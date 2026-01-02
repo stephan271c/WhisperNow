@@ -1,0 +1,16 @@
+[project]
+name = "new-transcribe2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "nemo-toolkit[asr]>=2.6.0",
+    "numpy>=1.26.4",
+    "pynput>=1.8.1",
+    "scipy>=1.16.3",
+    "sounddevice>=0.5.3",
+    "torch>=2.9.1",
+    "torchaudio>=2.9.1",
+    "torchvision>=0.24.1",
+]
