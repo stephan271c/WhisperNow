@@ -108,6 +108,19 @@ class ASRBackend(ABC):
         """Return the device the model is running on ('cuda' or 'cpu')."""
         pass
 
+    @abstractmethod
+    def is_model_cached(self, model_name: str) -> bool:
+        """
+        Check if the model is cached locally.
+        
+        Args:
+            model_name: Model identifier
+            
+        Returns:
+            True if model files exist locally
+        """
+        pass
+
 
 class NeMoBackend(ASRBackend):
     """
@@ -204,6 +217,19 @@ class NeMoBackend(ASRBackend):
     @property
     def device(self) -> str:
         return self._device
+
+    def is_model_cached(self, model_name: str) -> bool:
+        from huggingface_hub import scan_cache_dir
+        try:
+            # NeMo models often only have a .nemo file, and the filename varies.
+            # Using scan_cache_dir to check if the repo exists in cache is reliable.
+            cache_info = scan_cache_dir()
+            for repo in cache_info.repos:
+                if repo.repo_id == model_name:
+                    return True
+            return False
+        except Exception:
+            return False
 
 
 class HuggingFaceBackend(ASRBackend):
@@ -302,6 +328,11 @@ class HuggingFaceBackend(ASRBackend):
     @property
     def device(self) -> str:
         return self._device
+
+    def is_model_cached(self, model_name: str) -> bool:
+        from huggingface_hub import try_to_load_from_cache
+        # Transformers models always have a config.json
+        return try_to_load_from_cache(model_name, "config.json") is not None
 
 
 # Known model prefixes for auto-detection

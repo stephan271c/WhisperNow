@@ -272,10 +272,10 @@ class TranscriptionEngine:
         Returns:
             True if model files exist locally.
         """
-        # TODO: Implement proper cache check for both backends
-        # NeMo: ~/.cache/huggingface or ~/.cache/torch/NeMo
-        # HuggingFace: ~/.cache/huggingface/hub
-        return False
+        # Create a temporary backend instance to check cache
+        # This is lightweight as it doesn't load the model
+        backend = create_backend(self._backend_type, self.model_name)
+        return backend.is_model_cached(self.model_name)
 
 
 # Convenience function for quick transcription without engine management
