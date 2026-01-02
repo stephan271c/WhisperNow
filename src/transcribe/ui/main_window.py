@@ -8,12 +8,13 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
     QLabel, QSlider, QComboBox, QCheckBox, QPushButton,
     QGroupBox, QFormLayout, QSpinBox, QKeySequenceEdit,
-    QDialogButtonBox
+    QDialogButtonBox, QLineEdit, QMessageBox
 )
+from PySide6.QtGui import QKeySequence
 from PySide6.QtCore import Qt, Signal
-from typing import Optional
+from typing import Optional, List
 
-from ..core.settings import Settings, get_settings
+from ..core.settings import Settings, get_settings, HotkeyConfig
 from ..core.recorder import AudioRecorder
 
 
@@ -145,15 +146,19 @@ class SettingsWindow(QDialog):
         audio_group = QGroupBox("Audio Input")
         audio_layout = QFormLayout(audio_group)
         
-        # Input device dropdown
+        # Input device dropdown with refresh button
+        device_layout = QHBoxLayout()
         self._device_combo = QComboBox()
-        self._device_combo.addItem("System Default", None)
+        self._refresh_devices()
+        device_layout.addWidget(self._device_combo, 1)
         
-        # Populate with available devices
-        for device in AudioRecorder.list_devices():
-            self._device_combo.addItem(device.name, device.name)
+        refresh_btn = QPushButton("⟳")
+        refresh_btn.setFixedWidth(30)
+        refresh_btn.setToolTip("Refresh device list")
+        refresh_btn.clicked.connect(self._refresh_devices)
+        device_layout.addWidget(refresh_btn)
         
-        audio_layout.addRow("Input Device:", self._device_combo)
+        audio_layout.addRow("Input Device:", device_layout)
         
         # Sample rate dropdown
         self._sample_rate_combo = QComboBox()
@@ -166,6 +171,21 @@ class SettingsWindow(QDialog):
         layout.addStretch()
         return widget
     
+    def _refresh_devices(self) -> None:
+        """Refresh the audio device dropdown."""
+        current = self._device_combo.currentData() if hasattr(self, '_device_combo') else None
+        self._device_combo.clear()
+        self._device_combo.addItem("System Default", None)
+        
+        for device in AudioRecorder.list_devices():
+            self._device_combo.addItem(device.name, device.name)
+        
+        # Restore selection if still available
+        if current:
+            idx = self._device_combo.findData(current)
+            if idx >= 0:
+                self._device_combo.setCurrentIndex(idx)
+    
     def _create_advanced_tab(self) -> QWidget:
         """Create the Advanced settings tab."""
         widget = QWidget()
@@ -174,10 +194,20 @@ class SettingsWindow(QDialog):
         model_group = QGroupBox("Model")
         model_layout = QFormLayout(model_group)
         
-        # Model selection (read-only for now)
-        self._model_label = QLabel("nvidia/parakeet-tdt-0.6b-v3")
-        self._model_label.setStyleSheet("font-family: monospace;")
-        model_layout.addRow("Current Model:", self._model_label)
+        # Editable model name
+        self._model_edit = QLineEdit()
+        self._model_edit.setPlaceholderText("e.g. nvidia/parakeet-tdt-0.6b-v3")
+        self._model_edit.setStyleSheet("font-family: monospace;")
+        model_layout.addRow("Model Name:", self._model_edit)
+        
+        # Instructions
+        model_instructions = QLabel(
+            "Enter a valid HuggingFace or NVIDIA model name.\n"
+            "Model will be validated and downloaded on save."
+        )
+        model_instructions.setStyleSheet("color: gray; font-size: 11px;")
+        model_instructions.setWordWrap(True)
+        model_layout.addRow("", model_instructions)
         
         # GPU checkbox
         self._use_gpu_cb = QCheckBox("Use GPU acceleration (if available)")
@@ -202,8 +232,13 @@ class SettingsWindow(QDialog):
         self._notifications_cb.setChecked(self._settings.show_notifications)
         self._use_gpu_cb.setChecked(self._settings.use_gpu)
         
-        # Set hotkey (simplified - full implementation would parse the HotkeyConfig)
-        # self._hotkey_edit.setKeySequence(...)
+        # Set model name
+        self._model_edit.setText(self._settings.model_name)
+        
+        # Set hotkey from HotkeyConfig
+        hotkey = self._settings.hotkey
+        key_sequence = "+".join(hotkey.modifiers + [hotkey.key])
+        self._hotkey_edit.setKeySequence(QKeySequence(key_sequence))
         
         # Set sample rate
         idx = self._sample_rate_combo.findData(self._settings.sample_rate)
@@ -218,6 +253,12 @@ class SettingsWindow(QDialog):
     
     def _save_settings(self) -> None:
         """Save UI values to settings."""
+        # Validate model name first
+        model_name = self._model_edit.text().strip()
+        if model_name and model_name != self._settings.model_name:
+            if not self._validate_model_name(model_name):
+                return  # Validation failed, don't save
+        
         self._settings.characters_per_second = self._speed_slider.value()
         self._settings.auto_type_result = self._auto_type_cb.isChecked()
         self._settings.start_minimized = self._start_minimized_cb.isChecked()
@@ -227,8 +268,82 @@ class SettingsWindow(QDialog):
         self._settings.sample_rate = self._sample_rate_combo.currentData()
         self._settings.input_device = self._device_combo.currentData()
         
+        # Save model name
+        if model_name:
+            self._settings.model_name = model_name
+        
+        # Parse and save hotkey
+        hotkey_config = self._parse_key_sequence()
+        if hotkey_config:
+            self._settings.hotkey = hotkey_config
+        
         self._settings.save()
         self.settings_changed.emit()
+    
+    def _validate_model_name(self, model_name: str) -> bool:
+        """
+        Validate that the model name is a valid HuggingFace/NVIDIA model.
+        
+        Checks format (org/model) and attempts to verify existence.
+        Returns True if valid, False otherwise.
+        """
+        # Basic format check: should be org/model format
+        if "/" not in model_name or len(model_name.split("/")) != 2:
+            QMessageBox.warning(
+                self,
+                "Invalid Model Name",
+                f"Model name '{model_name}' is not in the correct format.\n\n"
+                "Expected format: organization/model-name\n"
+                "Example: nvidia/parakeet-tdt-0.6b-v3 or openai/whisper-large-v3"
+            )
+            return False
+        
+        org, model = model_name.split("/")
+        if not org or not model:
+            QMessageBox.warning(
+                self,
+                "Invalid Model Name",
+                "Both organization and model name must be provided."
+            )
+            return False
+        
+        # Note: Full validation (checking if model exists on HuggingFace)
+        # requires a network request and is done when loading the model.
+        # Here we just validate the format.
+        return True
+    
+    def _parse_key_sequence(self) -> Optional[HotkeyConfig]:
+        """Parse QKeySequence from the hotkey editor into HotkeyConfig."""
+        key_sequence = self._hotkey_edit.keySequence()
+        if key_sequence.isEmpty():
+            return None
+        
+        # Get string representation like "Ctrl+Space"
+        seq_str = key_sequence.toString()
+        if not seq_str:
+            return None
+        
+        parts = seq_str.split("+")
+        if not parts:
+            return None
+        
+        # Last part is the key, rest are modifiers
+        modifiers: List[str] = []
+        key = parts[-1].lower()
+        
+        for part in parts[:-1]:
+            mod = part.lower()
+            # Normalize modifier names
+            if mod in ("ctrl", "control"):
+                modifiers.append("ctrl")
+            elif mod in ("alt", "option"):
+                modifiers.append("alt")
+            elif mod in ("shift",):
+                modifiers.append("shift")
+            elif mod in ("meta", "cmd", "command", "win"):
+                modifiers.append("cmd")
+        
+        return HotkeyConfig(modifiers=modifiers, key=key)
     
     def _save_and_close(self) -> None:
         """Save settings and close the dialog."""

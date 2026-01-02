@@ -9,7 +9,7 @@ import signal
 from typing import Optional
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QThread, Signal, QObject
+from PySide6.QtCore import QThread, Signal, QObject, QTimer
 from pynput import keyboard
 from pynput.keyboard import Controller as KeyboardController
 import time
@@ -21,6 +21,7 @@ from .core.transcriber import TranscriptionEngine, EngineState
 from .ui.tray import SystemTray, TrayStatus
 from .ui.main_window import SettingsWindow
 from .ui.download_dialog import DownloadDialog
+from .ui.setup_wizard import SetupWizard
 from .utils.platform import check_accessibility_permissions, request_accessibility_permissions
 
 
@@ -154,6 +155,12 @@ class TranscribeApp(QObject):
         self._keyboard_controller = KeyboardController()
         self._download_dialog: Optional[DownloadDialog] = None
         
+        # Typing state for non-blocking character output
+        self._typing_text: str = ""
+        self._typing_index: int = 0
+        self._typing_timer: Optional[QTimer] = None
+        self._pending_notification: Optional[str] = None
+        
         # Connect signals
         self._tray.settings_requested.connect(self._show_settings)
         self._tray.quit_requested.connect(self._quit)
@@ -171,12 +178,16 @@ class TranscribeApp(QObject):
     
     def _on_engine_state_change(self, state: EngineState, message: str) -> None:
         """Handle transcription engine state changes."""
+        # Skip PROCESSING state - we manage that ourselves during typing
+        # This prevents the ASR transcription from showing blue icon
+        if state == EngineState.PROCESSING:
+            return
+        
         status_map = {
             EngineState.NOT_LOADED: TrayStatus.IDLE,
             EngineState.DOWNLOADING: TrayStatus.LOADING,
             EngineState.LOADING: TrayStatus.LOADING,
             EngineState.READY: TrayStatus.IDLE,
-            EngineState.PROCESSING: TrayStatus.PROCESSING,
             EngineState.ERROR: TrayStatus.ERROR,
         }
         self._tray.set_status(status_map.get(state, TrayStatus.IDLE), message)
@@ -229,25 +240,58 @@ class TranscribeApp(QObject):
         text = self._transcriber.transcribe(audio_data, self._settings.sample_rate)
         
         if text:
+            # Store notification for later (after typing completes)
+            if self._settings.show_notifications:
+                self._pending_notification = text[:100]
+            
             # Type the result
             if self._settings.auto_type_result:
                 self._type_text(text)
-            
-            # Show notification
-            if self._settings.show_notifications:
-                self._tray.show_notification("Transcription Complete", text[:100])
+            else:
+                # No typing needed, show notification and go idle immediately
+                self._finish_typing()
+        else:
+            self._tray.set_status(TrayStatus.IDLE)
     
     def _type_text(self, text: str) -> None:
-        """Type text with optional streaming effect."""
-        time.sleep(0.1)  # Small delay for focus
-        
+        """Type text using QTimer for non-blocking output."""
         if self._settings.characters_per_second <= 0:
+            # Instant typing - no timer needed
             self._keyboard_controller.type(text)
+            self._finish_typing()
         else:
-            delay = 1.0 / self._settings.characters_per_second
-            for char in text:
-                self._keyboard_controller.type(char)
-                time.sleep(delay)
+            # Character-by-character typing with timer (tray stays green)
+            self._typing_text = text
+            self._typing_index = 0
+            
+            # Create timer for character output
+            delay_ms = int(1000.0 / self._settings.characters_per_second)
+            self._typing_timer = QTimer(self)
+            self._typing_timer.timeout.connect(self._type_next_char)
+            self._typing_timer.start(delay_ms)
+    
+    def _type_next_char(self) -> None:
+        """Type the next character in the queue."""
+        if self._typing_index < len(self._typing_text):
+            char = self._typing_text[self._typing_index]
+            self._keyboard_controller.type(char)
+            self._typing_index += 1
+        else:
+            # Done typing
+            if self._typing_timer:
+                self._typing_timer.stop()
+                self._typing_timer.deleteLater()
+                self._typing_timer = None
+            self._typing_text = ""
+            self._typing_index = 0
+            self._finish_typing()
+    
+    def _finish_typing(self) -> None:
+        """Called when typing is complete. Show notification and set idle."""
+        if self._pending_notification:
+            self._tray.show_notification("Transcription Complete", self._pending_notification)
+            self._pending_notification = None
+        self._tray.set_status(TrayStatus.IDLE)
     
     def _show_settings(self) -> None:
         """Show the settings window."""
@@ -297,6 +341,14 @@ def main():
     
     # Handle Ctrl+C gracefully
     signal.signal(signal.SIGINT, lambda *args: QApplication.quit())
+    
+    # Check for first run
+    settings = get_settings()
+    if not settings.first_run_complete:
+        wizard = SetupWizard()
+        if wizard.exec() != SetupWizard.Accepted:
+            # User cancelled the wizard
+            sys.exit(0)
     
     # Create and run the app
     transcribe_app = TranscribeApp()

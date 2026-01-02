@@ -83,6 +83,7 @@ class Settings:
     start_minimized: bool = False
     auto_start_on_login: bool = False
     show_notifications: bool = True
+    first_run_complete: bool = False
     
     # Window state (internal)
     window_geometry: Optional[Tuple[int, int, int, int]] = None

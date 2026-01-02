@@ -5,9 +5,9 @@ Provides a system tray icon with status indicator and context menu.
 """
 
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
-from PySide6.QtGui import QIcon, QAction
-from PySide6.QtCore import Signal, QObject
-from typing import Optional, Callable
+from PySide6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QBrush, QPen
+from PySide6.QtCore import Signal, QObject, Qt
+from typing import Optional, Callable, Dict
 from enum import Enum, auto
 
 
@@ -109,20 +109,54 @@ class SystemTray(QObject):
     
     def _update_icon(self) -> None:
         """Update the tray icon based on current status."""
-        # TODO: Use actual icons for each state
-        # For now, use a placeholder or the app icon
-        # Icons should be in src/transcribe/ui/resources/
+        # Color mapping for each status
+        status_colors: Dict[TrayStatus, QColor] = {
+            TrayStatus.IDLE: QColor("#4CAF50"),       # Green
+            TrayStatus.LOADING: QColor("#FF9800"),    # Orange
+            TrayStatus.RECORDING: QColor("#F44336"),  # Red
+            TrayStatus.PROCESSING: QColor("#2196F3"), # Blue
+            TrayStatus.ERROR: QColor("#F44336"),      # Red
+        }
         
-        # Placeholder: Create a simple colored icon
-        # In production, load from resources
-        icon = QIcon.fromTheme("audio-input-microphone")
-        if icon.isNull():
-            # Fallback - create a simple icon
-            pass
+        # Status tooltips
+        status_tooltips: Dict[TrayStatus, str] = {
+            TrayStatus.IDLE: "Transcribe - Ready",
+            TrayStatus.LOADING: "Transcribe - Loading...",
+            TrayStatus.RECORDING: "Transcribe - Recording",
+            TrayStatus.PROCESSING: "Transcribe - Processing",
+            TrayStatus.ERROR: "Transcribe - Error",
+        }
+        
+        # Create a colored circle icon
+        size = 22
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        color = status_colors.get(self._status, QColor("#808080"))
+        painter.setBrush(QBrush(color))
+        painter.setPen(QPen(color.darker(120), 1))
+        
+        # Draw filled circle
+        margin = 2
+        painter.drawEllipse(margin, margin, size - 2 * margin, size - 2 * margin)
+        
+        # For error state, add an X overlay
+        if self._status == TrayStatus.ERROR:
+            painter.setPen(QPen(QColor("#FFFFFF"), 2))
+            inner_margin = 6
+            painter.drawLine(inner_margin, inner_margin, size - inner_margin, size - inner_margin)
+            painter.drawLine(size - inner_margin, inner_margin, inner_margin, size - inner_margin)
+        
+        painter.end()
+        
+        icon = QIcon(pixmap)
         
         if self._tray_icon:
             self._tray_icon.setIcon(icon)
-            self._tray_icon.setToolTip("Transcribe")
+            self._tray_icon.setToolTip(status_tooltips.get(self._status, "Transcribe"))
     
     def show_notification(self, title: str, message: str, duration_ms: int = 3000) -> None:
         """Show a balloon notification from the tray icon."""
