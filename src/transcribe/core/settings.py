@@ -82,7 +82,7 @@ class Settings:
     # App behavior
     start_minimized: bool = False
     auto_start_on_login: bool = False
-    show_notifications: bool = True
+
     first_run_complete: bool = False
     
     # Window state (internal)
@@ -98,11 +98,15 @@ class Settings:
                 with open(config_file, "r") as f:
                     data = json.load(f)
                 
-                # Handle nested HotkeyConfig
-                if "hotkey" in data and isinstance(data["hotkey"], dict):
-                    data["hotkey"] = HotkeyConfig(**data["hotkey"])
+                # Filter out unknown keys (backward compatibility)
+                valid_keys = cls.__dataclass_fields__.keys()
+                filtered_data = {k: v for k, v in data.items() if k in valid_keys}
                 
-                return cls(**data)
+                # Handle nested HotkeyConfig
+                if "hotkey" in filtered_data and isinstance(filtered_data["hotkey"], dict):
+                    filtered_data["hotkey"] = HotkeyConfig(**filtered_data["hotkey"])
+                
+                return cls(**filtered_data)
             except (json.JSONDecodeError, TypeError) as e:
                 print(f"Warning: Could not load settings: {e}. Using defaults.")
                 return cls()

@@ -16,7 +16,6 @@ class TrayStatus(Enum):
     IDLE = auto()        # Ready, waiting for input
     LOADING = auto()     # Model loading/downloading
     RECORDING = auto()   # Currently recording
-    PROCESSING = auto()  # Transcribing audio
     ERROR = auto()       # Error state
 
 
@@ -92,7 +91,6 @@ class SystemTray(QObject):
             TrayStatus.IDLE: "Ready - Hold hotkey to speak",
             TrayStatus.LOADING: "Loading model...",
             TrayStatus.RECORDING: "🔴 Recording...",
-            TrayStatus.PROCESSING: "Processing...",
             TrayStatus.ERROR: f"Error: {message}"
         }
         self._status_action.setText(status_texts.get(status, "Unknown"))
@@ -114,7 +112,6 @@ class SystemTray(QObject):
             TrayStatus.IDLE: QColor("#4CAF50"),       # Green
             TrayStatus.LOADING: QColor("#FF9800"),    # Orange
             TrayStatus.RECORDING: QColor("#F44336"),  # Red
-            TrayStatus.PROCESSING: QColor("#2196F3"), # Blue
             TrayStatus.ERROR: QColor("#F44336"),      # Red
         }
         
@@ -123,7 +120,6 @@ class SystemTray(QObject):
             TrayStatus.IDLE: "Transcribe - Ready",
             TrayStatus.LOADING: "Transcribe - Loading...",
             TrayStatus.RECORDING: "Transcribe - Recording",
-            TrayStatus.PROCESSING: "Transcribe - Processing",
             TrayStatus.ERROR: "Transcribe - Error",
         }
         
@@ -158,10 +154,6 @@ class SystemTray(QObject):
             self._tray_icon.setIcon(icon)
             self._tray_icon.setToolTip(status_tooltips.get(self._status, "Transcribe"))
     
-    def show_notification(self, title: str, message: str, duration_ms: int = 3000) -> None:
-        """Show a balloon notification from the tray icon."""
-        if self._tray_icon and QSystemTrayIcon.supportsMessages():
-            self._tray_icon.showMessage(title, message, QSystemTrayIcon.Information, duration_ms)
     
     def hide(self) -> None:
         """Hide the tray icon."""

@@ -159,7 +159,7 @@ class TranscribeApp(QObject):
         self._typing_text: str = ""
         self._typing_index: int = 0
         self._typing_timer: Optional[QTimer] = None
-        self._pending_notification: Optional[str] = None
+        self._typing_timer: Optional[QTimer] = None
         
         # Connect signals
         self._tray.settings_requested.connect(self._show_settings)
@@ -178,8 +178,8 @@ class TranscribeApp(QObject):
     
     def _on_engine_state_change(self, state: EngineState, message: str) -> None:
         """Handle transcription engine state changes."""
-        # Skip PROCESSING state - we manage that ourselves during typing
-        # This prevents the ASR transcription from showing blue icon
+        # Skip PROCESSING state - we stay IDLE (green) during transcription
+        # The only color change should be RECORDING (red) when hotkeys are held
         if state == EngineState.PROCESSING:
             return
         
@@ -239,16 +239,12 @@ class TranscribeApp(QObject):
         # Transcribe the audio
         text = self._transcriber.transcribe(audio_data, self._settings.sample_rate)
         
-        if text:
-            # Store notification for later (after typing completes)
-            if self._settings.show_notifications:
-                self._pending_notification = text[:100]
-            
+        if text:            
             # Type the result
             if self._settings.auto_type_result:
                 self._type_text(text)
             else:
-                # No typing needed, show notification and go idle immediately
+                # No typing needed, go idle immediately
                 self._finish_typing()
         else:
             self._tray.set_status(TrayStatus.IDLE)
@@ -287,10 +283,7 @@ class TranscribeApp(QObject):
             self._finish_typing()
     
     def _finish_typing(self) -> None:
-        """Called when typing is complete. Show notification and set idle."""
-        if self._pending_notification:
-            self._tray.show_notification("Transcription Complete", self._pending_notification)
-            self._pending_notification = None
+        """Called when typing is complete. Set idle."""
         self._tray.set_status(TrayStatus.IDLE)
     
     def _show_settings(self) -> None:

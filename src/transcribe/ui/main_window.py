@@ -101,14 +101,7 @@ class SettingsWindow(QDialog):
         
         layout.addWidget(startup_group)
         
-        # Notifications group
-        notif_group = QGroupBox("Notifications")
-        notif_layout = QVBoxLayout(notif_group)
-        
-        self._notifications_cb = QCheckBox("Show notifications when transcription completes")
-        notif_layout.addWidget(self._notifications_cb)
-        
-        layout.addWidget(notif_group)
+
         
         layout.addStretch()
         return widget
@@ -229,7 +222,6 @@ class SettingsWindow(QDialog):
         self._auto_type_cb.setChecked(self._settings.auto_type_result)
         self._start_minimized_cb.setChecked(self._settings.start_minimized)
         self._autostart_cb.setChecked(self._settings.auto_start_on_login)
-        self._notifications_cb.setChecked(self._settings.show_notifications)
         self._use_gpu_cb.setChecked(self._settings.use_gpu)
         
         # Set model name
@@ -263,7 +255,6 @@ class SettingsWindow(QDialog):
         self._settings.auto_type_result = self._auto_type_cb.isChecked()
         self._settings.start_minimized = self._start_minimized_cb.isChecked()
         self._settings.auto_start_on_login = self._autostart_cb.isChecked()
-        self._settings.show_notifications = self._notifications_cb.isChecked()
         self._settings.use_gpu = self._use_gpu_cb.isChecked()
         self._settings.sample_rate = self._sample_rate_combo.currentData()
         self._settings.input_device = self._device_combo.currentData()
