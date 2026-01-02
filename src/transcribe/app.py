@@ -20,6 +20,7 @@ from .core.recorder import AudioRecorder
 from .core.transcriber import TranscriptionEngine, EngineState
 from .ui.tray import SystemTray, TrayStatus
 from .ui.main_window import SettingsWindow
+from .ui.download_dialog import DownloadDialog
 from .utils.platform import check_accessibility_permissions, request_accessibility_permissions
 
 
@@ -146,10 +147,12 @@ class TranscribeApp(QObject):
         self._transcriber = TranscriptionEngine(
             model_name=self._settings.model_name,
             use_gpu=self._settings.use_gpu,
-            on_state_change=self._on_engine_state_change
+            on_state_change=self._on_engine_state_change,
+            on_download_progress=self._on_download_progress
         )
         self._hotkey_listener = HotkeyListener()
         self._keyboard_controller = KeyboardController()
+        self._download_dialog: Optional[DownloadDialog] = None
         
         # Connect signals
         self._tray.settings_requested.connect(self._show_settings)
@@ -177,6 +180,37 @@ class TranscribeApp(QObject):
             EngineState.ERROR: TrayStatus.ERROR,
         }
         self._tray.set_status(status_map.get(state, TrayStatus.IDLE), message)
+        
+        # Show/hide download dialog
+        if state == EngineState.DOWNLOADING:
+            self._show_download_dialog()
+        elif state in (EngineState.READY, EngineState.ERROR, EngineState.NOT_LOADED):
+            self._hide_download_dialog(state == EngineState.READY)
+    
+    def _on_download_progress(self, progress: float) -> None:
+        """Handle model download progress updates."""
+        if self._download_dialog is not None:
+            self._download_dialog.set_progress(progress)
+    
+    def _show_download_dialog(self) -> None:
+        """Show the model download progress dialog."""
+        if self._download_dialog is None:
+            self._download_dialog = DownloadDialog(
+                model_name=self._settings.model_name
+            )
+            self._download_dialog.cancelled.connect(self._on_download_cancelled)
+        self._download_dialog.show()
+    
+    def _hide_download_dialog(self, success: bool = True) -> None:
+        """Hide the download dialog."""
+        if self._download_dialog is not None:
+            self._download_dialog.finish(success)
+            self._download_dialog = None
+    
+    def _on_download_cancelled(self) -> None:
+        """Handle download cancellation."""
+        self._transcriber.unload()
+        self._hide_download_dialog(success=False)
     
     def _start_recording(self) -> None:
         """Start recording audio."""
