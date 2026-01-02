@@ -16,6 +16,18 @@ dependencies = [
     "torchvision>=0.24.1",
 ]
 
+[project.optional-dependencies]
+# HuggingFace Transformers backend (for Whisper, Wav2Vec2, etc.)
+huggingface = [
+    "transformers>=4.40.0",
+    "accelerate>=0.27.0",
+]
+# Install all backends
+all = [
+    "transformers>=4.40.0",
+    "accelerate>=0.27.0",
+]
+
 [project.gui-scripts]
 transcribe = "transcribe.app:main"
 
