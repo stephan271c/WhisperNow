@@ -3,6 +3,9 @@ import numpy as np
 import scipy.io.wavfile as wav
 import tempfile
 import os
+import signal
+import atexit
+import gc
 from pynput import keyboard
 from pynput.keyboard import Controller as KeyboardController
 import nemo.collections.asr as nemo_asr
@@ -12,6 +15,7 @@ import time
 # --- Configuration ---
 SAMPLE_RATE = 16000
 CHANNELS = 1
+CHARACTERS_PER_SECOND = 50  # Typing speed for streaming effect (set to 0 for instant)
 
 class PushToTalkApp:
     def __init__(self):
@@ -72,8 +76,8 @@ class PushToTalkApp:
                 # Small delay to allow focus to return to the text field
                 time.sleep(0.1)
                 
-                # Type the transcribed text into the focused window
-                self.keyboard_controller.type(text)
+                # Type the transcribed text into the focused window with streaming effect
+                self._type_with_streaming(text)
             except Exception as e:
                 print(f"Error: {e}")
             finally:
@@ -81,6 +85,17 @@ class PushToTalkApp:
                     os.remove(tmp_path)
             
             print("\nReady. Hold [Ctrl + Space] to speak.")
+
+    def _type_with_streaming(self, text):
+        """Type text with a streaming/typewriter effect."""
+        if CHARACTERS_PER_SECOND <= 0:
+            # Instant typing if set to 0 or negative
+            self.keyboard_controller.type(text)
+        else:
+            delay = 1.0 / CHARACTERS_PER_SECOND
+            for char in text:
+                self.keyboard_controller.type(char)
+                time.sleep(delay)
 
     def audio_callback(self, indata, frames, time, status):
         if self.recording:
@@ -107,11 +122,53 @@ class PushToTalkApp:
             self.stop_recording()
             
         if key == keyboard.Key.esc:
-            return False 
+            return False
+    
+    def cleanup(self):
+        """Clean up GPU memory and resources."""
+        print("\nCleaning up...")
+        if self.stream is not None:
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except:
+                pass
+        
+        # Delete model and clear CUDA cache
+        if hasattr(self, 'model'):
+            del self.model
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        gc.collect()
+        print("Cleanup complete.")
 
 if __name__ == "__main__":
-    app = PushToTalkApp()
-    print("\nReady! Hold down [Ctrl + Space] to record. Press [Esc] to quit.")
+    app = None
     
-    with keyboard.Listener(on_press=app.on_press, on_release=app.on_release) as listener:
-        listener.join()
+    def signal_handler(signum, frame):
+        """Handle termination signals."""
+        if app is not None:
+            app.cleanup()
+        exit(0)
+    
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        app = PushToTalkApp()
+        
+        # Register cleanup on normal exit
+        atexit.register(app.cleanup)
+        
+        print("\nReady! Hold down [Ctrl + Space] to record. Press [Esc] to quit.")
+        
+        with keyboard.Listener(on_press=app.on_press, on_release=app.on_release) as listener:
+            listener.join()
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if app is not None:
+            app.cleanup()
