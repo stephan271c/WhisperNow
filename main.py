@@ -15,7 +15,7 @@ import time
 # --- Configuration ---
 SAMPLE_RATE = 16000
 CHANNELS = 1
-CHARACTERS_PER_SECOND = 50  # Typing speed for streaming effect (set to 0 for instant)
+CHARACTERS_PER_SECOND = 150  # Typing speed for streaming effect (set to 0 for instant)
 
 class PushToTalkApp:
     def __init__(self):
