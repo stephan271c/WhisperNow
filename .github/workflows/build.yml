@@ -1,0 +1,44 @@
+
+name: Build Desktop App
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        
+    - name: Install uv
+      uses: astral-sh/setup-uv@v1
+      
+    - name: Install Dependencies
+      run: |
+        uv sync --dev
+        
+    - name: Build with PyInstaller
+      run: |
+        # Run the build script using uv to ensure environment is loaded
+        uv run scripts/build.py
+        
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: transcribe-${{ matrix.os }}
+        path: dist/transcribe
+        if-no-files-found: error
