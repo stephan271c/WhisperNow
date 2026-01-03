@@ -22,7 +22,11 @@ from .ui.tray import SystemTray, TrayStatus
 from .ui.main_window import SettingsWindow
 from .ui.download_dialog import DownloadDialog
 from .ui.setup_wizard import SetupWizard
-from .utils.platform import check_accessibility_permissions, request_accessibility_permissions
+from .utils.platform import (
+    check_accessibility_permissions,
+    request_accessibility_permissions,
+    set_autostart
+)
 
 
 class HotkeyListener(QObject):
@@ -50,24 +54,14 @@ class HotkeyListener(QObject):
         settings = get_settings()
         self._setup_hotkey(settings)
     
+    def update_settings(self, settings: Settings) -> None:
+        """Update hotkey configuration from new settings."""
+        self._setup_hotkey(settings)
+    
     def _setup_hotkey(self, settings: Settings) -> None:
         """Configure the hotkey from settings."""
-        # Build the set of required keys
-        self._required_modifiers = set()
-        
-        for mod in settings.hotkey.modifiers:
-            if mod == "ctrl":
-                self._required_modifiers.add(keyboard.Key.ctrl_l)
-                self._required_modifiers.add(keyboard.Key.ctrl_r)
-            elif mod == "alt":
-                self._required_modifiers.add(keyboard.Key.alt_l)
-                self._required_modifiers.add(keyboard.Key.alt_r)
-            elif mod == "shift":
-                self._required_modifiers.add(keyboard.Key.shift_l)
-                self._required_modifiers.add(keyboard.Key.shift_r)
-            elif mod == "cmd" or mod == "meta":
-                self._required_modifiers.add(keyboard.Key.cmd_l)
-                self._required_modifiers.add(keyboard.Key.cmd_r)
+        # Store required modifier types (e.g., {'ctrl', 'alt'})
+        self._required_modifier_types = set(settings.hotkey.modifiers)
         
         self._trigger_key = keyboard.Key.space
         if settings.hotkey.key != "space":
@@ -84,12 +78,26 @@ class HotkeyListener(QObject):
         if self._trigger_key not in self._pressed_keys:
             return False
         
-        # Check if at least one of each required modifier type is pressed
-        has_ctrl = not any("ctrl" in str(k) for k in self._required_modifiers) or \
-                   keyboard.Key.ctrl_l in self._pressed_keys or \
-                   keyboard.Key.ctrl_r in self._pressed_keys
+        # Check all required modifiers
+        for mod_type in self._required_modifier_types:
+            is_pressed = False
+            if mod_type == "ctrl":
+                is_pressed = (keyboard.Key.ctrl_l in self._pressed_keys or 
+                              keyboard.Key.ctrl_r in self._pressed_keys)
+            elif mod_type == "alt":
+                is_pressed = (keyboard.Key.alt_l in self._pressed_keys or 
+                              keyboard.Key.alt_r in self._pressed_keys)
+            elif mod_type == "shift":
+                is_pressed = (keyboard.Key.shift_l in self._pressed_keys or 
+                              keyboard.Key.shift_r in self._pressed_keys)
+            elif mod_type in ("cmd", "meta"):
+                is_pressed = (keyboard.Key.cmd_l in self._pressed_keys or 
+                              keyboard.Key.cmd_r in self._pressed_keys)
+            
+            if not is_pressed:
+                return False
         
-        return has_ctrl
+        return True
     
     def _on_press(self, key) -> None:
         """Handle key press events."""
@@ -302,8 +310,13 @@ class TranscribeApp(QObject):
         self._settings = get_settings()
         
         # Update components
+        # Update components
         self._recorder.sample_rate = self._settings.sample_rate
         self._recorder.device = self._settings.input_device
+        self._hotkey_listener.update_settings(self._settings)
+        
+        # Apply autostart setting
+        set_autostart(self._settings.auto_start_on_login, "Transcribe")
     
     def _quit(self) -> None:
         """Quit the application."""
