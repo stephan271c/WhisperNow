@@ -144,3 +144,132 @@ class TestConfigPaths:
         
         assert config_dir.exists()
         assert data_dir.exists()
+
+
+class TestSettingsValidation:
+    """Tests for settings validation logic."""
+    
+    def test_invalid_sample_rate_resets_to_default(self, tmp_path):
+        """Test invalid sample rates are reset to default."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "settings.json"
+        
+        # Test negative sample rate
+        config_file.write_text(json.dumps({"sample_rate": -1000}))
+        
+        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+            settings = Settings.load()
+            assert settings.sample_rate == 16000  # Should reset to default
+        
+        # Test sample rate too high
+        config_file.write_text(json.dumps({"sample_rate": 999999}))
+        
+        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+            settings = Settings.load()
+            assert settings.sample_rate == 16000
+        
+        # Test sample rate too low
+        config_file.write_text(json.dumps({"sample_rate": 100}))
+        
+        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+            settings = Settings.load()
+            assert settings.sample_rate == 16000
+    
+    def test_empty_model_name_resets_to_default(self, tmp_path):
+        """Test empty model name is reset to default."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "settings.json"
+        
+        config_file.write_text(json.dumps({"model_name": ""}))
+        
+        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+            settings = Settings.load()
+            assert settings.model_name == "nvidia/parakeet-tdt-0.6b-v3"
+    
+    def test_negative_characters_per_second_resets(self, tmp_path):
+        """Test negative characters_per_second is reset to default."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "settings.json"
+        
+        config_file.write_text(json.dumps({"characters_per_second": -50}))
+        
+        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+            settings = Settings.load()
+            assert settings.characters_per_second == 150
+    
+    def test_invalid_hotkey_modifiers_resets(self, tmp_path):
+        """Test invalid hotkey modifiers are reset to default."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "settings.json"
+        
+        # Empty modifiers list
+        config_file.write_text(json.dumps({"hotkey": {"modifiers": [], "key": "space"}}))
+        
+        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+            settings = Settings.load()
+            assert settings.hotkey.modifiers == ["ctrl"]
+            assert settings.hotkey.key == "space"
+    
+    def test_invalid_hotkey_key_resets(self, tmp_path):
+        """Test invalid hotkey key is reset to default."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "settings.json"
+        
+        # Empty key
+        config_file.write_text(json.dumps({"hotkey": {"modifiers": ["ctrl"], "key": ""}}))
+        
+        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+            settings = Settings.load()
+            assert settings.hotkey.modifiers == ["ctrl"]
+            assert settings.hotkey.key == "space"
+    
+    def test_validation_logs_warnings(self, tmp_path, caplog):
+        """Test that validation issues are logged as warnings."""
+        import logging
+        
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "settings.json"
+        
+        config_file.write_text(json.dumps({
+            "sample_rate": -1000,
+            "model_name": "",
+            "characters_per_second": -50
+        }))
+        
+        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+            with caplog.at_level(logging.WARNING):
+                settings = Settings.load()
+                
+                # Check that warnings were logged
+                assert "Invalid sample_rate" in caplog.text
+                assert "Invalid model_name" in caplog.text
+                assert "Invalid characters_per_second" in caplog.text
+    
+    def test_valid_settings_pass_validation(self, tmp_path):
+        """Test valid settings pass validation without modification."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "settings.json"
+        
+        valid_settings = {
+            "sample_rate": 44100,
+            "model_name": "custom/model",
+            "characters_per_second": 200,
+            "hotkey": {"modifiers": ["alt", "shift"], "key": "r"}
+        }
+        config_file.write_text(json.dumps(valid_settings))
+        
+        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+            settings = Settings.load()
+            assert settings.sample_rate == 44100
+            assert settings.model_name == "custom/model"
+            assert settings.characters_per_second == 200
+            assert settings.hotkey.modifiers == ["alt", "shift"]
+            assert settings.hotkey.key == "r"
+

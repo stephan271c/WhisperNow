@@ -2,7 +2,7 @@
 
 """
 Core functionality for the transcription app.
-Contains settings, audio recording, and transcription engine.
+Contains settings, audio recording, transcription engine, and hotkey listener.
 """
 
 from .backends import (
@@ -15,6 +15,7 @@ from .backends import (
     detect_backend_type,
 )
 from .transcriber import TranscriptionEngine, EngineState, transcribe_audio
+from .hotkey import HotkeyListener
 
 __all__ = [
     # Backend abstraction
@@ -29,4 +30,6 @@ __all__ = [
     "TranscriptionEngine",
     "EngineState",
     "transcribe_audio",
+    # Hotkey listener
+    "HotkeyListener",
 ]

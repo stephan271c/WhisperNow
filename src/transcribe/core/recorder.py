@@ -62,6 +62,17 @@ class AudioRecorder:
         """Check if currently recording."""
         return self._is_recording
     
+    @property
+    def sample_rate(self) -> int:
+        """Get the target sample rate for output audio."""
+        return self.target_sample_rate
+    
+    @sample_rate.setter
+    def sample_rate(self, value: int) -> None:
+        """Set the target sample rate for output audio."""
+        self.target_sample_rate = value
+
+    
     def _get_device_sample_rate(self) -> float:
         """Get the native sample rate of the selected device."""
         device_index = self._get_device_index()
@@ -71,24 +82,48 @@ class AudioRecorder:
             device_info = sd.query_devices(sd.default.device[0], 'input')
         return device_info['default_samplerate']
     
-    def start(self) -> None:
-        """Start recording audio."""
+    def start(self) -> bool:
+        """
+        Start recording audio.
+        
+        Returns:
+            True if recording started successfully, False if an error occurred.
+            Check last_error property for details on failure.
+        """
         if self._is_recording:
-            return
+            return True
         
         self._audio_buffer = []
-        self._is_recording = True
+        self._last_error: Optional[str] = None
         
-        # Use device's native sample rate to avoid compatibility issues
-        self._device_sample_rate = self._get_device_sample_rate()
-        
-        self._stream = sd.InputStream(
-            samplerate=self._device_sample_rate,
-            channels=self.channels,
-            device=self._get_device_index(),
-            callback=self._audio_callback
-        )
-        self._stream.start()
+        try:
+            # Use device's native sample rate to avoid compatibility issues
+            self._device_sample_rate = self._get_device_sample_rate()
+            
+            self._stream = sd.InputStream(
+                samplerate=self._device_sample_rate,
+                channels=self.channels,
+                device=self._get_device_index(),
+                callback=self._audio_callback
+            )
+            self._stream.start()
+            self._is_recording = True
+            return True
+            
+        except sd.PortAudioError as e:
+            self._last_error = f"Audio device error: {e}"
+            self._is_recording = False
+            return False
+        except Exception as e:
+            self._last_error = f"Failed to start recording: {e}"
+            self._is_recording = False
+            return False
+    
+    @property
+    def last_error(self) -> Optional[str]:
+        """Get the last error message, if any."""
+        return getattr(self, '_last_error', None)
+
     
     def stop(self) -> Optional[np.ndarray]:
         """

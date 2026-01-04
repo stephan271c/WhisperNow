@@ -7,6 +7,10 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from .logger import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_platform() -> str:
     """Get the current platform name."""
@@ -90,7 +94,7 @@ def _set_autostart_windows(enabled: bool, app_name: str) -> bool:
         
         return True
     except Exception as e:
-        print(f"Failed to set autostart: {e}")
+        logger.error(f"Failed to set autostart: {e}", exc_info=True)
         return False
 
 

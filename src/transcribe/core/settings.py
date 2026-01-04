@@ -14,6 +14,10 @@ from typing import Optional, Tuple
 import json
 import platform
 
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_config_dir() -> Path:
     """Get the platform-appropriate configuration directory."""
@@ -106,12 +110,44 @@ class Settings:
                 if "hotkey" in filtered_data and isinstance(filtered_data["hotkey"], dict):
                     filtered_data["hotkey"] = HotkeyConfig(**filtered_data["hotkey"])
                 
-                return cls(**filtered_data)
+                settings = cls(**filtered_data)
+                settings._validate()
+                return settings
             except (json.JSONDecodeError, TypeError) as e:
-                print(f"Warning: Could not load settings: {e}. Using defaults.")
+                logger.warning(f"Could not load settings: {e}. Using defaults.", exc_info=True)
                 return cls()
         
         return cls()
+    
+    def _validate(self) -> None:
+        """Validate settings and reset invalid values to defaults."""
+        defaults = Settings()
+        
+        # Validate sample_rate
+        if not isinstance(self.sample_rate, int) or not (8000 <= self.sample_rate <= 192000):
+            logger.warning(f"Invalid sample_rate {self.sample_rate}, resetting to {defaults.sample_rate}")
+            self.sample_rate = defaults.sample_rate
+        
+        # Validate model_name
+        if not isinstance(self.model_name, str) or not self.model_name.strip():
+            logger.warning(f"Invalid model_name '{self.model_name}', resetting to {defaults.model_name}")
+            self.model_name = defaults.model_name
+        
+        # Validate characters_per_second
+        if not isinstance(self.characters_per_second, int) or self.characters_per_second < 0:
+            logger.warning(f"Invalid characters_per_second {self.characters_per_second}, resetting to {defaults.characters_per_second}")
+            self.characters_per_second = defaults.characters_per_second
+        
+        # Validate hotkey configuration
+        if not isinstance(self.hotkey, HotkeyConfig):
+            logger.warning("Invalid hotkey configuration, resetting to default")
+            self.hotkey = defaults.hotkey
+        elif not self.hotkey.modifiers or not all(isinstance(m, str) and m.strip() for m in self.hotkey.modifiers):
+            logger.warning(f"Invalid hotkey modifiers {self.hotkey.modifiers}, resetting to default")
+            self.hotkey = defaults.hotkey
+        elif not isinstance(self.hotkey.key, str) or not self.hotkey.key.strip():
+            logger.warning(f"Invalid hotkey key '{self.hotkey.key}', resetting to default")
+            self.hotkey = defaults.hotkey
     
     def save(self) -> None:
         """Save settings to config file."""

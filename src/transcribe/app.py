@@ -9,15 +9,14 @@ import signal
 from typing import Optional
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QThread, Signal, QObject, QTimer
-from pynput import keyboard
+from PySide6.QtCore import QTimer, QObject
 from pynput.keyboard import Controller as KeyboardController
-import time
 
 from . import __app_name__, __version__
 from .core.settings import get_settings, Settings
 from .core.recorder import AudioRecorder
 from .core.transcriber import TranscriptionEngine, EngineState
+from .core.hotkey import HotkeyListener
 from .ui.tray import SystemTray, TrayStatus
 from .ui.main_window import SettingsWindow
 from .ui.download_dialog import DownloadDialog
@@ -27,110 +26,9 @@ from .utils.platform import (
     request_accessibility_permissions,
     set_autostart
 )
+from .utils.logger import get_logger
 
-
-class HotkeyListener(QObject):
-    """
-    Listens for hotkey combinations using pynput.
-    
-    Runs in a separate thread to avoid blocking the Qt event loop.
-    
-    Signals:
-        hotkey_pressed: Emitted when the hotkey is pressed
-        hotkey_released: Emitted when the hotkey is released
-    """
-    
-    hotkey_pressed = Signal()
-    hotkey_released = Signal()
-    
-    def __init__(self, parent: Optional[QObject] = None):
-        super().__init__(parent)
-        
-        self._listener: Optional[keyboard.Listener] = None
-        self._pressed_keys: set = set()
-        self._is_hotkey_active = False
-        
-        # Get hotkey config from settings
-        settings = get_settings()
-        self._setup_hotkey(settings)
-    
-    def update_settings(self, settings: Settings) -> None:
-        """Update hotkey configuration from new settings."""
-        self._setup_hotkey(settings)
-    
-    def _setup_hotkey(self, settings: Settings) -> None:
-        """Configure the hotkey from settings."""
-        # Store required modifier types (e.g., {'ctrl', 'alt'})
-        self._required_modifier_types = set(settings.hotkey.modifiers)
-        
-        self._trigger_key = keyboard.Key.space
-        if settings.hotkey.key != "space":
-            # Handle other keys
-            try:
-                self._trigger_key = getattr(keyboard.Key, settings.hotkey.key)
-            except AttributeError:
-                # It's a character key
-                self._trigger_key = keyboard.KeyCode.from_char(settings.hotkey.key)
-    
-    def _check_hotkey(self) -> bool:
-        """Check if the hotkey combination is currently held."""
-        # Check if trigger key is pressed
-        if self._trigger_key not in self._pressed_keys:
-            return False
-        
-        # Check all required modifiers
-        for mod_type in self._required_modifier_types:
-            is_pressed = False
-            if mod_type == "ctrl":
-                is_pressed = (keyboard.Key.ctrl_l in self._pressed_keys or 
-                              keyboard.Key.ctrl_r in self._pressed_keys)
-            elif mod_type == "alt":
-                is_pressed = (keyboard.Key.alt_l in self._pressed_keys or 
-                              keyboard.Key.alt_r in self._pressed_keys)
-            elif mod_type == "shift":
-                is_pressed = (keyboard.Key.shift_l in self._pressed_keys or 
-                              keyboard.Key.shift_r in self._pressed_keys)
-            elif mod_type in ("cmd", "meta"):
-                is_pressed = (keyboard.Key.cmd_l in self._pressed_keys or 
-                              keyboard.Key.cmd_r in self._pressed_keys)
-            
-            if not is_pressed:
-                return False
-        
-        return True
-    
-    def _on_press(self, key) -> None:
-        """Handle key press events."""
-        self._pressed_keys.add(key)
-        
-        if not self._is_hotkey_active and self._check_hotkey():
-            self._is_hotkey_active = True
-            self.hotkey_pressed.emit()
-    
-    def _on_release(self, key) -> None:
-        """Handle key release events."""
-        try:
-            self._pressed_keys.remove(key)
-        except KeyError:
-            pass
-        
-        if self._is_hotkey_active and not self._check_hotkey():
-            self._is_hotkey_active = False
-            self.hotkey_released.emit()
-    
-    def start(self) -> None:
-        """Start listening for hotkeys."""
-        self._listener = keyboard.Listener(
-            on_press=self._on_press,
-            on_release=self._on_release
-        )
-        self._listener.start()
-    
-    def stop(self) -> None:
-        """Stop listening for hotkeys."""
-        if self._listener:
-            self._listener.stop()
-            self._listener = None
+logger = get_logger(__name__)
 
 
 class TranscribeApp(QObject):
@@ -166,7 +64,6 @@ class TranscribeApp(QObject):
         # Typing state for non-blocking character output
         self._typing_text: str = ""
         self._typing_index: int = 0
-        self._typing_timer: Optional[QTimer] = None
         self._typing_timer: Optional[QTimer] = None
         
         # Connect signals
@@ -233,21 +130,37 @@ class TranscribeApp(QObject):
     
     def _start_recording(self) -> None:
         """Start recording audio."""
-        self._tray.set_status(TrayStatus.RECORDING)
-        self._recorder.start()
+        logger.debug("Starting audio recording")
+        if self._recorder.start():
+            self._tray.set_status(TrayStatus.RECORDING)
+            logger.info("Recording started")
+        else:
+            error_msg = self._recorder.last_error or "Failed to start recording"
+            self._tray.set_status(TrayStatus.ERROR, error_msg)
+            logger.error(f"Recording error: {error_msg}")
     
     def _stop_recording(self) -> None:
         """Stop recording and transcribe."""
+        import time
+        start_time = time.time()
+        
+        logger.debug("Stopping audio recording")
         audio_data = self._recorder.stop()
         
         if audio_data is None or len(audio_data) == 0:
+            logger.warning("No audio data captured")
             self._tray.set_status(TrayStatus.IDLE)
             return
+        
+        logger.info(f"Captured {len(audio_data)} audio samples, starting transcription")
         
         # Transcribe the audio
         text = self._transcriber.transcribe(audio_data, self._settings.sample_rate)
         
-        if text:            
+        duration = time.time() - start_time
+        
+        if text:
+            logger.info(f"Transcription completed in {duration:.2f}s: '{text[:50]}{'...' if len(text) > 50 else ''}'")
             # Type the result
             if self._settings.auto_type_result:
                 self._type_text(text)
@@ -255,6 +168,7 @@ class TranscribeApp(QObject):
                 # No typing needed, go idle immediately
                 self._finish_typing()
         else:
+            logger.warning(f"Transcription returned empty result after {duration:.2f}s")
             self._tray.set_status(TrayStatus.IDLE)
     
     def _type_text(self, text: str) -> None:
@@ -310,7 +224,6 @@ class TranscribeApp(QObject):
         self._settings = get_settings()
         
         # Update components
-        # Update components
         self._recorder.sample_rate = self._settings.sample_rate
         self._recorder.device = self._settings.input_device
         self._hotkey_listener.update_settings(self._settings)
@@ -320,22 +233,31 @@ class TranscribeApp(QObject):
     
     def _quit(self) -> None:
         """Quit the application."""
+        logger.info("Shutting down application")
         self._hotkey_listener.stop()
         self._transcriber.unload()
         self._tray.hide()
         QApplication.quit()
+        logger.info("Application shutdown complete")
     
     def run(self) -> None:
         """Start the application."""
+        logger.info(f"Starting {__app_name__} v{__version__}")
+        logger.info(f"Settings: model={self._settings.model_name}, sample_rate={self._settings.sample_rate}")
+        
         # Load model in background
+        logger.info("Loading transcription model...")
         self._transcriber.load_model()
         
         # Start hotkey listener
+        logger.info(f"Starting hotkey listener: {self._settings.hotkey.to_display_string()}")
         self._hotkey_listener.start()
         
         # Show notification that app is ready
         if not self._settings.start_minimized:
             self._show_settings()
+        
+        logger.info("Application initialization complete")
 
 
 def main():

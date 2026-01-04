@@ -97,9 +97,42 @@ class TestAudioRecorderState:
         
         assert recorder.is_recording is False
         assert audio is not None
-        assert len(audio) == 4  # 2 + 2 samples
+        assert len(audio) > 0  # Sample count may vary due to resampling
         mock_stream.stop.assert_called_once()
         mock_stream.close.assert_called_once()
+    
+    @patch("src.transcribe.core.recorder.sd.query_devices")
+    @patch("src.transcribe.core.recorder.sd.InputStream")
+    def test_stop_performs_resampling(self, mock_stream_class, mock_query):
+        """Test stop() resamples audio when device rate differs from target."""
+        # Setup device with 48kHz native rate
+        mock_query.return_value = {'default_samplerate': 48000.0}
+        
+        mock_stream = MagicMock()
+        mock_stream_class.return_value = mock_stream
+        
+        # Target 16kHz (standard for Whisper)
+        recorder = AudioRecorder(sample_rate=16000)
+        recorder.start()
+        
+        # Simulate 1 second of audio at 48kHz (48000 samples)
+        # We'll simulate 2 chunks of 24000 samples each
+        chunk_size = 24000
+        recorder._audio_buffer = [
+            np.zeros((chunk_size, 1), dtype=np.float32),
+            np.zeros((chunk_size, 1), dtype=np.float32),
+        ]
+        
+        audio = recorder.stop()
+        
+        # We expect 16000 samples total (1 second at 16kHz)
+        # 48000 source samples / 3 = 16000 target samples
+        expected_samples = 16000
+        
+        assert audio is not None
+        # Allow small rounding difference from resampling
+        assert abs(len(audio) - expected_samples) < 10
+        assert recorder.sample_rate == 16000
     
     def test_stop_without_start_returns_none(self):
         """Test stop() without start() returns None."""

@@ -1,3 +1,25 @@
+"""
+DEPRECATED: This is the original standalone script.
+
+This file is kept for reference only. The application has been refactored
+into a modular package. Please use:
+
+    python -m src.transcribe.app
+
+Or after installation:
+
+    transcribe
+
+See src/transcribe/ for the current implementation.
+"""
+
+import warnings
+warnings.warn(
+    "main_legacy.py is deprecated. Use 'python -m src.transcribe.app' instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 import sounddevice as sd
 import numpy as np
 import scipy.io.wavfile as wav

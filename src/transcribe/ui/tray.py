@@ -26,12 +26,10 @@ class SystemTray(QObject):
     Signals:
         settings_requested: Emitted when user clicks "Settings"
         quit_requested: Emitted when user clicks "Quit"
-        toggle_requested: Emitted when user clicks "Start/Pause"
     """
     
     settings_requested = Signal()
     quit_requested = Signal()
-    toggle_requested = Signal()
     
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -55,11 +53,6 @@ class SystemTray(QObject):
         self._menu.addAction(self._status_action)
         
         self._menu.addSeparator()
-        
-        # Toggle action
-        self._toggle_action = QAction("Pause", self._menu)
-        self._toggle_action.triggered.connect(self.toggle_requested.emit)
-        self._menu.addAction(self._toggle_action)
         
         # Settings action
         settings_action = QAction("Settings...", self._menu)
@@ -94,16 +87,6 @@ class SystemTray(QObject):
             TrayStatus.ERROR: f"Error: {message}"
         }
         self._status_action.setText(status_texts.get(status, "Unknown"))
-        
-        # Update toggle action text
-        if status == TrayStatus.IDLE:
-            self._toggle_action.setText("Pause")
-            self._toggle_action.setEnabled(True)
-        elif status == TrayStatus.LOADING:
-            self._toggle_action.setText("Start")
-            self._toggle_action.setEnabled(False)
-        else:
-            self._toggle_action.setEnabled(True)
     
     def _update_icon(self) -> None:
         """Update the tray icon based on current status."""
