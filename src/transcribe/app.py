@@ -17,6 +17,7 @@ from .core.settings import get_settings, Settings
 from .core.recorder import AudioRecorder
 from .core.transcriber import TranscriptionEngine, EngineState
 from .core.hotkey import HotkeyListener
+from .core.llm_processor import LLMProcessor, Enhancement
 from .ui.tray import SystemTray, TrayStatus
 from .ui.main_window import SettingsWindow
 from .ui.download_dialog import DownloadDialog
@@ -67,6 +68,10 @@ class TranscribeApp(QObject):
         self._typing_text: str = ""
         self._typing_index: int = 0
         self._typing_timer: Optional[QTimer] = None
+        
+        # LLM processor for text enhancement
+        self._llm_processor: Optional[LLMProcessor] = None
+        self._init_llm_processor()
         
         # Connect signals
         self._tray.settings_requested.connect(self._show_settings)
@@ -193,11 +198,60 @@ class TranscribeApp(QObject):
         
         if text:
             logger.info(f"Transcription completed in {duration:.2f}s: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            
+            # Apply LLM enhancement if active
+            text = self._apply_enhancement(text)
+            
             # Type the result
             self._type_text(text)
         else:
             logger.warning(f"Transcription returned empty result after {duration:.2f}s")
             self._tray.set_status(TrayStatus.IDLE)
+    
+    def _init_llm_processor(self) -> None:
+        """Initialize or reinitialize the LLM processor."""
+        # Initialize if we have an API key, active enhancement, or using local Ollama
+        has_config = (
+            self._settings.llm_api_key or 
+            self._settings.active_enhancement_id or
+            self._settings.llm_provider == "ollama"
+        )
+        if has_config:
+            self._llm_processor = LLMProcessor(
+                model=self._settings.llm_model,
+                api_key=self._settings.llm_api_key,
+                api_base=self._settings.llm_api_base
+            )
+            logger.info(f"LLM processor initialized: model={self._settings.llm_model}, api_base={self._settings.llm_api_base}")
+        else:
+            self._llm_processor = None
+    
+    def _get_active_enhancement(self) -> Optional[Enhancement]:
+        """Get the currently active enhancement, if any."""
+        if not self._settings.active_enhancement_id:
+            return None
+        
+        for enh_dict in self._settings.enhancements:
+            if enh_dict.get("id") == self._settings.active_enhancement_id:
+                return Enhancement.from_dict(enh_dict)
+        
+        return None
+    
+    def _apply_enhancement(self, text: str) -> str:
+        """Apply the active enhancement to the text, if configured."""
+        if not self._llm_processor:
+            return text
+        
+        enhancement = self._get_active_enhancement()
+        if not enhancement:
+            return text
+        
+        if not self._llm_processor.is_configured():
+            logger.warning("LLM processor not configured (no API key), skipping enhancement")
+            return text
+        
+        logger.info(f"Applying enhancement: {enhancement.title}")
+        return self._llm_processor.process(text, enhancement)
     
     def _type_text(self, text: str) -> None:
         """Type text using QTimer for non-blocking output."""
@@ -328,6 +382,9 @@ class TranscribeApp(QObject):
         self._recorder.sample_rate = self._settings.sample_rate
         self._recorder.device = self._settings.input_device
         self._hotkey_listener.update_settings(self._settings)
+        
+        # Reinitialize LLM processor with new settings
+        self._init_llm_processor()
         
         # Apply autostart setting
         set_autostart(self._settings.auto_start_on_login, "Transcribe")

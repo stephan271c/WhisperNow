@@ -4,18 +4,21 @@ Settings window with tabbed interface.
 Provides a GUI for configuring application settings.
 """
 
+import uuid
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
     QLabel, QSlider, QComboBox, QCheckBox, QPushButton,
     QGroupBox, QFormLayout, QSpinBox, QKeySequenceEdit,
-    QDialogButtonBox, QLineEdit, QMessageBox
+    QDialogButtonBox, QLineEdit, QMessageBox, QListWidget,
+    QListWidgetItem, QTextEdit
 )
 from PySide6.QtGui import QKeySequence
 from PySide6.QtCore import Qt, Signal
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from ..core.settings import Settings, get_settings, HotkeyConfig
 from ..core.recorder import AudioRecorder
+from ..core.llm_processor import Enhancement, DEFAULT_ENHANCEMENTS, PROVIDERS, get_models_for_provider
 
 
 class SettingsWindow(QDialog):
@@ -46,6 +49,7 @@ class SettingsWindow(QDialog):
         # Tab widget
         tabs = QTabWidget()
         tabs.addTab(self._create_general_tab(), "General")
+        tabs.addTab(self._create_enhancements_tab(), "Enhancements")
         tabs.addTab(self._create_hotkey_tab(), "Hotkeys")
         tabs.addTab(self._create_audio_tab(), "Audio")
         tabs.addTab(self._create_advanced_tab(), "Advanced")
@@ -111,6 +115,216 @@ class SettingsWindow(QDialog):
         """Enable/disable speed slider based on instant type setting."""
         self._speed_slider.setEnabled(not checked)
         self._speed_label.setEnabled(not checked)
+    
+    def _create_enhancements_tab(self) -> QWidget:
+        """Create the Enhancements settings tab."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # LLM Settings group
+        llm_group = QGroupBox("LLM Settings")
+        llm_layout = QFormLayout(llm_group)
+        
+        # Provider selector
+        self._provider_combo = QComboBox()
+        for provider_id, (display_name, _, _) in PROVIDERS.items():
+            self._provider_combo.addItem(display_name, provider_id)
+        self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        llm_layout.addRow("Provider:", self._provider_combo)
+        
+        # Model selector with refresh button
+        model_layout = QHBoxLayout()
+        self._llm_model_combo = QComboBox()
+        self._llm_model_combo.setEditable(True)  # Allow custom model names
+        self._llm_model_combo.setMinimumWidth(250)
+        model_layout.addWidget(self._llm_model_combo, 1)
+        
+        refresh_btn = QPushButton("⟳")
+        refresh_btn.setFixedWidth(30)
+        refresh_btn.setToolTip("Refresh model list from provider")
+        refresh_btn.clicked.connect(self._refresh_model_list)
+        model_layout.addWidget(refresh_btn)
+        llm_layout.addRow("Model:", model_layout)
+        
+        # API Base URL (shown for certain providers)
+        self._api_base_edit = QLineEdit()
+        self._api_base_edit.setPlaceholderText("e.g., http://localhost:11434")
+        self._api_base_label = QLabel("API Base URL:")
+        llm_layout.addRow(self._api_base_label, self._api_base_edit)
+        
+        # API Key input
+        self._api_key_edit = QLineEdit()
+        self._api_key_edit.setEchoMode(QLineEdit.Password)
+        self._api_key_edit.setPlaceholderText("Enter your API key")
+        llm_layout.addRow("API Key:", self._api_key_edit)
+        
+        layout.addWidget(llm_group)
+        
+        # Enhancements list group
+        enhance_group = QGroupBox("Enhancements")
+        enhance_layout = QVBoxLayout(enhance_group)
+        
+        # Active enhancement selector
+        active_layout = QHBoxLayout()
+        active_layout.addWidget(QLabel("Active Enhancement:"))
+        self._active_enhancement_combo = QComboBox()
+        active_layout.addWidget(self._active_enhancement_combo, 1)
+        enhance_layout.addLayout(active_layout)
+        
+        # Enhancement list
+        self._enhancement_list = QListWidget()
+        self._enhancement_list.itemDoubleClicked.connect(self._edit_enhancement)
+        enhance_layout.addWidget(self._enhancement_list)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self._add_enhancement)
+        edit_btn = QPushButton("Edit")
+        edit_btn.clicked.connect(self._edit_selected_enhancement)
+        delete_btn = QPushButton("Delete")
+        delete_btn.clicked.connect(self._delete_enhancement)
+        add_defaults_btn = QPushButton("Add Defaults")
+        add_defaults_btn.clicked.connect(self._add_default_enhancements)
+        
+        btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(edit_btn)
+        btn_layout.addWidget(delete_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(add_defaults_btn)
+        enhance_layout.addLayout(btn_layout)
+        
+        layout.addWidget(enhance_group)
+        
+        return widget
+    
+    def _on_provider_changed(self) -> None:
+        """Handle provider selection change."""
+        provider_id = self._provider_combo.currentData()
+        if not provider_id:
+            return
+        
+        # Get provider config
+        _, default_api_base, _ = PROVIDERS.get(provider_id, (None, None, None))
+        
+        # Show/hide API base field based on provider
+        # Only Ollama (local) and Other need custom API base - LiteLLM handles others automatically
+        needs_api_base = provider_id in ("ollama", "other")
+        self._api_base_label.setVisible(needs_api_base)
+        self._api_base_edit.setVisible(needs_api_base)
+        
+        # Set default API base if switching to a provider with one
+        if default_api_base and not self._api_base_edit.text():
+            self._api_base_edit.setText(default_api_base)
+        
+        # Refresh model list and reset to first model for new provider
+        self._refresh_model_list(reset_selection=True)
+    
+    def _refresh_model_list(self, reset_selection: bool = False) -> None:
+        """Refresh the model dropdown with models from the selected provider."""
+        provider_id = self._provider_combo.currentData()
+        if not provider_id:
+            return
+        
+        # Save current selection (only if not resetting)
+        current_model = "" if reset_selection else self._llm_model_combo.currentText()
+        
+        # Clear and populate
+        self._llm_model_combo.clear()
+        
+        # Get models for provider
+        models = get_models_for_provider(provider_id)
+        if models:
+            self._llm_model_combo.addItems(models)
+        
+        # Restore selection if still valid and not resetting, otherwise use first item
+        if not reset_selection and current_model:
+            idx = self._llm_model_combo.findText(current_model)
+            if idx >= 0:
+                self._llm_model_combo.setCurrentIndex(idx)
+            else:
+                # Keep custom model even if not in list (editable combo)
+                self._llm_model_combo.setCurrentText(current_model)
+    
+    def _refresh_enhancement_list(self) -> None:
+        """Refresh the enhancement list and active combo."""
+        self._enhancement_list.clear()
+        self._active_enhancement_combo.clear()
+        self._active_enhancement_combo.addItem("None (disabled)", None)
+        
+        for enh_dict in self._settings.enhancements:
+            item = QListWidgetItem(enh_dict.get("title", "Untitled"))
+            item.setData(Qt.UserRole, enh_dict)
+            self._enhancement_list.addItem(item)
+            
+            self._active_enhancement_combo.addItem(
+                enh_dict.get("title", "Untitled"),
+                enh_dict.get("id")
+            )
+        
+        # Select active enhancement
+        if self._settings.active_enhancement_id:
+            idx = self._active_enhancement_combo.findData(self._settings.active_enhancement_id)
+            if idx >= 0:
+                self._active_enhancement_combo.setCurrentIndex(idx)
+    
+    def _add_enhancement(self) -> None:
+        """Add a new enhancement."""
+        dialog = EnhancementEditDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            enh = dialog.get_enhancement()
+            self._settings.enhancements.append(enh)
+            self._refresh_enhancement_list()
+    
+    def _edit_enhancement(self, item: QListWidgetItem) -> None:
+        """Edit an enhancement from the list."""
+        enh_dict = item.data(Qt.UserRole)
+        dialog = EnhancementEditDialog(self, enh_dict)
+        if dialog.exec() == QDialog.Accepted:
+            updated = dialog.get_enhancement()
+            # Update in list
+            for i, e in enumerate(self._settings.enhancements):
+                if e.get("id") == updated.get("id"):
+                    self._settings.enhancements[i] = updated
+                    break
+            self._refresh_enhancement_list()
+    
+    def _edit_selected_enhancement(self) -> None:
+        """Edit the currently selected enhancement."""
+        item = self._enhancement_list.currentItem()
+        if item:
+            self._edit_enhancement(item)
+    
+    def _delete_enhancement(self) -> None:
+        """Delete the selected enhancement."""
+        item = self._enhancement_list.currentItem()
+        if not item:
+            return
+        
+        enh_dict = item.data(Qt.UserRole)
+        reply = QMessageBox.question(
+            self,
+            "Delete Enhancement",
+            f"Delete enhancement '{enh_dict.get('title')}'?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self._settings.enhancements = [
+                e for e in self._settings.enhancements
+                if e.get("id") != enh_dict.get("id")
+            ]
+            # Clear active if deleted
+            if self._settings.active_enhancement_id == enh_dict.get("id"):
+                self._settings.active_enhancement_id = None
+            self._refresh_enhancement_list()
+    
+    def _add_default_enhancements(self) -> None:
+        """Add the default enhancement presets."""
+        existing_ids = {e.get("id") for e in self._settings.enhancements}
+        for default in DEFAULT_ENHANCEMENTS:
+            if default.id not in existing_ids:
+                self._settings.enhancements.append(default.to_dict())
+        self._refresh_enhancement_list()
     
     def _create_hotkey_tab(self) -> QWidget:
         """Create the Hotkeys settings tab."""
@@ -250,6 +464,28 @@ class SettingsWindow(QDialog):
             idx = self._device_combo.findData(self._settings.input_device)
             if idx >= 0:
                 self._device_combo.setCurrentIndex(idx)
+        
+        # Load LLM settings
+        # Set provider first (this triggers _on_provider_changed which populates models)
+        provider_idx = self._provider_combo.findData(self._settings.llm_provider)
+        if provider_idx >= 0:
+            self._provider_combo.setCurrentIndex(provider_idx)
+        
+        # Set API base (before triggering provider change clears it)
+        if self._settings.llm_api_base:
+            self._api_base_edit.setText(self._settings.llm_api_base)
+        
+        # Trigger provider change to show/hide API base and populate models
+        self._on_provider_changed()
+        
+        # Set model after models are populated
+        self._llm_model_combo.setCurrentText(self._settings.llm_model)
+        
+        if self._settings.llm_api_key:
+            self._api_key_edit.setText(self._settings.llm_api_key)
+        
+        # Load enhancements
+        self._refresh_enhancement_list()
     
     def _save_settings(self) -> None:
         """Save UI values to settings."""
@@ -275,6 +511,18 @@ class SettingsWindow(QDialog):
         hotkey_config = self._parse_key_sequence()
         if hotkey_config:
             self._settings.hotkey = hotkey_config
+        
+        # Save LLM settings
+        self._settings.llm_provider = self._provider_combo.currentData()
+        self._settings.llm_model = self._llm_model_combo.currentText()
+        api_key = self._api_key_edit.text().strip()
+        if api_key:
+            self._settings.llm_api_key = api_key
+        api_base = self._api_base_edit.text().strip()
+        self._settings.llm_api_base = api_base if api_base else None
+        
+        # Save active enhancement
+        self._settings.active_enhancement_id = self._active_enhancement_combo.currentData()
         
         self._settings.save()
         self.settings_changed.emit()
@@ -353,3 +601,82 @@ class SettingsWindow(QDialog):
         """Reset all settings to defaults."""
         self._settings.reset_to_defaults()
         self._load_settings()
+
+
+class EnhancementEditDialog(QDialog):
+    """Dialog for creating or editing an enhancement."""
+    
+    def __init__(self, parent: Optional[QWidget] = None, enhancement: Optional[Dict] = None):
+        super().__init__(parent)
+        
+        self._enhancement = enhancement
+        self._is_new = enhancement is None
+        
+        self.setWindowTitle("Add Enhancement" if self._is_new else "Edit Enhancement")
+        self.setMinimumWidth(400)
+        self.setMinimumHeight(300)
+        
+        self._setup_ui()
+        self._load_enhancement()
+    
+    def _setup_ui(self) -> None:
+        """Build the dialog UI."""
+        layout = QVBoxLayout(self)
+        
+        form = QFormLayout()
+        
+        self._title_edit = QLineEdit()
+        self._title_edit.setPlaceholderText("e.g., Fix Grammar")
+        form.addRow("Title:", self._title_edit)
+        
+        self._prompt_edit = QTextEdit()
+        self._prompt_edit.setPlaceholderText(
+            "Enter the system prompt for the LLM...\n\n"
+            "Example: Fix any grammar or spelling errors in the following text. "
+            "Only output the corrected text, nothing else."
+        )
+        form.addRow("Prompt:", self._prompt_edit)
+        
+        layout.addLayout(form)
+        
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self._validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+    
+    def _load_enhancement(self) -> None:
+        """Load enhancement data into the form."""
+        if self._enhancement:
+            self._title_edit.setText(self._enhancement.get("title", ""))
+            self._prompt_edit.setPlainText(self._enhancement.get("prompt", ""))
+    
+    def _validate_and_accept(self) -> None:
+        """Validate input and accept if valid."""
+        title = self._title_edit.text().strip()
+        prompt = self._prompt_edit.toPlainText().strip()
+        
+        if not title:
+            QMessageBox.warning(self, "Validation Error", "Title is required.")
+            return
+        
+        if not prompt:
+            QMessageBox.warning(self, "Validation Error", "Prompt is required.")
+            return
+        
+        self.accept()
+    
+    def get_enhancement(self) -> Dict:
+        """Get the enhancement data from the form."""
+        if self._is_new:
+            enh_id = str(uuid.uuid4())[:8]
+        else:
+            enh_id = self._enhancement.get("id", str(uuid.uuid4())[:8])
+        
+        return {
+            "id": enh_id,
+            "title": self._title_edit.text().strip(),
+            "prompt": self._prompt_edit.toPlainText().strip(),
+        }

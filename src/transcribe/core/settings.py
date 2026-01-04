@@ -10,7 +10,7 @@ Stores configuration in platform-appropriate locations:
 
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import json
 import platform
 
@@ -92,6 +92,14 @@ class Settings:
     # Platform permissions (macOS)
     accessibility_permissions_granted: bool = False
     
+    # LLM Enhancement settings
+    enhancements: List[dict] = field(default_factory=list)  # List of Enhancement dicts
+    active_enhancement_id: Optional[str] = None  # ID of active enhancement, None = disabled
+    llm_provider: str = "openai"  # Provider: openai, anthropic, openrouter, ollama, gemini, other
+    llm_model: str = "gpt-4o-mini"  # LLM model name
+    llm_api_key: Optional[str] = None  # API key (user responsible for security)
+    llm_api_base: Optional[str] = None  # Custom API base URL (for openrouter, ollama, etc.)
+    
     # Window state (internal)
     window_geometry: Optional[Tuple[int, int, int, int]] = None
     
@@ -112,6 +120,11 @@ class Settings:
                 # Handle nested HotkeyConfig
                 if "hotkey" in filtered_data and isinstance(filtered_data["hotkey"], dict):
                     filtered_data["hotkey"] = HotkeyConfig(**filtered_data["hotkey"])
+                
+                # Handle enhancements list (keep as dicts, not Enhancement objects)
+                if "enhancements" in filtered_data:
+                    if not isinstance(filtered_data["enhancements"], list):
+                        filtered_data["enhancements"] = []
                 
                 settings = cls(**filtered_data)
                 settings._validate()

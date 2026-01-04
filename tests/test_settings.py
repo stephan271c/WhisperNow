@@ -63,7 +63,7 @@ class TestSettings:
                 sample_rate=44100,
                 input_device="Test Mic",
                 characters_per_second=200,
-                auto_type_result=False,
+                instant_type=True,
                 hotkey=HotkeyConfig(modifiers=["alt"], key="r"),
                 model_name="openai/whisper-base",
                 use_gpu=False,
@@ -79,7 +79,7 @@ class TestSettings:
             assert loaded.sample_rate == 44100
             assert loaded.input_device == "Test Mic"
             assert loaded.characters_per_second == 200
-            assert loaded.auto_type_result is False
+            assert loaded.instant_type is True
             assert loaded.hotkey.modifiers == ["alt"]
             assert loaded.hotkey.key == "r"
             assert loaded.model_name == "openai/whisper-base"
