@@ -156,6 +156,14 @@ class NeMoBackend(ASRBackend):
             
             if self._device == "cuda":
                 self._model = self._model.cuda()
+                # OPTIMIZATION: Convert to Half Precision (FP16)
+                # This cuts memory usage for weights by ~50%
+                self._model = self._model.half()
+            
+            # OPTIMIZATION: Switch to Evaluation Mode
+            # This tells PyTorch we are not training, disabling dropout and
+            # other training-specific layers.
+            self._model.eval()
                 
         except Exception as e:
             self._model = None
@@ -259,11 +267,15 @@ class HuggingFaceBackend(ASRBackend):
         self._device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
         device_arg = 0 if self._device == "cuda" else -1
         
+        # Optional optimization for HF as well: use fp16 if on cuda
+        dtype = torch.float16 if self._device == "cuda" else torch.float32
+
         try:
             self._pipeline = pipeline(
                 task="automatic-speech-recognition",
                 model=model_name,
                 device=device_arg,
+                torch_dtype=dtype,
                 # chunk_length_s=30,  # For long audio files
             )
         except Exception as e:

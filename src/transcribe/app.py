@@ -208,6 +208,35 @@ class TranscribeApp(QObject):
             logger.warning(f"Transcription returned empty result after {duration:.2f}s")
             self._tray.set_status(TrayStatus.IDLE)
     
+    def _get_litellm_model_name(self) -> str:
+        """Get the model name formatted for liteLLM with provider prefix."""
+        model = self._settings.llm_model
+        provider = self._settings.llm_provider
+        
+        # Known provider prefixes that liteLLM recognizes
+        known_prefixes = (
+            "openrouter/", "ollama/", "gemini/", 
+            "openai/", "anthropic/", "azure/", "huggingface/"
+        )
+        
+        # If model already has a known provider prefix, use as-is
+        if model.startswith(known_prefixes):
+            return model
+        
+        # Providers that require a prefix
+        prefix_map = {
+            "openrouter": "openrouter/",
+            "ollama": "ollama/",
+            "gemini": "gemini/",
+        }
+        
+        prefix = prefix_map.get(provider)
+        if prefix:
+            return f"{prefix}{model}"
+        
+        # OpenAI, Anthropic, and 'other' don't need prefixes
+        return model
+    
     def _init_llm_processor(self) -> None:
         """Initialize or reinitialize the LLM processor."""
         # Initialize if we have an API key, active enhancement, or using local Ollama
@@ -217,12 +246,13 @@ class TranscribeApp(QObject):
             self._settings.llm_provider == "ollama"
         )
         if has_config:
+            model_name = self._get_litellm_model_name()
             self._llm_processor = LLMProcessor(
-                model=self._settings.llm_model,
+                model=model_name,
                 api_key=self._settings.llm_api_key,
                 api_base=self._settings.llm_api_base
             )
-            logger.info(f"LLM processor initialized: model={self._settings.llm_model}, api_base={self._settings.llm_api_base}")
+            logger.info(f"LLM processor initialized: model={model_name}, api_base={self._settings.llm_api_base}")
         else:
             self._llm_processor = None
     
