@@ -18,7 +18,7 @@ from typing import Optional, List, Dict
 
 from ..core.settings import Settings, get_settings, HotkeyConfig
 from ..core.recorder import AudioRecorder
-from ..core.llm_processor import Enhancement, DEFAULT_ENHANCEMENTS, PROVIDERS, get_models_for_provider
+from ..core.llm_processor import Enhancement, PROVIDERS, get_models_for_provider
 
 
 class SettingsWindow(QDialog):
@@ -184,14 +184,11 @@ class SettingsWindow(QDialog):
         edit_btn.clicked.connect(self._edit_selected_enhancement)
         delete_btn = QPushButton("Delete")
         delete_btn.clicked.connect(self._delete_enhancement)
-        add_defaults_btn = QPushButton("Add Defaults")
-        add_defaults_btn.clicked.connect(self._add_default_enhancements)
         
         btn_layout.addWidget(add_btn)
         btn_layout.addWidget(edit_btn)
         btn_layout.addWidget(delete_btn)
         btn_layout.addStretch()
-        btn_layout.addWidget(add_defaults_btn)
         enhance_layout.addLayout(btn_layout)
         
         layout.addWidget(enhance_group)
@@ -317,14 +314,6 @@ class SettingsWindow(QDialog):
             if self._settings.active_enhancement_id == enh_dict.get("id"):
                 self._settings.active_enhancement_id = None
             self._refresh_enhancement_list()
-    
-    def _add_default_enhancements(self) -> None:
-        """Add the default enhancement presets."""
-        existing_ids = {e.get("id") for e in self._settings.enhancements}
-        for default in DEFAULT_ENHANCEMENTS:
-            if default.id not in existing_ids:
-                self._settings.enhancements.append(default.to_dict())
-        self._refresh_enhancement_list()
     
     def _create_hotkey_tab(self) -> QWidget:
         """Create the Hotkeys settings tab."""
@@ -518,8 +507,11 @@ class SettingsWindow(QDialog):
         api_key = self._api_key_edit.text().strip()
         if api_key:
             self._settings.llm_api_key = api_key
-        api_base = self._api_base_edit.text().strip()
-        self._settings.llm_api_base = api_base if api_base else None
+        if self._api_base_edit.isVisible():
+            api_base = self._api_base_edit.text().strip()
+            self._settings.llm_api_base = api_base if api_base else None
+        else:
+            self._settings.llm_api_base = None
         
         # Save active enhancement
         self._settings.active_enhancement_id = self._active_enhancement_combo.currentData()

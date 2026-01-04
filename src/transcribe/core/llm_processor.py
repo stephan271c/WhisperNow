@@ -10,6 +10,7 @@ import os
 
 import litellm
 from litellm import completion
+from litellm.exceptions import BadRequestError
 
 from ..utils.logger import get_logger
 
@@ -129,6 +130,10 @@ class LLMProcessor:
         self.api_key = api_key
         self.api_base = api_base
         
+        # State to track if we need to merge system prompts into user messages
+        # (for models that reject developer instructions/system prompts)
+        self._force_merged_prompt = False
+        
         logger.info(f"LLMProcessor initialized with model: {model}, api_base: {api_base}")
     
     def process(self, text: str, enhancement: Enhancement) -> str:
@@ -151,11 +156,17 @@ class LLMProcessor:
             # Build completion kwargs
             kwargs = {
                 "model": self.model,
-                "messages": [
+            }
+            
+            # Use cached fallback strategy if we know this model needs it
+            if self._force_merged_prompt:
+                merged_content = f"{enhancement.prompt}\n\n{text}"
+                kwargs["messages"] = [{"role": "user", "content": merged_content}]
+            else:
+                kwargs["messages"] = [
                     {"role": "system", "content": enhancement.prompt},
                     {"role": "user", "content": text}
-                ],
-            }
+                ]
             
             if self.api_key:
                 kwargs["api_key"] = self.api_key
@@ -168,6 +179,33 @@ class LLMProcessor:
             logger.info(f"Enhancement complete: {len(text)} -> {len(result)} chars")
             return result
             
+        except BadRequestError as e:
+            # Handle models that don't support system prompts (like some Google/OpenRouter models)
+            err_str = str(e)
+            if "Developer instruction is not enabled" in err_str or "unsupported_country_region_territory" in err_str:
+                # Log the specific error for debugging
+                logger.warning(f"Model {self.model} rejected system prompt or raised 400. Retrying with merged prompt. Error: {e}")
+                
+                try:
+                    # Merge system prompt into user message
+                    merged_content = f"{enhancement.prompt}\n\n{text}"
+                    kwargs["messages"] = [{"role": "user", "content": merged_content}]
+                    
+                    response = completion(**kwargs)
+                    result = response.choices[0].message.content
+                    logger.info(f"Enhancement complete (fallback): {len(text)} -> {len(result)} chars")
+                    
+                    # Cache this success so we don't error next time
+                    self._force_merged_prompt = True
+                    return result
+                except Exception as retry_err:
+                    logger.error(f"Fallback processing failed: {retry_err}", exc_info=True)
+                    return text
+            
+            # Re-raise other bad requests
+            logger.error(f"LLM processing failed with BadRequest: {e}", exc_info=True)
+            return text
+
         except Exception as e:
             logger.error(f"LLM processing failed: {e}", exc_info=True)
             # Return original text on failure

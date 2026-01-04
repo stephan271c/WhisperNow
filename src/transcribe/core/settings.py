@@ -10,13 +10,19 @@ Stores configuration in platform-appropriate locations:
 
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, TYPE_CHECKING
 import json
 import platform
 
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_default_enhancements() -> List[dict]:
+    """Get default enhancement presets as dicts (lazy import to avoid circular dependency)."""
+    from .llm_processor import DEFAULT_ENHANCEMENTS
+    return [e.to_dict() for e in DEFAULT_ENHANCEMENTS]
 
 
 def get_config_dir() -> Path:
@@ -128,12 +134,20 @@ class Settings:
                 
                 settings = cls(**filtered_data)
                 settings._validate()
+                
+                # Auto-populate default enhancements if none exist
+                if not settings.enhancements:
+                    settings.enhancements = _get_default_enhancements()
+                
                 return settings
             except (json.JSONDecodeError, TypeError) as e:
                 logger.warning(f"Could not load settings: {e}. Using defaults.", exc_info=True)
                 return cls()
         
-        return cls()
+        # New settings: populate with defaults
+        settings = cls()
+        settings.enhancements = _get_default_enhancements()
+        return settings
     
     def _validate(self) -> None:
         """Validate settings and reset invalid values to defaults."""
