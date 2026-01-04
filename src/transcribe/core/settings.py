@@ -74,7 +74,7 @@ class Settings:
     
     # Typing behavior
     characters_per_second: int = 150  # 0 = instant
-    auto_type_result: bool = True
+    instant_type: bool = False
     
     # Hotkey
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
@@ -88,6 +88,9 @@ class Settings:
     auto_start_on_login: bool = False
 
     first_run_complete: bool = False
+    
+    # Platform permissions (macOS)
+    accessibility_permissions_granted: bool = False
     
     # Window state (internal)
     window_geometry: Optional[Tuple[int, int, int, int]] = None

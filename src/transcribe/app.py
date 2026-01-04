@@ -21,7 +21,9 @@ from .ui.tray import SystemTray, TrayStatus
 from .ui.main_window import SettingsWindow
 from .ui.download_dialog import DownloadDialog
 from .ui.setup_wizard import SetupWizard
+from .ui.permissions_dialog import PermissionsDialog
 from .utils.platform import (
+    get_platform,
     check_accessibility_permissions,
     request_accessibility_permissions,
     set_autostart
@@ -77,9 +79,39 @@ class TranscribeApp(QObject):
     
     def _check_permissions(self) -> None:
         """Check for required permissions (macOS accessibility)."""
-        if not check_accessibility_permissions():
-            # TODO: Show a dialog explaining the need for permissions
-            request_accessibility_permissions()
+        # Only relevant on macOS
+        if get_platform() != "macos":
+            return
+        
+        # If already granted and recorded, verify it's still valid
+        if self._settings.accessibility_permissions_granted:
+            if check_accessibility_permissions():
+                return  # Still valid
+            else:
+                # Permission was revoked, need to re-request
+                logger.warning("Accessibility permission was revoked, prompting user")
+        
+        # Check current status
+        if check_accessibility_permissions():
+            self._settings.accessibility_permissions_granted = True
+            self._settings.save()
+            logger.info("Accessibility permissions already granted")
+            return
+        
+        # Show dialog explaining permissions
+        logger.info("Showing accessibility permissions dialog")
+        dialog = PermissionsDialog()
+        dialog.exec()
+        
+        # Update settings with result
+        granted = check_accessibility_permissions()
+        self._settings.accessibility_permissions_granted = granted
+        self._settings.save()
+        
+        if granted:
+            logger.info("User granted accessibility permissions")
+        else:
+            logger.warning("User continued without accessibility permissions")
     
     def _on_engine_state_change(self, state: EngineState, message: str) -> None:
         """Handle transcription engine state changes."""
@@ -162,20 +194,16 @@ class TranscribeApp(QObject):
         if text:
             logger.info(f"Transcription completed in {duration:.2f}s: '{text[:50]}{'...' if len(text) > 50 else ''}'")
             # Type the result
-            if self._settings.auto_type_result:
-                self._type_text(text)
-            else:
-                # No typing needed, go idle immediately
-                self._finish_typing()
+            self._type_text(text)
         else:
             logger.warning(f"Transcription returned empty result after {duration:.2f}s")
             self._tray.set_status(TrayStatus.IDLE)
     
     def _type_text(self, text: str) -> None:
         """Type text using QTimer for non-blocking output."""
-        if self._settings.characters_per_second <= 0:
-            # Instant typing - no timer needed
-            self._keyboard_controller.type(text)
+        if self._settings.instant_type or self._settings.characters_per_second <= 0:
+            # Instant typing via clipboard paste - avoids pynput race conditions
+            self._paste_text(text)
             self._finish_typing()
         else:
             # Character-by-character typing with timer (tray stays green)
@@ -203,6 +231,56 @@ class TranscribeApp(QObject):
             self._typing_text = ""
             self._typing_index = 0
             self._finish_typing()
+    
+    def _paste_text(self, text: str) -> None:
+        """Paste text using clipboard - more reliable than keyboard.type() on Linux."""
+        from pynput.keyboard import Key
+        import subprocess
+        import time
+        
+        logger.debug(f"Pasting text via clipboard: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+        
+        # Save current clipboard
+        try:
+            result = subprocess.run(
+                ['xclip', '-selection', 'clipboard', '-o'],
+                capture_output=True, text=True, timeout=1
+            )
+            old_clipboard = result.stdout if result.returncode == 0 else ""
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            old_clipboard = ""
+        
+        # Set new clipboard content using xclip
+        try:
+            subprocess.run(
+                ['xclip', '-selection', 'clipboard'],
+                input=text, text=True, timeout=1, check=True
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError) as e:
+            logger.error(f"Failed to set clipboard: {e}")
+            # Fallback to direct typing
+            self._keyboard_controller.type(text)
+            return
+        
+        # Small delay to ensure clipboard is ready
+        time.sleep(0.05)
+        
+        # Simulate Ctrl+V
+        with self._keyboard_controller.pressed(Key.ctrl):
+            self._keyboard_controller.tap('v')
+        
+        # Small delay before restoring clipboard
+        time.sleep(0.1)
+        
+        # Restore old clipboard
+        if old_clipboard:
+            try:
+                subprocess.run(
+                    ['xclip', '-selection', 'clipboard'],
+                    input=old_clipboard, text=True, timeout=1
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
     
     def _finish_typing(self) -> None:
         """Called when typing is complete. Set idle."""

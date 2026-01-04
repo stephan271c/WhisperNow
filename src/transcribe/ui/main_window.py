@@ -84,8 +84,9 @@ class SettingsWindow(QDialog):
         typing_layout.addRow("Typing Speed:", speed_layout)
         
         # Auto-type checkbox
-        self._auto_type_cb = QCheckBox("Automatically type transcribed text")
-        typing_layout.addRow("", self._auto_type_cb)
+        self._instant_type_cb = QCheckBox("Instantly output text")
+        self._instant_type_cb.toggled.connect(self._on_instant_type_toggled)
+        typing_layout.addRow("", self._instant_type_cb)
         
         layout.addWidget(typing_group)
         
@@ -105,6 +106,11 @@ class SettingsWindow(QDialog):
         
         layout.addStretch()
         return widget
+    
+    def _on_instant_type_toggled(self, checked: bool) -> None:
+        """Enable/disable speed slider based on instant type setting."""
+        self._speed_slider.setEnabled(not checked)
+        self._speed_label.setEnabled(not checked)
     
     def _create_hotkey_tab(self) -> QWidget:
         """Create the Hotkeys settings tab."""
@@ -219,7 +225,9 @@ class SettingsWindow(QDialog):
     def _load_settings(self) -> None:
         """Load current settings into the UI."""
         self._speed_slider.setValue(self._settings.characters_per_second)
-        self._auto_type_cb.setChecked(self._settings.auto_type_result)
+        self._instant_type_cb.setChecked(self._settings.instant_type)
+        self._on_instant_type_toggled(self._settings.instant_type)
+        
         self._start_minimized_cb.setChecked(self._settings.start_minimized)
         self._autostart_cb.setChecked(self._settings.auto_start_on_login)
         self._use_gpu_cb.setChecked(self._settings.use_gpu)
@@ -252,7 +260,7 @@ class SettingsWindow(QDialog):
                 return  # Validation failed, don't save
         
         self._settings.characters_per_second = self._speed_slider.value()
-        self._settings.auto_type_result = self._auto_type_cb.isChecked()
+        self._settings.instant_type = self._instant_type_cb.isChecked()
         self._settings.start_minimized = self._start_minimized_cb.isChecked()
         self._settings.auto_start_on_login = self._autostart_cb.isChecked()
         self._settings.use_gpu = self._use_gpu_cb.isChecked()

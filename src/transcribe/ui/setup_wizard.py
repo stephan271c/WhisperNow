@@ -267,6 +267,10 @@ class SetupWizard(QWizard):
         # Save hotkey configuration
         self._settings.hotkey = self._hotkey_page.get_hotkey_config()
         
+        # Save accessibility permission status (macOS only)
+        if get_platform() == "macos":
+            self._settings.accessibility_permissions_granted = check_accessibility_permissions()
+        
         # Mark first run as complete
         self._settings.first_run_complete = True
         

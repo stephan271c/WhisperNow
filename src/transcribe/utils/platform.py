@@ -30,10 +30,21 @@ def check_accessibility_permissions() -> bool:
     if get_platform() != "macos":
         return True
     
-    # TODO: Implement macOS accessibility check
-    # Could use: osascript -e 'tell application "System Events" to keystroke ""'
-    # and check for permission error
-    return True
+    try:
+        # Attempt a minimal System Events interaction to test accessibility
+        result = subprocess.run(
+            ["osascript", "-e", 'tell application "System Events" to keystroke ""'],
+            capture_output=True,
+            timeout=5
+        )
+        # Return code 0 means permission is granted
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        logger.warning("Accessibility permission check timed out")
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to check accessibility permissions: {e}")
+        return False
 
 
 def request_accessibility_permissions() -> None:
