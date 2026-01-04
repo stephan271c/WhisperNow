@@ -237,23 +237,46 @@ class TranscribeApp(QObject):
         from pynput.keyboard import Key
         import subprocess
         import time
+        import platform
         
         logger.debug(f"Pasting text via clipboard: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+        
+        system = platform.system()
+        
+        # Platform-specific clipboard commands
+        if system == "Linux":
+            copy_cmd = ['xclip', '-selection', 'clipboard']
+            paste_cmd = ['xclip', '-selection', 'clipboard', '-o']
+            paste_key = Key.ctrl
+        elif system == "Darwin":  # macOS
+            copy_cmd = ['pbcopy']
+            paste_cmd = ['pbpaste']
+            paste_key = Key.cmd
+        elif system == "Windows":
+            # Windows uses clip.exe for copy, PowerShell for read
+            copy_cmd = ['clip']
+            paste_cmd = ['powershell', '-command', 'Get-Clipboard']
+            paste_key = Key.ctrl
+        else:
+            # Unknown platform, fall back to direct typing
+            logger.warning(f"Unknown platform {system}, falling back to direct typing")
+            self._keyboard_controller.type(text)
+            return
         
         # Save current clipboard
         try:
             result = subprocess.run(
-                ['xclip', '-selection', 'clipboard', '-o'],
+                paste_cmd,
                 capture_output=True, text=True, timeout=1
             )
             old_clipboard = result.stdout if result.returncode == 0 else ""
         except (subprocess.TimeoutExpired, FileNotFoundError):
             old_clipboard = ""
         
-        # Set new clipboard content using xclip
+        # Set new clipboard content
         try:
             subprocess.run(
-                ['xclip', '-selection', 'clipboard'],
+                copy_cmd,
                 input=text, text=True, timeout=1, check=True
             )
         except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError) as e:
@@ -265,8 +288,8 @@ class TranscribeApp(QObject):
         # Small delay to ensure clipboard is ready
         time.sleep(0.05)
         
-        # Simulate Ctrl+V
-        with self._keyboard_controller.pressed(Key.ctrl):
+        # Simulate Ctrl+V (or Cmd+V on macOS)
+        with self._keyboard_controller.pressed(paste_key):
             self._keyboard_controller.tap('v')
         
         # Small delay before restoring clipboard
@@ -276,7 +299,7 @@ class TranscribeApp(QObject):
         if old_clipboard:
             try:
                 subprocess.run(
-                    ['xclip', '-selection', 'clipboard'],
+                    copy_cmd,
                     input=old_clipboard, text=True, timeout=1
                 )
             except (subprocess.TimeoutExpired, FileNotFoundError):
