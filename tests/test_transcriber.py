@@ -108,6 +108,39 @@ class TestEngineUnload:
         assert engine.state == EngineState.NOT_LOADED
 
 
+class TestTranscribeChunked:
+    """Tests for chunked transcription orchestration."""
+    
+    @patch('src.transcribe.core.transcriber.needs_chunking')
+    def test_transcribe_chunked_orchestration(self, mock_needs_chunking):
+        """Test proper orchestration of splitting, transcribing, and combining."""
+        # Setup mocks
+        mock_needs_chunking.return_value = True
+        
+        engine = TranscriptionEngine()
+        engine._audio_processor = MagicMock()
+        
+        # Mock split to return 2 chunks
+        chunk1 = MagicMock()
+        chunk2 = MagicMock()
+        engine._audio_processor.split_audio.return_value = [chunk1, chunk2]
+        
+        # Mock internal transcribe to return text for chunks
+        engine.transcribe = MagicMock(side_effect=["Part1", "Part2"])
+        
+        # Mock combine
+        engine._audio_processor.combine_transcriptions.return_value = "Part1 Part2"
+        
+        # Execute
+        result = engine.transcribe_chunked(MagicMock(), 16000)
+        
+        # Verify
+        assert result == "Part1 Part2"
+        assert engine.transcribe.call_count == 2
+        engine._audio_processor.split_audio.assert_called_once()
+        engine._audio_processor.combine_transcriptions.assert_called_once_with(["Part1", "Part2"])
+
+
 # Integration tests that require actual models
 # These are marked with pytest.mark.slow and skipped by default
 @pytest.mark.slow

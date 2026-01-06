@@ -191,8 +191,8 @@ class TranscribeApp(QObject):
         
         logger.info(f"Captured {len(audio_data)} audio samples, starting transcription")
         
-        # Transcribe the audio
-        text = self._transcriber.transcribe(audio_data, self._settings.sample_rate)
+        # Transcribe the audio (auto-chunks if over 30 seconds)
+        text = self._transcriber.transcribe_chunked(audio_data, self._settings.sample_rate)
         
         duration = time.time() - start_time
         

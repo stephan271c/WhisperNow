@@ -20,6 +20,7 @@ from .backends import (
     create_backend,
     detect_backend_type,
 )
+from .audio_processor import AudioProcessor, needs_chunking
 
 
 class EngineState(Enum):
@@ -86,6 +87,7 @@ class TranscriptionEngine:
         self._backend: Optional[ASRBackend] = None
         self._state = EngineState.NOT_LOADED
         self._device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
+        self._audio_processor = AudioProcessor()
     
     @property
     def state(self) -> EngineState:
@@ -189,6 +191,50 @@ class TranscriptionEngine:
         except Exception as e:
             self._set_state(EngineState.ERROR, f"Transcription failed: {e}")
             return None
+    
+    def transcribe_chunked(
+        self,
+        audio_data: np.ndarray,
+        sample_rate: int = 16000
+    ) -> Optional[str]:
+        """
+        Transcribe audio data, automatically chunking if too long.
+        
+        For audio over 30 seconds, splits into smaller chunks using
+        silence detection for optimal split points, transcribes each
+        chunk, and combines the results.
+        
+        Args:
+            audio_data: Numpy array of audio samples
+            sample_rate: Sample rate of the audio
+            
+        Returns:
+            Transcribed text, or None if transcription failed.
+        """
+        # Check if chunking is needed
+        if not needs_chunking(audio_data, sample_rate):
+            return self.transcribe(audio_data, sample_rate)
+        
+        # Split audio into chunks
+        from ..utils.logger import get_logger
+        logger = get_logger(__name__)
+        
+        chunks = self._audio_processor.split_audio(audio_data, sample_rate)
+        logger.info(f"Processing {len(chunks)} audio chunks")
+        
+        # Transcribe each chunk
+        transcriptions = []
+        for i, chunk in enumerate(chunks):
+            logger.debug(f"Transcribing chunk {i+1}/{len(chunks)}")
+            text = self.transcribe(chunk, sample_rate)
+            if text:
+                transcriptions.append(text)
+        
+        # Combine transcriptions
+        combined = self._audio_processor.combine_transcriptions(transcriptions)
+        logger.info(f"Combined {len(transcriptions)} transcriptions")
+        
+        return combined
     
     def transcribe_with_metadata(
         self,

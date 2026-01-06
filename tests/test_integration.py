@@ -18,7 +18,7 @@ def mock_dependencies():
         
         # Setup mock settings
         settings = Settings()
-        settings.characters_per_second = 0  # Instant typing for tests
+        settings.characters_per_second = 150  # Use char-by-char typing for tests
         mock_get_settings.return_value = settings
         
         # Setup mocks
@@ -27,7 +27,7 @@ def mock_dependencies():
         mock_recorder.stop.return_value = b"audio_data"  # Simulate audio captured
         
         mock_transcriber = MockTranscriber.return_value
-        mock_transcriber.transcribe.return_value = "Hello World"
+        mock_transcriber.transcribe_chunked.return_value = "Hello World"
         
         # We use the REAL HotkeyListener logic, but patched into the App so we control it
         # Actually, using wraps=HotkeyListener is tricky because it spawns a thread.
@@ -42,9 +42,15 @@ def mock_dependencies():
             'set_autostart': mock_set_autostart
         }
 
+@patch('subprocess.run')
 @patch('src.transcribe.app.KeyboardController')
-def test_full_transcription_flow(MockController, mock_dependencies, qtbot):
+def test_full_transcription_flow(MockController, mock_subprocess, mock_dependencies, qtbot):
     """Test the complete flow: Hotkey -> Record -> Transcribe -> Type"""
+    
+    # Set to instant typing (uses paste via subprocess)
+    mock_dependencies['settings'].characters_per_second = 0
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = ""
     
     # Initialize App
     app = TranscribeApp()
@@ -62,11 +68,19 @@ def test_full_transcription_flow(MockController, mock_dependencies, qtbot):
     # Verify recording stopped
     mock_dependencies['recorder'].stop.assert_called_once()
     
-    # Verify transcription
-    mock_dependencies['transcriber'].transcribe.assert_called_once_with(b"audio_data", 16000)
+    # Verify transcription (using chunked method now)
+    mock_dependencies['transcriber'].transcribe_chunked.assert_called_once_with(b"audio_data", 16000)
+
+    # Verify that text was actually "typed" (via clipboard paste in this case)
+    # The app calls _paste_text, which calls subprocess.run with xclip/pbcopy etc.
+    # We should verify that subprocess.run was called to put "Hello World" on clipboard
     
-    # Verify typing
-    MockController.return_value.type.assert_called_with("Hello World")
+    # Filter calls to subprocess.run that set the clipboard (input="Hello World")
+    clip_calls = [
+        call for call in mock_subprocess.call_args_list 
+        if call.kwargs.get('input') == "Hello World"
+    ]
+    assert len(clip_calls) > 0, "Clipboard was not updated with transcribed text"
 
 def test_settings_hotkey_update(mock_dependencies, qtbot):
     """Test that changing settings updates the hotkey listener."""
