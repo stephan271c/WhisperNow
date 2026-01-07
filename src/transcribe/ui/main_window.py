@@ -10,13 +10,14 @@ from PySide6.QtWidgets import (
     QLabel, QSlider, QComboBox, QCheckBox, QPushButton,
     QGroupBox, QFormLayout, QSpinBox, QKeySequenceEdit,
     QDialogButtonBox, QLineEdit, QMessageBox, QListWidget,
-    QListWidgetItem, QTextEdit
+    QListWidgetItem, QTextEdit, QTableWidget, QTableWidgetItem,
+    QHeaderView, QAbstractItemView, QFrame
 )
 from PySide6.QtGui import QKeySequence
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from typing import Optional, List, Dict
 
-from ..core.settings import Settings, get_settings, HotkeyConfig
+from ..core.settings import Settings, get_settings, HotkeyConfig, load_history, clear_history
 from ..core.recorder import AudioRecorder
 from ..core.llm_processor import Enhancement, PROVIDERS, get_models_for_provider
 
@@ -39,8 +40,69 @@ class SettingsWindow(QDialog):
         self.setMinimumHeight(400)
         
         self._settings = get_settings()
+        self._loading_overlay: Optional[QFrame] = None
         self._setup_ui()
         self._load_settings()
+        
+        # Auto-refresh timer for history tab
+        self._history_refresh_timer = QTimer(self)
+        self._history_refresh_timer.timeout.connect(self._refresh_history)
+        self._history_refresh_timer.start(2000)  # Refresh every 2 seconds
+    
+    def set_loading(self, loading: bool) -> None:
+        """
+        Show or hide the loading overlay.
+        
+        Args:
+            loading: True to show loading overlay, False to hide
+        """
+        if loading:
+            if self._loading_overlay is None:
+                self._loading_overlay = self._create_loading_overlay()
+            self._loading_overlay.show()
+            self._loading_overlay.raise_()
+            # Disable GPU checkbox during loading
+            if hasattr(self, '_use_gpu_cb'):
+                self._use_gpu_cb.setEnabled(False)
+        else:
+            if self._loading_overlay is not None:
+                self._loading_overlay.hide()
+            # Re-enable GPU checkbox
+            if hasattr(self, '_use_gpu_cb'):
+                self._use_gpu_cb.setEnabled(True)
+    
+    def _create_loading_overlay(self) -> QFrame:
+        """Create a semi-transparent loading overlay."""
+        overlay = QFrame(self)
+        overlay.setStyleSheet("""
+            QFrame {
+                background-color: rgba(0, 0, 0, 150);
+                border-radius: 8px;
+            }
+            QLabel {
+                color: white;
+                font-size: 16px;
+                font-weight: bold;
+            }
+        """)
+        
+        layout = QVBoxLayout(overlay)
+        layout.setAlignment(Qt.AlignCenter)
+        
+        label = QLabel("Loading model...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+        
+        # Position overlay over the entire window
+        overlay.setGeometry(self.rect())
+        
+        return overlay
+    
+    def resizeEvent(self, event):
+        """Resize overlay when window is resized."""
+        super().resizeEvent(event)
+        if self._loading_overlay is not None:
+            self._loading_overlay.setGeometry(self.rect())
     
     def _setup_ui(self) -> None:
         """Build the UI layout."""
@@ -52,6 +114,7 @@ class SettingsWindow(QDialog):
         tabs.addTab(self._create_enhancements_tab(), "Enhancements")
         tabs.addTab(self._create_hotkey_tab(), "Hotkeys")
         tabs.addTab(self._create_audio_tab(), "Audio")
+        tabs.addTab(self._create_history_tab(), "History")
         tabs.addTab(self._create_advanced_tab(), "Advanced")
         layout.addWidget(tabs)
         
@@ -388,6 +451,104 @@ class SettingsWindow(QDialog):
             if idx >= 0:
                 self._device_combo.setCurrentIndex(idx)
     
+    def _create_history_tab(self) -> QWidget:
+        """Create the History tab showing recent transcriptions."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Description
+        desc = QLabel("Recent transcriptions (most recent first):")
+        layout.addWidget(desc)
+        
+        # Table with 3 columns: Raw, Enhanced, Cost
+        self._history_table = QTableWidget()
+        self._history_table.setColumnCount(3)
+        self._history_table.setHorizontalHeaderLabels(["Raw Transcription", "Enhanced Text", "Cost"])
+        
+        # Configure table appearance
+        header = self._history_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        
+        self._history_table.setAlternatingRowColors(True)
+        self._history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._history_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._history_table.verticalHeader().setVisible(False)
+        self._history_table.setWordWrap(True)
+        
+        layout.addWidget(self._history_table)
+        
+        # Button row
+        btn_layout = QHBoxLayout()
+        
+        btn_layout.addStretch()
+        
+        clear_btn = QPushButton("Clear History")
+        clear_btn.clicked.connect(self._clear_history)
+        btn_layout.addWidget(clear_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        # Load initial data
+        self._refresh_history()
+        
+        return widget
+    
+    def _refresh_history(self) -> None:
+        """Refresh the history table with data from history.json."""
+        records = load_history()
+        
+        # Clear existing rows
+        self._history_table.setRowCount(0)
+        
+        # Add rows in reverse order (newest first)
+        for record in reversed(records):
+            row = self._history_table.rowCount()
+            self._history_table.insertRow(row)
+            
+            # Raw text (truncate for display)
+            raw_text = record.raw_text
+            if len(raw_text) > 100:
+                raw_text = raw_text[:100] + "..."
+            raw_item = QTableWidgetItem(raw_text)
+            raw_item.setToolTip(record.raw_text)  # Full text on hover
+            self._history_table.setItem(row, 0, raw_item)
+            
+            # Enhanced text
+            if record.enhanced_text:
+                enhanced_text = record.enhanced_text
+                if len(enhanced_text) > 100:
+                    enhanced_text = enhanced_text[:100] + "..."
+                enhanced_item = QTableWidgetItem(enhanced_text)
+                enhanced_item.setToolTip(record.enhanced_text)
+            else:
+                enhanced_item = QTableWidgetItem("—")
+            self._history_table.setItem(row, 1, enhanced_item)
+            
+            # Cost
+            if record.cost_usd is not None:
+                cost_text = f"${record.cost_usd:.6f}"
+            else:
+                cost_text = "—"
+            cost_item = QTableWidgetItem(cost_text)
+            self._history_table.setItem(row, 2, cost_item)
+        
+        # Resize rows to content
+        self._history_table.resizeRowsToContents()
+    
+    def _clear_history(self) -> None:
+        """Clear all transcription history."""
+        reply = QMessageBox.question(
+            self,
+            "Clear History",
+            "Are you sure you want to clear all transcription history?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            clear_history()
+            self._refresh_history()
+
     def _create_advanced_tab(self) -> QWidget:
         """Create the Advanced settings tab."""
         widget = QWidget()

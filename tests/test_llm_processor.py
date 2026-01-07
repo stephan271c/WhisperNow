@@ -10,6 +10,7 @@ from unittest.mock import patch, MagicMock
 from src.transcribe.core.llm_processor import (
     Enhancement,
     LLMProcessor,
+    LLMResponse,
     DEFAULT_ENHANCEMENTS,
 )
 
@@ -116,11 +117,12 @@ class TestLLMProcessor:
     
     @patch('src.transcribe.core.llm_processor.completion')
     def test_process_calls_completion(self, mock_completion):
-        """Test that process calls litellm completion."""
+        """Test that process calls litellm completion and returns LLMResponse."""
         # Setup mock response
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Fixed text"
+        mock_response.usage = None
         mock_completion.return_value = mock_response
         
         processor = LLMProcessor(model="gpt-4o-mini", api_key="test-key")
@@ -132,7 +134,9 @@ class TestLLMProcessor:
         
         result = processor.process("Original text", enhancement)
         
-        assert result == "Fixed text"
+        # Result is now LLMResponse object
+        assert isinstance(result, LLMResponse)
+        assert result.content == "Fixed text"
         mock_completion.assert_called_once()
         call_args = mock_completion.call_args
         assert call_args.kwargs['model'] == "gpt-4o-mini"
@@ -145,7 +149,7 @@ class TestLLMProcessor:
     
     @patch('src.transcribe.core.llm_processor.completion')
     def test_process_returns_original_on_error(self, mock_completion):
-        """Test that process returns original text on error."""
+        """Test that process returns original text in LLMResponse on error."""
         mock_completion.side_effect = Exception("API error")
         
         processor = LLMProcessor(model="gpt-4o-mini", api_key="test-key")
@@ -153,12 +157,17 @@ class TestLLMProcessor:
         
         result = processor.process("Original text", enhancement)
         
-        assert result == "Original text"
+        assert isinstance(result, LLMResponse)
+        assert result.content == "Original text"
     
     def test_process_empty_text(self):
-        """Test that process returns empty text unchanged."""
+        """Test that process returns empty text unchanged in LLMResponse."""
         processor = LLMProcessor(model="gpt-4o-mini", api_key="test-key")
         enhancement = Enhancement(id="test", title="Test", prompt="Fix")
         
-        assert processor.process("", enhancement) == ""
-        assert processor.process("   ", enhancement) == "   "
+        result = processor.process("", enhancement)
+        assert isinstance(result, LLMResponse)
+        assert result.content == ""
+        
+        result2 = processor.process("   ", enhancement)
+        assert result2.content == "   "

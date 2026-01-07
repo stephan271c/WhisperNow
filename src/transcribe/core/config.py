@@ -14,6 +14,12 @@ LOG_LEVEL = "DEBUG"       # DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_TO_CONSOLE = True   # Set to True to output logs to terminal
 # =============================================================================
 
+# =============================================================================
+# HISTORY SETTINGS
+# =============================================================================
+MAX_HISTORY_ENTRIES = 20  # Number of transcription history records to keep
+# =============================================================================
+
 
 def get_log_level() -> int:
     """Get the logging level as an integer."""

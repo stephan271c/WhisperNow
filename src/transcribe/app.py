@@ -6,18 +6,20 @@ Coordinates all components: tray, settings, recorder, and transcriber.
 
 import sys
 import signal
-from typing import Optional
+from datetime import datetime
+from typing import Optional, Tuple
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QTimer, QObject
 from pynput.keyboard import Controller as KeyboardController
 
 from . import __app_name__, __version__
-from .core.settings import get_settings, Settings
+from .core.settings import get_settings, Settings, TranscriptionRecord, add_history_record
 from .core.recorder import AudioRecorder
 from .core.transcriber import TranscriptionEngine, EngineState
+from .core.model_loader import ModelLoaderThread
 from .core.hotkey import HotkeyListener
-from .core.llm_processor import LLMProcessor, Enhancement
+from .core.llm_processor import LLMProcessor, Enhancement, LLMResponse
 from .ui.tray import SystemTray, TrayStatus
 from .ui.main_window import SettingsWindow
 from .ui.download_dialog import DownloadDialog
@@ -63,6 +65,7 @@ class TranscribeApp(QObject):
         self._hotkey_listener = HotkeyListener()
         self._keyboard_controller = KeyboardController()
         self._download_dialog: Optional[DownloadDialog] = None
+        self._model_loader_thread: Optional[ModelLoaderThread] = None
         
         # Typing state for non-blocking character output
         self._typing_text: str = ""
@@ -192,18 +195,21 @@ class TranscribeApp(QObject):
         logger.info(f"Captured {len(audio_data)} audio samples, starting transcription")
         
         # Transcribe the audio (auto-chunks if over 30 seconds)
-        text = self._transcriber.transcribe_chunked(audio_data, self._settings.sample_rate)
+        raw_text = self._transcriber.transcribe_chunked(audio_data, self._settings.sample_rate)
         
         duration = time.time() - start_time
         
-        if text:
-            logger.info(f"Transcription completed in {duration:.2f}s: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+        if raw_text:
+            logger.info(f"Transcription completed in {duration:.2f}s: '{raw_text[:50]}{'...' if len(raw_text) > 50 else ''}'")
             
             # Apply LLM enhancement if active
-            text = self._apply_enhancement(text)
+            final_text, enhanced_text, enhancement_name, cost = self._apply_enhancement(raw_text)
+            
+            # Record transcription to history
+            self._record_transcription(raw_text, enhanced_text, enhancement_name, cost)
             
             # Type the result
-            self._type_text(text)
+            self._type_text(final_text)
         else:
             logger.warning(f"Transcription returned empty result after {duration:.2f}s")
             self._tray.set_status(TrayStatus.IDLE)
@@ -267,21 +273,47 @@ class TranscribeApp(QObject):
         
         return None
     
-    def _apply_enhancement(self, text: str) -> str:
-        """Apply the active enhancement to the text, if configured."""
+    def _apply_enhancement(self, text: str) -> Tuple[str, Optional[str], Optional[str], Optional[float]]:
+        """
+        Apply the active enhancement to the text, if configured.
+        
+        Returns:
+            Tuple of (final_text, enhanced_text, enhancement_name, cost_usd).
+            If no enhancement applied, enhanced_text/enhancement_name/cost will be None.
+        """
         if not self._llm_processor:
-            return text
+            return text, None, None, None
         
         enhancement = self._get_active_enhancement()
         if not enhancement:
-            return text
+            return text, None, None, None
         
         if not self._llm_processor.is_configured():
             logger.warning("LLM processor not configured (no API key), skipping enhancement")
-            return text
+            return text, None, None, None
         
         logger.info(f"Applying enhancement: {enhancement.title}")
-        return self._llm_processor.process(text, enhancement)
+        response = self._llm_processor.process(text, enhancement)
+        
+        return response.content, response.content, enhancement.title, response.cost_usd
+    
+    def _record_transcription(
+        self,
+        raw_text: str,
+        enhanced_text: Optional[str],
+        enhancement_name: Optional[str],
+        cost_usd: Optional[float]
+    ) -> None:
+        """Record a transcription to history."""
+        record = TranscriptionRecord(
+            timestamp=datetime.now().isoformat(),
+            raw_text=raw_text,
+            enhanced_text=enhanced_text,
+            enhancement_name=enhancement_name,
+            cost_usd=cost_usd
+        )
+        add_history_record(record)
+        logger.debug(f"Recorded transcription to history: {len(raw_text)} chars")
     
     def _type_text(self, text: str) -> None:
         """Type text using QTimer for non-blocking output."""
@@ -431,14 +463,18 @@ class TranscribeApp(QObject):
                 change_reason.append(f"GPU: {old_gpu} -> {self._settings.use_gpu}")
             logger.info(f"Reloading transcription engine ({', '.join(change_reason)})")
             
+            # Unload current model
             self._transcriber.unload()
-            self._transcriber = TranscriptionEngine(
-                model_name=self._settings.model_name,
-                use_gpu=self._settings.use_gpu,
-                on_state_change=self._on_engine_state_change,
-                on_download_progress=self._on_download_progress
+            
+            # Show loading state in settings window
+            if self._settings_window is not None:
+                self._settings_window.set_loading(True)
+            
+            # Start background loading
+            self._start_model_loading(
+                self._settings.model_name,
+                self._settings.use_gpu
             )
-            self._transcriber.load_model()
         
         # Apply autostart setting
         set_autostart(self._settings.auto_start_on_login, "Transcribe")
@@ -452,24 +488,69 @@ class TranscribeApp(QObject):
         QApplication.quit()
         logger.info("Application shutdown complete")
     
+    def _start_model_loading(self, model_name: str, use_gpu: bool) -> None:
+        """Start loading a model in the background."""
+        # Cancel any existing loading thread
+        if self._model_loader_thread is not None and self._model_loader_thread.isRunning():
+            self._model_loader_thread.wait()
+        
+        # Create and start new loader thread
+        self._model_loader_thread = ModelLoaderThread(
+            model_name=model_name,
+            use_gpu=use_gpu,
+            parent=self
+        )
+        self._model_loader_thread.state_changed.connect(self._on_engine_state_change)
+        self._model_loader_thread.progress.connect(self._on_download_progress)
+        self._model_loader_thread.finished.connect(self._on_model_loaded)
+        self._model_loader_thread.start()
+    
+    def _on_model_loaded(self, success: bool, message: str) -> None:
+        """Handle completion of background model loading."""
+        if success and self._model_loader_thread is not None:
+            # Transfer the loaded engine
+            self._transcriber = self._model_loader_thread.engine
+            logger.info(f"Model loading complete: {message}")
+        else:
+            logger.error(f"Model loading failed: {message}")
+        
+        # Hide loading state in settings window
+        if self._settings_window is not None:
+            self._settings_window.set_loading(False)
+        
+        # Update tray status
+        if success:
+            self._tray.set_status(TrayStatus.IDLE, message)
+        else:
+            self._tray.set_status(TrayStatus.ERROR, message)
+    
     def run(self) -> None:
         """Start the application."""
         logger.info(f"Starting {__app_name__} v{__version__}")
         logger.info(f"Settings: model={self._settings.model_name}, sample_rate={self._settings.sample_rate}")
         
-        # Load model in background
-        logger.info("Loading transcription model...")
-        self._transcriber.load_model()
-        
         # Start hotkey listener
         logger.info(f"Starting hotkey listener: {self._settings.hotkey.to_display_string()}")
         self._hotkey_listener.start()
         
-        # Show notification that app is ready
+        # Show window first (if not minimized), then start loading
         if not self._settings.start_minimized:
             self._show_settings()
         
+        # Defer model loading to after the event loop starts
+        # This allows the UI to appear first, then show loading state
+        logger.info("Deferring model load to after UI is shown...")
+        QTimer.singleShot(100, self._start_deferred_model_loading)
+        
         logger.info("Application initialization complete")
+    
+    def _start_deferred_model_loading(self) -> None:
+        """Start model loading after UI has been displayed."""
+        logger.info("Starting deferred transcription model loading...")
+        self._start_model_loading(
+            self._settings.model_name,
+            self._settings.use_gpu
+        )
 
 
 def main():

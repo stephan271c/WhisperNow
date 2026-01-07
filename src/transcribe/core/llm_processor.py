@@ -9,7 +9,7 @@ from typing import Optional, List, Dict
 import os
 
 import litellm
-from litellm import completion
+from litellm import completion, completion_cost
 
 
 from ..utils.logger import get_logger
@@ -107,6 +107,14 @@ class Enhancement:
         return cls(**data)
 
 
+@dataclass
+class LLMResponse:
+    """Result from LLM processing."""
+    content: str
+    cost_usd: Optional[float] = None
+    usage: Optional[dict] = None  # token counts: prompt_tokens, completion_tokens, total_tokens
+
+
 class LLMProcessor:
     """
     Processes text through an LLM using enhancement prompts.
@@ -142,7 +150,7 @@ class LLMProcessor:
         
         logger.info(f"LLMProcessor initialized with model: {model}, api_base: {api_base}")
     
-    def process(self, text: str, enhancement: Enhancement) -> str:
+    def process(self, text: str, enhancement: Enhancement) -> LLMResponse:
         """
         Apply an enhancement prompt to the given text.
         
@@ -151,10 +159,11 @@ class LLMProcessor:
             enhancement: The enhancement containing the prompt to apply
             
         Returns:
-            The enhanced text from the LLM, or original text if processing fails
+            LLMResponse with enhanced text, cost, and usage info.
+            On failure, returns LLMResponse with original text and no cost.
         """
         if not text or not text.strip():
-            return text
+            return LLMResponse(content=text)
         
         logger.info(f"Applying enhancement '{enhancement.title}' to text ({len(text)} chars)")
         
@@ -184,14 +193,35 @@ class LLMProcessor:
             
             response = completion(**kwargs)
             
-            result = response.choices[0].message.content
-            logger.info(f"Enhancement complete: {len(text)} -> {len(result)} chars")
-            return result
+            result_text = response.choices[0].message.content
+            
+            # Extract cost using litellm's completion_cost
+            try:
+                cost = completion_cost(completion_response=response)
+            except Exception:
+                cost = None
+            
+            # Extract usage stats
+            usage = None
+            if response.usage:
+                usage = {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                }
+            
+            logger.info(f"Enhancement complete: {len(text)} -> {len(result_text)} chars, cost=${cost:.6f}" if cost else f"Enhancement complete: {len(text)} -> {len(result_text)} chars")
+            
+            return LLMResponse(
+                content=result_text,
+                cost_usd=cost,
+                usage=usage
+            )
 
         except Exception as e:
             logger.error(f"LLM processing failed: {e}", exc_info=True)
             # Return original text on failure
-            return text
+            return LLMResponse(content=text)
     
     def is_configured(self) -> bool:
         """

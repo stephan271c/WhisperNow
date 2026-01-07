@@ -15,6 +15,7 @@ import json
 import platform
 
 from ..utils.logger import get_logger
+from .config import MAX_HISTORY_ENTRIES
 
 logger = get_logger(__name__)
 
@@ -68,6 +69,25 @@ class HotkeyConfig:
         parts = [mod.capitalize() for mod in self.modifiers]
         parts.append(self.key.capitalize())
         return " + ".join(parts)
+
+
+@dataclass
+class TranscriptionRecord:
+    """A single transcription history entry."""
+    timestamp: str  # ISO format datetime
+    raw_text: str
+    enhanced_text: Optional[str] = None
+    enhancement_name: Optional[str] = None
+    cost_usd: Optional[float] = None
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "TranscriptionRecord":
+        """Create from dictionary."""
+        return cls(**data)
 
 
 @dataclass
@@ -204,3 +224,57 @@ def get_settings() -> Settings:
     if _settings_instance is None:
         _settings_instance = Settings.load()
     return _settings_instance
+
+
+# =============================================================================
+# History Management (separate file)
+# =============================================================================
+
+def get_history_file() -> Path:
+    """Get the path to the transcription history file."""
+    return get_config_dir() / "history.json"
+
+
+def load_history() -> List[TranscriptionRecord]:
+    """Load transcription history from history.json."""
+    history_file = get_history_file()
+    
+    if not history_file.exists():
+        return []
+    
+    try:
+        with open(history_file, "r") as f:
+            data = json.load(f)
+        
+        records = [TranscriptionRecord.from_dict(item) for item in data]
+        return records
+    except (json.JSONDecodeError, TypeError, KeyError) as e:
+        logger.warning(f"Could not load history: {e}. Starting fresh.")
+        return []
+
+
+def save_history(records: List[TranscriptionRecord]) -> None:
+    """Save transcription history, limiting to MAX_HISTORY_ENTRIES."""
+    history_file = get_history_file()
+    
+    # Keep only the most recent entries
+    records = records[-MAX_HISTORY_ENTRIES:]
+    
+    data = [record.to_dict() for record in records]
+    
+    with open(history_file, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def add_history_record(record: TranscriptionRecord) -> None:
+    """Add a single transcription record to history."""
+    records = load_history()
+    records.append(record)
+    save_history(records)
+
+
+def clear_history() -> None:
+    """Clear all transcription history."""
+    history_file = get_history_file()
+    if history_file.exists():
+        history_file.unlink()
