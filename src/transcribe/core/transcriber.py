@@ -7,6 +7,7 @@ Emits signals for progress updates (loading, ready, processing).
 """
 
 import gc
+import time
 from enum import Enum, auto
 from typing import Optional, Callable
 
@@ -21,6 +22,7 @@ from .backends import (
     detect_backend_type,
 )
 from .audio_processor import AudioProcessor, needs_chunking
+from ..utils.logger import get_logger
 
 
 class EngineState(Enum):
@@ -88,6 +90,7 @@ class TranscriptionEngine:
         self._state = EngineState.NOT_LOADED
         self._device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
         self._audio_processor = AudioProcessor()
+        self.logger = get_logger(__name__)
     
     @property
     def state(self) -> EngineState:
@@ -179,11 +182,28 @@ class TranscriptionEngine:
         
         self._set_state(EngineState.PROCESSING, "Transcribing...")
         
+        start_time = time.time()
+        
         try:
             result: TranscriptionResult = self._backend.transcribe(
                 audio_data=audio_data,
                 sample_rate=sample_rate
             )
+            
+            processing_time = time.time() - start_time
+            audio_duration = len(audio_data) / sample_rate
+            
+            # Log performance metrics
+            if processing_time > 0:
+                rtf = audio_duration / processing_time
+                self.logger.debug(
+                    f"Transcription finished: audio_len={audio_duration:.2f}s, "
+                    f"time={processing_time:.2f}s, speed={rtf:.2f}x"
+                )
+                
+                if result.text:
+                    cps = len(result.text) / processing_time
+                    self.logger.debug(f"Transcription speed: {cps:.2f} chars/sec")
             
             self._set_state(EngineState.READY, "Ready")
             return result.text
@@ -258,11 +278,24 @@ class TranscriptionEngine:
         
         self._set_state(EngineState.PROCESSING, "Transcribing...")
         
+        start_time = time.time()
+        
         try:
             result = self._backend.transcribe(
                 audio_data=audio_data,
                 sample_rate=sample_rate
             )
+            
+            processing_time = time.time() - start_time
+            audio_duration = len(audio_data) / sample_rate
+            
+            # Log performance metrics
+            if processing_time > 0:
+                rtf = audio_duration / processing_time
+                self.logger.debug(
+                    f"Transcription finished: audio_len={audio_duration:.2f}s, "
+                    f"time={processing_time:.2f}s, speed={rtf:.2f}x"
+                )
             
             self._set_state(EngineState.READY, "Ready")
             return result
