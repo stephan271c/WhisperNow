@@ -200,8 +200,14 @@ class AudioProcessor:
         min_chunk_samples = int(self.min_chunk_duration * sample_rate)
         silence_samples = int(self.silence_duration * sample_rate)
         
+        # Convert to mono for silence detection analysis only (preserves original for chunking)
+        if audio_data.ndim > 1:
+            analysis_audio = np.mean(audio_data, axis=1)
+        else:
+            analysis_audio = audio_data
+        
         # Normalize audio for silence detection
-        audio_float = audio_data.astype(np.float32)
+        audio_float = analysis_audio.astype(np.float32)
         max_val = np.max(np.abs(audio_float))
         if max_val > 0:
             audio_normalized = audio_float / max_val

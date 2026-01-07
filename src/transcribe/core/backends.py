@@ -150,15 +150,21 @@ class NeMoBackend(ASRBackend):
         
         try:
             # TODO: Hook into download progress if possible
+            # Pass map_location to ensure model loads on the correct device
+            # Without this, NeMo defaults to GPU if available
             self._model = nemo_asr.models.ASRModel.from_pretrained(
-                model_name=model_name
+                model_name=model_name,
+                map_location=self._device
             )
             
+            # Explicitly move to the target device to ensure correct placement
             if self._device == "cuda":
                 self._model = self._model.cuda()
                 # OPTIMIZATION: Convert to Half Precision (FP16)
                 # This cuts memory usage for weights by ~50%
                 self._model = self._model.half()
+            else:
+                self._model = self._model.cpu()
             
             # OPTIMIZATION: Switch to Evaluation Mode
             # This tells PyTorch we are not training, disabling dropout and
