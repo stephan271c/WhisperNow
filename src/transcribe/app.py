@@ -405,6 +405,10 @@ class TranscribeApp(QObject):
     
     def _on_settings_changed(self) -> None:
         """Handle settings changes."""
+        # Track previous values for comparison
+        old_model = self._transcriber.model_name
+        old_gpu = self._transcriber.use_gpu
+        
         # Reload settings
         self._settings = get_settings()
         
@@ -415,6 +419,26 @@ class TranscribeApp(QObject):
         
         # Reinitialize LLM processor with new settings
         self._init_llm_processor()
+        
+        # Reload transcriber if model or GPU setting changed
+        model_changed = old_model != self._settings.model_name
+        gpu_changed = old_gpu != self._settings.use_gpu
+        if model_changed or gpu_changed:
+            change_reason = []
+            if model_changed:
+                change_reason.append(f"model: {old_model} -> {self._settings.model_name}")
+            if gpu_changed:
+                change_reason.append(f"GPU: {old_gpu} -> {self._settings.use_gpu}")
+            logger.info(f"Reloading transcription engine ({', '.join(change_reason)})")
+            
+            self._transcriber.unload()
+            self._transcriber = TranscriptionEngine(
+                model_name=self._settings.model_name,
+                use_gpu=self._settings.use_gpu,
+                on_state_change=self._on_engine_state_change,
+                on_download_progress=self._on_download_progress
+            )
+            self._transcriber.load_model()
         
         # Apply autostart setting
         set_autostart(self._settings.auto_start_on_login, "Transcribe")
