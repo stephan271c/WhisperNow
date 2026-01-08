@@ -28,30 +28,38 @@ class TestLoggerConfiguration:
         logger2 = get_logger("transcribe")
         assert logger1 is logger2
     
-    @patch("src.transcribe.core.settings.get_config_dir")
-    def test_log_directory_creation(self, mock_config_dir, tmp_path):
+    @patch("src.transcribe.utils.logger.get_log_dir")
+    def test_log_directory_creation(self, mock_get_log_dir, tmp_path):
         """Test log directory is created."""
-        mock_config_dir.return_value = tmp_path
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        mock_get_log_dir.return_value = log_dir
         
-        log_dir = get_log_dir()
+        result = get_log_dir()
         
-        assert log_dir.exists()
-        assert log_dir.is_dir()
-        assert log_dir.name == "logs"
+        assert result.exists()
+        assert result.is_dir()
+        assert result.name == "logs"
     
-    @patch("src.transcribe.core.settings.get_config_dir")
-    def test_logger_writes_to_file(self, mock_config_dir, tmp_path):
+    @patch("src.transcribe.utils.logger.get_log_dir")
+    def test_logger_writes_to_file(self, mock_get_log_dir, tmp_path):
         """Test logger writes messages to file."""
-        mock_config_dir.return_value = tmp_path
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        mock_get_log_dir.return_value = log_dir
         
         # Force re-initialization
         import src.transcribe.utils.logger as logger_module
         logger_module._logger_instance = None
         
+        # Clear any existing handlers from the transcribe logger
+        root_logger = logging.getLogger("transcribe")
+        root_logger.handlers.clear()
+        
         logger = get_logger("transcribe")
         logger.info("Test message")
         
-        log_file = tmp_path / "logs" / "app.log"
+        log_file = log_dir / "app.log"
         assert log_file.exists()
         
         content = log_file.read_text()
@@ -62,10 +70,12 @@ class TestLoggerConfiguration:
 class TestLogRotation:
     """Tests for log rotation functionality."""
     
-    @patch("src.transcribe.core.settings.get_config_dir")
-    def test_log_rotation_when_size_exceeded(self, mock_config_dir, tmp_path):
+    @patch("src.transcribe.utils.logger.get_log_dir")
+    def test_log_rotation_when_size_exceeded(self, mock_get_log_dir, tmp_path):
         """Test log rotation occurs when max size is exceeded."""
-        mock_config_dir.return_value = tmp_path
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        mock_get_log_dir.return_value = log_dir
         
         # Force re-initialization with small max size
         import src.transcribe.utils.logger as logger_module
