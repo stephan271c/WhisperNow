@@ -1,12 +1,12 @@
 """
-Settings window with tabbed interface.
+Settings window with sidebar navigation.
 
 Provides a GUI for configuring application settings.
 """
 
 import uuid
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
+    QDialog, QVBoxLayout, QHBoxLayout, QStackedWidget, QWidget,
     QLabel, QSlider, QComboBox, QCheckBox, QPushButton,
     QGroupBox, QFormLayout, QSpinBox, QKeySequenceEdit,
     QDialogButtonBox, QLineEdit, QMessageBox, QListWidget,
@@ -24,7 +24,7 @@ from ..core.llm_processor import Enhancement, PROVIDERS, get_models_for_provider
 
 class SettingsWindow(QDialog):
     """
-    Settings dialog with tabs for different configuration categories.
+    Settings dialog with sidebar navigation for configuration categories.
     
     Signals:
         settings_changed: Emitted when settings are saved
@@ -108,15 +108,34 @@ class SettingsWindow(QDialog):
         """Build the UI layout."""
         layout = QVBoxLayout(self)
         
-        # Tab widget
-        tabs = QTabWidget()
-        tabs.addTab(self._create_general_tab(), "General")
-        tabs.addTab(self._create_enhancements_tab(), "Enhancements")
-        tabs.addTab(self._create_hotkey_tab(), "Hotkeys")
-        tabs.addTab(self._create_audio_tab(), "Audio")
-        tabs.addTab(self._create_history_tab(), "History")
-        tabs.addTab(self._create_advanced_tab(), "Advanced")
-        layout.addWidget(tabs)
+        # Sidebar navigation
+        content_layout = QHBoxLayout()
+        self._nav_list = QListWidget()
+        self._nav_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._nav_list.setSpacing(2)
+        self._nav_list.setFixedWidth(170)
+        self._nav_list.setFrameShape(QFrame.NoFrame)
+        
+        self._stacked = QStackedWidget()
+        
+        pages = [
+            ("Home", self._create_home_tab()),
+            ("Mode", self._create_enhancements_tab()),
+            ("Vocabulary", self._create_vocabulary_tab()),
+            ("Configuration", self._create_configuration_tab()),
+            ("History", self._create_history_tab()),
+        ]
+        for title, page in pages:
+            self._nav_list.addItem(title)
+            self._stacked.addWidget(page)
+        
+        self._nav_list.currentRowChanged.connect(self._stacked.setCurrentIndex)
+        self._nav_list.setCurrentRow(0)
+        
+        content_layout.addWidget(self._nav_list)
+        content_layout.addWidget(self._stacked, 1)
+        layout.addLayout(content_layout)
         
         # Dialog buttons
         buttons = QDialogButtonBox(
@@ -127,10 +146,69 @@ class SettingsWindow(QDialog):
         buttons.button(QDialogButtonBox.Apply).clicked.connect(self._save_settings)
         layout.addWidget(buttons)
     
-    def _create_general_tab(self) -> QWidget:
-        """Create the General settings tab."""
+    def _create_home_tab(self) -> QWidget:
+        """Create the Home tab with a brief overview."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        
+        title = QLabel("Get started")
+        title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        layout.addWidget(title)
+        
+        intro = QLabel("Choose a section on the left to configure Transcribe.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        
+        features = QLabel(
+            "<ul>"
+            "<li><b>Mode</b>: Configure enhancements for different tasks.</li>"
+            "<li><b>Vocabulary</b>: Word substitutions (coming soon).</li>"
+            "<li><b>Configuration</b>: General behavior, audio input, hotkeys, and ASR model.</li>"
+            "<li><b>History</b>: Review recent transcriptions.</li>"
+            "</ul>"
+        )
+        features.setWordWrap(True)
+        features.setTextFormat(Qt.RichText)
+        layout.addWidget(features)
+        
+        layout.addStretch()
+        return widget
+    
+    def _create_vocabulary_tab(self) -> QWidget:
+        """Create the Vocabulary placeholder tab."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        placeholder = QLabel("Vocabulary substitutions will appear here.")
+        placeholder.setStyleSheet("color: gray;")
+        placeholder.setWordWrap(True)
+        layout.addWidget(placeholder)
+        
+        layout.addStretch()
+        return widget
+    
+    def _create_configuration_tab(self) -> QWidget:
+        """Create the Configuration tab with all settings grouped."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+        
+        general_section = self._create_general_section()
+        layout.addWidget(general_section)
+        layout.addWidget(self._create_audio_section())
+        layout.addWidget(self._create_hotkey_section())
+        layout.addWidget(self._create_asr_model_section())
+        
+        layout.addStretch()
+        return widget
+    
+    def _create_general_section(self) -> QWidget:
+        """Create the General settings section."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
         
         # Typing behavior group
         typing_group = QGroupBox("Typing Behavior")
@@ -168,10 +246,6 @@ class SettingsWindow(QDialog):
         startup_layout.addWidget(self._autostart_cb)
         
         layout.addWidget(startup_group)
-        
-
-        
-        layout.addStretch()
         return widget
     
     def _on_instant_type_toggled(self, checked: bool) -> None:
@@ -180,7 +254,7 @@ class SettingsWindow(QDialog):
         self._speed_label.setEnabled(not checked)
     
     def _create_enhancements_tab(self) -> QWidget:
-        """Create the Enhancements settings tab."""
+        """Create the Mode settings tab."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
@@ -378,8 +452,8 @@ class SettingsWindow(QDialog):
                 self._settings.active_enhancement_id = None
             self._refresh_enhancement_list()
     
-    def _create_hotkey_tab(self) -> QWidget:
-        """Create the Hotkeys settings tab."""
+    def _create_hotkey_section(self) -> QWidget:
+        """Create the Hotkey settings section."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
@@ -400,15 +474,14 @@ class SettingsWindow(QDialog):
         hotkey_layout.addRow("", instructions)
         
         layout.addWidget(hotkey_group)
-        layout.addStretch()
         return widget
     
-    def _create_audio_tab(self) -> QWidget:
-        """Create the Audio settings tab."""
+    def _create_audio_section(self) -> QWidget:
+        """Create the Audio settings section."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        audio_group = QGroupBox("Audio Input")
+        audio_group = QGroupBox("Audio")
         audio_layout = QFormLayout(audio_group)
         
         # Input device dropdown with refresh button
@@ -433,7 +506,6 @@ class SettingsWindow(QDialog):
         audio_layout.addRow("Sample Rate:", self._sample_rate_combo)
         
         layout.addWidget(audio_group)
-        layout.addStretch()
         return widget
     
     def _refresh_devices(self) -> None:
@@ -578,12 +650,12 @@ class SettingsWindow(QDialog):
             clear_history()
             self._refresh_history()
 
-    def _create_advanced_tab(self) -> QWidget:
-        """Create the Advanced settings tab."""
+    def _create_asr_model_section(self) -> QWidget:
+        """Create the ASR model settings section."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        model_group = QGroupBox("Model")
+        model_group = QGroupBox("ASR Model")
         model_layout = QFormLayout(model_group)
         
         # Editable model name
@@ -611,8 +683,6 @@ class SettingsWindow(QDialog):
         reset_btn = QPushButton("Reset All Settings to Defaults")
         reset_btn.clicked.connect(self._reset_settings)
         layout.addWidget(reset_btn)
-        
-        layout.addStretch()
         return widget
     
     def _load_settings(self) -> None:
