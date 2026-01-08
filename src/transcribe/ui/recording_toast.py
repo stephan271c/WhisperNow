@@ -19,7 +19,6 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QFrame,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QVBoxLayout,
@@ -187,13 +186,6 @@ class RecordingToast(QWidget):
 
         layout.addWidget(header, alignment=Qt.AlignCenter)
         layout.addWidget(wave_frame, alignment=Qt.AlignCenter)
-
-        for frame in (header, wave_frame):
-            shadow = QGraphicsDropShadowEffect(self)
-            shadow.setBlurRadius(18)
-            shadow.setColor(QColor(0, 0, 0, 160))
-            shadow.setOffset(0, 6)
-            frame.setGraphicsEffect(shadow)
 
         self.setStyleSheet(
             """
