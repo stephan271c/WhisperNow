@@ -25,6 +25,7 @@ from .ui.main_window import SettingsWindow
 from .ui.download_dialog import DownloadDialog
 from .ui.setup_wizard import SetupWizard
 from .ui.permissions_dialog import PermissionsDialog
+from .ui.recording_toast import RecordingToast
 from .utils.platform import (
     get_platform,
     check_accessibility_permissions,
@@ -52,9 +53,17 @@ class TranscribeApp(QObject):
         
         # Initialize components
         self._tray = SystemTray()
+        self._recording_toast = RecordingToast(__app_name__)
+        self._latest_audio_level = 0.0
+        self._latest_audio_spectrum: list[float] = []
+        self._audio_level_timer = QTimer(self)
+        self._audio_level_timer.setInterval(50)
+        self._audio_level_timer.timeout.connect(self._update_audio_level)
         self._recorder = AudioRecorder(
             sample_rate=self._settings.sample_rate,
-            device=self._settings.input_device
+            device=self._settings.input_device,
+            on_audio_level=self._capture_audio_level,
+            on_audio_spectrum=self._capture_audio_spectrum,
         )
         self._transcriber = TranscriptionEngine(
             model_name=self._settings.model_name,
@@ -173,6 +182,10 @@ class TranscribeApp(QObject):
         logger.debug("Starting audio recording")
         if self._recorder.start():
             self._tray.set_status(TrayStatus.RECORDING)
+            self._latest_audio_level = 0.0
+            self._latest_audio_spectrum = []
+            self._recording_toast.show_recording()
+            self._audio_level_timer.start()
             logger.info("Recording started")
         else:
             error_msg = self._recorder.last_error or "Failed to start recording"
@@ -186,6 +199,10 @@ class TranscribeApp(QObject):
         
         logger.debug("Stopping audio recording")
         audio_data = self._recorder.stop()
+        self._audio_level_timer.stop()
+        self._recording_toast.hide_recording()
+        self._recording_toast.set_level(0.0)
+        self._recording_toast.set_spectrum([])
         
         if audio_data is None or len(audio_data) == 0:
             logger.warning("No audio data captured")
@@ -485,8 +502,22 @@ class TranscribeApp(QObject):
         self._hotkey_listener.stop()
         self._transcriber.unload()
         self._tray.hide()
+        self._recording_toast.hide()
         QApplication.quit()
         logger.info("Application shutdown complete")
+
+    def _capture_audio_level(self, level: float) -> None:
+        """Capture audio level updates from the recorder callback."""
+        self._latest_audio_level = level
+
+    def _capture_audio_spectrum(self, spectrum: list[float]) -> None:
+        """Capture spectrum updates from the recorder callback."""
+        self._latest_audio_spectrum = spectrum
+
+    def _update_audio_level(self) -> None:
+        """Push the latest audio level into the toast animation."""
+        self._recording_toast.set_level(self._latest_audio_level)
+        self._recording_toast.set_spectrum(self._latest_audio_spectrum)
     
     def _start_model_loading(self, model_name: str, use_gpu: bool) -> None:
         """Start loading a model in the background."""

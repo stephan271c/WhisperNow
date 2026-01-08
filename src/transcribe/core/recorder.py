@@ -36,7 +36,8 @@ class AudioRecorder:
         sample_rate: int = 16000,
         channels: int = 1,
         device: Optional[str] = None,
-        on_audio_level: Optional[Callable[[float], None]] = None
+        on_audio_level: Optional[Callable[[float], None]] = None,
+        on_audio_spectrum: Optional[Callable[[List[float]], None]] = None
     ):
         """
         Initialize the audio recorder.
@@ -46,16 +47,23 @@ class AudioRecorder:
             channels: Number of audio channels (default: 1 for mono)
             device: Device name or None for system default
             on_audio_level: Callback for audio level updates (0.0-1.0)
+            on_audio_spectrum: Callback for spectrum band levels (0.0-1.0)
         """
         self.target_sample_rate = sample_rate
         self.channels = channels
         self.device = device
         self.on_audio_level = on_audio_level
+        self.on_audio_spectrum = on_audio_spectrum
         
         self._stream: Optional[sd.InputStream] = None
         self._audio_buffer: List[np.ndarray] = []
         self._is_recording = False
         self._device_sample_rate: Optional[float] = None
+        self._spectrum_frames: Optional[int] = None
+        self._spectrum_rate: Optional[float] = None
+        self._spectrum_bins: List[tuple[int, int]] = []
+        self._spectrum_band_count = 8
+        self._window: Optional[np.ndarray] = None
     
     @property
     def is_recording(self) -> bool:
@@ -177,6 +185,10 @@ class AudioRecorder:
             if self.on_audio_level is not None:
                 level = np.abs(indata).mean()
                 self.on_audio_level(min(1.0, level * 10))  # Scale for visibility
+
+            if self.on_audio_spectrum is not None and self._device_sample_rate:
+                bands = self._compute_spectrum_bands(indata, self._device_sample_rate)
+                self.on_audio_spectrum(bands)
     
     def _get_device_index(self) -> Optional[int]:
         """Get the device index from device name."""
@@ -188,6 +200,70 @@ class AudioRecorder:
                 return device.index
         
         return None
+
+    def _compute_spectrum_bands(self, indata: np.ndarray, sample_rate: float) -> List[float]:
+        """Compute log-scaled spectrum band energies for visualization."""
+        if indata.size == 0:
+            return [0.0] * self._spectrum_band_count
+
+        mono = indata.mean(axis=1) if indata.ndim > 1 else indata.flatten()
+        frames = mono.shape[0]
+        if frames < 8:
+            return [0.0] * self._spectrum_band_count
+
+        if self._window is None or self._window.shape[0] != frames:
+            self._window = np.hanning(frames)
+
+        windowed = mono * self._window
+        fft = np.fft.rfft(windowed)
+        mag = np.abs(fft)
+        if mag.size == 0:
+            return [0.0] * self._spectrum_band_count
+
+        bands = self._get_spectrum_bins(frames, sample_rate)
+        log_mag = np.log1p(mag)
+        max_mag = float(np.max(log_mag))
+        if max_mag <= 0.0:
+            return [0.0] * self._spectrum_band_count
+
+        energies: List[float] = []
+        for start, end in bands:
+            if end <= start:
+                energies.append(0.0)
+                continue
+            band_energy = float(np.mean(log_mag[start:end])) / max_mag
+            energies.append(min(1.0, max(0.0, band_energy)))
+        return energies
+
+    def _get_spectrum_bins(self, frames: int, sample_rate: float) -> List[tuple[int, int]]:
+        """Cache band bin ranges for the current FFT size."""
+        if self._spectrum_frames == frames and self._spectrum_rate == sample_rate:
+            return self._spectrum_bins
+
+        low_freq = 80.0
+        high_freq = min(8000.0, (sample_rate / 2.0) * 0.95)
+        if high_freq <= low_freq:
+            high_freq = low_freq * 2.0
+
+        edges = np.logspace(
+            np.log10(low_freq),
+            np.log10(high_freq),
+            num=self._spectrum_band_count + 1,
+        )
+        freqs = np.fft.rfftfreq(frames, 1.0 / sample_rate)
+
+        bins: List[tuple[int, int]] = []
+        for idx in range(self._spectrum_band_count):
+            start = int(np.searchsorted(freqs, edges[idx], side="left"))
+            end = int(np.searchsorted(freqs, edges[idx + 1], side="right"))
+            if end <= start:
+                end = min(start + 1, len(freqs))
+            bins.append((start, end))
+
+        self._spectrum_frames = frames
+        self._spectrum_rate = sample_rate
+        self._spectrum_bins = bins
+        return bins
     
     @staticmethod
     def list_devices() -> List[AudioDevice]:
