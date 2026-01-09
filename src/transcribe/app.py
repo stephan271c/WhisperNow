@@ -219,8 +219,21 @@ class TranscribeApp(QObject):
         if raw_text:
             logger.info(f"Transcription completed in {duration:.2f}s: '{raw_text[:50]}{'...' if len(raw_text) > 50 else ''}'")
             
+            # Apply vocabulary replacements
+            from .core.vocabulary_processor import apply_vocabulary_replacements
+            processed_text = apply_vocabulary_replacements(
+                raw_text,
+                self._settings.vocabulary_replacements
+            )
+            
             # Apply LLM enhancement if active
-            final_text, enhanced_text, enhancement_name, cost = self._apply_enhancement(raw_text)
+            final_text, enhanced_text, enhancement_name, cost = self._apply_enhancement(processed_text)
+            
+            # If vocabulary replacements were applied but no LLM enhancement,
+            # record the processed text as the "enhanced" version
+            if enhanced_text is None and processed_text != raw_text:
+                enhanced_text = processed_text
+                enhancement_name = "Vocabulary Replacement"
             
             # Record transcription to history
             self._record_transcription(raw_text, enhanced_text, enhancement_name, cost)

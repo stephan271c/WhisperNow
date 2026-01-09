@@ -126,6 +126,9 @@ class Settings:
     llm_api_key: Optional[str] = None  # API key (user responsible for security)
     llm_api_base: Optional[str] = None  # Custom API base URL (for openrouter, ollama, etc.)
     
+    # Vocabulary replacements: List of (original, replacement) tuples
+    vocabulary_replacements: List[Tuple[str, str]] = field(default_factory=list)
+    
     # Window state (internal)
     window_geometry: Optional[Tuple[int, int, int, int]] = None
     

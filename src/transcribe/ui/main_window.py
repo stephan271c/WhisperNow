@@ -115,7 +115,7 @@ class SettingsWindow(QDialog):
         # Create tab instances
         self._home_tab = HomeTab(self)
         self._enhancements_tab = EnhancementsTab(self._settings, self)
-        self._vocabulary_tab = VocabularyTab(self)
+        self._vocabulary_tab = VocabularyTab(self._settings, self)
         self._configuration_tab = ConfigurationTab(self._settings, self)
         self._history_tab = HistoryTab(self)
 
@@ -153,6 +153,7 @@ class SettingsWindow(QDialog):
         """Load current settings into all tabs."""
         self._configuration_tab.load_settings()
         self._enhancements_tab.load_settings()
+        self._vocabulary_tab.load_settings()
 
     def _save_settings(self) -> None:
         """Save UI values from all tabs to settings."""
@@ -161,6 +162,7 @@ class SettingsWindow(QDialog):
             return
 
         self._enhancements_tab.save_settings()
+        self._vocabulary_tab.save_settings()
 
         self._settings.save()
         self.settings_changed.emit()

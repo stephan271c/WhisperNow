@@ -104,14 +104,15 @@ def test_settings_hotkey_update(mock_dependencies, qtbot):
 def test_autostart_update(mock_dependencies, qtbot):
     """Test that changing settings updates autostart."""
     
-    app = TranscribeApp()
-    
-    # Change settings
-    new_settings = Settings(auto_start_on_login=True)
-    mock_dependencies['get_settings'].return_value = new_settings
-    
-    # Trigger update
-    app._on_settings_changed()
-    
-    # Verify autostart called
-    mock_dependencies['set_autostart'].assert_called_with(True, "Transcribe")
+    with patch('src.transcribe.app.HotkeyListener') as MockListener:
+        app = TranscribeApp()
+        
+        # Change settings
+        new_settings = Settings(auto_start_on_login=True)
+        mock_dependencies['get_settings'].return_value = new_settings
+        
+        # Trigger update
+        app._on_settings_changed()
+        
+        # Verify autostart called
+        mock_dependencies['set_autostart'].assert_called_with(True, "Transcribe")
