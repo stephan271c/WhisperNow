@@ -96,15 +96,14 @@ class VocabularyTab(QWidget):
         delete_btn = QPushButton("🗑️")
         delete_btn.setFixedWidth(36)
         delete_btn.setStyleSheet("QPushButton { color: #e74c3c; border: none; }")
-        delete_btn.clicked.connect(lambda checked, r=row: self._delete_row(r))
+        delete_btn.clicked.connect(lambda checked, btn=delete_btn: self._delete_row(btn))
         self._table.setCellWidget(row, 2, delete_btn)
 
-    def _delete_row(self, row: int) -> None:
+    def _delete_row(self, button: QPushButton) -> None:
         """Delete a row from the table."""
-        # Since row indices shift after deletion, find the button's current row
-        sender = self.sender()
+        # Find the row that contains this button
         for r in range(self._table.rowCount()):
-            if self._table.cellWidget(r, 2) is sender:
+            if self._table.cellWidget(r, 2) is button:
                 self._table.removeRow(r)
                 break
 
