@@ -5,7 +5,7 @@ Core functionality for the transcription app.
 Contains settings, audio recording, transcription engine, and hotkey listener.
 """
 
-from .backends import (
+from .asr.backends import (
     ASRBackend,
     BackendType,
     TranscriptionResult,
@@ -14,8 +14,8 @@ from .backends import (
     create_backend,
     detect_backend_type,
 )
-from .transcriber import TranscriptionEngine, EngineState, transcribe_audio
-from .hotkey import HotkeyListener
+from .asr.transcriber import TranscriptionEngine, EngineState, transcribe_audio
+from .input.hotkey import HotkeyListener
 
 __all__ = [
     # Backend abstraction

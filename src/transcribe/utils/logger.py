@@ -60,7 +60,7 @@ def get_logger(name: str = "transcribe") -> logging.Logger:
     # This must happen before returning any child logger so they inherit handlers
     if _logger_instance is None:
         # Import config here to avoid circular dependency
-        from ..core.config import get_log_level, LOG_TO_CONSOLE
+        from ..core.settings.config import get_log_level, LOG_TO_CONSOLE
         
         root_logger = logging.getLogger("transcribe")
         

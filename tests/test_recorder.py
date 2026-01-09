@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 import numpy as np
 import pytest
 
-from src.transcribe.core.recorder import AudioRecorder, AudioDevice
+from src.transcribe.core.audio.recorder import AudioRecorder, AudioDevice
 
 
 class TestAudioDevice:
@@ -32,7 +32,7 @@ class TestAudioDevice:
 class TestAudioRecorderDeviceEnumeration:
     """Tests for device enumeration."""
     
-    @patch("src.transcribe.core.recorder.sd.query_devices")
+    @patch("src.transcribe.core.audio.recorder.sd.query_devices")
     def test_list_devices_returns_input_devices(self, mock_query):
         """Test list_devices filters to input devices only."""
         mock_query.return_value = [
@@ -49,7 +49,7 @@ class TestAudioRecorderDeviceEnumeration:
         assert devices[1].name == "Mic 2"
         assert devices[1].channels == 1
     
-    @patch("src.transcribe.core.recorder.sd.query_devices")
+    @patch("src.transcribe.core.audio.recorder.sd.query_devices")
     def test_list_devices_empty(self, mock_query):
         """Test list_devices handles no devices."""
         mock_query.return_value = []
@@ -66,7 +66,7 @@ class TestAudioRecorderState:
         recorder = AudioRecorder()
         assert recorder.is_recording is False
     
-    @patch("src.transcribe.core.recorder.sd.InputStream")
+    @patch("src.transcribe.core.audio.recorder.sd.InputStream")
     def test_start_sets_recording(self, mock_stream_class):
         """Test start() sets is_recording to True."""
         mock_stream = MagicMock()
@@ -78,7 +78,7 @@ class TestAudioRecorderState:
         assert recorder.is_recording is True
         mock_stream.start.assert_called_once()
     
-    @patch("src.transcribe.core.recorder.sd.InputStream")
+    @patch("src.transcribe.core.audio.recorder.sd.InputStream")
     def test_stop_clears_recording(self, mock_stream_class):
         """Test stop() sets is_recording to False and returns audio."""
         mock_stream = MagicMock()
@@ -101,8 +101,8 @@ class TestAudioRecorderState:
         mock_stream.stop.assert_called_once()
         mock_stream.close.assert_called_once()
     
-    @patch("src.transcribe.core.recorder.sd.query_devices")
-    @patch("src.transcribe.core.recorder.sd.InputStream")
+    @patch("src.transcribe.core.audio.recorder.sd.query_devices")
+    @patch("src.transcribe.core.audio.recorder.sd.InputStream")
     def test_stop_performs_resampling(self, mock_stream_class, mock_query):
         """Test stop() resamples audio when device rate differs from target."""
         # Setup device with 48kHz native rate
@@ -140,7 +140,7 @@ class TestAudioRecorderState:
         audio = recorder.stop()
         assert audio is None
     
-    @patch("src.transcribe.core.recorder.sd.InputStream")
+    @patch("src.transcribe.core.audio.recorder.sd.InputStream")
     def test_start_twice_is_idempotent(self, mock_stream_class):
         """Test calling start() twice only starts once."""
         mock_stream = MagicMock()
@@ -180,7 +180,7 @@ class TestAudioRecorderConfiguration:
 class TestAudioCallback:
     """Tests for audio level callback."""
     
-    @patch("src.transcribe.core.recorder.sd.InputStream")
+    @patch("src.transcribe.core.audio.recorder.sd.InputStream")
     def test_audio_level_callback(self, mock_stream_class):
         """Test on_audio_level callback is invoked."""
         mock_stream = MagicMock()

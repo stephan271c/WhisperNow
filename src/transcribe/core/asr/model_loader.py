@@ -7,7 +7,7 @@ Provides async model loading to keep the UI responsive during model initializati
 from PySide6.QtCore import QThread, Signal
 
 from .transcriber import TranscriptionEngine, EngineState
-from ..utils.logger import get_logger
+from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
 

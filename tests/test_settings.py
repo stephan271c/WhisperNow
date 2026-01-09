@@ -57,7 +57,7 @@ class TestSettings:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             # Create settings with custom values
             original = Settings(
                 sample_rate=44100,
@@ -90,7 +90,7 @@ class TestSettings:
         config_dir = tmp_path / "empty_config"
         config_dir.mkdir()
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             settings = Settings.load()
             default = Settings()
             
@@ -104,7 +104,7 @@ class TestSettings:
         config_file = config_dir / "settings.json"
         config_file.write_text("{ this is not valid json }")
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             settings = Settings.load()
             default = Settings()
             assert settings.sample_rate == default.sample_rate
@@ -158,21 +158,21 @@ class TestSettingsValidation:
         # Test negative sample rate
         config_file.write_text(json.dumps({"sample_rate": -1000}))
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             settings = Settings.load()
             assert settings.sample_rate == 16000  # Should reset to default
         
         # Test sample rate too high
         config_file.write_text(json.dumps({"sample_rate": 999999}))
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             settings = Settings.load()
             assert settings.sample_rate == 16000
         
         # Test sample rate too low
         config_file.write_text(json.dumps({"sample_rate": 100}))
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             settings = Settings.load()
             assert settings.sample_rate == 16000
     
@@ -184,7 +184,7 @@ class TestSettingsValidation:
         
         config_file.write_text(json.dumps({"model_name": ""}))
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             settings = Settings.load()
             assert settings.model_name == "nvidia/parakeet-tdt-0.6b-v3"
     
@@ -196,7 +196,7 @@ class TestSettingsValidation:
         
         config_file.write_text(json.dumps({"characters_per_second": -50}))
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             settings = Settings.load()
             assert settings.characters_per_second == 150
     
@@ -209,7 +209,7 @@ class TestSettingsValidation:
         # Empty modifiers list
         config_file.write_text(json.dumps({"hotkey": {"modifiers": [], "key": "space"}}))
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             settings = Settings.load()
             assert settings.hotkey.modifiers == ["ctrl"]
             assert settings.hotkey.key == "space"
@@ -223,7 +223,7 @@ class TestSettingsValidation:
         # Empty key
         config_file.write_text(json.dumps({"hotkey": {"modifiers": ["ctrl"], "key": ""}}))
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             settings = Settings.load()
             assert settings.hotkey.modifiers == ["ctrl"]
             assert settings.hotkey.key == "space"
@@ -242,8 +242,12 @@ class TestSettingsValidation:
             "characters_per_second": -50
         }))
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
-            with caplog.at_level(logging.WARNING):
+        # Ensure we capture from the transcribe logger even if propagation is off
+        logger = logging.getLogger("transcribe")
+        logger.propagate = True
+        
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
+            with caplog.at_level(logging.WARNING, logger="transcribe"):
                 settings = Settings.load()
                 
                 # Check that warnings were logged
@@ -265,7 +269,7 @@ class TestSettingsValidation:
         }
         config_file.write_text(json.dumps(valid_settings))
         
-        with patch("src.transcribe.core.settings.get_config_dir", return_value=config_dir):
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
             settings = Settings.load()
             assert settings.sample_rate == 44100
             assert settings.model_name == "custom/model"

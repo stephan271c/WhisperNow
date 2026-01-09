@@ -7,7 +7,7 @@ Tests silence detection, chunk splitting, and transcription combining.
 import numpy as np
 import pytest
 
-from src.transcribe.core.audio_processor import (
+from src.transcribe.core.audio.audio_processor import (
     AudioProcessor,
     AudioChunkInfo,
     AudioPreview,

@@ -5,7 +5,7 @@ Platform-specific utilities for cross-platform compatibility.
 import platform
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from .logger import get_logger
 
@@ -168,3 +168,62 @@ def get_app_icon_path() -> Optional[Path]:
     # TODO: Implement icon path resolution
     # Should check for bundled resources in PyInstaller, etc.
     return None
+
+
+def check_and_request_permissions(settings: "Settings") -> bool:
+    """
+    Check for required permissions and request them if needed (macOS only).
+    
+    On macOS, accessibility permissions are required for keyboard listening.
+    Shows a dialog explaining permissions if not granted.
+    Updates settings.accessibility_permissions_granted.
+    
+    Args:
+        settings: Settings object to update with permission status
+        
+    Returns:
+        True if permissions are granted, False otherwise.
+    """
+    # Only relevant on macOS
+    if get_platform() != "macos":
+        return True
+    
+    # If already granted and recorded, verify it's still valid
+    if settings.accessibility_permissions_granted:
+        if check_accessibility_permissions():
+            return True
+        else:
+            # Permission was revoked, need to re-request
+            logger.warning("Accessibility permission was revoked, prompting user")
+    
+    # Check current status
+    if check_accessibility_permissions():
+        settings.accessibility_permissions_granted = True
+        settings.save()
+        logger.info("Accessibility permissions already granted")
+        return True
+    
+    # Show dialog explaining permissions (import here to avoid circular dependency)
+    from ..ui.permissions_dialog import PermissionsDialog
+    
+    logger.info("Showing accessibility permissions dialog")
+    dialog = PermissionsDialog()
+    dialog.exec()
+    
+    # Update settings with result
+    granted = check_accessibility_permissions()
+    settings.accessibility_permissions_granted = granted
+    settings.save()
+    
+    if granted:
+        logger.info("User granted accessibility permissions")
+    else:
+        logger.warning("User continued without accessibility permissions")
+    
+    return granted
+
+
+# Type hint import for Settings
+if TYPE_CHECKING:
+    from ..core.settings import Settings
+

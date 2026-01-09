@@ -12,7 +12,7 @@ import litellm
 from litellm import completion, completion_cost
 
 
-from ..utils.logger import get_logger
+from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -121,6 +121,42 @@ class LLMProcessor:
     
     Uses LiteLLM for provider-agnostic API access.
     """
+    
+    @staticmethod
+    def format_model_name(model: str, provider: str) -> str:
+        """
+        Format a model name for liteLLM with the appropriate provider prefix.
+        
+        Args:
+            model: The model name (e.g., "gpt-4o-mini", "llama3.2")
+            provider: The provider ID (e.g., "openai", "ollama", "openrouter")
+            
+        Returns:
+            The model name with provider prefix if needed.
+        """
+        # Known provider prefixes that liteLLM recognizes
+        known_prefixes = (
+            "openrouter/", "ollama/", "gemini/", 
+            "openai/", "anthropic/", "azure/", "huggingface/"
+        )
+        
+        # If model already has a known provider prefix, use as-is
+        if model.startswith(known_prefixes):
+            return model
+        
+        # Providers that require a prefix
+        prefix_map = {
+            "openrouter": "openrouter/",
+            "ollama": "ollama/",
+            "gemini": "gemini/",
+        }
+        
+        prefix = prefix_map.get(provider)
+        if prefix:
+            return f"{prefix}{model}"
+        
+        # OpenAI, Anthropic, and 'other' don't need prefixes
+        return model
     
     def __init__(
         self,

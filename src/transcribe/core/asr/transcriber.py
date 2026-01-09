@@ -21,8 +21,8 @@ from .backends import (
     create_backend,
     detect_backend_type,
 )
-from .audio_processor import AudioProcessor, needs_chunking
-from ..utils.logger import get_logger
+from ..audio.audio_processor import AudioProcessor, needs_chunking
+from ...utils.logger import get_logger
 
 
 class EngineState(Enum):
@@ -236,7 +236,7 @@ class TranscriptionEngine:
             return self.transcribe(audio_data, sample_rate)
         
         # Split audio into chunks
-        from ..utils.logger import get_logger
+        from ...utils.logger import get_logger
         logger = get_logger(__name__)
         
         chunks = self._audio_processor.split_audio(audio_data, sample_rate)

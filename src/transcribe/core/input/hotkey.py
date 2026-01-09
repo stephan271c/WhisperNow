@@ -10,7 +10,7 @@ from typing import Optional
 from PySide6.QtCore import Signal, QObject
 from pynput import keyboard
 
-from .settings import get_settings, Settings
+from ..settings.settings import get_settings, Settings
 
 
 class HotkeyListener(QObject):

@@ -11,7 +11,7 @@ from PySide6.QtGui import QKeySequence
 from PySide6.QtCore import Qt, Signal
 
 from ...core.settings import Settings, HotkeyConfig
-from ...core.recorder import AudioRecorder
+from ...core.audio import AudioRecorder
 
 
 class ConfigurationTab(QWidget):

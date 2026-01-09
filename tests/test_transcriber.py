@@ -8,8 +8,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from src.transcribe.core.backends import BackendType, detect_backend_type
-from src.transcribe.core.transcriber import TranscriptionEngine, EngineState
+from src.transcribe.core.asr.backends import BackendType, detect_backend_type
+from src.transcribe.core.asr.transcriber import TranscriptionEngine, EngineState
 
 
 class TestBackendDetection:
@@ -111,7 +111,7 @@ class TestEngineUnload:
 class TestTranscribeChunked:
     """Tests for chunked transcription orchestration."""
     
-    @patch('src.transcribe.core.transcriber.needs_chunking')
+    @patch('src.transcribe.core.asr.transcriber.needs_chunking')
     def test_transcribe_chunked_orchestration(self, mock_needs_chunking):
         """Test proper orchestration of splitting, transcribing, and combining."""
         # Setup mocks

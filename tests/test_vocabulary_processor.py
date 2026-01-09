@@ -1,6 +1,6 @@
 """Tests for vocabulary processor."""
 import pytest
-from src.transcribe.core.vocabulary_processor import apply_vocabulary_replacements
+from src.transcribe.core.llm.vocabulary_processor import apply_vocabulary_replacements
 
 
 class TestApplyVocabularyReplacements:

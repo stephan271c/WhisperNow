@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 import numpy as np
 
-from ..utils.logger import get_logger
+from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
 

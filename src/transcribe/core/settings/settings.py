@@ -14,7 +14,7 @@ from typing import Optional, Tuple, List, TYPE_CHECKING
 import json
 import platform
 
-from ..utils.logger import get_logger
+from ...utils.logger import get_logger
 from .config import MAX_HISTORY_ENTRIES
 
 logger = get_logger(__name__)
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 def _get_default_enhancements() -> List[dict]:
     """Get default enhancement presets as dicts (lazy import to avoid circular dependency)."""
-    from .llm_processor import DEFAULT_ENHANCEMENTS
+    from ..llm.llm_processor import DEFAULT_ENHANCEMENTS
     return [e.to_dict() for e in DEFAULT_ENHANCEMENTS]
 
 
@@ -216,6 +216,25 @@ class Settings:
         default = Settings()
         for key, value in asdict(default).items():
             setattr(self, key, value)
+    
+    def get_active_enhancement(self) -> Optional["Enhancement"]:
+        """
+        Get the currently active enhancement, if any.
+        
+        Returns:
+            The active Enhancement object, or None if no enhancement is active
+            or the active_enhancement_id doesn't match any enhancement.
+        """
+        if not self.active_enhancement_id:
+            return None
+        
+        from ..llm.llm_processor import Enhancement
+        
+        for enh_dict in self.enhancements:
+            if enh_dict.get("id") == self.active_enhancement_id:
+                return Enhancement.from_dict(enh_dict)
+        
+        return None
 
 
 # Convenience function for quick access

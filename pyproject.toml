@@ -48,3 +48,8 @@ dev = [
 override-dependencies = [
     "ml_dtypes>=0.5.4",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]

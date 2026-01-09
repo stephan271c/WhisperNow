@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt
 from typing import Optional
 
 from ..core.settings import Settings, get_settings, HotkeyConfig
-from ..core.recorder import AudioRecorder
+from ..core.audio import AudioRecorder
 from ..utils.platform import (
     get_platform, check_accessibility_permissions, 
     request_accessibility_permissions
