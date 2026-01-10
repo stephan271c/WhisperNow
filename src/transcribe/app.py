@@ -17,7 +17,7 @@ from .core.settings import get_settings, TranscriptionRecord, add_history_record
 from .core.audio import AudioRecorder
 from .core.asr import TranscriptionEngine, EngineState, ModelLoaderThread
 from .core.input import HotkeyListener
-from .core.llm import LLMProcessor
+from .core.transcript_processor import LLMProcessor
 from .core.output import TextOutputController
 from .ui.tray import SystemTray, TrayStatus
 from .ui.main_window import SettingsWindow
@@ -177,7 +177,7 @@ class TranscribeApp(QObject):
             logger.info(f"Transcription completed in {duration:.2f}s: '{raw_text[:50]}{'...' if len(raw_text) > 50 else ''}'")
             
             # Apply vocabulary replacements
-            from .core.llm import apply_vocabulary_replacements
+            from .core.transcript_processor import apply_vocabulary_replacements
             processed_text = apply_vocabulary_replacements(
                 raw_text,
                 self._settings.vocabulary_replacements

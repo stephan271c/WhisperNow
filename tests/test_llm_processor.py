@@ -7,7 +7,7 @@ Verifies Enhancement dataclass and LLMProcessor functionality.
 import pytest
 from unittest.mock import patch, MagicMock
 
-from src.transcribe.core.llm.llm_processor import (
+from src.transcribe.core.transcript_processor.llm_processor import (
     Enhancement,
     LLMProcessor,
     LLMResponse,
@@ -115,7 +115,7 @@ class TestLLMProcessor:
         with patch.dict('os.environ', {'OPENAI_API_KEY': 'env-key'}):
             assert processor.is_configured() is True
     
-    @patch('src.transcribe.core.llm.llm_processor.completion')
+    @patch('src.transcribe.core.transcript_processor.llm_processor.completion')
     def test_process_calls_completion(self, mock_completion):
         """Test that process calls litellm completion and returns LLMResponse."""
         # Setup mock response
@@ -147,7 +147,7 @@ class TestLLMProcessor:
         assert call_args.kwargs['messages'][1]['role'] == 'user'
         assert call_args.kwargs['messages'][1]['content'] == "Original text"
     
-    @patch('src.transcribe.core.llm.llm_processor.completion')
+    @patch('src.transcribe.core.transcript_processor.llm_processor.completion')
     def test_process_returns_original_on_error(self, mock_completion):
         """Test that process returns original text in LLMResponse on error."""
         mock_completion.side_effect = Exception("API error")

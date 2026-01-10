@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 
 from ...core.settings import Settings
-from ...core.llm import PROVIDERS, get_models_for_provider
+from ...core.transcript_processor import PROVIDERS, get_models_for_provider
 from .enhancement_edit_dialog import EnhancementEditDialog
 
 

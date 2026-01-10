@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 def _get_default_enhancements() -> List[dict]:
     """Get default enhancement presets as dicts (lazy import to avoid circular dependency)."""
-    from ..llm.llm_processor import DEFAULT_ENHANCEMENTS
+    from ..transcript_processor.llm_processor import DEFAULT_ENHANCEMENTS
     return [e.to_dict() for e in DEFAULT_ENHANCEMENTS]
 
 
@@ -228,7 +228,7 @@ class Settings:
         if not self.active_enhancement_id:
             return None
         
-        from ..llm.llm_processor import Enhancement
+        from ..transcript_processor.llm_processor import Enhancement
         
         for enh_dict in self.enhancements:
             if enh_dict.get("id") == self.active_enhancement_id:
