@@ -10,7 +10,7 @@ Stores configuration in platform-appropriate locations:
 
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional, Tuple, List, TYPE_CHECKING
+from typing import Optional, Tuple, List, Dict, TYPE_CHECKING
 import json
 import platform
 
@@ -91,6 +91,26 @@ class TranscriptionRecord:
 
 
 @dataclass
+class LLMProviderSettings:
+    """Settings for a single LLM provider."""
+    model: str = ""
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "LLMProviderSettings":
+        """Create from dictionary."""
+        # Filter to only valid fields
+        valid_keys = cls.__dataclass_fields__.keys()
+        filtered = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(**filtered)
+
+
+@dataclass
 class Settings:
     """Application settings with defaults."""
     
@@ -121,10 +141,8 @@ class Settings:
     # LLM Enhancement settings
     enhancements: List[dict] = field(default_factory=list)  # List of Enhancement dicts
     active_enhancement_id: Optional[str] = None  # ID of active enhancement, None = disabled
-    llm_provider: str = "openai"  # Provider: openai, anthropic, openrouter, ollama, gemini, other
-    llm_model: str = "gpt-4o-mini"  # LLM model name
-    llm_api_key: Optional[str] = None  # API key (user responsible for security)
-    llm_api_base: Optional[str] = None  # Custom API base URL (for openrouter, ollama, etc.)
+    llm_provider: str = "openai"  # Currently active provider
+    llm_provider_settings: Dict[str, dict] = field(default_factory=dict)  # provider_id -> LLMProviderSettings dict
     
     # Vocabulary replacements: List of (original, replacement) tuples
     vocabulary_replacements: List[Tuple[str, str]] = field(default_factory=list)
@@ -154,6 +172,24 @@ class Settings:
                 if "enhancements" in filtered_data:
                     if not isinstance(filtered_data["enhancements"], list):
                         filtered_data["enhancements"] = []
+                
+                # Migrate old flat LLM settings to per-provider format
+                old_llm_model = data.get("llm_model")
+                old_llm_api_key = data.get("llm_api_key")
+                old_llm_api_base = data.get("llm_api_base")
+                old_provider = data.get("llm_provider", "openai")
+                
+                if old_llm_model or old_llm_api_key or old_llm_api_base:
+                    # Migrate old settings to per-provider format
+                    if "llm_provider_settings" not in filtered_data:
+                        filtered_data["llm_provider_settings"] = {}
+                    if old_provider not in filtered_data["llm_provider_settings"]:
+                        filtered_data["llm_provider_settings"][old_provider] = {
+                            "model": old_llm_model or "",
+                            "api_key": old_llm_api_key,
+                            "api_base": old_llm_api_base,
+                        }
+                    logger.info(f"Migrated old LLM settings to per-provider format for '{old_provider}'")
                 
                 settings = cls(**filtered_data)
                 settings._validate()
@@ -235,6 +271,67 @@ class Settings:
                 return Enhancement.from_dict(enh_dict)
         
         return None
+    
+    def get_provider_settings(self, provider_id: str) -> LLMProviderSettings:
+        """
+        Get settings for a specific provider.
+        
+        Args:
+            provider_id: The provider identifier (e.g., 'openai', 'ollama')
+            
+        Returns:
+            LLMProviderSettings for the provider (may have empty/None values if not configured)
+        """
+        if provider_id in self.llm_provider_settings:
+            return LLMProviderSettings.from_dict(self.llm_provider_settings[provider_id])
+        return LLMProviderSettings()
+    
+    def set_provider_settings(self, provider_id: str, settings: LLMProviderSettings) -> None:
+        """
+        Save settings for a specific provider.
+        
+        Args:
+            provider_id: The provider identifier
+            settings: The LLMProviderSettings to save
+        """
+        self.llm_provider_settings[provider_id] = settings.to_dict()
+    
+    # Backward-compatible property accessors for the active provider's settings
+    @property
+    def llm_model(self) -> str:
+        """Get the model for the active provider."""
+        return self.get_provider_settings(self.llm_provider).model
+    
+    @llm_model.setter
+    def llm_model(self, value: str) -> None:
+        """Set the model for the active provider."""
+        settings = self.get_provider_settings(self.llm_provider)
+        settings.model = value
+        self.set_provider_settings(self.llm_provider, settings)
+    
+    @property
+    def llm_api_key(self) -> Optional[str]:
+        """Get the API key for the active provider."""
+        return self.get_provider_settings(self.llm_provider).api_key
+    
+    @llm_api_key.setter
+    def llm_api_key(self, value: Optional[str]) -> None:
+        """Set the API key for the active provider."""
+        settings = self.get_provider_settings(self.llm_provider)
+        settings.api_key = value
+        self.set_provider_settings(self.llm_provider, settings)
+    
+    @property
+    def llm_api_base(self) -> Optional[str]:
+        """Get the API base URL for the active provider."""
+        return self.get_provider_settings(self.llm_provider).api_base
+    
+    @llm_api_base.setter
+    def llm_api_base(self, value: Optional[str]) -> None:
+        """Set the API base URL for the active provider."""
+        settings = self.get_provider_settings(self.llm_provider)
+        settings.api_base = value
+        self.set_provider_settings(self.llm_provider, settings)
 
 
 # Convenience function for quick access

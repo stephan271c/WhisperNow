@@ -277,3 +277,135 @@ class TestSettingsValidation:
             assert settings.hotkey.modifiers == ["alt", "shift"]
             assert settings.hotkey.key == "r"
 
+
+class TestPerProviderSettings:
+    """Tests for per-provider LLM settings storage."""
+    
+    def test_get_set_provider_settings(self):
+        """Test getting and setting provider-specific settings."""
+        from src.transcribe.core.settings import LLMProviderSettings
+        
+        settings = Settings()
+        
+        # Initially, provider settings should be empty
+        openai_settings = settings.get_provider_settings("openai")
+        assert openai_settings.model == ""
+        assert openai_settings.api_key is None
+        
+        # Set settings for OpenAI
+        settings.set_provider_settings("openai", LLMProviderSettings(
+            model="gpt-4",
+            api_key="sk-test-key",
+            api_base=None
+        ))
+        
+        # Verify they were saved
+        openai_settings = settings.get_provider_settings("openai")
+        assert openai_settings.model == "gpt-4"
+        assert openai_settings.api_key == "sk-test-key"
+    
+    def test_provider_settings_isolation(self):
+        """Test that changing one provider's settings doesn't affect another."""
+        from src.transcribe.core.settings import LLMProviderSettings
+        
+        settings = Settings()
+        
+        # Set settings for two different providers
+        settings.set_provider_settings("openai", LLMProviderSettings(
+            model="gpt-4",
+            api_key="openai-key"
+        ))
+        settings.set_provider_settings("ollama", LLMProviderSettings(
+            model="llama3.2",
+            api_base="http://localhost:11434"
+        ))
+        
+        # Verify they are independent
+        openai = settings.get_provider_settings("openai")
+        ollama = settings.get_provider_settings("ollama")
+        
+        assert openai.model == "gpt-4"
+        assert openai.api_key == "openai-key"
+        assert ollama.model == "llama3.2"
+        assert ollama.api_base == "http://localhost:11434"
+        assert ollama.api_key is None  # Not set for Ollama
+    
+    def test_backward_compatible_properties(self):
+        """Test that llm_model, llm_api_key properties work with active provider."""
+        from src.transcribe.core.settings import LLMProviderSettings
+        
+        settings = Settings()
+        settings.llm_provider = "anthropic"
+        
+        # Set via property
+        settings.llm_model = "claude-3-sonnet"
+        settings.llm_api_key = "anthropic-key"
+        
+        # Verify via property
+        assert settings.llm_model == "claude-3-sonnet"
+        assert settings.llm_api_key == "anthropic-key"
+        
+        # Verify underlying storage
+        provider_settings = settings.get_provider_settings("anthropic")
+        assert provider_settings.model == "claude-3-sonnet"
+        assert provider_settings.api_key == "anthropic-key"
+    
+    def test_migration_from_old_format(self, tmp_path):
+        """Test that old flat LLM settings are migrated to per-provider format."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "settings.json"
+        
+        # Old format with flat LLM settings
+        old_settings = {
+            "llm_provider": "openrouter",
+            "llm_model": "anthropic/claude-3-sonnet",
+            "llm_api_key": "sk-or-test-key",
+            "llm_api_base": None
+        }
+        config_file.write_text(json.dumps(old_settings))
+        
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
+            settings = Settings.load()
+            
+            # Should have migrated to per-provider format
+            provider_settings = settings.get_provider_settings("openrouter")
+            assert provider_settings.model == "anthropic/claude-3-sonnet"
+            assert provider_settings.api_key == "sk-or-test-key"
+            
+            # Active provider should be preserved
+            assert settings.llm_provider == "openrouter"
+    
+    def test_per_provider_save_load_cycle(self, tmp_path):
+        """Test that per-provider settings persist through save/load cycle."""
+        from src.transcribe.core.settings import LLMProviderSettings
+        
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        
+        with patch("src.transcribe.core.settings.settings.get_config_dir", return_value=config_dir):
+            # Create settings with multiple providers configured
+            settings = Settings()
+            settings.llm_provider = "openai"
+            settings.set_provider_settings("openai", LLMProviderSettings(
+                model="gpt-4",
+                api_key="openai-key"
+            ))
+            settings.set_provider_settings("ollama", LLMProviderSettings(
+                model="llama3.2",
+                api_base="http://localhost:11434"
+            ))
+            settings.save()
+            
+            # Load and verify
+            loaded = Settings.load()
+            
+            assert loaded.llm_provider == "openai"
+            
+            openai = loaded.get_provider_settings("openai")
+            assert openai.model == "gpt-4"
+            assert openai.api_key == "openai-key"
+            
+            ollama = loaded.get_provider_settings("ollama")
+            assert ollama.model == "llama3.2"
+            assert ollama.api_base == "http://localhost:11434"

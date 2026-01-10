@@ -88,22 +88,26 @@ class LLMSettingsWidget(QWidget):
         if not provider_id:
             return
 
-        # Get provider config
+        # Get provider config and saved settings for this provider
         _, default_api_base, _ = PROVIDERS.get(provider_id, (None, None, None))
+        provider_settings = self._settings.get_provider_settings(provider_id)
 
         # Show/hide API base field based on provider
         needs_api_base = provider_id in ("ollama", "other")
         self._api_base_label.setVisible(needs_api_base)
         self._api_base_edit.setVisible(needs_api_base)
 
-        # Set default API base if switching to a provider with one
-        if default_api_base and not self._api_base_edit.text():
+        # Load saved API base, or use default if not configured
+        if provider_settings.api_base:
+            self._api_base_edit.setText(provider_settings.api_base)
+        elif default_api_base:
             self._api_base_edit.setText(default_api_base)
+        else:
+            self._api_base_edit.clear()
 
-        # Handle API key based on whether we're switching back to saved provider
-        if provider_id == self._settings.llm_provider:
-            if self._settings.llm_api_key:
-                self._api_key_edit.setText(self._settings.llm_api_key)
+        # Load saved API key for this provider
+        if provider_settings.api_key:
+            self._api_key_edit.setText(provider_settings.api_key)
         else:
             self._api_key_edit.clear()
 
@@ -120,15 +124,16 @@ class LLMSettingsWidget(QWidget):
             }
             self._llm_model_edit.setPlaceholderText(placeholders.get(provider_id, ""))
             
-            if provider_id == self._settings.llm_provider:
-                if self._settings.llm_model:
-                    self._llm_model_edit.setText(self._settings.llm_model)
+            # Load saved model for this provider
+            if provider_settings.model:
+                self._llm_model_edit.setText(provider_settings.model)
             else:
                 self._llm_model_edit.clear()
         else:
             self._refresh_model_list(reset_selection=True)
-            if provider_id == self._settings.llm_provider and self._settings.llm_model:
-                self._llm_model_combo.setCurrentText(self._settings.llm_model)
+            # Load saved model for this provider
+            if provider_settings.model:
+                self._llm_model_combo.setCurrentText(provider_settings.model)
 
     def _refresh_model_list(self, reset_selection: bool = False) -> None:
         """Refresh the model dropdown with models from the selected provider."""
@@ -152,22 +157,14 @@ class LLMSettingsWidget(QWidget):
 
     def load_settings(self) -> None:
         """Load current settings into the UI."""
+        # Set the provider combo - this will trigger _on_provider_changed
+        # which loads all provider-specific settings
         provider_idx = self._provider_combo.findData(self._settings.llm_provider)
         if provider_idx >= 0:
             self._provider_combo.setCurrentIndex(provider_idx)
-
-        if self._settings.llm_api_base:
-            self._api_base_edit.setText(self._settings.llm_api_base)
-
+        
+        # Trigger loading of provider settings
         self._on_provider_changed()
-
-        if self._uses_text_input(self._settings.llm_provider):
-            self._llm_model_edit.setText(self._settings.llm_model or "")
-        else:
-            self._llm_model_combo.setCurrentText(self._settings.llm_model or "")
-
-        if self._settings.llm_api_key:
-            self._api_key_edit.setText(self._settings.llm_api_key)
 
     def save_settings(self) -> None:
         """Save UI values to settings."""

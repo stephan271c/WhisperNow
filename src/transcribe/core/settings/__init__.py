@@ -2,6 +2,7 @@
 
 from .settings import (
     HotkeyConfig,
+    LLMProviderSettings,
     Settings,
     TranscriptionRecord,
     add_history_record,
@@ -16,6 +17,7 @@ from .settings import (
 
 __all__ = [
     "HotkeyConfig",
+    "LLMProviderSettings",
     "Settings",
     "TranscriptionRecord",
     "add_history_record",
