@@ -137,6 +137,16 @@ class EnhancementsTab(QWidget):
         if default_api_base and not self._api_base_edit.text():
             self._api_base_edit.setText(default_api_base)
 
+        # Handle API key based on whether we're switching back to saved provider
+        if provider_id == self._settings.llm_provider:
+            # Restore saved API key when switching back to the saved provider
+            if self._settings.llm_api_key:
+                self._api_key_edit.setText(self._settings.llm_api_key)
+        else:
+            # Clear API key if switching to a different provider than saved
+            # This prevents API key from one provider showing up on another
+            self._api_key_edit.clear()
+
         # Switch model input mode: text for OpenRouter/Ollama/Other, combo for others
         use_text = self._uses_text_input(provider_id)
         self._model_stack.setCurrentIndex(1 if use_text else 0)
