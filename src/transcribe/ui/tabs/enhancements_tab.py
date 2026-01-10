@@ -5,7 +5,7 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QGroupBox, QFormLayout, QLineEdit,
-    QListWidget, QListWidgetItem, QMessageBox, QDialog
+    QListWidget, QListWidgetItem, QMessageBox, QDialog, QStackedWidget
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -40,18 +40,32 @@ class EnhancementsTab(QWidget):
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         llm_layout.addRow("Provider:", self._provider_combo)
 
-        # Model selector with refresh button
+        # Model selector - uses stacked widget for combo vs text input
         model_layout = QHBoxLayout()
+        
+        # Stacked widget to switch between combo and text input
+        self._model_stack = QStackedWidget()
+        
+        # Option 1: ComboBox for providers with curated lists (OpenAI, Anthropic, Gemini)
         self._llm_model_combo = QComboBox()
-        self._llm_model_combo.setEditable(True)  # Allow custom model names
+        self._llm_model_combo.setEditable(True)
         self._llm_model_combo.setMinimumWidth(250)
-        model_layout.addWidget(self._llm_model_combo, 1)
+        self._model_stack.addWidget(self._llm_model_combo)  # Index 0
+        
+        # Option 2: LineEdit for providers with many models (OpenRouter, Ollama, Other)
+        self._llm_model_edit = QLineEdit()
+        self._llm_model_edit.setPlaceholderText("e.g., openrouter/anthropic/claude-3-sonnet")
+        self._llm_model_edit.setMinimumWidth(250)
+        self._model_stack.addWidget(self._llm_model_edit)  # Index 1
+        
+        model_layout.addWidget(self._model_stack, 1)
 
-        refresh_btn = QPushButton("⟳")
-        refresh_btn.setFixedWidth(30)
-        refresh_btn.setToolTip("Refresh model list from provider")
-        refresh_btn.clicked.connect(lambda: self._refresh_model_list())
-        model_layout.addWidget(refresh_btn)
+        # Refresh button (only visible for combo mode)
+        self._refresh_btn = QPushButton("⟳")
+        self._refresh_btn.setFixedWidth(30)
+        self._refresh_btn.setToolTip("Refresh model list from provider")
+        self._refresh_btn.clicked.connect(lambda: self._refresh_model_list())
+        model_layout.addWidget(self._refresh_btn)
         llm_layout.addRow("Model:", model_layout)
 
         # API Base URL (shown for certain providers)
@@ -101,6 +115,10 @@ class EnhancementsTab(QWidget):
 
         layout.addWidget(enhance_group)
 
+    def _uses_text_input(self, provider_id: str) -> bool:
+        """Return True if provider should use text input instead of dropdown."""
+        return provider_id in ("openrouter", "ollama", "other")
+
     def _on_provider_changed(self) -> None:
         """Handle provider selection change."""
         provider_id = self._provider_combo.currentData()
@@ -119,8 +137,36 @@ class EnhancementsTab(QWidget):
         if default_api_base and not self._api_base_edit.text():
             self._api_base_edit.setText(default_api_base)
 
-        # Refresh model list and reset to first model for new provider
-        self._refresh_model_list(reset_selection=True)
+        # Switch model input mode: text for OpenRouter/Ollama/Other, combo for others
+        use_text = self._uses_text_input(provider_id)
+        self._model_stack.setCurrentIndex(1 if use_text else 0)
+        self._refresh_btn.setVisible(not use_text)
+        
+        # Set placeholder hint for text input based on provider
+        if use_text:
+            placeholders = {
+                "openrouter": "e.g., openrouter/anthropic/claude-3-sonnet",
+                "ollama": "e.g., ollama/llama3.2",
+                "other": "e.g., your-provider/model-name",
+            }
+            self._llm_model_edit.setPlaceholderText(placeholders.get(provider_id, ""))
+            
+            # Handle model text based on whether we're switching back to saved provider
+            if provider_id == self._settings.llm_provider:
+                # Restore saved model when switching back to the saved provider
+                if self._settings.llm_model:
+                    self._llm_model_edit.setText(self._settings.llm_model)
+            else:
+                # Clear model text if switching to a different provider than saved
+                # This prevents model from one provider showing up on another
+                self._llm_model_edit.clear()
+        else:
+            # Refresh combo list for dropdown providers
+            self._refresh_model_list(reset_selection=True)
+            
+            # Restore saved model if switching back to the originally saved provider
+            if provider_id == self._settings.llm_provider and self._settings.llm_model:
+                self._llm_model_combo.setCurrentText(self._settings.llm_model)
 
     def _refresh_model_list(self, reset_selection: bool = False) -> None:
         """Refresh the model dropdown with models from the selected provider."""
@@ -236,11 +282,14 @@ class EnhancementsTab(QWidget):
         if self._settings.llm_api_base:
             self._api_base_edit.setText(self._settings.llm_api_base)
 
-        # Trigger provider change to show/hide API base and populate models
+        # Trigger provider change to show/hide API base and set model input mode
         self._on_provider_changed()
 
-        # Set model after models are populated
-        self._llm_model_combo.setCurrentText(self._settings.llm_model)
+        # Set model in the appropriate widget based on provider
+        if self._uses_text_input(self._settings.llm_provider):
+            self._llm_model_edit.setText(self._settings.llm_model or "")
+        else:
+            self._llm_model_combo.setCurrentText(self._settings.llm_model or "")
 
         if self._settings.llm_api_key:
             self._api_key_edit.setText(self._settings.llm_api_key)
@@ -250,8 +299,15 @@ class EnhancementsTab(QWidget):
 
     def save_settings(self) -> None:
         """Save UI values to settings."""
-        self._settings.llm_provider = self._provider_combo.currentData()
-        self._settings.llm_model = self._llm_model_combo.currentText()
+        provider = self._provider_combo.currentData()
+        self._settings.llm_provider = provider
+        
+        # Get model from appropriate widget
+        if self._uses_text_input(provider):
+            self._settings.llm_model = self._llm_model_edit.text().strip()
+        else:
+            self._settings.llm_model = self._llm_model_combo.currentText()
+        
         api_key = self._api_key_edit.text().strip()
         if api_key:
             self._settings.llm_api_key = api_key
