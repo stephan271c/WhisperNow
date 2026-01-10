@@ -172,6 +172,11 @@ class SettingsWindow(QDialog):
         self._save_settings()
         self.accept()
 
+    def reject(self) -> None:
+        """Handle Cancel: reset UI to saved settings before closing."""
+        self._load_settings()
+        super().reject()
+
     def _reset_settings(self) -> None:
         """Reset all settings to defaults."""
         self._settings.reset_to_defaults()
