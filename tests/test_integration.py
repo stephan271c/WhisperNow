@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import MagicMock, patch, ANY
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
-from src.transcribe.application import TranscribeApp
+from src.transcribe.app import TranscribeApp
 from src.transcribe.core.asr.transcriber import EngineState
 from src.transcribe.core.input.hotkey import HotkeyListener
 from src.transcribe.core.settings import Settings, HotkeyConfig
@@ -39,14 +39,14 @@ def cleanup_app():
 
 @pytest.fixture
 def mock_dependencies():
-    with patch('src.transcribe.application.get_settings') as mock_get_settings, \
-         patch('src.transcribe.application.SystemTray') as MockTray, \
-         patch('src.transcribe.application.AudioRecorder') as MockRecorder, \
-         patch('src.transcribe.application.TranscriptionEngine') as MockTranscriber, \
-         patch('src.transcribe.application.HotkeyListener', wraps=HotkeyListener) as MockHotkey, \
-         patch('src.transcribe.application.check_and_request_permissions', return_value=True), \
-         patch('src.transcribe.application.set_autostart') as mock_set_autostart, \
-         patch('src.transcribe.application.ModelLoaderThread') as MockLoaderThread:
+    with patch('src.transcribe.app.get_settings') as mock_get_settings, \
+         patch('src.transcribe.app.SystemTray') as MockTray, \
+         patch('src.transcribe.app.AudioRecorder') as MockRecorder, \
+         patch('src.transcribe.app.TranscriptionEngine') as MockTranscriber, \
+         patch('src.transcribe.app.HotkeyListener', wraps=HotkeyListener) as MockHotkey, \
+         patch('src.transcribe.app.check_and_request_permissions', return_value=True), \
+         patch('src.transcribe.app.set_autostart') as mock_set_autostart, \
+         patch('src.transcribe.app.ModelLoaderThread') as MockLoaderThread:
         
         # Setup mock settings
         settings = Settings()
@@ -81,7 +81,7 @@ def mock_dependencies():
         }
 
 @patch('src.transcribe.core.output.text_output.subprocess.run')
-@patch('src.transcribe.application.TextOutputController')
+@patch('src.transcribe.app.TextOutputController')
 def test_full_transcription_flow(MockTextOutput, mock_subprocess, mock_dependencies, cleanup_app, qtbot):
     """Test the complete flow: Hotkey -> Record -> Transcribe -> Type"""
     
@@ -121,7 +121,7 @@ def test_settings_hotkey_update(mock_dependencies, cleanup_app, qtbot):
     """Test that changing settings updates the hotkey listener."""
     
     # Mock the internal hotkey listener of the app to check for updates
-    with patch('src.transcribe.application.HotkeyListener') as MockListener:
+    with patch('src.transcribe.app.HotkeyListener') as MockListener:
         mock_listener_instance = MockListener.return_value
         
         app = cleanup_app(TranscribeApp())
@@ -139,7 +139,7 @@ def test_settings_hotkey_update(mock_dependencies, cleanup_app, qtbot):
 def test_autostart_update(mock_dependencies, cleanup_app, qtbot):
     """Test that changing settings updates autostart."""
     
-    with patch('src.transcribe.application.HotkeyListener') as MockListener:
+    with patch('src.transcribe.app.HotkeyListener') as MockListener:
         app = cleanup_app(TranscribeApp())
         
         # Change settings

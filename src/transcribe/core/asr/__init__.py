@@ -10,7 +10,7 @@ from .backends import (
     detect_backend_type,
 )
 from .model_loader import ModelLoaderThread
-from .transcriber import TranscriptionEngine, EngineState, transcribe_audio
+from .transcriber import TranscriptionEngine, EngineState
 
 __all__ = [
     "ASRBackend",
@@ -23,5 +23,4 @@ __all__ = [
     "ModelLoaderThread",
     "TranscriptionEngine",
     "EngineState",
-    "transcribe_audio",
 ]

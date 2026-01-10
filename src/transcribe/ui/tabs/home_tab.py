@@ -26,7 +26,7 @@ class HomeTab(QWidget):
         features = QLabel(
             "<ul>"
             "<li><b>Mode</b>: Configure enhancements for different tasks.</li>"
-            "<li><b>Vocabulary</b>: Word substitutions (coming soon).</li>"
+            "<li><b>Vocabulary</b>: Word substitutions.</li>"
             "<li><b>Configuration</b>: General behavior, audio input, hotkeys, and ASR model.</li>"
             "<li><b>History</b>: Review recent transcriptions.</li>"
             "</ul>"

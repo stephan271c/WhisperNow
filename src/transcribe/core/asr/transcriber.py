@@ -355,32 +355,3 @@ class TranscriptionEngine:
         # This is lightweight as it doesn't load the model
         backend = create_backend(self._backend_type, self.model_name)
         return backend.is_model_cached(self.model_name)
-
-
-# Convenience function for quick transcription without engine management
-def transcribe_audio(
-    audio_data: np.ndarray,
-    model_name: str = "nvidia/parakeet-tdt-0.6b-v3",
-    sample_rate: int = 16000,
-    use_gpu: bool = True
-) -> Optional[str]:
-    """
-    Quick transcription without managing engine lifecycle.
-    
-    Note: This loads the model each time, so it's not efficient for
-    repeated use. For multiple transcriptions, use TranscriptionEngine directly.
-    
-    Args:
-        audio_data: Numpy array of audio samples
-        model_name: Model to use for transcription
-        sample_rate: Sample rate of the audio
-        use_gpu: Whether to use GPU if available
-        
-    Returns:
-        Transcribed text, or None if failed.
-    """
-    engine = TranscriptionEngine(model_name=model_name, use_gpu=use_gpu)
-    try:
-        return engine.transcribe(audio_data, sample_rate)
-    finally:
-        engine.unload()

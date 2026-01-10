@@ -14,7 +14,7 @@ from .asr.backends import (
     create_backend,
     detect_backend_type,
 )
-from .asr.transcriber import TranscriptionEngine, EngineState, transcribe_audio
+from .asr.transcriber import TranscriptionEngine, EngineState
 from .input.hotkey import HotkeyListener
 
 __all__ = [
@@ -29,7 +29,6 @@ __all__ = [
     # Transcription engine
     "TranscriptionEngine",
     "EngineState",
-    "transcribe_audio",
     # Hotkey listener
     "HotkeyListener",
 ]
