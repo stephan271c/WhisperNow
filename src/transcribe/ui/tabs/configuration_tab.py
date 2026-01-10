@@ -5,7 +5,7 @@ from typing import Optional, List
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
     QComboBox, QCheckBox, QPushButton, QGroupBox, QFormLayout,
-    QKeySequenceEdit, QLineEdit, QMessageBox
+    QKeySequenceEdit, QLineEdit, QMessageBox, QScrollArea
 )
 from PySide6.QtGui import QKeySequence
 from PySide6.QtCore import Qt, Signal
@@ -30,7 +30,18 @@ class ConfigurationTab(QWidget):
 
     def _setup_ui(self) -> None:
         """Build the UI layout."""
-        layout = QVBoxLayout(self)
+        # Create main layout for the tab
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+
+        # Create container widget for scroll area content
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
 
@@ -40,6 +51,9 @@ class ConfigurationTab(QWidget):
         layout.addWidget(self._create_asr_model_section())
 
         layout.addStretch()
+
+        scroll_area.setWidget(scroll_content)
+        main_layout.addWidget(scroll_area)
 
     def _create_general_section(self) -> QWidget:
         """Create the General settings section."""
