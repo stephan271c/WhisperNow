@@ -5,7 +5,8 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QGroupBox, QFormLayout, QLineEdit,
-    QListWidget, QListWidgetItem, QMessageBox, QDialog, QStackedWidget
+    QListWidget, QListWidgetItem, QMessageBox, QDialog, QStackedWidget,
+    QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -28,6 +29,7 @@ class LLMSettingsWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         llm_group = QGroupBox("LLM Settings")
+        llm_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         llm_layout = QFormLayout(llm_group)
 
         # Provider selector
@@ -203,6 +205,7 @@ class EnhancementListWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         enhance_group = QGroupBox("Enhancements")
+        enhance_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         enhance_layout = QVBoxLayout(enhance_group)
 
         # Active enhancement selector
@@ -214,6 +217,7 @@ class EnhancementListWidget(QWidget):
 
         # Enhancement list
         self._enhancement_list = QListWidget()
+        self._enhancement_list.setMaximumHeight(150)
         self._enhancement_list.itemDoubleClicked.connect(self._edit_enhancement)
         enhance_layout.addWidget(self._enhancement_list)
 
@@ -337,6 +341,9 @@ class EnhancementsTab(QWidget):
         self._enhancement_list = EnhancementListWidget(self._settings, self)
         self._enhancement_list.enhancements_changed.connect(self.enhancements_changed.emit)
         layout.addWidget(self._enhancement_list)
+
+        # Push content to top, absorb extra vertical space at bottom
+        layout.addStretch(1)
 
     def refresh_enhancement_list(self) -> None:
         """Refresh the enhancement list (for external callers)."""
