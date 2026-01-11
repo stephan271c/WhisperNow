@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import sys
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
@@ -72,3 +73,20 @@ coll = COLLECT(
     upx_exclude=[],
     name='whispernow',
 )
+
+# macOS: Create .app bundle
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='WhisperNow.app',
+        icon=None,  # TODO: Add icon.icns when available
+        bundle_identifier='com.whispernow.app',
+        info_plist={
+            'CFBundleShortVersionString': '0.1.0',
+            'CFBundleName': 'WhisperNow',
+            'CFBundleDisplayName': 'WhisperNow',
+            'NSHighResolutionCapable': True,
+            'NSMicrophoneUsageDescription': 'WhisperNow needs microphone access for speech transcription.',
+            'NSAccessibilityUsageDescription': 'WhisperNow needs accessibility access for keyboard shortcuts and text input.',
+        },
+    )
