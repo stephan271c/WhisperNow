@@ -76,7 +76,8 @@ class LLMSettingsWidget(QWidget):
         self._api_key_edit = QLineEdit()
         self._api_key_edit.setEchoMode(QLineEdit.Password)
         self._api_key_edit.setPlaceholderText("Enter your API key")
-        llm_layout.addRow("API Key:", self._api_key_edit)
+        self._api_key_label = QLabel("API Key:")
+        llm_layout.addRow(self._api_key_label, self._api_key_edit)
 
         layout.addWidget(llm_group)
 
@@ -107,8 +108,15 @@ class LLMSettingsWidget(QWidget):
         else:
             self._api_base_edit.clear()
 
-        # Load saved API key for this provider
-        if provider_settings.api_key:
+        # Show/hide API key field based on provider
+        # Providers with env_var_name=None don't need an API key (e.g., local Ollama)
+        _, _, env_var_name = PROVIDERS.get(provider_id, (None, None, None))
+        needs_api_key = env_var_name is not None or provider_id == "other"
+        self._api_key_label.setVisible(needs_api_key)
+        self._api_key_edit.setVisible(needs_api_key)
+
+        # Load saved API key for this provider (only if field is visible)
+        if needs_api_key and provider_settings.api_key:
             self._api_key_edit.setText(provider_settings.api_key)
         else:
             self._api_key_edit.clear()
