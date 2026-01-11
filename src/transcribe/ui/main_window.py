@@ -177,6 +177,10 @@ class SettingsWindow(QDialog):
         self._load_settings()
         super().reject()
 
+    def refresh_asr_model_list(self) -> None:
+        """Refresh the ASR model list in the configuration tab."""
+        self._configuration_tab.refresh_model_list()
+
     def _reset_settings(self) -> None:
         """Reset all settings to defaults."""
         self._settings.reset_to_defaults()

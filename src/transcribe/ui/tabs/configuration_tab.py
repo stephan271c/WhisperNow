@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt, Signal
 
 from ...core.settings import Settings, HotkeyConfig
 from ...core.audio import AudioRecorder
-from ...core.asr.model_utils import get_installed_asr_models
+from ...core.asr.model_utils import get_installed_asr_models, delete_asr_model
 
 # Special value for custom model entry in combo box
 _CUSTOM_MODEL_ENTRY = "__custom_model__"
@@ -188,12 +188,24 @@ class ConfigurationTab(QWidget):
         model_group = QGroupBox("ASR Model")
         model_layout = QFormLayout(model_group)
 
-        # Model selection combo box
+        # Model selection combo box with delete button
+        model_row_layout = QHBoxLayout()
         self._model_combo = QComboBox()
         self._model_combo.setStyleSheet("font-family: monospace;")
+        model_row_layout.addWidget(self._model_combo, 1)
+
+        # Delete button for removing cached models (create before _refresh_model_list)
+        self._delete_model_btn = QPushButton("🗑")
+        self._delete_model_btn.setFixedWidth(30)
+        self._delete_model_btn.setToolTip("Delete selected model from cache")
+        self._delete_model_btn.clicked.connect(self._on_delete_model_clicked)
+        model_row_layout.addWidget(self._delete_model_btn)
+
+        # Now populate the model list (this depends on delete button existing)
         self._refresh_model_list()
         self._model_combo.currentIndexChanged.connect(self._on_model_combo_changed)
-        model_layout.addRow("Model:", self._model_combo)
+
+        model_layout.addRow("Model:", model_row_layout)
 
         # Custom model name entry (hidden by default)
         self._custom_model_edit = QLineEdit()
@@ -243,11 +255,60 @@ class ConfigurationTab(QWidget):
             if idx >= 0:
                 self._model_combo.setCurrentIndex(idx)
 
+        # Update delete button state
+        self._update_delete_button_state()
+
+    def refresh_model_list(self) -> None:
+        """Public method to refresh the model list. Called after model loading."""
+        self._refresh_model_list()
+
+    def _update_delete_button_state(self) -> None:
+        """Enable delete button only for installed models (not custom entry)."""
+        current_data = self._model_combo.currentData()
+        # Disable for "Custom model..." option and when currently active model is selected
+        is_custom = current_data == _CUSTOM_MODEL_ENTRY
+        is_active_model = current_data == self._settings.model_name
+        self._delete_model_btn.setEnabled(not is_custom and not is_active_model)
+        if is_active_model and not is_custom:
+            self._delete_model_btn.setToolTip("Cannot delete currently active model")
+        else:
+            self._delete_model_btn.setToolTip("Delete selected model from cache")
+
     def _on_model_combo_changed(self, index: int) -> None:
         """Show/hide custom model entry based on combo selection."""
         is_custom = self._model_combo.currentData() == _CUSTOM_MODEL_ENTRY
         self._custom_model_edit.setVisible(is_custom)
         self._custom_model_instructions.setVisible(is_custom)
+        self._update_delete_button_state()
+
+    def _on_delete_model_clicked(self) -> None:
+        """Handle delete button click - show confirmation and delete model."""
+        model_name = self._model_combo.currentData()
+        if not model_name or model_name == _CUSTOM_MODEL_ENTRY:
+            return
+
+        # Confirm deletion
+        reply = QMessageBox.question(
+            self,
+            "Delete Model",
+            f"Are you sure you want to delete '{model_name}' from the cache?\n\n"
+            "This will free up disk space but the model will need to be\n"
+            "re-downloaded if you want to use it again.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # Perform deletion
+        success, message = delete_asr_model(model_name)
+
+        if success:
+            QMessageBox.information(self, "Model Deleted", message)
+            self._refresh_model_list()
+        else:
+            QMessageBox.warning(self, "Deletion Failed", message)
 
     def _load_model_selection(self, model_name: str) -> None:
         """Load a model name into the combo box or custom entry."""

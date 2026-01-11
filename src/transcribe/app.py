@@ -404,9 +404,12 @@ class TranscribeApp(QObject):
         else:
             logger.error(f"Model loading failed: {message}")
         
-        # Hide loading state in settings window
+        # Hide loading state in settings window and refresh model list
         if self._settings_window is not None:
             self._settings_window.set_loading(False)
+            # Refresh model list so newly downloaded models appear in dropdown
+            if success:
+                self._settings_window.refresh_asr_model_list()
         
         # Update tray status
         if success:
