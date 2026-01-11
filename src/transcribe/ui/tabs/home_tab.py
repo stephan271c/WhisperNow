@@ -19,7 +19,7 @@ class HomeTab(QWidget):
         title.setStyleSheet("font-size: 14px; font-weight: 600;")
         layout.addWidget(title)
 
-        intro = QLabel("Choose a section on the left to configure Transcribe.")
+        intro = QLabel("Choose a section on the left to configure WhisperNow.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 

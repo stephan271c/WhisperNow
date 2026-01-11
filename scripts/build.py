@@ -24,10 +24,10 @@ def build():
             cwd=project_root,
             check=True
         )
-        print("\nBuild successful! Output is in dist/transcribe/")
+        print("\nBuild successful! Output is in dist/whispernow/")
         
         # Verify
-        executable = dist_dir / "transcribe" / "transcribe"
+        executable = dist_dir / "whispernow" / "whispernow"
         if executable.exists():
              print(f"Executable created: {executable}")
         else:

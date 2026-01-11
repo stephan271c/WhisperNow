@@ -1,5 +1,5 @@
 [project]
-name = "transcribe"
+name = "whispernow"
 version = "0.1.0"
 description = "Push-to-talk speech transcription desktop app"
 readme = "README.md"
@@ -29,10 +29,10 @@ all = [
 ]
 
 [project.gui-scripts]
-transcribe = "transcribe.app:main"
+whispernow = "transcribe.app:main"
 
 [project.scripts]
-transcribe-cli = "transcribe.app:main"
+whispernow-cli = "transcribe.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -353,7 +353,7 @@ class TranscribeApp(QObject):
             )
         
         # Apply autostart setting
-        set_autostart(self._settings.auto_start_on_login, "Transcribe")
+        set_autostart(self._settings.auto_start_on_login, "WhisperNow")
     
     def _quit(self) -> None:
         """Quit the application."""
@@ -447,7 +447,7 @@ def main():
     """Application entry point."""
     # Create Qt application
     app = QApplication(sys.argv)
-    app.setApplicationName("Transcribe")
+    app.setApplicationName("WhisperNow")
     app.setQuitOnLastWindowClosed(False)  # Keep running in tray
     
     # Handle Ctrl+C gracefully

@@ -25,13 +25,13 @@ class WelcomePage(QWizardPage):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("Welcome to Transcribe")
+        self.setTitle("Welcome to WhisperNow")
         self.setSubTitle("Let's set up your speech-to-text assistant.")
         
         layout = QVBoxLayout(self)
         
         intro = QLabel(
-            "Transcribe lets you dictate text anywhere on your computer.\n\n"
+            "WhisperNow lets you dictate text anywhere on your computer.\n\n"
             "Just hold down a hotkey and speak — your words will be "
             "typed automatically.\n\n"
             "This wizard will help you configure:\n"
@@ -49,7 +49,7 @@ class PermissionsPage(QWizardPage):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("Accessibility Permissions")
-        self.setSubTitle("Transcribe needs permission to type on your behalf.")
+        self.setSubTitle("WhisperNow needs permission to type on your behalf.")
         
         layout = QVBoxLayout(self)
         
@@ -85,11 +85,11 @@ class PermissionsPage(QWizardPage):
         else:
             self._status_label.setText(
                 "⚠️ Accessibility permission required.\n\n"
-                "Transcribe needs accessibility access to:\n"
+                "WhisperNow needs accessibility access to:\n"
                 "• Listen for your hotkey\n"
                 "• Type the transcribed text\n\n"
                 "Click the button below to open System Preferences, "
-                "then add Transcribe to the allowed apps."
+                "then add WhisperNow to the allowed apps."
             )
             self._status_label.setStyleSheet("")
     
@@ -214,13 +214,13 @@ class CompletePage(QWizardPage):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("Setup Complete!")
-        self.setSubTitle("You're ready to start using Transcribe.")
+        self.setSubTitle("You're ready to start using WhisperNow.")
         
         layout = QVBoxLayout(self)
         
         summary = QLabel(
             "Your settings have been saved.\n\n"
-            "Look for the Transcribe icon in your system tray. "
+            "Look for the WhisperNow icon in your system tray. "
             "Right-click it to access settings or quit.\n\n"
             "To transcribe:\n"
             "1. Hold your hotkey\n"
@@ -238,7 +238,7 @@ class SetupWizard(QWizard):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Transcribe Setup")
+        self.setWindowTitle("WhisperNow Setup")
         self.setWizardStyle(QWizard.ModernStyle)
         self.setMinimumSize(500, 400)
         

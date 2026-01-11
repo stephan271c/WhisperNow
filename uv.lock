@@ -4842,64 +4842,6 @@ wheels = [
 ]
 
 [[package]]
-name = "transcribe"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "litellm" },
-    { name = "nemo-toolkit", extra = ["asr"] },
-    { name = "pynput" },
-    { name = "pyside6" },
-    { name = "scipy" },
-    { name = "sounddevice" },
-    { name = "torch" },
-    { name = "torchaudio" },
-    { name = "torchvision" },
-]
-
-[package.optional-dependencies]
-all = [
-    { name = "accelerate" },
-    { name = "transformers" },
-]
-huggingface = [
-    { name = "accelerate" },
-    { name = "transformers" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pyinstaller" },
-    { name = "pytest" },
-    { name = "pytest-qt" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "accelerate", marker = "extra == 'all'", specifier = ">=0.27.0" },
-    { name = "accelerate", marker = "extra == 'huggingface'", specifier = ">=0.27.0" },
-    { name = "litellm", specifier = ">=1.80.11" },
-    { name = "nemo-toolkit", extras = ["asr"], specifier = ">=2.6.0" },
-    { name = "pynput", specifier = ">=1.8.1" },
-    { name = "pyside6", specifier = ">=6.6.0" },
-    { name = "scipy", specifier = ">=1.16.3" },
-    { name = "sounddevice", specifier = ">=0.5.3" },
-    { name = "torch", specifier = ">=2.9.1" },
-    { name = "torchaudio", specifier = ">=2.9.1" },
-    { name = "torchvision", specifier = ">=0.24.1" },
-    { name = "transformers", marker = "extra == 'all'", specifier = ">=4.40.0" },
-    { name = "transformers", marker = "extra == 'huggingface'", specifier = ">=4.40.0" },
-]
-provides-extras = ["huggingface", "all"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pyinstaller", specifier = ">=6.17.0" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "pytest-qt", specifier = ">=4.5.0" },
-]
-
-[[package]]
 name = "transformers"
 version = "4.53.3"
 source = { registry = "https://pypi.org/simple" }
@@ -5080,6 +5022,64 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/77/81/d4a23d67e9356f1c2d6fe9aa7e99f42078b5e3845b181412a5582f168af4/whisper_normalizer-0.1.12.tar.gz", hash = "sha256:484dcedbfeba2ee94cf9412d57ab1e66b847e91f80c15ffc4c6ab82ad5484b8c", size = 39630, upload-time = "2025-06-06T19:03:50.75Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/07/d7/2bf42cb3f19da0aec48052a6e3bc3a592afc182fe98c011a0e0ae5fbe1f5/whisper_normalizer-0.1.12-py3-none-any.whl", hash = "sha256:2cd7276d2599c05147a50cf86d240e6cd27623f5ccfe8b20ccea6a518274989a", size = 36748, upload-time = "2025-06-06T19:03:49.182Z" },
+]
+
+[[package]]
+name = "whispernow"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "litellm" },
+    { name = "nemo-toolkit", extra = ["asr"] },
+    { name = "pynput" },
+    { name = "pyside6" },
+    { name = "scipy" },
+    { name = "sounddevice" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "torchvision" },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "accelerate" },
+    { name = "transformers" },
+]
+huggingface = [
+    { name = "accelerate" },
+    { name = "transformers" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pyinstaller" },
+    { name = "pytest" },
+    { name = "pytest-qt" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "accelerate", marker = "extra == 'all'", specifier = ">=0.27.0" },
+    { name = "accelerate", marker = "extra == 'huggingface'", specifier = ">=0.27.0" },
+    { name = "litellm", specifier = ">=1.80.11" },
+    { name = "nemo-toolkit", extras = ["asr"], specifier = ">=2.6.0" },
+    { name = "pynput", specifier = ">=1.8.1" },
+    { name = "pyside6", specifier = ">=6.6.0" },
+    { name = "scipy", specifier = ">=1.16.3" },
+    { name = "sounddevice", specifier = ">=0.5.3" },
+    { name = "torch", specifier = ">=2.9.1" },
+    { name = "torchaudio", specifier = ">=2.9.1" },
+    { name = "torchvision", specifier = ">=0.24.1" },
+    { name = "transformers", marker = "extra == 'all'", specifier = ">=4.40.0" },
+    { name = "transformers", marker = "extra == 'huggingface'", specifier = ">=4.40.0" },
+]
+provides-extras = ["huggingface", "all"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pyinstaller", specifier = ">=6.17.0" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-qt", specifier = ">=4.5.0" },
 ]
 
 [[package]]

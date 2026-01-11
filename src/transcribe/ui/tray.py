@@ -100,10 +100,10 @@ class SystemTray(QObject):
         
         # Status tooltips
         status_tooltips: Dict[TrayStatus, str] = {
-            TrayStatus.IDLE: "Transcribe - Ready",
-            TrayStatus.LOADING: "Transcribe - Loading...",
-            TrayStatus.RECORDING: "Transcribe - Recording",
-            TrayStatus.ERROR: "Transcribe - Error",
+            TrayStatus.IDLE: "WhisperNow - Ready",
+            TrayStatus.LOADING: "WhisperNow - Loading...",
+            TrayStatus.RECORDING: "WhisperNow - Recording",
+            TrayStatus.ERROR: "WhisperNow - Error",
         }
         
         # Create a colored circle icon
@@ -135,7 +135,7 @@ class SystemTray(QObject):
         
         if self._tray_icon:
             self._tray_icon.setIcon(icon)
-            self._tray_icon.setToolTip(status_tooltips.get(self._status, "Transcribe"))
+            self._tray_icon.setToolTip(status_tooltips.get(self._status, "WhisperNow"))
     
     
     def hide(self) -> None:

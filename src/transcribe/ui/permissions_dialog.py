@@ -45,7 +45,7 @@ class PermissionsDialog(QDialog):
         
         # Explanation
         explanation = QLabel(
-            "Transcribe needs accessibility permission to:\n\n"
+            "WhisperNow needs accessibility permission to:\n\n"
             "• Listen for your push-to-talk hotkey\n"
             "• Type the transcribed text into applications\n\n"
             "Without this permission, the app cannot detect when you "
@@ -70,7 +70,7 @@ class PermissionsDialog(QDialog):
             "<b>How to grant permission:</b><br>"
             "1. Click 'Open System Preferences' below<br>"
             "2. Click the lock icon to make changes<br>"
-            "3. Find and check 'Transcribe' in the list<br>"
+            "3. Find and check 'WhisperNow' in the list<br>"
             "4. Click 'Check Again' to verify"
         )
         instructions.setTextFormat(Qt.RichText)

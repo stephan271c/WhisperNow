@@ -63,7 +63,7 @@ def request_accessibility_permissions() -> None:
     ], check=False)
 
 
-def set_autostart(enabled: bool, app_name: str = "Transcribe") -> bool:
+def set_autostart(enabled: bool, app_name: str = "WhisperNow") -> bool:
     """
     Enable or disable auto-start on login.
     

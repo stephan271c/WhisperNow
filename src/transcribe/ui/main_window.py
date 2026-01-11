@@ -34,7 +34,7 @@ class SettingsWindow(QDialog):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
 
-        self.setWindowTitle("Transcribe Settings")
+        self.setWindowTitle("WhisperNow Settings")
         self.setMinimumWidth(450)
         self.setMinimumHeight(400)
 
