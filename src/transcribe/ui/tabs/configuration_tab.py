@@ -12,6 +12,10 @@ from PySide6.QtCore import Qt, Signal
 
 from ...core.settings import Settings, HotkeyConfig
 from ...core.audio import AudioRecorder
+from ...core.asr.model_utils import get_installed_asr_models
+
+# Special value for custom model entry in combo box
+_CUSTOM_MODEL_ENTRY = "__custom_model__"
 
 
 class ConfigurationTab(QWidget):
@@ -184,20 +188,29 @@ class ConfigurationTab(QWidget):
         model_group = QGroupBox("ASR Model")
         model_layout = QFormLayout(model_group)
 
-        # Editable model name
-        self._model_edit = QLineEdit()
-        self._model_edit.setPlaceholderText("e.g. nvidia/parakeet-tdt-0.6b-v3")
-        self._model_edit.setStyleSheet("font-family: monospace;")
-        model_layout.addRow("Model Name:", self._model_edit)
+        # Model selection combo box
+        self._model_combo = QComboBox()
+        self._model_combo.setStyleSheet("font-family: monospace;")
+        self._refresh_model_list()
+        self._model_combo.currentIndexChanged.connect(self._on_model_combo_changed)
+        model_layout.addRow("Model:", self._model_combo)
 
-        # Instructions
-        model_instructions = QLabel(
+        # Custom model name entry (hidden by default)
+        self._custom_model_edit = QLineEdit()
+        self._custom_model_edit.setPlaceholderText("e.g. nvidia/parakeet-tdt-0.6b-v3")
+        self._custom_model_edit.setStyleSheet("font-family: monospace;")
+        self._custom_model_edit.hide()  # Hidden until "Custom model..." is selected
+        model_layout.addRow("", self._custom_model_edit)
+
+        # Instructions for custom model
+        self._custom_model_instructions = QLabel(
             "Enter a valid HuggingFace or NVIDIA model name.\n"
             "Model will be validated and downloaded on save."
         )
-        model_instructions.setStyleSheet("color: gray; font-size: 11px;")
-        model_instructions.setWordWrap(True)
-        model_layout.addRow("", model_instructions)
+        self._custom_model_instructions.setStyleSheet("color: gray; font-size: 11px;")
+        self._custom_model_instructions.setWordWrap(True)
+        self._custom_model_instructions.hide()  # Hidden until "Custom model..." is selected
+        model_layout.addRow("", self._custom_model_instructions)
 
         # GPU checkbox
         self._use_gpu_cb = QCheckBox("Use GPU acceleration (if available)")
@@ -210,6 +223,53 @@ class ConfigurationTab(QWidget):
         reset_btn.clicked.connect(self.reset_requested.emit)
         layout.addWidget(reset_btn)
         return widget
+
+    def _refresh_model_list(self) -> None:
+        """Refresh the model combo box with installed models."""
+        current_data = self._model_combo.currentData() if self._model_combo.count() > 0 else None
+        self._model_combo.clear()
+
+        # Add installed models
+        installed_models = get_installed_asr_models()
+        for model in installed_models:
+            self._model_combo.addItem(model, model)
+
+        # Add "Custom model..." option at the end
+        self._model_combo.addItem("Custom model...", _CUSTOM_MODEL_ENTRY)
+
+        # Restore selection if possible
+        if current_data:
+            idx = self._model_combo.findData(current_data)
+            if idx >= 0:
+                self._model_combo.setCurrentIndex(idx)
+
+    def _on_model_combo_changed(self, index: int) -> None:
+        """Show/hide custom model entry based on combo selection."""
+        is_custom = self._model_combo.currentData() == _CUSTOM_MODEL_ENTRY
+        self._custom_model_edit.setVisible(is_custom)
+        self._custom_model_instructions.setVisible(is_custom)
+
+    def _load_model_selection(self, model_name: str) -> None:
+        """Load a model name into the combo box or custom entry."""
+        # Try to find the model in the combo box
+        idx = self._model_combo.findData(model_name)
+        if idx >= 0:
+            # Model is in the list, select it
+            self._model_combo.setCurrentIndex(idx)
+        else:
+            # Model not in list, use custom entry
+            custom_idx = self._model_combo.findData(_CUSTOM_MODEL_ENTRY)
+            if custom_idx >= 0:
+                self._model_combo.setCurrentIndex(custom_idx)
+            self._custom_model_edit.setText(model_name)
+            self._on_model_combo_changed(self._model_combo.currentIndex())
+
+    def _get_selected_model_name(self) -> str:
+        """Get the currently selected model name from combo or custom entry."""
+        if self._model_combo.currentData() == _CUSTOM_MODEL_ENTRY:
+            return self._custom_model_edit.text().strip()
+        else:
+            return self._model_combo.currentData() or ""
 
     def set_gpu_enabled(self, enabled: bool) -> None:
         """Enable or disable the GPU checkbox (e.g., during model loading)."""
@@ -227,8 +287,8 @@ class ConfigurationTab(QWidget):
         self._autostart_cb.setChecked(self._settings.auto_start_on_login)
         self._use_gpu_cb.setChecked(self._settings.use_gpu)
 
-        # Set model name
-        self._model_edit.setText(self._settings.model_name)
+        # Set model selection
+        self._load_model_selection(self._settings.model_name)
 
         # Set hotkey from HotkeyConfig
         hotkey = self._settings.hotkey
@@ -248,8 +308,8 @@ class ConfigurationTab(QWidget):
 
     def save_settings(self) -> bool:
         """Save UI values to settings. Returns False if validation fails."""
-        # Validate model name first
-        model_name = self._model_edit.text().strip()
+        # Get model name from combo or custom textbox
+        model_name = self._get_selected_model_name()
         if model_name and model_name != self._settings.model_name:
             if not self._validate_model_name(model_name):
                 return False
