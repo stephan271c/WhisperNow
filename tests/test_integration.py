@@ -150,4 +150,4 @@ def test_autostart_update(mock_dependencies, cleanup_app, qtbot):
         app._on_settings_changed()
         
         # Verify autostart called
-        mock_dependencies['set_autostart'].assert_called_with(True, "Transcribe")
+        mock_dependencies['set_autostart'].assert_called_with(True, "WhisperNow")

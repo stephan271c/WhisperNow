@@ -2,14 +2,14 @@
 
 **Push-to-talk speech transcription for desktop** – fast, private, and cross-platform.
 
-WhisperNow is a desktop application that transcribes your speech in real-time with a simple push-to-talk hotkey. It runs locally using NVIDIA's Parakeet ASR model, keeping your voice data private while delivering high-quality transcriptions.
+WhisperNow is a desktop application that transcribes your speech in real-time with a simple push-to-talk hotkey. It runs locally using NVIDIA NeMo and HuggingFace ASR models, keeping your voice data private while delivering high-quality transcriptions.
 
 ---
 
 ## Features
 
 - **Push-to-Talk Recording** – Hold a customizable hotkey to record, release to transcribe
-- **High-Quality ASR** – Uses NVIDIA NeMo Parakeet models (with optional HuggingFace backends)
+- **High-Quality ASR** – Uses NVIDIA NeMo and HuggingFace ASR models
 - **GPU Acceleration** – CUDA support for fast transcription on compatible hardware
 - **System Tray Integration** – Runs quietly in the background
 - **LLM Enhancement** – Optional post-processing via OpenAI, Anthropic, Google, or local Ollama
@@ -32,8 +32,8 @@ WhisperNow is a desktop application that transcribes your speech in real-time wi
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourname/whispernow.git
-cd whispernow
+git clone https://github.com/stephan271c/WhisperNow.git
+cd WhisperNow
 
 # Create virtual environment and install dependencies
 uv sync
@@ -45,7 +45,7 @@ uv run python -m src.transcribe.app
 
 ### Pre-built Releases
 
-Download installers for your platform from the [Releases](https://github.com/yourname/whispernow/releases) page:
+Download installers for your platform from the [Releases](https://github.com/stephan271c/WhisperNow/releases) page:
 
 | Platform | Format |
 |----------|--------|
@@ -55,10 +55,26 @@ Download installers for your platform from the [Releases](https://github.com/you
 
 ---
 
+## How it works
+
+```mermaid
+graph TD
+    A[User Produces Speech] --> B(ASR Model)
+    B -->|Transcription| C{Vocabulary<br>Substitution?}
+    C -->|Yes| D[Replace Keywords/Abbreviations]
+    C -->|No| E{LLM<br>Enhancement?}
+    D --> E
+    E -->|Yes| F[Apply LLM Enhancements]
+    E -->|No| G[Output to Textbox]
+    F --> G
+```
+
+---
+
 ## Quick Start
 
 1. **Launch WhisperNow** – The app starts in the system tray
-2. **Wait for model loading** – First run downloads the ASR model (~600MB)
+2. **Wait for model loading** – First run downloads the ASR model
 3. **Press and hold** your hotkey (default: `Ctrl+Shift`) to record
 4. **Release** to transcribe – text is automatically typed into the active window
 
@@ -71,27 +87,48 @@ On first launch, a setup wizard guides you through:
 
 ---
 
+## Models
+
+### ASR Models
+
+WhisperNow supports Nvidia NeMo and HuggingFace pipeline compatible ASR models, including OpenAI Whisper models. We recommend using parakeet-tdt-0.6b-v3 for the best performance.
+
+| Model | Description |
+|-------|-------------|
+| `nvidia/parakeet-tdt-0.6b-v3` | NVIDIA NeMo ASR model |
+| `nvidia/canary-1b-v2` | NVIDIA NeMo ASR model |
+| `openai/whisper-large-v3-turbo` | OpenAI Whisper model |
+| `openai/whisper-small` | OpenAI Whisper model |
+
+### LLM Models
+
+WhisperNow uses litellm to interface with LLMs. You can use any LLM that litellm supports. Since the llm is used for simple post-processing, we recommend using a small model.
+
+| Model | Description |
+|-------|-------------|
+| `ollama/gemma3:1b` | Ollama Gemini model |
+nvidia/nemotron-3-nano-30b-a3b:free` | OpenRouter model |
+| `openai/gpt-5-nano` | OpenAI GPT-5 nano model |
+| `anthropic/claude-sonnet-4-5` | Anthropic Claude model |
+| `gemini/gemini-flash-latest` | Google Gemini model |
+
 ## Configuration
 
 Access settings by clicking the tray icon → **Settings**.
 
-### General Tab
+### Configuration Tab
 | Setting | Description |
 |---------|-------------|
-| Hotkey | Keyboard shortcut for push-to-talk |
+| Typing speed | Characters per second (0 = instant paste) |
 | Start minimized | Launch to tray without showing window |
 | Auto-start on login | Launch WhisperNow at system startup |
-| Typing speed | Characters per second (0 = instant paste) |
-
-### Model Tab
-| Setting | Description |
-|---------|-------------|
-| ASR Model | Select from available Parakeet models |
-| Use GPU | Enable CUDA acceleration |
+| Hotkey | Keyboard shortcut for push-to-talk |
 | Sample Rate | Audio sample rate (default: 16000 Hz) |
 | Input Device | Select microphone |
+| ASR Model | Select from available ASR models |
+| Use GPU | Enable CUDA acceleration |
 
-### Enhancements Tab
+### Mode Tab
 Configure optional LLM post-processing:
 | Provider | Description |
 |----------|-------------|
@@ -220,7 +257,6 @@ Tagged releases (`v*`) automatically create draft GitHub releases with all platf
 
 ### Linux
 - Requires `xclip` for clipboard operations
-- AppImage requires FUSE: `sudo apt install fuse libfuse2`
 - Hotkey capture may need X11 or elevated permissions
 
 ### macOS
@@ -247,6 +283,6 @@ Tagged releases (`v*`) automatically create draft GitHub releases with all platf
 
 ## License
 
-This project is licensed under the MIT License – see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License
 
 
