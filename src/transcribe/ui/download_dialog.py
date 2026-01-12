@@ -14,13 +14,7 @@ from PySide6.QtWidgets import (
 
 
 class DownloadDialog(QDialog):
-    """
-    Progress dialog for model downloads.
     
-    Shows a progress bar and allows cancellation.
-    """
-    
-    # Signal emitted when user clicks cancel
     cancelled = Signal()
     
     def __init__(
@@ -47,18 +41,15 @@ class DownloadDialog(QDialog):
         layout.setSpacing(16)
         layout.setContentsMargins(24, 24, 24, 24)
         
-        # Title label
         self.title_label = QLabel("Downloading Model")
         self.title_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         layout.addWidget(self.title_label)
         
-        # Model name label
         self.model_label = QLabel(model_name)
         self.model_label.setStyleSheet("color: #666;")
         self.model_label.setWordWrap(True)
         layout.addWidget(self.model_label)
         
-        # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
@@ -66,12 +57,10 @@ class DownloadDialog(QDialog):
         self.progress_bar.setTextVisible(True)
         layout.addWidget(self.progress_bar)
         
-        # Status label (for ETA or additional info)
         self.status_label = QLabel("Preparing...")
         self.status_label.setStyleSheet("color: #888; font-size: 11px;")
         layout.addWidget(self.status_label)
         
-        # Button layout
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         
@@ -85,12 +74,6 @@ class DownloadDialog(QDialog):
         self.model_label.setText(model_name)
     
     def set_progress(self, progress: float) -> None:
-        """
-        Update the progress bar.
-        
-        Args:
-            progress: Progress value from 0.0 to 1.0
-        """
         percent = int(progress * 100)
         self.progress_bar.setValue(percent)
         
@@ -114,10 +97,4 @@ class DownloadDialog(QDialog):
         return self._cancelled
     
     def finish(self, success: bool = True) -> None:
-        """
-        Close the dialog when download is complete.
-        
-        Args:
-            success: Whether the download completed successfully
-        """
         self.accept() if success else self.reject()

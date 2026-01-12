@@ -51,7 +51,6 @@ class PermissionsPage(QWizardPage):
         self._status_label.setWordWrap(True)
         layout.addWidget(self._status_label)
         
-        # Button to open System Preferences
         btn_layout = QHBoxLayout()
         self._open_prefs_btn = QPushButton("Open System Preferences")
         self._open_prefs_btn.clicked.connect(request_accessibility_permissions)
@@ -111,14 +110,12 @@ class MicrophonePage(QWizardPage):
         layout.addWidget(QLabel("Input Device:"))
         layout.addWidget(self._device_combo)
         
-        # Refresh button
         refresh_btn = QPushButton("Refresh Devices")
         refresh_btn.clicked.connect(self._refresh_devices)
         layout.addWidget(refresh_btn)
         
         layout.addStretch()
         
-        # Register field for wizard data access
         self.registerField("input_device", self._device_combo, "currentData")
     
     def _refresh_devices(self) -> None:
@@ -228,10 +225,8 @@ class SetupWizard(QWizard):
         
         self._settings = get_settings()
         
-        # Add pages
         self.addPage(WelcomePage())
         
-        # Only show permissions page on macOS
         if get_platform() == "macos":
             self.addPage(PermissionsPage())
         
@@ -244,17 +239,13 @@ class SetupWizard(QWizard):
         self.addPage(CompletePage())
     
     def accept(self) -> None:
-        # Save microphone selection
         self._settings.input_device = self._mic_page.get_selected_device()
         
-        # Save hotkey configuration
         self._settings.hotkey = self._hotkey_page.get_hotkey_config()
         
-        # Save accessibility permission status (macOS only)
         if get_platform() == "macos":
             self._settings.accessibility_permissions_granted = check_accessibility_permissions()
         
-        # Mark first run as complete
         self._settings.first_run_complete = True
         
         self._settings.save()

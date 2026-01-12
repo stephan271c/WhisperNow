@@ -118,7 +118,6 @@ class AudioProcessor:
         audio_data: np.ndarray, 
         sample_rate: int
     ) -> List[np.ndarray]:
-        """Split audio into smaller chunks using silence detection."""
         duration = len(audio_data) / sample_rate
         
         if duration <= self.max_duration:
@@ -143,7 +142,6 @@ class AudioProcessor:
         audio_data: np.ndarray, 
         sample_rate: int
     ) -> List[int]:
-        """Find optimal split points using silence detection."""
         max_chunk_samples = int(self.max_duration * sample_rate)
         min_chunk_samples = int(self.min_chunk_duration * sample_rate)
         silence_samples = int(self.silence_duration * sample_rate)
@@ -206,7 +204,6 @@ class AudioProcessor:
         silence_samples: int, 
         sample_rate: int
     ) -> Optional[int]:
-        """Find the best silence period in a given range."""
         step = int(0.05 * sample_rate)
         if step < 1:
             step = 1
@@ -236,7 +233,6 @@ class AudioProcessor:
         total_samples: int, 
         sample_rate: int
     ) -> List[int]:
-        """Generate time-based splits as fallback when no silence is found."""
         target_samples = int(self.max_duration * sample_rate * 0.9)
         
         split_points = []
@@ -254,7 +250,6 @@ class AudioProcessor:
         sample_rate: int, 
         split_points: List[int]
     ) -> List[np.ndarray]:
-        """Create individual audio chunks with overlap."""
         chunks = []
         overlap_samples = int(self.overlap_duration * sample_rate)
         
@@ -274,7 +269,6 @@ class AudioProcessor:
         return chunks
     
     def combine_transcriptions(self, transcriptions: List[str]) -> str:
-        """Combine multiple transcriptions into a single text."""
         if not transcriptions:
             return ""
         

@@ -80,13 +80,6 @@ class AudioRecorder:
         return device_info['default_samplerate']
     
     def start(self) -> bool:
-        """
-        Start recording audio.
-        
-        Returns:
-            True if recording started successfully, False if an error occurred.
-            Check last_error property for details on failure.
-        """
         if self._is_recording:
             return True
         
@@ -122,12 +115,6 @@ class AudioRecorder:
 
     
     def stop(self) -> Optional[np.ndarray]:
-        """
-        Stop recording and return the audio data.
-        
-        Returns:
-            Numpy array of audio samples at target_sample_rate, or None if no audio was recorded.
-        """
         if not self._is_recording:
             return None
         
