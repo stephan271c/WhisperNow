@@ -35,9 +35,8 @@ class TestHotkeyConfig:
     
     def test_serialization(self):
         """Test HotkeyConfig serializes to dict correctly."""
-        from dataclasses import asdict
         hotkey = HotkeyConfig(modifiers=["alt"], key="space")
-        data = asdict(hotkey)
+        data = hotkey.model_dump()
         assert data == {"modifiers": ["alt"], "key": "space"}
 
 
@@ -128,14 +127,14 @@ class TestConfigPaths:
         """Test get_config_dir returns a Path object."""
         result = get_config_dir()
         assert isinstance(result, Path)
-        # Should contain 'transcribe' in path
-        assert "transcribe" in str(result)
+        # Should contain app name in path
+        assert "whispernow" in str(result)
     
     def test_get_data_dir_returns_path(self):
         """Test get_data_dir returns a Path object."""
         result = get_data_dir()
         assert isinstance(result, Path)
-        assert "transcribe" in str(result)
+        assert "whispernow" in str(result)
     
     def test_config_and_data_dirs_exist(self):
         """Test that directories are created when accessed."""

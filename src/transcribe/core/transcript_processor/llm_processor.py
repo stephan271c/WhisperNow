@@ -4,13 +4,13 @@ LLM processing for text enhancement.
 Uses LiteLLM to apply configurable prompts to transcribed text.
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Optional, List, Dict
 import os
 
 import litellm
 from litellm import completion, completion_cost
-
+from pydantic import BaseModel, ConfigDict
 
 from ...utils.logger import get_logger
 
@@ -90,21 +90,22 @@ def _get_fallback_models(provider: str) -> List[str]:
 
 
 
-@dataclass
-class Enhancement:
+class Enhancement(BaseModel):
     """A named prompt template for enhancing transcribed text."""
+    model_config = ConfigDict(extra='ignore')
+    
     id: str
     title: str
     prompt: str
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
-        return asdict(self)
+        return self.model_dump()
     
     @classmethod
     def from_dict(cls, data: dict) -> "Enhancement":
         """Create from dictionary."""
-        return cls(**data)
+        return cls.model_validate(data)
 
 
 @dataclass
