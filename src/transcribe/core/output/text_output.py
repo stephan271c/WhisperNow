@@ -28,23 +28,10 @@ class TextOutputController:
     """
 
     def __init__(self, on_complete: Optional[Callable[[], None]] = None):
-        """
-        Initialize the text output controller.
-
-        Args:
-            on_complete: Callback invoked when text output completes
-        """
         self._keyboard = KeyboardController()
         self._on_complete = on_complete
 
     def output_text(self, text: str, instant: bool = True) -> None:
-        """
-        Output text to the active application.
-
-        Args:
-            text: The text to output
-            instant: If True, use clipboard paste. If False, type character-by-character.
-        """
         if instant:
             self._paste_text(text)
         else:
