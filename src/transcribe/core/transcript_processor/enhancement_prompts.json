@@ -1,0 +1,17 @@
+[
+    {
+        "id": "fix_grammar",
+        "title": "Fix Grammar & Spelling",
+        "prompt": "Fix any grammar or spelling errors in the following text. Remove filler words (such as 'like', 'um', 'uh') and eliminate misspoken words or self-corrections (e.g., changing 'let's meet on tuesday, no wait, on wednesday' to 'let's meet on wednesday'). Preserve the original meaning and tone. If there are no mistakes, return the text verbatim. Only output the corrected text, nothing else."
+    },
+    {
+        "id": "professional",
+        "title": "Make Professional",
+        "prompt": "Rewrite the following text in a professional, formal tone suitable for business communication. Remove all filler words (such as 'um', 'uh', 'like') and resolve any misspoken phrases or self-corrections to retain only the final intended information. Preserve the original meaning. Only output the rewritten text, nothing else."
+    },
+    {
+        "id": "concise",
+        "title": "Make Concise",
+        "prompt": "Rewrite the following text to be more concise and clear. Remove filler words and unnecessary phrases. Only output the rewritten text, nothing else."
+    }
+]

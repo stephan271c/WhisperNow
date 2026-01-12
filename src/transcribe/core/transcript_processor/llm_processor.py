@@ -1,8 +1,3 @@
-"""
-LLM processing for text enhancement.
-
-Uses LiteLLM to apply configurable prompts to transcribed text.
-"""
 
 from dataclasses import dataclass
 from typing import Optional, List, Dict
@@ -28,13 +23,7 @@ PROVIDERS: Dict[str, tuple] = {
 
 
 def get_models_for_provider(provider: str) -> List[str]:
-    """
-    Get available models for a provider from litellm.model_cost.
-    
-    Uses fast prefix-based filtering on the local model_cost dict
-    (no network requests, no slow get_llm_provider calls).
-    The dropdown is editable so users can type any model name.
-    """
+    """Get models for provider. Dropdown is editable so users can type custom names."""
     if provider == "other":
         return []  # User will type custom model name
     
@@ -104,24 +93,9 @@ class LLMResponse:
 
 
 class LLMProcessor:
-    """
-    Processes text through an LLM using enhancement prompts.
-    
-    Uses LiteLLM for provider-agnostic API access.
-    """
     
     @staticmethod
     def format_model_name(model: str, provider: str) -> str:
-        """
-        Format a model name for liteLLM with the appropriate provider prefix.
-        
-        Args:
-            model: The model name (e.g., "gpt-4o-mini", "llama3.2")
-            provider: The provider ID (e.g., "openai", "ollama", "openrouter")
-            
-        Returns:
-            The model name with provider prefix if needed.
-        """
         known_prefixes = (
             "openrouter/", "ollama/", "gemini/", 
             "openai/", "anthropic/", "azure/", "huggingface/"
@@ -144,18 +118,10 @@ class LLMProcessor:
     
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5-nano",
         api_key: Optional[str] = None,
         api_base: Optional[str] = None
     ):
-        """
-        Initialize the LLM processor.
-        
-        Args:
-            model: The LLM model to use (e.g., "gpt-4o-mini", "ollama/llama3")
-            api_key: Optional API key. If not provided, uses environment variables.
-            api_base: Optional API base URL (required for Ollama, OpenRouter, etc.)
-        """
         self.model = model
         self.api_key = api_key
         self.api_base = api_base
@@ -169,36 +135,22 @@ class LLMProcessor:
         logger.info(f"LLMProcessor initialized with model: {model}, api_base: {api_base}")
     
     def process(self, text: str, enhancement: Enhancement) -> LLMResponse:
-        """
-        Apply an enhancement prompt to the given text.
-        
-        Args:
-            text: The raw transcribed text to enhance
-            enhancement: The enhancement containing the prompt to apply
-            
-        Returns:
-            LLMResponse with enhanced text, cost, and usage info.
-            On failure, returns LLMResponse with original text and no cost.
-        """
         if not text or not text.strip():
             return LLMResponse(content=text)
         
         logger.info(f"Applying enhancement '{enhancement.title}' to text ({len(text)} chars)")
         
         try:
-            # Build messages based on system message support
             if self._supports_system_messages:
                 messages = [
                     {"role": "system", "content": enhancement.prompt},
                     {"role": "user", "content": text}
                 ]
             else:
-                # Merge system prompt with user prompt for models that don't support system messages
                 merged_content = f"{enhancement.prompt}\n\n{text}"
                 messages = [{"role": "user", "content": merged_content}]
                 logger.debug(f"Merged system prompt with user prompt for {self.model}")
-            
-            # Build completion kwargs
+
             kwargs = {
                 "model": self.model,
                 "messages": messages,
@@ -239,12 +191,6 @@ class LLMProcessor:
             return LLMResponse(content=text)
     
     def is_configured(self) -> bool:
-        """
-        Check if the LLM processor has valid configuration.
-        
-        Returns True if API key is set (either directly or via environment),
-        or if using a provider that doesn't require auth (like local Ollama).
-        """
         if self.api_key:
             return True
         
@@ -261,28 +207,25 @@ class LLMProcessor:
         return any(os.environ.get(var) for var in env_vars)
 
 
-# Default enhancement presets
-DEFAULT_ENHANCEMENTS: List[Enhancement] = [
-    Enhancement(
-        id="fix_grammar",
-        title="Fix Grammar & Spelling",
-        prompt="Fix any grammar or spelling errors in the following text. "
-               "Preserve the original meaning and tone. "
-               "Only output the corrected text, nothing else."
-    ),
-    Enhancement(
-        id="professional",
-        title="Make Professional",
-        prompt="Rewrite the following text in a professional, formal tone "
-               "suitable for business communication. "
-               "Preserve the original meaning. "
-               "Only output the rewritten text, nothing else."
-    ),
-    Enhancement(
-        id="concise",
-        title="Make Concise",
-        prompt="Rewrite the following text to be more concise and clear. "
-               "Remove filler words and unnecessary phrases. "
-               "Only output the rewritten text, nothing else."
-    ),
-]
+def load_default_enhancements() -> List[Enhancement]:
+    import json
+    from pathlib import Path
+    
+    json_path = Path(__file__).parent / "enhancement_prompts.json"
+    
+    with open(json_path, "r") as f:
+        data = json.load(f)
+    return [Enhancement.model_validate(item) for item in data]
+
+
+_default_enhancements: Optional[List[Enhancement]] = None
+
+
+def get_default_enhancements() -> List[Enhancement]:
+    global _default_enhancements
+    if _default_enhancements is None:
+        _default_enhancements = load_default_enhancements()
+    return _default_enhancements
+
+
+DEFAULT_ENHANCEMENTS = get_default_enhancements()

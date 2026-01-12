@@ -21,8 +21,8 @@ APP_NAME = "whispernow"
 
 
 def _get_default_enhancements() -> List[dict]:
-    from ..transcript_processor.llm_processor import DEFAULT_ENHANCEMENTS
-    return [e.model_dump() for e in DEFAULT_ENHANCEMENTS]
+    from ..transcript_processor.llm_processor import get_default_enhancements
+    return [e.model_dump() for e in get_default_enhancements()]
 
 
 def get_config_dir() -> Path:

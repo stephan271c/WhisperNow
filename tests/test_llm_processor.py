@@ -76,7 +76,7 @@ class TestLLMProcessor:
     
     def test_initialization_defaults(self):
         processor = LLMProcessor()
-        assert processor.model == "gpt-4o-mini"
+        assert processor.model == "gpt-5-nano"
         assert processor.api_key is None
     
     def test_is_configured_with_api_key(self):
