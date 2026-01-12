@@ -1,19 +1,26 @@
-
-
-from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QStackedWidget, QWidget,
-    QLabel, QDialogButtonBox, QListWidget, QAbstractItemView, QFrame
-)
-from PySide6.QtCore import Qt, Signal
 from typing import Optional
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QDialog,
+    QDialogButtonBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..core.settings import get_settings
 from .tabs import (
-    HomeTab,
-    VocabularyTab,
     ConfigurationTab,
     EnhancementsTab,
     HistoryTab,
+    HomeTab,
+    VocabularyTab,
 )
 
 
@@ -48,7 +55,8 @@ class SettingsWindow(QDialog):
 
     def _create_loading_overlay(self) -> QFrame:
         overlay = QFrame(self)
-        overlay.setStyleSheet("""
+        overlay.setStyleSheet(
+            """
             QFrame {
                 background-color: rgba(0, 0, 0, 150);
                 border-radius: 8px;
@@ -58,7 +66,8 @@ class SettingsWindow(QDialog):
                 font-size: 16px;
                 font-weight: bold;
             }
-        """)
+        """
+        )
 
         layout = QVBoxLayout(overlay)
         layout.setAlignment(Qt.AlignCenter)

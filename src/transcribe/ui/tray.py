@@ -1,68 +1,67 @@
-
-
-from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
-from PySide6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QBrush, QPen
-from PySide6.QtCore import Signal, QObject, Qt
-from typing import Optional, Callable, Dict
 from enum import Enum, auto
+from typing import Callable, Dict, Optional
+
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtGui import QAction, QBrush, QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 
 class TrayStatus(Enum):
-    IDLE = auto()        # Ready, waiting for input
-    LOADING = auto()     # Model loading/downloading
-    RECORDING = auto()   # Currently recording
+    IDLE = auto()  # Ready, waiting for input
+    LOADING = auto()  # Model loading/downloading
+    RECORDING = auto()  # Currently recording
     PROCESSING = auto()  # Transcribing/enhancing
-    ERROR = auto()       # Error state
+    ERROR = auto()  # Error state
 
 
 class SystemTray(QObject):
     """
     System tray icon with context menu.
-    
+
     Signals:
         settings_requested: Emitted when user clicks "Settings"
         quit_requested: Emitted when user clicks "Quit"
     """
-    
+
     settings_requested = Signal()
     quit_requested = Signal()
-    
+
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
-        
+
         self._status = TrayStatus.LOADING
         self._tray_icon: Optional[QSystemTrayIcon] = None
         self._menu: Optional[QMenu] = None
-        
+
         self._setup_tray()
-    
+
     def _setup_tray(self) -> None:
         self._tray_icon = QSystemTrayIcon(self)
-        
+
         self._menu = QMenu()
-        
+
         self._status_action = QAction("Loading...", self._menu)
         self._status_action.setEnabled(False)
         self._menu.addAction(self._status_action)
-        
+
         self._menu.addSeparator()
-        
+
         settings_action = QAction("Settings...", self._menu)
         settings_action.triggered.connect(self.settings_requested.emit)
         self._menu.addAction(settings_action)
-        
+
         self._menu.addSeparator()
-        
+
         quit_action = QAction("Quit", self._menu)
         quit_action.triggered.connect(self.quit_requested.emit)
         self._menu.addAction(quit_action)
-        
+
         self._tray_icon.setContextMenu(self._menu)
-        
+
         self._update_icon()
-        
+
         self._tray_icon.show()
-    
+
     def set_status(self, status: TrayStatus, message: str = "") -> None:
         self._status = status
         self._update_icon()
@@ -71,17 +70,17 @@ class SystemTray(QObject):
             TrayStatus.LOADING: "Loading model...",
             TrayStatus.RECORDING: "🔴 Recording...",
             TrayStatus.PROCESSING: "⏳ Processing...",
-            TrayStatus.ERROR: f"Error: {message}"
+            TrayStatus.ERROR: f"Error: {message}",
         }
         self._status_action.setText(status_texts.get(status, "Unknown"))
-    
+
     def _update_icon(self) -> None:
         status_colors: Dict[TrayStatus, QColor] = {
-            TrayStatus.IDLE: QColor("#4CAF50"),       # Green
-            TrayStatus.LOADING: QColor("#FF9800"),    # Orange
+            TrayStatus.IDLE: QColor("#4CAF50"),  # Green
+            TrayStatus.LOADING: QColor("#FF9800"),  # Orange
             TrayStatus.RECORDING: QColor("#F44336"),  # Red
-            TrayStatus.PROCESSING: QColor("#FF9800"), # Orange
-            TrayStatus.ERROR: QColor("#F44336"),      # Red
+            TrayStatus.PROCESSING: QColor("#FF9800"),  # Orange
+            TrayStatus.ERROR: QColor("#F44336"),  # Red
         }
 
         status_tooltips: Dict[TrayStatus, str] = {
@@ -94,10 +93,10 @@ class SystemTray(QObject):
         size = 22
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.transparent)
-        
+
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
-        
+
         color = status_colors.get(self._status, QColor("#808080"))
         painter.setBrush(QBrush(color))
         painter.setPen(QPen(color.darker(120), 1))
@@ -107,18 +106,21 @@ class SystemTray(QObject):
         if self._status == TrayStatus.ERROR:
             painter.setPen(QPen(QColor("#FFFFFF"), 2))
             inner_margin = 6
-            painter.drawLine(inner_margin, inner_margin, size - inner_margin, size - inner_margin)
-            painter.drawLine(size - inner_margin, inner_margin, inner_margin, size - inner_margin)
-        
+            painter.drawLine(
+                inner_margin, inner_margin, size - inner_margin, size - inner_margin
+            )
+            painter.drawLine(
+                size - inner_margin, inner_margin, inner_margin, size - inner_margin
+            )
+
         painter.end()
-        
+
         icon = QIcon(pixmap)
-        
+
         if self._tray_icon:
             self._tray_icon.setIcon(icon)
             self._tray_icon.setToolTip(status_tooltips.get(self._status, "WhisperNow"))
-    
-    
+
     def hide(self) -> None:
         if self._tray_icon:
             self._tray_icon.hide()

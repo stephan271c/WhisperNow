@@ -1,13 +1,20 @@
-
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QMessageBox, QMenu
-)
-from PySide6.QtGui import QGuiApplication
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
-from ...core.settings import load_history, clear_history
+from ...core.settings import clear_history, load_history
 
 
 class HistoryTab(QWidget):
@@ -28,7 +35,9 @@ class HistoryTab(QWidget):
 
         self._history_table = QTableWidget()
         self._history_table.setColumnCount(3)
-        self._history_table.setHorizontalHeaderLabels(["Raw Transcription", "Enhanced Text", "Cost"])
+        self._history_table.setHorizontalHeaderLabels(
+            ["Raw Transcription", "Enhanced Text", "Cost"]
+        )
 
         header = self._history_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -122,7 +131,7 @@ class HistoryTab(QWidget):
             self,
             "Clear History",
             "Are you sure you want to clear all transcription history?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
             clear_history()

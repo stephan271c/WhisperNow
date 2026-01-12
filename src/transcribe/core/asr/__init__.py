@@ -1,14 +1,14 @@
 from .backends import (
     ASRBackend,
     BackendType,
-    TranscriptionResult,
-    NeMoBackend,
     HuggingFaceBackend,
+    NeMoBackend,
+    TranscriptionResult,
     create_backend,
     detect_backend_type,
 )
 from .model_loader import ModelLoaderThread
-from .transcriber import TranscriptionEngine, EngineState
+from .transcriber import EngineState, TranscriptionEngine
 from .transcription_worker import TranscriptionWorkerThread
 
 __all__ = [
@@ -24,4 +24,3 @@ __all__ = [
     "EngineState",
     "TranscriptionWorkerThread",
 ]
-

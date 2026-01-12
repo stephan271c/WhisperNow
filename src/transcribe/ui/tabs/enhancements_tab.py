@@ -1,13 +1,23 @@
-
 from typing import Optional
 
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-    QPushButton, QGroupBox, QFormLayout, QLineEdit,
-    QListWidget, QListWidgetItem, QMessageBox, QDialog, QStackedWidget,
-    QSizePolicy
-)
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ...core.settings import Settings
 from ...core.transcript_processor import PROVIDERS, get_models_for_provider
@@ -40,17 +50,19 @@ class LLMSettingsWidget(QWidget):
 
         model_layout = QHBoxLayout()
         self._model_stack = QStackedWidget()
-        
+
         self._llm_model_combo = QComboBox()
         self._llm_model_combo.setEditable(True)
         self._llm_model_combo.setMinimumWidth(250)
         self._model_stack.addWidget(self._llm_model_combo)  # Index 0
-        
+
         self._llm_model_edit = QLineEdit()
-        self._llm_model_edit.setPlaceholderText("e.g., openrouter/anthropic/claude-3-sonnet")
+        self._llm_model_edit.setPlaceholderText(
+            "e.g., openrouter/anthropic/claude-3-sonnet"
+        )
         self._llm_model_edit.setMinimumWidth(250)
         self._model_stack.addWidget(self._llm_model_edit)  # Index 1
-        
+
         model_layout.addWidget(self._model_stack, 1)
 
         self._refresh_btn = QPushButton("⟳")
@@ -122,10 +134,10 @@ class LLMSettingsWidget(QWidget):
         use_text = self._uses_text_input(provider_id)
         self._model_stack.setCurrentIndex(1 if use_text else 0)
         self._refresh_btn.setVisible(not use_text and provider_id != "ollama")
-        
+
         self._custom_model_edit.hide()
         self._custom_model_label.hide()
-        
+
         if use_text:
             placeholders = {
                 "openrouter": "e.g., openrouter/anthropic/claude-3-sonnet",
@@ -146,23 +158,23 @@ class LLMSettingsWidget(QWidget):
     def _populate_ollama_models(self, provider_settings) -> None:
         self._llm_model_combo.blockSignals(True)
         self._llm_model_combo.clear()
-        
+
         models_to_show = list(provider_settings.saved_models)
         current_model = provider_settings.model
         if current_model and current_model not in models_to_show:
             models_to_show.insert(0, current_model)
-        
+
         for model in models_to_show:
             self._llm_model_combo.addItem(model, model)
-        
+
         self._llm_model_combo.addItem("Custom Model...", _CUSTOM_MODEL_ENTRY)
-        
+
         if current_model:
             idx = self._llm_model_combo.findData(current_model)
             if idx >= 0:
                 self._llm_model_combo.setCurrentIndex(idx)
                 self._llm_model_combo.setEditText(current_model)
-        
+
         self._llm_model_combo.blockSignals(False)
         self._on_model_combo_changed()
 
@@ -194,18 +206,18 @@ class LLMSettingsWidget(QWidget):
     def save_settings(self) -> None:
         provider = self._provider_combo.currentData()
         self._settings.llm_provider = provider
-        
+
         if self._uses_text_input(provider):
             self._settings.llm_model = self._llm_model_edit.text().strip()
         elif provider == "ollama":
             self._save_ollama_model()
         else:
             self._settings.llm_model = self._llm_model_combo.currentText()
-        
+
         api_key = self._api_key_edit.text().strip()
         if api_key:
             self._settings.llm_api_key = api_key
-            
+
         if self._api_base_edit.isVisible():
             api_base = self._api_base_edit.text().strip()
             self._settings.llm_api_base = api_base if api_base else None
@@ -214,17 +226,17 @@ class LLMSettingsWidget(QWidget):
 
     def _save_ollama_model(self) -> None:
         is_custom = self._llm_model_combo.currentData() == _CUSTOM_MODEL_ENTRY
-        
+
         if is_custom:
             model = self._custom_model_edit.text().strip()
         else:
             model = self._llm_model_combo.currentData() or ""
-        
+
         if not model:
             return
-        
+
         self._settings.llm_model = model
-        
+
         provider_settings = self._settings.get_provider_settings("ollama")
         if model and model not in provider_settings.saved_models:
             provider_settings.saved_models.append(model)
@@ -286,12 +298,13 @@ class EnhancementListWidget(QWidget):
             self._enhancement_list.addItem(item)
 
             self._active_enhancement_combo.addItem(
-                enh_dict.get("title", "Untitled"),
-                enh_dict.get("id")
+                enh_dict.get("title", "Untitled"), enh_dict.get("id")
             )
 
         if self._settings.active_enhancement_id:
-            idx = self._active_enhancement_combo.findData(self._settings.active_enhancement_id)
+            idx = self._active_enhancement_combo.findData(
+                self._settings.active_enhancement_id
+            )
             if idx >= 0:
                 self._active_enhancement_combo.setCurrentIndex(idx)
 
@@ -330,11 +343,12 @@ class EnhancementListWidget(QWidget):
             self,
             "Delete Enhancement",
             f"Delete enhancement '{enh_dict.get('title')}'?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
             self._settings.enhancements = [
-                e for e in self._settings.enhancements
+                e
+                for e in self._settings.enhancements
                 if e.get("id") != enh_dict.get("id")
             ]
             if self._settings.active_enhancement_id == enh_dict.get("id"):
@@ -346,7 +360,9 @@ class EnhancementListWidget(QWidget):
         self.refresh_list()
 
     def save_settings(self) -> None:
-        self._settings.active_enhancement_id = self._active_enhancement_combo.currentData()
+        self._settings.active_enhancement_id = (
+            self._active_enhancement_combo.currentData()
+        )
 
 
 class EnhancementsTab(QWidget):
@@ -369,7 +385,9 @@ class EnhancementsTab(QWidget):
         layout.addWidget(self._llm_settings)
 
         self._enhancement_list = EnhancementListWidget(self._settings, self)
-        self._enhancement_list.enhancements_changed.connect(self.enhancements_changed.emit)
+        self._enhancement_list.enhancements_changed.connect(
+            self.enhancements_changed.emit
+        )
         layout.addWidget(self._enhancement_list)
 
         layout.addStretch(1)

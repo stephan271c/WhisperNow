@@ -1,8 +1,9 @@
+from dataclasses import dataclass
+from typing import Callable, List, Optional
+
 import numpy as np
 import sounddevice as sd
 from scipy import signal
-from typing import Callable, Optional, List
-from dataclasses import dataclass
 
 
 @dataclass
@@ -16,25 +17,25 @@ class AudioDevice:
 class AudioRecorder:
     """
     Records audio from the microphone.
-    
+
     Usage:
         recorder = AudioRecorder(sample_rate=16000)
         recorder.start()
         # ... user speaks ...
         audio_data = recorder.stop()
     """
-    
+
     def __init__(
         self,
         sample_rate: int = 16000,
         channels: int = 1,
         device: Optional[str] = None,
         on_audio_level: Optional[Callable[[float], None]] = None,
-        on_audio_spectrum: Optional[Callable[[List[float]], None]] = None
+        on_audio_spectrum: Optional[Callable[[List[float]], None]] = None,
     ):
         """
         Initialize the audio recorder.
-        
+
         Args:
             sample_rate: Target sample rate in Hz for output (default: 16000 for ASR models)
             channels: Number of audio channels (default: 1 for mono)
@@ -47,7 +48,7 @@ class AudioRecorder:
         self.device = device
         self.on_audio_level = on_audio_level
         self.on_audio_spectrum = on_audio_spectrum
-        
+
         self._stream: Optional[sd.InputStream] = None
         self._audio_buffer: List[np.ndarray] = []
         self._is_recording = False
@@ -57,49 +58,48 @@ class AudioRecorder:
         self._spectrum_bins: List[tuple[int, int]] = []
         self._spectrum_band_count = 8
         self._window: Optional[np.ndarray] = None
-    
+
     @property
     def is_recording(self) -> bool:
         return self._is_recording
-    
+
     @property
     def sample_rate(self) -> int:
         return self.target_sample_rate
-    
+
     @sample_rate.setter
     def sample_rate(self, value: int) -> None:
         self.target_sample_rate = value
 
-    
     def _get_device_sample_rate(self) -> float:
         device_index = self._get_device_index()
         if device_index is not None:
-            device_info = sd.query_devices(device_index, 'input')
+            device_info = sd.query_devices(device_index, "input")
         else:
-            device_info = sd.query_devices(sd.default.device[0], 'input')
-        return device_info['default_samplerate']
-    
+            device_info = sd.query_devices(sd.default.device[0], "input")
+        return device_info["default_samplerate"]
+
     def start(self) -> bool:
         if self._is_recording:
             return True
-        
+
         self._audio_buffer = []
         self._last_error: Optional[str] = None
-        
+
         try:
             # Use device's native sample rate to avoid compatibility issues
             self._device_sample_rate = self._get_device_sample_rate()
-            
+
             self._stream = sd.InputStream(
                 samplerate=self._device_sample_rate,
                 channels=self.channels,
                 device=self._get_device_index(),
-                callback=self._audio_callback
+                callback=self._audio_callback,
             )
             self._stream.start()
             self._is_recording = True
             return True
-            
+
         except sd.PortAudioError as e:
             self._last_error = f"Audio device error: {e}"
             self._is_recording = False
@@ -108,38 +108,41 @@ class AudioRecorder:
             self._last_error = f"Failed to start recording: {e}"
             self._is_recording = False
             return False
-    
+
     @property
     def last_error(self) -> Optional[str]:
-        return getattr(self, '_last_error', None)
+        return getattr(self, "_last_error", None)
 
-    
     def stop(self) -> Optional[np.ndarray]:
         if not self._is_recording:
             return None
-        
+
         self._is_recording = False
-        
+
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()
             self._stream = None
-        
+
         if not self._audio_buffer:
             return None
-        
+
         audio_data = np.concatenate(self._audio_buffer, axis=0)
-        
+
         # Resample to target sample rate if needed
-        if self._device_sample_rate and self._device_sample_rate != self.target_sample_rate:
+        if (
+            self._device_sample_rate
+            and self._device_sample_rate != self.target_sample_rate
+        ):
             # Calculate resampling ratio
             from math import gcd
+
             src_rate = int(self._device_sample_rate)
             dst_rate = self.target_sample_rate
             divisor = gcd(src_rate, dst_rate)
             up = dst_rate // divisor
             down = src_rate // divisor
-            
+
             # Resample each channel
             if audio_data.ndim == 1:
                 audio_data = signal.resample_poly(audio_data, up, down)
@@ -148,13 +151,13 @@ class AudioRecorder:
                 for ch in range(audio_data.shape[1]):
                     resampled.append(signal.resample_poly(audio_data[:, ch], up, down))
                 audio_data = np.column_stack(resampled)
-        
+
         return audio_data
-    
+
     def _audio_callback(self, indata: np.ndarray, frames: int, time, status) -> None:
         if self._is_recording:
             self._audio_buffer.append(indata.copy())
-            
+
             if self.on_audio_level is not None:
                 level = np.abs(indata).mean()
                 self.on_audio_level(min(1.0, level * 10))
@@ -162,18 +165,20 @@ class AudioRecorder:
             if self.on_audio_spectrum is not None and self._device_sample_rate:
                 bands = self._compute_spectrum_bands(indata, self._device_sample_rate)
                 self.on_audio_spectrum(bands)
-    
+
     def _get_device_index(self) -> Optional[int]:
         if self.device is None:
             return None
-        
+
         for device in self.list_devices():
             if device.name == self.device:
                 return device.index
-        
+
         return None
 
-    def _compute_spectrum_bands(self, indata: np.ndarray, sample_rate: float) -> List[float]:
+    def _compute_spectrum_bands(
+        self, indata: np.ndarray, sample_rate: float
+    ) -> List[float]:
         if indata.size == 0:
             return [0.0] * self._spectrum_band_count
 
@@ -206,7 +211,9 @@ class AudioRecorder:
             energies.append(min(1.0, max(0.0, band_energy)))
         return energies
 
-    def _get_spectrum_bins(self, frames: int, sample_rate: float) -> List[tuple[int, int]]:
+    def _get_spectrum_bins(
+        self, frames: int, sample_rate: float
+    ) -> List[tuple[int, int]]:
         if self._spectrum_frames == frames and self._spectrum_rate == sample_rate:
             return self._spectrum_bins
 
@@ -234,18 +241,20 @@ class AudioRecorder:
         self._spectrum_rate = sample_rate
         self._spectrum_bins = bins
         return bins
-    
+
     @staticmethod
     def list_devices() -> List[AudioDevice]:
         devices = []
-        
+
         for i, device in enumerate(sd.query_devices()):
             if device["max_input_channels"] > 0:
-                devices.append(AudioDevice(
-                    name=device["name"],
-                    index=i,
-                    channels=device["max_input_channels"],
-                    default_sample_rate=device["default_samplerate"]
-                ))
-        
+                devices.append(
+                    AudioDevice(
+                        name=device["name"],
+                        index=i,
+                        channels=device["max_input_channels"],
+                        default_sample_rate=device["default_samplerate"],
+                    )
+                )
+
         return devices

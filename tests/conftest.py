@@ -1,4 +1,5 @@
 """Pytest configuration for Qt-based tests."""
+
 import pytest
 from PySide6.QtWidgets import QApplication
 

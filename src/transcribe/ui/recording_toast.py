@@ -1,18 +1,16 @@
-
-
 from __future__ import annotations
 
 import math
 from typing import Optional
 
 from PySide6.QtCore import (
-    Qt,
+    QParallelAnimationGroup,
     QPoint,
     QPropertyAnimation,
-    QParallelAnimationGroup,
+    Qt,
     QTimer,
 )
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QGuiApplication, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -20,7 +18,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QGuiApplication
 
 
 class WaveformWidget(QWidget):
@@ -104,7 +101,9 @@ class WaveformWidget(QWidget):
         height = self.height()
 
         spacing = 4
-        bar_width = max(2, min(4, int((width - spacing * (self._bar_count - 1)) / self._bar_count)))
+        bar_width = max(
+            2, min(4, int((width - spacing * (self._bar_count - 1)) / self._bar_count))
+        )
         total_width = self._bar_count * bar_width + (self._bar_count - 1) * spacing
         start_x = (width - total_width) / 2
 
@@ -121,7 +120,9 @@ class WaveformWidget(QWidget):
             bar_height = min_height + (max_height - min_height) * motion * energy
             x = start_x + index * (bar_width + spacing)
             y = (height - bar_height) / 2
-            painter.drawRoundedRect(x, y, bar_width, bar_height, bar_width / 6, bar_width / 6)
+            painter.drawRoundedRect(
+                x, y, bar_width, bar_height, bar_width / 6, bar_width / 6
+            )
 
         painter.end()
 

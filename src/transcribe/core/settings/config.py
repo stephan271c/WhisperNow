@@ -6,12 +6,11 @@ Edit the variables below to configure development settings.
 
 import logging
 
-
 # =============================================================================
 # DEVELOPMENT SETTINGS - Edit these for local development
 # =============================================================================
-LOG_LEVEL = "DEBUG"       # DEBUG, INFO, WARNING, ERROR, CRITICAL
-LOG_TO_CONSOLE = True   # Set to True to output logs to terminal
+LOG_LEVEL = "DEBUG"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+LOG_TO_CONSOLE = True  # Set to True to output logs to terminal
 # =============================================================================
 
 # =============================================================================

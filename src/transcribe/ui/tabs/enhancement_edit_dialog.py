@@ -1,16 +1,23 @@
-
 import uuid
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QFormLayout, QLineEdit,
-    QTextEdit, QDialogButtonBox, QMessageBox, QWidget
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QLineEdit,
+    QMessageBox,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 
 class EnhancementEditDialog(QDialog):
 
-    def __init__(self, parent: Optional[QWidget] = None, enhancement: Optional[Dict] = None):
+    def __init__(
+        self, parent: Optional[QWidget] = None, enhancement: Optional[Dict] = None
+    ):
         super().__init__(parent)
 
         self._enhancement = enhancement
@@ -42,9 +49,7 @@ class EnhancementEditDialog(QDialog):
 
         layout.addLayout(form)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Save | QDialogButtonBox.Cancel
-        )
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)

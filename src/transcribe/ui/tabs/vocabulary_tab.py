@@ -1,10 +1,17 @@
-
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QGroupBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView
-)
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ...core.settings import Settings
 
@@ -85,7 +92,9 @@ class VocabularyTab(QWidget):
         delete_btn = QPushButton("🗑️")
         delete_btn.setFixedWidth(36)
         delete_btn.setStyleSheet("QPushButton { color: #e74c3c; border: none; }")
-        delete_btn.clicked.connect(lambda checked, btn=delete_btn: self._delete_row(btn))
+        delete_btn.clicked.connect(
+            lambda checked, btn=delete_btn: self._delete_row(btn)
+        )
         self._table.setCellWidget(row, 2, delete_btn)
 
     def _delete_row(self, button: QPushButton) -> None:

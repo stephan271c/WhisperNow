@@ -1,17 +1,27 @@
+from typing import List, Optional
 
-from typing import Optional, List
-
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
-    QComboBox, QCheckBox, QPushButton, QGroupBox, QFormLayout,
-    QKeySequenceEdit, QLineEdit, QMessageBox, QScrollArea
-)
-from PySide6.QtGui import QKeySequence
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QKeySequence
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QKeySequenceEdit,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
-from ...core.settings import Settings, HotkeyConfig
+from ...core.asr.model_utils import delete_asr_model, get_installed_asr_models
 from ...core.audio import AudioRecorder
-from ...core.asr.model_utils import get_installed_asr_models, delete_asr_model
+from ...core.settings import HotkeyConfig, Settings
 
 # Special value for custom model entry in combo box
 _CUSTOM_MODEL_ENTRY = "__custom_model__"
@@ -67,7 +77,9 @@ class ConfigurationTab(QWidget):
         self._speed_slider.setTickInterval(50)
         self._speed_label = QLabel("150 chars/sec")
         self._speed_slider.valueChanged.connect(
-            lambda v: self._speed_label.setText(f"{v} chars/sec" if v > 0 else "Instant")
+            lambda v: self._speed_label.setText(
+                f"{v} chars/sec" if v > 0 else "Instant"
+            )
         )
         speed_layout.addWidget(self._speed_slider)
         speed_layout.addWidget(self._speed_label)
@@ -125,7 +137,9 @@ class ConfigurationTab(QWidget):
         return widget
 
     def _refresh_devices(self) -> None:
-        current = self._device_combo.currentData() if hasattr(self, '_device_combo') else None
+        current = (
+            self._device_combo.currentData() if hasattr(self, "_device_combo") else None
+        )
         self._device_combo.clear()
         self._device_combo.addItem("System Default", None)
 
@@ -207,7 +221,9 @@ class ConfigurationTab(QWidget):
         return widget
 
     def _refresh_model_list(self) -> None:
-        current_data = self._model_combo.currentData() if self._model_combo.count() > 0 else None
+        current_data = (
+            self._model_combo.currentData() if self._model_combo.count() > 0 else None
+        )
         self._model_combo.clear()
 
         installed_models = get_installed_asr_models()
@@ -255,7 +271,7 @@ class ConfigurationTab(QWidget):
             "This will free up disk space but the model will need to be\n"
             "re-downloaded if you want to use it again.",
             QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.No,
         )
 
         if reply != QMessageBox.Yes:
@@ -344,7 +360,7 @@ class ConfigurationTab(QWidget):
                 "Invalid Model Name",
                 f"Model name '{model_name}' is not in the correct format.\n\n"
                 "Expected format: organization/model-name\n"
-                "Example: nvidia/parakeet-tdt-0.6b-v3 or openai/whisper-large-v3"
+                "Example: nvidia/parakeet-tdt-0.6b-v3 or openai/whisper-large-v3",
             )
             return False
 
@@ -353,7 +369,7 @@ class ConfigurationTab(QWidget):
             QMessageBox.warning(
                 self,
                 "Invalid Model Name",
-                "Both organization and model name must be provided."
+                "Both organization and model name must be provided.",
             )
             return False
 
