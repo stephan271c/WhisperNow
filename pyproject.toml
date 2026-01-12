@@ -77,7 +77,9 @@ formal_name = "WhisperNow"
 description = "Push-to-talk speech transcription desktop app"
 sources = ["src/transcribe"]
 icon = ""
-requires = []
+requires = [
+    "wget>=3.2",  # Pre-install for nemo-toolkit compatibility
+]
 
 [tool.briefcase.app.transcribe.macOS]
 min_os_version = "12.0"
