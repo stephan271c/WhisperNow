@@ -175,9 +175,8 @@ whispernow/
 │       └── platform.py       # Platform-specific utilities
 ├── tests/                    # Test suite
 ├── scripts/
-│   └── build.py              # PyInstaller build script
+│   └── build.py              # Briefcase build script
 ├── pyproject.toml            # Project metadata & dependencies
-├── transcribe.spec           # PyInstaller spec file
 └── installer.iss             # Windows Inno Setup script
 ```
 
@@ -204,14 +203,14 @@ uv run pytest --cov=src/transcribe
 ### Building Distributables
 
 ```bash
-# Build with PyInstaller
+# Build with Briefcase
 uv run python scripts/build.py
 ```
 
 **Output locations:**
-- Windows: `dist/whispernow/` (folder) + `installer-output/*.exe`
-- macOS: `dist/WhisperNow.app` + `*.dmg`
-- Linux: `dist/whispernow/` + `*.AppImage`
+- Windows: `build/transcribe/windows/app/` + `installer-output/*.exe`
+- macOS: `build/transcribe/macos/app/WhisperNow.app` + `*.dmg`
+- Linux: `build/transcribe/linux/appimage/*.AppImage`
 
 ### CI/CD
 
@@ -249,7 +248,7 @@ Tagged releases (`v*`) automatically create draft GitHub releases with all platf
 | Package | Purpose |
 |---------|---------|
 | pytest + pytest-qt | Testing framework |
-| pyinstaller | Application bundling |
+| briefcase | Application bundling |
 
 ---
 

@@ -42,9 +42,9 @@ where = ["src"]
 [dependency-groups]
 dev = [
     "black>=25.12.0",
+    "briefcase>=0.3.26",
     "isort>=7.0.0",
     "pre-commit>=4.5.1",
-    "pyinstaller>=6.17.0",
     "pytest>=9.0.2",
     "pytest-qt>=4.5.0",
 ]
@@ -61,3 +61,28 @@ profile = "black"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
+
+# ============================================================================
+# Briefcase Configuration
+# ============================================================================
+[tool.briefcase]
+project_name = "WhisperNow"
+bundle = "com.whispernow"
+version = "0.1.0"
+author = "WhisperNow Team"
+license.text = "MIT"
+
+[tool.briefcase.app.transcribe]
+formal_name = "WhisperNow"
+description = "Push-to-talk speech transcription desktop app"
+sources = ["src/transcribe"]
+icon = ""
+requires = []
+
+[tool.briefcase.app.transcribe.macOS]
+min_os_version = "12.0"
+
+[tool.briefcase.app.transcribe.linux.appimage]
+manylinux = "manylinux_2_28"
+
+[tool.briefcase.app.transcribe.windows]

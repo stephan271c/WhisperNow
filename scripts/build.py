@@ -1,37 +1,66 @@
-import shutil
+"""Build WhisperNow using Briefcase for all platforms."""
+
+import platform
 import subprocess
 import sys
 from pathlib import Path
 
 
+def get_platform_target() -> tuple[str, str]:
+    """Return (platform, format) tuple for the current OS."""
+    system = platform.system().lower()
+    if system == "linux":
+        return ("linux", "appimage")
+    elif system == "darwin":
+        return ("macos", "app")
+    elif system == "windows":
+        return ("windows", "app")
+    else:
+        raise RuntimeError(f"Unsupported platform: {system}")
+
+
 def build():
-    """Run the PyInstaller build process."""
+    """Run the Briefcase build process for the current platform."""
     project_root = Path(__file__).parent.parent
-    dist_dir = project_root / "dist"
-    build_dir = project_root / "build"
+    plat, fmt = get_platform_target()
 
-    # Clean previous builds
-    print("Cleaning previous builds...")
-    if dist_dir.exists():
-        shutil.rmtree(dist_dir)
-    if build_dir.exists():
-        shutil.rmtree(build_dir)
+    print("=" * 60)
+    print(f"Briefcase Build - {plat} ({fmt})")
+    print("=" * 60)
 
-    print("Running PyInstaller...")
     try:
+        # Step 1: Create the application scaffold
+        print(f"\n[1/2] Creating application scaffold for {plat}/{fmt}...")
         subprocess.run(
-            [sys.executable, "-m", "PyInstaller", "transcribe.spec", "--clean"],
+            [sys.executable, "-m", "briefcase", "create", plat, fmt],
             cwd=project_root,
             check=True,
         )
-        print("\nBuild successful! Output is in dist/whispernow/")
 
-        # Verify
-        executable = dist_dir / "whispernow" / "whispernow"
-        if executable.exists():
-            print(f"Executable created: {executable}")
+        # Step 2: Build the application
+        print(f"\n[2/2] Building application for {plat}/{fmt}...")
+        subprocess.run(
+            [sys.executable, "-m", "briefcase", "build", plat, fmt],
+            cwd=project_root,
+            check=True,
+        )
+
+        print("\n" + "=" * 60)
+        print("Build successful!")
+        print("=" * 60)
+
+        # Show output location based on platform
+        if plat == "linux":
+            build_dir = project_root / "build" / "transcribe" / "linux" / "appimage"
+        elif plat == "darwin":
+            build_dir = project_root / "build" / "transcribe" / "macos" / "app"
+        elif plat == "windows":
+            build_dir = project_root / "build" / "transcribe" / "windows" / "app"
+
+        if build_dir.exists():
+            print(f"Build output: {build_dir}")
         else:
-            print("Warning: Executable not found at expected path.")
+            print(f"Note: Build directory may be at {build_dir}")
 
     except subprocess.CalledProcessError as e:
         print(f"\nBuild failed with exit code {e.returncode}")

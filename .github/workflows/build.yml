@@ -35,15 +35,15 @@ jobs:
     - name: Install Dependencies
       run: uv sync --group dev
         
-    - name: Run PyInstaller
+    - name: Build with Briefcase
       run: |
         uv run python scripts/build.py
         
-    - name: Debug - Show build size
+    - name: Debug - Show build output
       run: |
-        echo "=== PyInstaller output ==="
-        Get-ChildItem -Recurse dist | Measure-Object -Property Length -Sum
-        Get-ChildItem dist/whispernow -Recurse | Sort-Object Length -Descending | Select-Object -First 20
+        echo "=== Briefcase output ==="
+        Get-ChildItem -Recurse build/transcribe/windows/app -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum
+        Get-ChildItem build/transcribe/windows/app -Recurse -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 20
 
     - name: Create Installer with Inno Setup
       run: iscc /O+ installer.iss
@@ -77,25 +77,28 @@ jobs:
     - name: Install Dependencies
       run: uv sync --group dev
         
-    - name: Run PyInstaller
+    - name: Build with Briefcase
       run: |
         uv run python scripts/build.py
 
-    - name: Debug - Show build size
+    - name: Debug - Show build output
       run: |
-        echo "=== PyInstaller output ==="
-        du -sh dist/
-        du -h dist/WhisperNow.app/Contents/MacOS/ | sort -h | tail -20
+        echo "=== Briefcase output ==="
+        du -sh build/transcribe/macos/app/ || true
+        ls -la build/transcribe/macos/app/ || true
       
     - name: Install create-dmg
       run: brew install create-dmg
 
     - name: Create DMG
       run: |
-        # First, verify the .app bundle exists
-        if [ ! -d "dist/WhisperNow.app" ]; then
-          echo "Error: dist/WhisperNow.app not found!"
-          ls -la dist/
+        # Find the .app bundle in Briefcase output
+        APP_PATH="build/transcribe/macos/app/WhisperNow.app"
+        
+        if [ ! -d "$APP_PATH" ]; then
+          echo "Looking for .app bundle..."
+          find build -name "*.app" -type d 2>/dev/null || true
+          echo "Error: .app bundle not found at expected path: $APP_PATH"
           exit 1
         fi
         
@@ -109,8 +112,8 @@ jobs:
           --hide-extension "${{ env.APP_NAME }}.app" \
           --app-drop-link 425 190 \
           "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS.dmg" \
-          "dist/WhisperNow.app" || \
-        hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "dist/WhisperNow.app" -ov -format UDZO "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS.dmg"
+          "$APP_PATH" || \
+        hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "$APP_PATH" -ov -format UDZO "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS.dmg"
         
     - name: Upload macOS DMG
       uses: actions/upload-artifact@v4
@@ -120,7 +123,7 @@ jobs:
         if-no-files-found: error
 
   # ============================================================================
-  # Linux Build - Creates AppImage
+  # Linux Build - Creates AppImage using Briefcase
   # ============================================================================
   build-linux:
     name: Build Linux AppImage
@@ -149,70 +152,38 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        # libfuse2 is required for AppImage (uses fuse2, not fuse3)
+        # libfuse2 is required for AppImage
         sudo apt-get install -y libfuse2
       
     - name: Install Dependencies
       run: uv sync --group dev
         
-    - name: Build with PyInstaller
+    - name: Build with Briefcase
       run: |
         uv run python scripts/build.py
         
-    - name: Debug - Show build size
+    - name: Debug - Show build output
       run: |
-        echo "=== PyInstaller output ==="
-        du -sh dist/
-        du -h dist/whispernow/ | sort -h | tail -20
+        echo "=== Briefcase output ==="
+        du -sh build/transcribe/linux/appimage/ || true
+        ls -la build/transcribe/linux/appimage/ || true
+        find build -name "*.AppImage" 2>/dev/null || true
 
-    - name: Create AppImage structure
+    - name: Package AppImage
       run: |
-        # Create AppDir structure
-        mkdir -p AppDir/usr/bin
-        mkdir -p AppDir/usr/share/applications
-        mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+        uv run briefcase package linux appimage
         
-        # Copy built application
-        cp -r dist/whispernow/* AppDir/usr/bin/
-        
-        # Create desktop entry
-        cat > AppDir/usr/share/applications/whispernow.desktop << 'EOF'
-        [Desktop Entry]
-        Name=WhisperNow
-        Exec=whispernow
-        Icon=whispernow
-        Type=Application
-        Categories=Utility;Audio;
-        Comment=Push-to-talk speech transcription
-        EOF
-        
-        # Also place desktop file at root (required by AppImage)
-        cp AppDir/usr/share/applications/whispernow.desktop AppDir/
-        
-        # Create a simple icon placeholder (would be replaced with real icon)
-        # Using a 1x1 transparent PNG as placeholder
-        echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > AppDir/usr/share/icons/hicolor/256x256/apps/whispernow.png
-        cp AppDir/usr/share/icons/hicolor/256x256/apps/whispernow.png AppDir/whispernow.png
-        
-        # Create AppRun script
-        cat > AppDir/AppRun << 'EOF'
-        #!/bin/bash
-        SELF=$(readlink -f "$0")
-        HERE=${SELF%/*}
-        export PATH="${HERE}/usr/bin:${PATH}"
-        export LD_LIBRARY_PATH="${HERE}/usr/bin:${LD_LIBRARY_PATH}"
-        exec "${HERE}/usr/bin/whispernow" "$@"
-        EOF
-        chmod +x AppDir/AppRun
-        
-    - name: Download appimagetool
+    - name: Find and rename AppImage
       run: |
-        wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-        chmod +x appimagetool-x86_64.AppImage
-        
-    - name: Create AppImage
-      run: |
-        ARCH=x86_64 ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir ${{ env.APP_NAME }}-${{ env.APP_VERSION }}-Linux.AppImage
+        # Find the generated AppImage
+        APPIMAGE=$(find build -name "*.AppImage" -type f | head -1)
+        if [ -z "$APPIMAGE" ]; then
+          echo "Error: No AppImage found!"
+          find build -type f -name "*" | head -50
+          exit 1
+        fi
+        echo "Found AppImage: $APPIMAGE"
+        cp "$APPIMAGE" "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-Linux.AppImage"
         
     - name: Upload Linux AppImage
       uses: actions/upload-artifact@v4

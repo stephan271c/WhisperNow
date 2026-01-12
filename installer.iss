@@ -8,8 +8,8 @@
 #define MyAppExeName "whispernow.exe"
 
 [Setup]
-; Unique application identifier
-AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
+; Unique application identifier - NEVER change this after first release
+AppId={{13AD1DC3-955C-4618-86E0-36B01ABF13EF}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -29,9 +29,13 @@ SolidCompression=yes
 MinVersion=10.0
 ; Installer appearance
 WizardStyle=modern
-; Privilege requirements - install for current user by default
+; Privilege requirements - install for current user by default (no UAC prompt)
+; App installs to: C:\Users\<User>\AppData\Local\Programs\WhisperNow
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+; 64-bit architecture settings (required for PyTorch/CUDA apps)
+ArchitecturesAllowed=x64
+ArchitecturesInstallIn64BitMode=x64
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -41,8 +45,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "startupicon"; Description: "Start WhisperNow when Windows starts"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
-; Install all files from the PyInstaller dist folder
-Source: "dist\whispernow\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Install all files from the Briefcase build folder
+Source: "build\transcribe\windows\app\WhisperNow\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -53,6 +57,6 @@ Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: st
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
-[UninstallDelete]
-; Clean up any settings/cache files on uninstall (optional)
-Type: filesandordirs; Name: "{localappdata}\WhisperNow"
+; Note: Previous [UninstallDelete] section removed.
+; User data in {localappdata}\WhisperNow (settings, models) is preserved on uninstall.
+; This allows users to reinstall without losing their configuration or re-downloading models.
