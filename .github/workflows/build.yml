@@ -35,8 +35,15 @@ jobs:
     - name: Install Dependencies
       run: uv sync --group dev
         
-    - name: Build with PyInstaller
-      run: uv run python scripts/build.py
+    - name: Run PyInstaller
+      run: |
+        uv run python scripts/build.py
+        
+    - name: Debug - Show build size
+      run: |
+        echo "=== PyInstaller output ==="
+        Get-ChildItem -Recurse dist | Measure-Object -Property Length -Sum
+        Get-ChildItem dist/whispernow -Recurse | Sort-Object Length -Descending | Select-Object -First 20
 
     - name: Create Installer with Inno Setup
       run: iscc /O+ installer.iss
@@ -70,8 +77,15 @@ jobs:
     - name: Install Dependencies
       run: uv sync --group dev
         
-    - name: Build with PyInstaller
-      run: uv run python scripts/build.py
+    - name: Run PyInstaller
+      run: |
+        uv run python scripts/build.py
+
+    - name: Debug - Show build size
+      run: |
+        echo "=== PyInstaller output ==="
+        du -sh dist/
+        du -h dist/WhisperNow.app/Contents/MacOS/ | sort -h | tail -20
       
     - name: Install create-dmg
       run: brew install create-dmg
@@ -142,7 +156,14 @@ jobs:
       run: uv sync --group dev
         
     - name: Build with PyInstaller
-      run: uv run python scripts/build.py
+      run: |
+        uv run python scripts/build.py
+        
+    - name: Debug - Show build size
+      run: |
+        echo "=== PyInstaller output ==="
+        du -sh dist/
+        du -h dist/whispernow/ | sort -h | tail -20
 
     - name: Create AppImage structure
       run: |
@@ -197,7 +218,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.APP_NAME }}-Linux-AppImage
-        path: "*.AppImage"
+        path: "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-Linux.AppImage"
         if-no-files-found: error
 
   # ============================================================================

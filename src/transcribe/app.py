@@ -8,25 +8,29 @@ from typing import Optional, Tuple
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication
 
-from . import __app_name__, __version__
-from .core.asr import (
+from transcribe import __app_name__, __version__
+from transcribe.core.asr import (
     EngineState,
     ModelLoaderThread,
     TranscriptionEngine,
     TranscriptionWorkerThread,
 )
-from .core.audio import AudioRecorder
-from .core.input import HotkeyListener
-from .core.output import TextOutputController
-from .core.settings import TranscriptionRecord, add_history_record, get_settings
-from .core.transcript_processor import LLMProcessor
-from .ui.download_dialog import DownloadDialog
-from .ui.main_window import SettingsWindow
-from .ui.recording_toast import RecordingToast
-from .ui.setup_wizard import SetupWizard
-from .ui.tray import SystemTray, TrayStatus
-from .utils.logger import get_logger
-from .utils.platform import check_and_request_permissions, set_autostart
+from transcribe.core.audio import AudioRecorder
+from transcribe.core.input import HotkeyListener
+from transcribe.core.output import TextOutputController
+from transcribe.core.settings import (
+    TranscriptionRecord,
+    add_history_record,
+    get_settings,
+)
+from transcribe.core.transcript_processor import LLMProcessor
+from transcribe.ui.download_dialog import DownloadDialog
+from transcribe.ui.main_window import SettingsWindow
+from transcribe.ui.recording_toast import RecordingToast
+from transcribe.ui.setup_wizard import SetupWizard
+from transcribe.ui.tray import SystemTray, TrayStatus
+from transcribe.utils.logger import get_logger
+from transcribe.utils.platform import check_and_request_permissions, set_autostart
 
 logger = get_logger(__name__)
 
