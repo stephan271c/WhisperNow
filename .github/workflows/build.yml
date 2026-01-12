@@ -32,7 +32,7 @@ jobs:
       uses: astral-sh/setup-uv@v1
       
     - name: Install Dependencies
-      run: uv sync --dev
+      run: uv sync --group dev
         
     - name: Build with PyInstaller
       run: uv run python scripts/build.py
@@ -69,7 +69,7 @@ jobs:
       uses: astral-sh/setup-uv@v1
       
     - name: Install Dependencies
-      run: uv sync --dev
+      run: uv sync --group dev
         
     - name: Build with PyInstaller
       run: uv run python scripts/build.py
@@ -124,7 +124,7 @@ jobs:
         sudo apt-get install -y xclip fuse libfuse2
       
     - name: Install Dependencies
-      run: uv sync --dev
+      run: uv sync --group dev
         
     - name: Build with PyInstaller
       run: uv run python scripts/build.py
