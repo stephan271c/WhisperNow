@@ -142,6 +142,10 @@ class SettingsWindow(QDialog):
         buttons.button(QDialogButtonBox.Apply).clicked.connect(self._save_settings)
         layout.addWidget(buttons)
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._load_settings()
+
     def _load_settings(self) -> None:
         self._configuration_tab.load_settings()
         self._enhancements_tab.load_settings()
