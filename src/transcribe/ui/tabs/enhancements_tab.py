@@ -123,7 +123,6 @@ class LLMSettingsWidget(QWidget):
         self._model_stack.setCurrentIndex(1 if use_text else 0)
         self._refresh_btn.setVisible(not use_text and provider_id != "ollama")
         
-        # Hide custom model fields initially
         self._custom_model_edit.hide()
         self._custom_model_label.hide()
         
@@ -145,11 +144,9 @@ class LLMSettingsWidget(QWidget):
                 self._llm_model_combo.setCurrentText(provider_settings.model)
 
     def _populate_ollama_models(self, provider_settings) -> None:
-        # Block signals to prevent _on_model_combo_changed from firing during setup
         self._llm_model_combo.blockSignals(True)
         self._llm_model_combo.clear()
         
-        # Collect all models: saved ones + current active model if different
         models_to_show = list(provider_settings.saved_models)
         current_model = provider_settings.model
         if current_model and current_model not in models_to_show:
@@ -160,16 +157,13 @@ class LLMSettingsWidget(QWidget):
         
         self._llm_model_combo.addItem("Custom Model...", _CUSTOM_MODEL_ENTRY)
         
-        # Select the current model if it exists in the list
         if current_model:
             idx = self._llm_model_combo.findData(current_model)
             if idx >= 0:
                 self._llm_model_combo.setCurrentIndex(idx)
-                # For editable combo, explicitly set the displayed text
                 self._llm_model_combo.setEditText(current_model)
         
         self._llm_model_combo.blockSignals(False)
-        # Manually trigger to sync visibility state
         self._on_model_combo_changed()
 
     def _refresh_model_list(self, reset_selection: bool = False) -> None:
@@ -231,7 +225,6 @@ class LLMSettingsWidget(QWidget):
         
         self._settings.llm_model = model
         
-        # Add to saved models if new
         provider_settings = self._settings.get_provider_settings("ollama")
         if model and model not in provider_settings.saved_models:
             provider_settings.saved_models.append(model)
@@ -364,6 +357,10 @@ class EnhancementsTab(QWidget):
         super().__init__(parent)
         self._settings = settings
         self._setup_ui()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.load_settings()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
