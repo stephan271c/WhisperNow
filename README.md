@@ -106,7 +106,7 @@ WhisperNow uses litellm to interface with LLMs. You can use any LLM that litellm
 
 | Model | Description |
 |-------|-------------|
-| `ollama/gemma3:1b` | Ollama Gemini model |
+| `ollama/gemma3:1b` | Ollama Google Gemma model |
 nvidia/nemotron-3-nano-30b-a3b:free` | OpenRouter model |
 | `openai/gpt-5-nano` | OpenAI GPT-5 nano model |
 | `anthropic/claude-sonnet-4-5` | Anthropic Claude model |
@@ -156,29 +156,29 @@ Define custom word/phrase replacements. Useful for:
 ```
 whispernow/
 ├── src/transcribe/
-│   ├── app.py              # Application entry point
+│   ├── app.py                # Application entry point
 │   ├── core/
-│   │   ├── asr/            # Speech recognition backends
-│   │   ├── audio/          # Audio recording
-│   │   ├── input/          # Hotkey handling
-│   │   ├── output/         # Text output controller
-│   │   ├── settings/       # Configuration management
+│   │   ├── asr/              # Speech recognition backends
+│   │   ├── audio/            # Audio recording
+│   │   ├── input/            # Hotkey handling
+│   │   ├── output/           # Text output controller
+│   │   ├── settings/         # Configuration management
 │   │   └── transcript_processor/  # LLM & vocabulary processing
 │   ├── ui/
-│   │   ├── tray.py         # System tray icon
-│   │   ├── main_window.py  # Settings window
-│   │   ├── setup_wizard.py # First-run wizard
-│   │   ├── recording_toast.py  # Recording indicator
-│   │   └── tabs/           # Settings tabs
+│   │   ├── main_window.py    # Settings window
+│   │   ├── tray.py           # System tray icon
+│   │   ├── setup_wizard.py   # First-run wizard
+│   │   ├── recording_toast.py    # Recording indicator
+│   │   └── tabs/             # Settings tabs
 │   └── utils/
-│       ├── logger.py       # Logging configuration
-│       └── platform.py     # Platform-specific utilities
-├── tests/                  # Test suite
+│       ├── logger.py         # Logging configuration
+│       └── platform.py       # Platform-specific utilities
+├── tests/                    # Test suite
 ├── scripts/
-│   └── build.py            # PyInstaller build script
-├── pyproject.toml          # Project metadata & dependencies
-├── transcribe.spec         # PyInstaller spec file
-└── installer.iss           # Windows Inno Setup script
+│   └── build.py              # PyInstaller build script
+├── pyproject.toml            # Project metadata & dependencies
+├── transcribe.spec           # PyInstaller spec file
+└── installer.iss             # Windows Inno Setup script
 ```
 
 ---
