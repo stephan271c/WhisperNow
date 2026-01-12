@@ -20,7 +20,9 @@ def build():
     print("Running PyInstaller...")
     try:
         subprocess.run(
-            ["pyinstaller", "transcribe.spec", "--clean"], cwd=project_root, check=True
+            [sys.executable, "-m", "PyInstaller", "transcribe.spec", "--clean"],
+            cwd=project_root,
+            check=True,
         )
         print("\nBuild successful! Output is in dist/whispernow/")
 
