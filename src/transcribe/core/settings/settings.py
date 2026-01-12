@@ -82,6 +82,7 @@ class LLMProviderSettings(BaseModel):
     model: str = ""
     api_key: Optional[str] = None
     api_base: Optional[str] = None
+    saved_models: List[str] = Field(default_factory=list)
     
     def to_dict(self) -> dict:
         return self.model_dump()

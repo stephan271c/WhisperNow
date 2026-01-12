@@ -13,6 +13,9 @@ from ...core.settings import Settings
 from ...core.transcript_processor import PROVIDERS, get_models_for_provider
 from .enhancement_edit_dialog import EnhancementEditDialog
 
+# Special value for custom model entry in combo box
+_CUSTOM_MODEL_ENTRY = "__custom_model__"
+
 
 class LLMSettingsWidget(QWidget):
 
@@ -57,6 +60,15 @@ class LLMSettingsWidget(QWidget):
         model_layout.addWidget(self._refresh_btn)
         llm_layout.addRow("Model:", model_layout)
 
+        self._custom_model_edit = QLineEdit()
+        self._custom_model_edit.setPlaceholderText("e.g., ollama/gemma3:1b")
+        self._custom_model_edit.hide()
+        self._custom_model_label = QLabel("")
+        self._custom_model_label.hide()
+        llm_layout.addRow(self._custom_model_label, self._custom_model_edit)
+
+        self._llm_model_combo.currentIndexChanged.connect(self._on_model_combo_changed)
+
         self._api_base_edit = QLineEdit()
         self._api_base_edit.setPlaceholderText("e.g., http://localhost:11434")
         self._api_base_label = QLabel("API Base URL:")
@@ -71,7 +83,12 @@ class LLMSettingsWidget(QWidget):
         layout.addWidget(llm_group)
 
     def _uses_text_input(self, provider_id: str) -> bool:
-        return provider_id in ("openrouter", "ollama", "other")
+        return provider_id in ("openrouter", "other")
+
+    def _on_model_combo_changed(self) -> None:
+        is_custom = self._llm_model_combo.currentData() == _CUSTOM_MODEL_ENTRY
+        self._custom_model_edit.setVisible(is_custom)
+        self._custom_model_label.setVisible(is_custom)
 
     def _on_provider_changed(self) -> None:
         provider_id = self._provider_combo.currentData()
@@ -104,12 +121,15 @@ class LLMSettingsWidget(QWidget):
 
         use_text = self._uses_text_input(provider_id)
         self._model_stack.setCurrentIndex(1 if use_text else 0)
-        self._refresh_btn.setVisible(not use_text)
+        self._refresh_btn.setVisible(not use_text and provider_id != "ollama")
+        
+        # Hide custom model fields initially
+        self._custom_model_edit.hide()
+        self._custom_model_label.hide()
         
         if use_text:
             placeholders = {
                 "openrouter": "e.g., openrouter/anthropic/claude-3-sonnet",
-                "ollama": "e.g., ollama/llama3.2",
                 "other": "e.g., your-provider/model-name",
             }
             self._llm_model_edit.setPlaceholderText(placeholders.get(provider_id, ""))
@@ -117,10 +137,40 @@ class LLMSettingsWidget(QWidget):
                 self._llm_model_edit.setText(provider_settings.model)
             else:
                 self._llm_model_edit.clear()
+        elif provider_id == "ollama":
+            self._populate_ollama_models(provider_settings)
         else:
             self._refresh_model_list(reset_selection=True)
             if provider_settings.model:
                 self._llm_model_combo.setCurrentText(provider_settings.model)
+
+    def _populate_ollama_models(self, provider_settings) -> None:
+        # Block signals to prevent _on_model_combo_changed from firing during setup
+        self._llm_model_combo.blockSignals(True)
+        self._llm_model_combo.clear()
+        
+        # Collect all models: saved ones + current active model if different
+        models_to_show = list(provider_settings.saved_models)
+        current_model = provider_settings.model
+        if current_model and current_model not in models_to_show:
+            models_to_show.insert(0, current_model)
+        
+        for model in models_to_show:
+            self._llm_model_combo.addItem(model, model)
+        
+        self._llm_model_combo.addItem("Custom Model...", _CUSTOM_MODEL_ENTRY)
+        
+        # Select the current model if it exists in the list
+        if current_model:
+            idx = self._llm_model_combo.findData(current_model)
+            if idx >= 0:
+                self._llm_model_combo.setCurrentIndex(idx)
+                # For editable combo, explicitly set the displayed text
+                self._llm_model_combo.setEditText(current_model)
+        
+        self._llm_model_combo.blockSignals(False)
+        # Manually trigger to sync visibility state
+        self._on_model_combo_changed()
 
     def _refresh_model_list(self, reset_selection: bool = False) -> None:
         provider_id = self._provider_combo.currentData()
@@ -153,6 +203,8 @@ class LLMSettingsWidget(QWidget):
         
         if self._uses_text_input(provider):
             self._settings.llm_model = self._llm_model_edit.text().strip()
+        elif provider == "ollama":
+            self._save_ollama_model()
         else:
             self._settings.llm_model = self._llm_model_combo.currentText()
         
@@ -165,6 +217,25 @@ class LLMSettingsWidget(QWidget):
             self._settings.llm_api_base = api_base if api_base else None
         else:
             self._settings.llm_api_base = None
+
+    def _save_ollama_model(self) -> None:
+        is_custom = self._llm_model_combo.currentData() == _CUSTOM_MODEL_ENTRY
+        
+        if is_custom:
+            model = self._custom_model_edit.text().strip()
+        else:
+            model = self._llm_model_combo.currentData() or ""
+        
+        if not model:
+            return
+        
+        self._settings.llm_model = model
+        
+        # Add to saved models if new
+        provider_settings = self._settings.get_provider_settings("ollama")
+        if model and model not in provider_settings.saved_models:
+            provider_settings.saved_models.append(model)
+            self._settings.set_provider_settings("ollama", provider_settings)
 
 
 class EnhancementListWidget(QWidget):
