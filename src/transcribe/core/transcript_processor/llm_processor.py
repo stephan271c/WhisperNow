@@ -17,8 +17,6 @@ from ...utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-# Provider configurations
-# Format: provider_id -> (display_name, default_api_base, env_var_name)
 PROVIDERS: Dict[str, tuple] = {
     "openai": ("OpenAI", None, "OPENAI_API_KEY"),
     "anthropic": ("Anthropic", None, "ANTHROPIC_API_KEY"),
@@ -43,31 +41,25 @@ def get_models_for_provider(provider: str) -> List[str]:
     try:
         all_models = list(litellm.model_cost.keys())
         
-        # Filter by model name patterns (fast, no API calls)
         if provider == "openai":
             # OpenAI models: gpt-*, o1-*, o3-*, chatgpt-*
             filtered = [m for m in all_models 
                        if m.startswith(('gpt-', 'o1-', 'o3-', 'chatgpt-'))
-                       and '/' not in m]  # Exclude provider-prefixed versions
+                       and '/' not in m]
         elif provider == "anthropic":
-            # Anthropic: claude-* (not provider-prefixed)
             filtered = [m for m in all_models 
                        if m.startswith('claude-') and '/' not in m]
         elif provider == "gemini":
-            # Gemini: gemini/* or gemini-*
             filtered = [m for m in all_models 
                        if m.startswith('gemini/') or 
                        (m.startswith('gemini-') and '/' not in m)]
         elif provider == "ollama":
-            # Ollama: ollama/*
             filtered = [m for m in all_models if m.startswith('ollama/')]
         elif provider == "openrouter":
-            # OpenRouter: openrouter/*
             filtered = [m for m in all_models if m.startswith('openrouter/')]
         else:
             filtered = []
         
-        # Sort and limit to keep UI responsive
         result = sorted(filtered)[:100]
         return result if result else _get_fallback_models(provider)
         
@@ -77,7 +69,6 @@ def get_models_for_provider(provider: str) -> List[str]:
 
 
 def _get_fallback_models(provider: str) -> List[str]:
-    """Fallback curated models if litellm.model_cost filtering fails."""
     models = {
         "openai": ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "o1-preview", "o1-mini"],
         "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
@@ -91,7 +82,6 @@ def _get_fallback_models(provider: str) -> List[str]:
 
 
 class Enhancement(BaseModel):
-    """A named prompt template for enhancing transcribed text."""
     model_config = ConfigDict(extra='ignore')
     
     id: str
@@ -99,18 +89,15 @@ class Enhancement(BaseModel):
     prompt: str
     
     def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
         return self.model_dump()
     
     @classmethod
     def from_dict(cls, data: dict) -> "Enhancement":
-        """Create from dictionary."""
         return cls.model_validate(data)
 
 
 @dataclass
 class LLMResponse:
-    """Result from LLM processing."""
     content: str
     cost_usd: Optional[float] = None
     usage: Optional[dict] = None  # token counts: prompt_tokens, completion_tokens, total_tokens
@@ -135,17 +122,14 @@ class LLMProcessor:
         Returns:
             The model name with provider prefix if needed.
         """
-        # Known provider prefixes that liteLLM recognizes
         known_prefixes = (
             "openrouter/", "ollama/", "gemini/", 
             "openai/", "anthropic/", "azure/", "huggingface/"
         )
         
-        # If model already has a known provider prefix, use as-is
         if model.startswith(known_prefixes):
             return model
         
-        # Providers that require a prefix
         prefix_map = {
             "openrouter": "openrouter/",
             "ollama": "ollama/",
@@ -156,7 +140,6 @@ class LLMProcessor:
         if prefix:
             return f"{prefix}{model}"
         
-        # OpenAI, Anthropic, and 'other' don't need prefixes
         return model
     
     def __init__(
@@ -177,8 +160,6 @@ class LLMProcessor:
         self.api_key = api_key
         self.api_base = api_base
         
-        # Check upfront if this model supports system messages
-        # Uses LiteLLM's model_cost metadata, defaults to True if not found
         model_info = litellm.model_cost.get(model, {})
         self._supports_system_messages = model_info.get('supports_system_messages', True)
         
@@ -232,13 +213,11 @@ class LLMProcessor:
             
             result_text = response.choices[0].message.content
             
-            # Extract cost using litellm's completion_cost
             try:
                 cost = completion_cost(completion_response=response)
             except Exception:
                 cost = None
             
-            # Extract usage stats
             usage = None
             if response.usage:
                 usage = {
@@ -257,7 +236,6 @@ class LLMProcessor:
 
         except Exception as e:
             logger.error(f"LLM processing failed: {e}", exc_info=True)
-            # Return original text on failure
             return LLMResponse(content=text)
     
     def is_configured(self) -> bool:
@@ -267,15 +245,12 @@ class LLMProcessor:
         Returns True if API key is set (either directly or via environment),
         or if using a provider that doesn't require auth (like local Ollama).
         """
-        # Check for direct API key
         if self.api_key:
             return True
         
-        # Ollama (local) doesn't need API key
         if self.model.startswith("ollama/"):
             return True
         
-        # Check common environment variables
         env_vars = [
             "OPENAI_API_KEY",
             "ANTHROPIC_API_KEY", 

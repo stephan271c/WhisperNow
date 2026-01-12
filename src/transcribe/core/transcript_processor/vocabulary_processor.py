@@ -31,13 +31,12 @@ def apply_vocabulary_replacements(
     
     result = text
     for original, replacement in replacements:
-        if not original:  # Skip empty originals
+        if not original:
             continue
         
         if case_sensitive:
             result = result.replace(original, replacement)
         else:
-            # Case-insensitive replacement
             result = re.sub(re.escape(original), replacement, result, flags=re.IGNORECASE)
     
     if result != text:

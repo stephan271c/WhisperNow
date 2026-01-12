@@ -1,8 +1,4 @@
-"""
-System tray icon and menu using PySide6.
 
-Provides a system tray icon with status indicator and context menu.
-"""
 
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 from PySide6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QBrush, QPen
@@ -12,7 +8,6 @@ from enum import Enum, auto
 
 
 class TrayStatus(Enum):
-    """Status indicators for the tray icon."""
     IDLE = auto()        # Ready, waiting for input
     LOADING = auto()     # Model loading/downloading
     RECORDING = auto()   # Currently recording
@@ -42,45 +37,35 @@ class SystemTray(QObject):
         self._setup_tray()
     
     def _setup_tray(self) -> None:
-        """Initialize the system tray icon and menu."""
         self._tray_icon = QSystemTrayIcon(self)
         
-        # Create context menu
         self._menu = QMenu()
         
-        # Status label (non-clickable)
         self._status_action = QAction("Loading...", self._menu)
         self._status_action.setEnabled(False)
         self._menu.addAction(self._status_action)
         
         self._menu.addSeparator()
         
-        # Settings action
         settings_action = QAction("Settings...", self._menu)
         settings_action.triggered.connect(self.settings_requested.emit)
         self._menu.addAction(settings_action)
         
         self._menu.addSeparator()
         
-        # Quit action
         quit_action = QAction("Quit", self._menu)
         quit_action.triggered.connect(self.quit_requested.emit)
         self._menu.addAction(quit_action)
         
         self._tray_icon.setContextMenu(self._menu)
         
-        # Set initial icon
         self._update_icon()
         
-        # Show the tray icon
         self._tray_icon.show()
     
     def set_status(self, status: TrayStatus, message: str = "") -> None:
-        """Update the tray status and icon."""
         self._status = status
         self._update_icon()
-        
-        # Update status text in menu
         status_texts = {
             TrayStatus.IDLE: "Ready - Hold hotkey to speak",
             TrayStatus.LOADING: "Loading model...",
@@ -91,8 +76,6 @@ class SystemTray(QObject):
         self._status_action.setText(status_texts.get(status, "Unknown"))
     
     def _update_icon(self) -> None:
-        """Update the tray icon based on current status."""
-        # Color mapping for each status
         status_colors: Dict[TrayStatus, QColor] = {
             TrayStatus.IDLE: QColor("#4CAF50"),       # Green
             TrayStatus.LOADING: QColor("#FF9800"),    # Orange
@@ -100,8 +83,7 @@ class SystemTray(QObject):
             TrayStatus.PROCESSING: QColor("#FF9800"), # Orange
             TrayStatus.ERROR: QColor("#F44336"),      # Red
         }
-        
-        # Status tooltips
+
         status_tooltips: Dict[TrayStatus, str] = {
             TrayStatus.IDLE: "WhisperNow - Ready",
             TrayStatus.LOADING: "WhisperNow - Loading...",
@@ -109,8 +91,6 @@ class SystemTray(QObject):
             TrayStatus.PROCESSING: "WhisperNow - Processing...",
             TrayStatus.ERROR: "WhisperNow - Error",
         }
-        
-        # Create a colored circle icon
         size = 22
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.transparent)
@@ -121,12 +101,9 @@ class SystemTray(QObject):
         color = status_colors.get(self._status, QColor("#808080"))
         painter.setBrush(QBrush(color))
         painter.setPen(QPen(color.darker(120), 1))
-        
-        # Draw filled circle
         margin = 2
         painter.drawEllipse(margin, margin, size - 2 * margin, size - 2 * margin)
-        
-        # For error state, add an X overlay
+
         if self._status == TrayStatus.ERROR:
             painter.setPen(QPen(QColor("#FFFFFF"), 2))
             inner_margin = 6
@@ -143,6 +120,5 @@ class SystemTray(QObject):
     
     
     def hide(self) -> None:
-        """Hide the tray icon."""
         if self._tray_icon:
             self._tray_icon.hide()

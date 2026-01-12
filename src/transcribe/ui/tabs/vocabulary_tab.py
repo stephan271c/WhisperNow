@@ -1,4 +1,3 @@
-"""Vocabulary tab for text replacement rules."""
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -11,7 +10,6 @@ from ...core.settings import Settings
 
 
 class VocabularyTab(QWidget):
-    """Tab for configuring vocabulary replacement rules."""
 
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
@@ -20,10 +18,8 @@ class VocabularyTab(QWidget):
         self.load_settings()
 
     def _setup_ui(self) -> None:
-        """Build the UI layout."""
         layout = QVBoxLayout(self)
 
-        # Add replacement section
         add_group = QGroupBox("Add a text replacement")
         add_layout = QHBoxLayout(add_group)
 
@@ -39,13 +35,11 @@ class VocabularyTab(QWidget):
         add_btn.clicked.connect(self._add_replacement)
         add_layout.addWidget(add_btn)
 
-        # Allow Enter key to add
         self._original_edit.returnPressed.connect(self._add_replacement)
         self._replacement_edit.returnPressed.connect(self._add_replacement)
 
         layout.addWidget(add_group)
 
-        # Replacements list
         list_group = QGroupBox("Replacement Rules")
         list_layout = QVBoxLayout(list_group)
 
@@ -64,23 +58,19 @@ class VocabularyTab(QWidget):
         layout.addWidget(list_group)
 
     def _add_replacement(self) -> None:
-        """Add a new replacement rule."""
         original = self._original_edit.text().strip()
         replacement = self._replacement_edit.text().strip()
 
         if not original:
             return  # Need at least an original word
 
-        # Add to table
         self._add_table_row(original, replacement)
 
-        # Clear inputs
         self._original_edit.clear()
         self._replacement_edit.clear()
         self._original_edit.setFocus()
 
     def _add_table_row(self, original: str, replacement: str) -> None:
-        """Add a row to the table."""
         row = self._table.rowCount()
         self._table.insertRow(row)
 
@@ -92,7 +82,6 @@ class VocabularyTab(QWidget):
         replacement_item.setFlags(replacement_item.flags() & ~Qt.ItemIsEditable)
         self._table.setItem(row, 1, replacement_item)
 
-        # Delete button
         delete_btn = QPushButton("🗑️")
         delete_btn.setFixedWidth(36)
         delete_btn.setStyleSheet("QPushButton { color: #e74c3c; border: none; }")
@@ -100,21 +89,17 @@ class VocabularyTab(QWidget):
         self._table.setCellWidget(row, 2, delete_btn)
 
     def _delete_row(self, button: QPushButton) -> None:
-        """Delete a row from the table."""
-        # Find the row that contains this button
         for r in range(self._table.rowCount()):
             if self._table.cellWidget(r, 2) is button:
                 self._table.removeRow(r)
                 break
 
     def load_settings(self) -> None:
-        """Load replacement rules from settings."""
         self._table.setRowCount(0)
         for original, replacement in self._settings.vocabulary_replacements:
             self._add_table_row(original, replacement)
 
     def save_settings(self) -> None:
-        """Save replacement rules to settings."""
         replacements = []
         for row in range(self._table.rowCount()):
             original_item = self._table.item(row, 0)

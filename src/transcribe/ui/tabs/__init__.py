@@ -1,5 +1,3 @@
-"""Tab components for the settings window."""
-
 from .home_tab import HomeTab
 from .vocabulary_tab import VocabularyTab
 from .configuration_tab import ConfigurationTab

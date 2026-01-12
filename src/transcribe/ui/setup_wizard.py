@@ -1,8 +1,4 @@
-"""
-First-run setup wizard for new users.
 
-Provides a guided setup experience for configuring the application.
-"""
 
 from PySide6.QtWidgets import (
     QWizard, QWizardPage, QVBoxLayout, QLabel, QComboBox,
@@ -21,7 +17,6 @@ from ..utils.platform import (
 
 
 class WelcomePage(QWizardPage):
-    """Welcome page introducing the application."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,7 +39,6 @@ class WelcomePage(QWizardPage):
 
 
 class PermissionsPage(QWizardPage):
-    """macOS permissions page for accessibility access."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -74,7 +68,6 @@ class PermissionsPage(QWizardPage):
         self._update_status()
     
     def _update_status(self) -> None:
-        """Update the permission status display."""
         if check_accessibility_permissions():
             self._status_label.setText(
                 "✅ Accessibility permission granted!\n\n"
@@ -94,16 +87,13 @@ class PermissionsPage(QWizardPage):
             self._status_label.setStyleSheet("")
     
     def _check_permission(self) -> None:
-        """Re-check permission status."""
         self._update_status()
     
     def isComplete(self) -> bool:
-        """Allow proceeding even without permission (user knows the risk)."""
         return True
 
 
 class MicrophonePage(QWizardPage):
-    """Microphone selection page."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -132,7 +122,6 @@ class MicrophonePage(QWizardPage):
         self.registerField("input_device", self._device_combo, "currentData")
     
     def _refresh_devices(self) -> None:
-        """Refresh the device list."""
         current = self._device_combo.currentData()
         self._device_combo.clear()
         self._device_combo.addItem("System Default", None)
@@ -146,12 +135,10 @@ class MicrophonePage(QWizardPage):
                 self._device_combo.setCurrentIndex(idx)
     
     def get_selected_device(self) -> Optional[str]:
-        """Get the selected device name."""
         return self._device_combo.currentData()
 
 
 class HotkeyPage(QWizardPage):
-    """Hotkey configuration page."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -178,7 +165,6 @@ class HotkeyPage(QWizardPage):
         layout.addStretch()
     
     def get_hotkey_config(self) -> HotkeyConfig:
-        """Parse the hotkey into a HotkeyConfig."""
         key_sequence = self._hotkey_edit.keySequence()
         if key_sequence.isEmpty():
             return HotkeyConfig()  # Default
@@ -209,7 +195,6 @@ class HotkeyPage(QWizardPage):
 
 
 class CompletePage(QWizardPage):
-    """Setup complete page."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -234,7 +219,6 @@ class CompletePage(QWizardPage):
 
 
 class SetupWizard(QWizard):
-    """First-run setup wizard."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -260,7 +244,6 @@ class SetupWizard(QWizard):
         self.addPage(CompletePage())
     
     def accept(self) -> None:
-        """Save settings when wizard completes."""
         # Save microphone selection
         self._settings.input_device = self._mic_page.get_selected_device()
         

@@ -32,25 +32,15 @@ class ModelLoaderThread(QThread):
         use_gpu: bool = True,
         parent=None
     ):
-        """
-        Initialize the model loader thread.
-        
-        Args:
-            model_name: Name of the model to load
-            use_gpu: Whether to use GPU acceleration
-            parent: Parent QObject
-        """
         super().__init__(parent)
         self._model_name = model_name
         self._use_gpu = use_gpu
         self._engine: TranscriptionEngine = None
     
     def run(self):
-        """Load the model in the background thread."""
         logger.info(f"Background loading model: {self._model_name} (GPU={self._use_gpu})")
         
         try:
-            # Create engine with callbacks that emit signals
             self._engine = TranscriptionEngine(
                 model_name=self._model_name,
                 use_gpu=self._use_gpu,
@@ -58,7 +48,6 @@ class ModelLoaderThread(QThread):
                 on_download_progress=self._on_progress
             )
             
-            # Load the model
             success = self._engine.load_model()
             
             if success:
@@ -76,11 +65,9 @@ class ModelLoaderThread(QThread):
             self.finished.emit(False, message)
     
     def _on_state_change(self, state: EngineState, message: str):
-        """Forward state changes to UI thread via signal."""
         self.state_changed.emit(state, message)
     
     def _on_progress(self, value: float):
-        """Forward progress updates to UI thread via signal."""
         self.progress.emit(value)
     
     @property

@@ -220,13 +220,6 @@ class Settings(BaseModel):
             setattr(self, key, value)
     
     def get_active_enhancement(self) -> Optional["Enhancement"]:
-        """
-        Get the currently active enhancement, if any.
-        
-        Returns:
-            The active Enhancement object, or None if no enhancement is active
-            or the active_enhancement_id doesn't match any enhancement.
-        """
         if not self.active_enhancement_id:
             return None
         
@@ -239,27 +232,11 @@ class Settings(BaseModel):
         return None
     
     def get_provider_settings(self, provider_id: str) -> LLMProviderSettings:
-        """
-        Get settings for a specific provider.
-        
-        Args:
-            provider_id: The provider identifier (e.g., 'openai', 'ollama')
-            
-        Returns:
-            LLMProviderSettings for the provider (may have empty/None values if not configured)
-        """
         if provider_id in self.llm_provider_settings:
             return LLMProviderSettings.model_validate(self.llm_provider_settings[provider_id])
         return LLMProviderSettings()
     
     def set_provider_settings(self, provider_id: str, settings: LLMProviderSettings) -> None:
-        """
-        Save settings for a specific provider.
-        
-        Args:
-            provider_id: The provider identifier
-            settings: The LLMProviderSettings to save
-        """
         self.llm_provider_settings[provider_id] = settings.model_dump()
     
     @property

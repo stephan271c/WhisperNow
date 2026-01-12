@@ -1,5 +1,3 @@
-"""ASR backend and transcription engine implementations."""
-
 from .backends import (
     ASRBackend,
     BackendType,

@@ -1,9 +1,3 @@
-"""
-Audio recording functionality.
-
-Handles microphone input using sounddevice library.
-"""
-
 import numpy as np
 import sounddevice as sd
 from scipy import signal
@@ -13,7 +7,6 @@ from dataclasses import dataclass
 
 @dataclass
 class AudioDevice:
-    """Represents an audio input device."""
     name: str
     index: int
     channels: int
@@ -67,22 +60,18 @@ class AudioRecorder:
     
     @property
     def is_recording(self) -> bool:
-        """Check if currently recording."""
         return self._is_recording
     
     @property
     def sample_rate(self) -> int:
-        """Get the target sample rate for output audio."""
         return self.target_sample_rate
     
     @sample_rate.setter
     def sample_rate(self, value: int) -> None:
-        """Set the target sample rate for output audio."""
         self.target_sample_rate = value
 
     
     def _get_device_sample_rate(self) -> float:
-        """Get the native sample rate of the selected device."""
         device_index = self._get_device_index()
         if device_index is not None:
             device_info = sd.query_devices(device_index, 'input')
@@ -129,7 +118,6 @@ class AudioRecorder:
     
     @property
     def last_error(self) -> Optional[str]:
-        """Get the last error message, if any."""
         return getattr(self, '_last_error', None)
 
     
@@ -177,21 +165,18 @@ class AudioRecorder:
         return audio_data
     
     def _audio_callback(self, indata: np.ndarray, frames: int, time, status) -> None:
-        """Callback for audio stream."""
         if self._is_recording:
             self._audio_buffer.append(indata.copy())
             
-            # Calculate audio level for visualization
             if self.on_audio_level is not None:
                 level = np.abs(indata).mean()
-                self.on_audio_level(min(1.0, level * 10))  # Scale for visibility
+                self.on_audio_level(min(1.0, level * 10))
 
             if self.on_audio_spectrum is not None and self._device_sample_rate:
                 bands = self._compute_spectrum_bands(indata, self._device_sample_rate)
                 self.on_audio_spectrum(bands)
     
     def _get_device_index(self) -> Optional[int]:
-        """Get the device index from device name."""
         if self.device is None:
             return None
         
@@ -202,7 +187,6 @@ class AudioRecorder:
         return None
 
     def _compute_spectrum_bands(self, indata: np.ndarray, sample_rate: float) -> List[float]:
-        """Compute log-scaled spectrum band energies for visualization."""
         if indata.size == 0:
             return [0.0] * self._spectrum_band_count
 
@@ -236,7 +220,6 @@ class AudioRecorder:
         return energies
 
     def _get_spectrum_bins(self, frames: int, sample_rate: float) -> List[tuple[int, int]]:
-        """Cache band bin ranges for the current FFT size."""
         if self._spectrum_frames == frames and self._spectrum_rate == sample_rate:
             return self._spectrum_bins
 
@@ -267,7 +250,6 @@ class AudioRecorder:
     
     @staticmethod
     def list_devices() -> List[AudioDevice]:
-        """List available audio input devices."""
         devices = []
         
         for i, device in enumerate(sd.query_devices()):

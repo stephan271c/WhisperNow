@@ -1,4 +1,3 @@
-"""Dialog for creating or editing enhancements."""
 
 import uuid
 from typing import Optional, Dict
@@ -10,7 +9,6 @@ from PySide6.QtWidgets import (
 
 
 class EnhancementEditDialog(QDialog):
-    """Dialog for creating or editing an enhancement."""
 
     def __init__(self, parent: Optional[QWidget] = None, enhancement: Optional[Dict] = None):
         super().__init__(parent)
@@ -26,7 +24,6 @@ class EnhancementEditDialog(QDialog):
         self._load_enhancement()
 
     def _setup_ui(self) -> None:
-        """Build the dialog UI."""
         layout = QVBoxLayout(self)
 
         form = QFormLayout()
@@ -45,7 +42,6 @@ class EnhancementEditDialog(QDialog):
 
         layout.addLayout(form)
 
-        # Buttons
         buttons = QDialogButtonBox(
             QDialogButtonBox.Save | QDialogButtonBox.Cancel
         )
@@ -54,13 +50,11 @@ class EnhancementEditDialog(QDialog):
         layout.addWidget(buttons)
 
     def _load_enhancement(self) -> None:
-        """Load enhancement data into the form."""
         if self._enhancement:
             self._title_edit.setText(self._enhancement.get("title", ""))
             self._prompt_edit.setPlainText(self._enhancement.get("prompt", ""))
 
     def _validate_and_accept(self) -> None:
-        """Validate input and accept if valid."""
         title = self._title_edit.text().strip()
         prompt = self._prompt_edit.toPlainText().strip()
 
@@ -75,7 +69,6 @@ class EnhancementEditDialog(QDialog):
         self.accept()
 
     def get_enhancement(self) -> Dict:
-        """Get the enhancement data from the form."""
         if self._is_new:
             enh_id = str(uuid.uuid4())[:8]
         else:

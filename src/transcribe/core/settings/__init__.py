@@ -1,5 +1,3 @@
-"""Settings and persistence utilities."""
-
 from .settings import (
     HotkeyConfig,
     LLMProviderSettings,

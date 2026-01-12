@@ -1,10 +1,3 @@
-# Core module - Business logic
-
-"""
-Core functionality for the transcription app.
-Contains settings, audio recording, transcription engine, and hotkey listener.
-"""
-
 from .asr.backends import (
     ASRBackend,
     BackendType,
@@ -18,7 +11,6 @@ from .asr.transcriber import TranscriptionEngine, EngineState
 from .input.hotkey import HotkeyListener
 
 __all__ = [
-    # Backend abstraction
     "ASRBackend",
     "BackendType",
     "TranscriptionResult",
@@ -26,9 +18,7 @@ __all__ = [
     "HuggingFaceBackend",
     "create_backend",
     "detect_backend_type",
-    # Transcription engine
     "TranscriptionEngine",
     "EngineState",
-    # Hotkey listener
     "HotkeyListener",
 ]

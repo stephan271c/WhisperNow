@@ -26,7 +26,6 @@ from ...utils.logger import get_logger
 
 
 class EngineState(Enum):
-    """State of the transcription engine."""
     NOT_LOADED = auto()
     DOWNLOADING = auto()
     LOADING = auto()
@@ -94,33 +93,27 @@ class TranscriptionEngine:
     
     @property
     def state(self) -> EngineState:
-        """Current state of the engine."""
         return self._state
     
     @property
     def is_ready(self) -> bool:
-        """Check if the engine is ready to transcribe."""
         return self._state == EngineState.READY
     
     @property
     def device(self) -> str:
-        """The device the model is running on ('cuda' or 'cpu')."""
         if self._backend and self._backend.is_loaded:
             return self._backend.device
         return self._device
     
     @property
     def backend_type(self) -> BackendType:
-        """The type of ASR backend being used."""
         return self._backend_type
     
     @property
     def backend_name(self) -> str:
-        """Human-readable name of the current backend."""
         return self._backend_type.name
     
     def _set_state(self, state: EngineState, message: str = "") -> None:
-        """Update state and notify callback."""
         self._state = state
         if self.on_state_change:
             self.on_state_change(state, message)
@@ -140,11 +133,7 @@ class TranscriptionEngine:
                 EngineState.LOADING,
                 f"Loading {self.backend_name} model: {self.model_name}..."
             )
-            
-            # Create the appropriate backend
             self._backend = create_backend(self._backend_type)
-            
-            # Load the model
             self._backend.load(
                 model_name=self.model_name,
                 use_gpu=self.use_gpu,
@@ -193,7 +182,6 @@ class TranscriptionEngine:
             processing_time = time.time() - start_time
             audio_duration = len(audio_data) / sample_rate
             
-            # Log performance metrics
             if processing_time > 0:
                 rtf = audio_duration / processing_time
                 self.logger.debug(
@@ -235,14 +223,11 @@ class TranscriptionEngine:
         if not needs_chunking(audio_data, sample_rate):
             return self.transcribe(audio_data, sample_rate)
         
-        # Split audio into chunks
         from ...utils.logger import get_logger
         logger = get_logger(__name__)
         
         chunks = self._audio_processor.split_audio(audio_data, sample_rate)
         logger.info(f"Processing {len(chunks)} audio chunks")
-        
-        # Transcribe each chunk
         transcriptions = []
         for i, chunk in enumerate(chunks):
             logger.debug(f"Transcribing chunk {i+1}/{len(chunks)}")
@@ -250,7 +235,6 @@ class TranscriptionEngine:
             if text:
                 transcriptions.append(text)
         
-        # Combine transcriptions
         combined = self._audio_processor.combine_transcriptions(transcriptions)
         logger.info(f"Combined {len(transcriptions)} transcriptions")
         
@@ -289,7 +273,6 @@ class TranscriptionEngine:
             processing_time = time.time() - start_time
             audio_duration = len(audio_data) / sample_rate
             
-            # Log performance metrics
             if processing_time > 0:
                 rtf = audio_duration / processing_time
                 self.logger.debug(
@@ -305,7 +288,6 @@ class TranscriptionEngine:
             return None
     
     def unload(self) -> None:
-        """Unload the model and free GPU memory."""
         if self._backend is not None:
             self._backend.unload()
             self._backend = None
@@ -331,17 +313,14 @@ class TranscriptionEngine:
         Returns:
             True if switch was successful, False otherwise.
         """
-        # Unload current model
         self.unload()
         
-        # Update model configuration
         self.model_name = model_name
         if backend_type == BackendType.AUTO:
             self._backend_type = detect_backend_type(model_name)
         else:
             self._backend_type = backend_type
         
-        # Load new model
         return self.load_model()
     
     def is_model_cached(self) -> bool:
@@ -351,7 +330,5 @@ class TranscriptionEngine:
         Returns:
             True if model files exist locally.
         """
-        # Create a temporary backend instance to check cache
-        # This is lightweight as it doesn't load the model
         backend = create_backend(self._backend_type, self.model_name)
         return backend.is_model_cached(self.model_name)

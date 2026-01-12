@@ -34,35 +34,26 @@ class HotkeyListener(QObject):
         self._pressed_keys: set = set()
         self._is_hotkey_active = False
         
-        # Get hotkey config from settings
         settings = get_settings()
         self._setup_hotkey(settings)
     
     def update_settings(self, settings: Settings) -> None:
-        """Update hotkey configuration from new settings."""
         self._setup_hotkey(settings)
     
     def _setup_hotkey(self, settings: Settings) -> None:
-        """Configure the hotkey from settings."""
-        # Store required modifier types (e.g., {'ctrl', 'alt'})
         self._required_modifier_types = set(settings.hotkey.modifiers)
         
         self._trigger_key = keyboard.Key.space
         if settings.hotkey.key != "space":
-            # Handle other keys
             try:
                 self._trigger_key = getattr(keyboard.Key, settings.hotkey.key)
             except AttributeError:
-                # It's a character key
                 self._trigger_key = keyboard.KeyCode.from_char(settings.hotkey.key)
     
     def _check_hotkey(self) -> bool:
-        """Check if the hotkey combination is currently held."""
-        # Check if trigger key is pressed
         if self._trigger_key not in self._pressed_keys:
             return False
         
-        # Check all required modifiers
         for mod_type in self._required_modifier_types:
             is_pressed = False
             if mod_type == "ctrl":
@@ -84,7 +75,6 @@ class HotkeyListener(QObject):
         return True
     
     def _on_press(self, key) -> None:
-        """Handle key press events."""
         self._pressed_keys.add(key)
         
         if not self._is_hotkey_active and self._check_hotkey():
@@ -92,7 +82,6 @@ class HotkeyListener(QObject):
             self.hotkey_pressed.emit()
     
     def _on_release(self, key) -> None:
-        """Handle key release events."""
         try:
             self._pressed_keys.remove(key)
         except KeyError:
@@ -103,7 +92,6 @@ class HotkeyListener(QObject):
             self.hotkey_released.emit()
     
     def start(self) -> None:
-        """Start listening for hotkeys."""
         self._listener = keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release
@@ -111,7 +99,6 @@ class HotkeyListener(QObject):
         self._listener.start()
     
     def stop(self) -> None:
-        """Stop listening for hotkeys."""
         if self._listener:
             self._listener.stop()
             self._listener = None

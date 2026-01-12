@@ -58,20 +58,16 @@ class TextOutputController:
             self._on_complete()
     
     def type_character(self, char: str) -> None:
-        """Type a single character. Used for timer-based character output."""
         self._keyboard.type(char)
     
     def _type_text_blocking(self, text: str) -> None:
-        """Type text character by character (blocking)."""
         self._keyboard.type(text)
     
     def _paste_text(self, text: str) -> None:
-        """Paste text using clipboard - more reliable than keyboard.type() on Linux."""
         logger.debug(f"Pasting text via clipboard: '{text[:50]}{'...' if len(text) > 50 else ''}'")
         
         system = platform.system()
         
-        # Platform-specific clipboard commands
         if system == "Linux":
             copy_cmd = ['xclip', '-selection', 'clipboard']
             paste_cmd = ['xclip', '-selection', 'clipboard', '-o']
@@ -81,41 +77,32 @@ class TextOutputController:
             paste_cmd = ['pbpaste']
             paste_key = Key.cmd
         elif system == "Windows":
-            # Windows uses clip.exe for copy, PowerShell for read
             copy_cmd = ['clip']
             paste_cmd = ['powershell', '-command', 'Get-Clipboard']
             paste_key = Key.ctrl
         else:
-            # Unknown platform, fall back to direct typing
             logger.warning(f"Unknown platform {system}, falling back to direct typing")
             self._keyboard.type(text)
             return
         
-        # Save current clipboard
         old_clipboard = self._get_clipboard(paste_cmd)
         
-        # Set new clipboard content
         if not self._set_clipboard(copy_cmd, text):
             # Fallback to direct typing
             self._keyboard.type(text)
             return
         
-        # Small delay to ensure clipboard is ready
         time.sleep(0.05)
         
-        # Simulate Ctrl+V (or Cmd+V on macOS)
         with self._keyboard.pressed(paste_key):
             self._keyboard.tap('v')
         
-        # Small delay before restoring clipboard
         time.sleep(0.1)
         
-        # Restore old clipboard
         if old_clipboard:
             self._set_clipboard(copy_cmd, old_clipboard)
     
     def _get_clipboard(self, paste_cmd: list) -> str:
-        """Get current clipboard content."""
         try:
             result = subprocess.run(
                 paste_cmd,
@@ -126,7 +113,6 @@ class TextOutputController:
             return ""
     
     def _set_clipboard(self, copy_cmd: list, text: str) -> bool:
-        """Set clipboard content. Returns True on success."""
         try:
             subprocess.run(
                 copy_cmd,

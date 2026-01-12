@@ -1,6 +1,4 @@
-"""
-Dialog for explaining and requesting accessibility permissions on macOS.
-"""
+
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame
@@ -31,7 +29,6 @@ class PermissionsDialog(QDialog):
         self._update_status()
     
     def _setup_ui(self) -> None:
-        """Set up the dialog UI."""
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
         
@@ -97,7 +94,6 @@ class PermissionsDialog(QDialog):
         layout.addLayout(button_layout)
     
     def _update_status(self) -> None:
-        """Update the permission status display."""
         if check_accessibility_permissions():
             self._status_label.setText("✅ Permission granted!")
             self._status_frame.setStyleSheet(
@@ -117,14 +113,11 @@ class PermissionsDialog(QDialog):
             self._continue_btn.setText("Continue Anyway")
     
     def _open_preferences(self) -> None:
-        """Open System Preferences to the Accessibility pane."""
         logger.info("Opening System Preferences for accessibility permissions")
         request_accessibility_permissions()
     
     def _check_permission(self) -> None:
-        """Re-check permission status."""
         self._update_status()
     
     def permissions_granted(self) -> bool:
-        """Check if permissions are currently granted."""
         return check_accessibility_permissions()

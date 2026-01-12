@@ -1,8 +1,4 @@
-"""
-Settings window with sidebar navigation.
 
-Provides a GUI for configuring application settings.
-"""
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QStackedWidget, QWidget,
@@ -65,7 +61,6 @@ class SettingsWindow(QDialog):
             self._configuration_tab.set_gpu_enabled(True)
 
     def _create_loading_overlay(self) -> QFrame:
-        """Create a semi-transparent loading overlay."""
         overlay = QFrame(self)
         overlay.setStyleSheet("""
             QFrame {
@@ -92,13 +87,11 @@ class SettingsWindow(QDialog):
         return overlay
 
     def resizeEvent(self, event):
-        """Resize overlay when window is resized."""
         super().resizeEvent(event)
         if self._loading_overlay is not None:
             self._loading_overlay.setGeometry(self.rect())
 
     def _setup_ui(self) -> None:
-        """Build the UI layout."""
         layout = QVBoxLayout(self)
 
         # Sidebar navigation
@@ -150,13 +143,11 @@ class SettingsWindow(QDialog):
         layout.addWidget(buttons)
 
     def _load_settings(self) -> None:
-        """Load current settings into all tabs."""
         self._configuration_tab.load_settings()
         self._enhancements_tab.load_settings()
         self._vocabulary_tab.load_settings()
 
     def _save_settings(self) -> None:
-        """Save UI values from all tabs to settings."""
         # Configuration tab returns False if validation fails
         if not self._configuration_tab.save_settings():
             return
@@ -168,20 +159,16 @@ class SettingsWindow(QDialog):
         self.settings_changed.emit()
 
     def _save_and_close(self) -> None:
-        """Save settings and close the dialog."""
         self._save_settings()
         self.accept()
 
     def reject(self) -> None:
-        """Handle Cancel: reset UI to saved settings before closing."""
         self._load_settings()
         super().reject()
 
     def refresh_asr_model_list(self) -> None:
-        """Refresh the ASR model list in the configuration tab."""
         self._configuration_tab.refresh_model_list()
 
     def _reset_settings(self) -> None:
-        """Reset all settings to defaults."""
         self._settings.reset_to_defaults()
         self._load_settings()

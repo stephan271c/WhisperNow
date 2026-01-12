@@ -1,8 +1,4 @@
-"""
-Recording toast with animated waveform.
 
-Shows a small floating pill when microphone recording is active.
-"""
 
 from __future__ import annotations
 
@@ -45,26 +41,21 @@ class WaveformWidget(QWidget):
         self.setFixedSize(120, 18)
 
     def set_level(self, level: float) -> None:
-        """Set the target audio level."""
         self._target_level = max(0.0, min(1.0, level))
 
     def set_spectrum(self, spectrum: list[float]) -> None:
-        """Set target spectrum levels for each bar (0.0-1.0)."""
         mapped = self._map_spectrum(spectrum)
         self._target_spectrum = [max(0.0, min(1.0, value)) for value in mapped]
 
     def set_bar_color(self, color: QColor) -> None:
-        """Set the bar color."""
         self._bar_color = color
         self.update()
 
     def start(self) -> None:
-        """Start the waveform animation."""
         if not self._timer.isActive():
             self._timer.start()
 
     def stop(self) -> None:
-        """Stop the waveform animation and reset."""
         if self._timer.isActive():
             self._timer.stop()
         self._phase = 0.0
@@ -238,7 +229,6 @@ class RecordingToast(QWidget):
         self._hidden_pos = QPoint(x, y + 12)
 
     def show_recording(self) -> None:
-        """Show the toast with a short animation."""
         self._update_positions()
         self._hide_after_animation = False
         self._waveform.start()
@@ -254,7 +244,6 @@ class RecordingToast(QWidget):
         self._anim_group.start()
 
     def hide_recording(self) -> None:
-        """Hide the toast with a short animation."""
         if not self.isVisible():
             return
         self._update_positions()
@@ -267,11 +256,9 @@ class RecordingToast(QWidget):
         self._anim_group.start()
 
     def set_level(self, level: float) -> None:
-        """Update the waveform intensity."""
         self._waveform.set_level(level)
 
     def set_spectrum(self, spectrum: list[float]) -> None:
-        """Update the waveform spectrum band energies."""
         self._waveform.set_spectrum(spectrum)
 
     def _on_animation_finished(self) -> None:

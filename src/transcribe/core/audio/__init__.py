@@ -1,5 +1,3 @@
-"""Audio-related core functionality."""
-
 from .audio_processor import (
     AudioProcessor,
     AudioChunkInfo,

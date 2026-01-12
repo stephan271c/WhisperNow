@@ -1,4 +1,3 @@
-"""Enhancements/Mode tab for LLM settings and enhancement management."""
 
 from typing import Optional
 
@@ -16,7 +15,6 @@ from .enhancement_edit_dialog import EnhancementEditDialog
 
 
 class LLMSettingsWidget(QWidget):
-    """Widget for configuring LLM provider, model, and API credentials."""
 
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
@@ -24,7 +22,6 @@ class LLMSettingsWidget(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """Build the LLM settings UI."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -32,25 +29,20 @@ class LLMSettingsWidget(QWidget):
         llm_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         llm_layout = QFormLayout(llm_group)
 
-        # Provider selector
         self._provider_combo = QComboBox()
         for provider_id, (display_name, _, _) in PROVIDERS.items():
             self._provider_combo.addItem(display_name, provider_id)
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         llm_layout.addRow("Provider:", self._provider_combo)
 
-        # Model selector - uses stacked widget for combo vs text input
         model_layout = QHBoxLayout()
-        
         self._model_stack = QStackedWidget()
         
-        # Option 1: ComboBox for providers with curated lists
         self._llm_model_combo = QComboBox()
         self._llm_model_combo.setEditable(True)
         self._llm_model_combo.setMinimumWidth(250)
         self._model_stack.addWidget(self._llm_model_combo)  # Index 0
         
-        # Option 2: LineEdit for providers with many models
         self._llm_model_edit = QLineEdit()
         self._llm_model_edit.setPlaceholderText("e.g., openrouter/anthropic/claude-3-sonnet")
         self._llm_model_edit.setMinimumWidth(250)
@@ -58,7 +50,6 @@ class LLMSettingsWidget(QWidget):
         
         model_layout.addWidget(self._model_stack, 1)
 
-        # Refresh button (only visible for combo mode)
         self._refresh_btn = QPushButton("⟳")
         self._refresh_btn.setFixedWidth(30)
         self._refresh_btn.setToolTip("Refresh model list from provider")
@@ -66,13 +57,11 @@ class LLMSettingsWidget(QWidget):
         model_layout.addWidget(self._refresh_btn)
         llm_layout.addRow("Model:", model_layout)
 
-        # API Base URL (shown for certain providers)
         self._api_base_edit = QLineEdit()
         self._api_base_edit.setPlaceholderText("e.g., http://localhost:11434")
         self._api_base_label = QLabel("API Base URL:")
         llm_layout.addRow(self._api_base_label, self._api_base_edit)
 
-        # API Key input
         self._api_key_edit = QLineEdit()
         self._api_key_edit.setEchoMode(QLineEdit.Password)
         self._api_key_edit.setPlaceholderText("Enter your API key")
@@ -82,25 +71,20 @@ class LLMSettingsWidget(QWidget):
         layout.addWidget(llm_group)
 
     def _uses_text_input(self, provider_id: str) -> bool:
-        """Return True if provider should use text input instead of dropdown."""
         return provider_id in ("openrouter", "ollama", "other")
 
     def _on_provider_changed(self) -> None:
-        """Handle provider selection change."""
         provider_id = self._provider_combo.currentData()
         if not provider_id:
             return
 
-        # Get provider config and saved settings for this provider
         _, default_api_base, _ = PROVIDERS.get(provider_id, (None, None, None))
         provider_settings = self._settings.get_provider_settings(provider_id)
 
-        # Show/hide API base field based on provider
         needs_api_base = provider_id in ("ollama", "other")
         self._api_base_label.setVisible(needs_api_base)
         self._api_base_edit.setVisible(needs_api_base)
 
-        # Load saved API base, or use default if not configured
         if provider_settings.api_base:
             self._api_base_edit.setText(provider_settings.api_base)
         elif default_api_base:
@@ -108,20 +92,16 @@ class LLMSettingsWidget(QWidget):
         else:
             self._api_base_edit.clear()
 
-        # Show/hide API key field based on provider
-        # Providers with env_var_name=None don't need an API key (e.g., local Ollama)
         _, _, env_var_name = PROVIDERS.get(provider_id, (None, None, None))
         needs_api_key = env_var_name is not None or provider_id == "other"
         self._api_key_label.setVisible(needs_api_key)
         self._api_key_edit.setVisible(needs_api_key)
 
-        # Load saved API key for this provider (only if field is visible)
         if needs_api_key and provider_settings.api_key:
             self._api_key_edit.setText(provider_settings.api_key)
         else:
             self._api_key_edit.clear()
 
-        # Switch model input mode
         use_text = self._uses_text_input(provider_id)
         self._model_stack.setCurrentIndex(1 if use_text else 0)
         self._refresh_btn.setVisible(not use_text)
@@ -133,20 +113,16 @@ class LLMSettingsWidget(QWidget):
                 "other": "e.g., your-provider/model-name",
             }
             self._llm_model_edit.setPlaceholderText(placeholders.get(provider_id, ""))
-            
-            # Load saved model for this provider
             if provider_settings.model:
                 self._llm_model_edit.setText(provider_settings.model)
             else:
                 self._llm_model_edit.clear()
         else:
             self._refresh_model_list(reset_selection=True)
-            # Load saved model for this provider
             if provider_settings.model:
                 self._llm_model_combo.setCurrentText(provider_settings.model)
 
     def _refresh_model_list(self, reset_selection: bool = False) -> None:
-        """Refresh the model dropdown with models from the selected provider."""
         provider_id = self._provider_combo.currentData()
         if not provider_id:
             return
@@ -166,18 +142,12 @@ class LLMSettingsWidget(QWidget):
                 self._llm_model_combo.setCurrentText(current_model)
 
     def load_settings(self) -> None:
-        """Load current settings into the UI."""
-        # Set the provider combo - this will trigger _on_provider_changed
-        # which loads all provider-specific settings
         provider_idx = self._provider_combo.findData(self._settings.llm_provider)
         if provider_idx >= 0:
             self._provider_combo.setCurrentIndex(provider_idx)
-        
-        # Trigger loading of provider settings
         self._on_provider_changed()
 
     def save_settings(self) -> None:
-        """Save UI values to settings."""
         provider = self._provider_combo.currentData()
         self._settings.llm_provider = provider
         
@@ -198,7 +168,6 @@ class LLMSettingsWidget(QWidget):
 
 
 class EnhancementListWidget(QWidget):
-    """Widget for managing enhancement prompts."""
 
     enhancements_changed = Signal()
 
@@ -208,7 +177,6 @@ class EnhancementListWidget(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """Build the enhancement list UI."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -216,20 +184,17 @@ class EnhancementListWidget(QWidget):
         enhance_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         enhance_layout = QVBoxLayout(enhance_group)
 
-        # Active enhancement selector
         active_layout = QHBoxLayout()
         active_layout.addWidget(QLabel("Active Enhancement:"))
         self._active_enhancement_combo = QComboBox()
         active_layout.addWidget(self._active_enhancement_combo, 1)
         enhance_layout.addLayout(active_layout)
 
-        # Enhancement list
         self._enhancement_list = QListWidget()
         self._enhancement_list.setMaximumHeight(150)
         self._enhancement_list.itemDoubleClicked.connect(self._edit_enhancement)
         enhance_layout.addWidget(self._enhancement_list)
 
-        # Buttons
         btn_layout = QHBoxLayout()
         add_btn = QPushButton("Add")
         add_btn.clicked.connect(self._add_enhancement)
@@ -247,7 +212,6 @@ class EnhancementListWidget(QWidget):
         layout.addWidget(enhance_group)
 
     def refresh_list(self) -> None:
-        """Refresh the enhancement list and active combo."""
         self._enhancement_list.clear()
         self._active_enhancement_combo.clear()
         self._active_enhancement_combo.addItem("None (disabled)", None)
@@ -268,7 +232,6 @@ class EnhancementListWidget(QWidget):
                 self._active_enhancement_combo.setCurrentIndex(idx)
 
     def _add_enhancement(self) -> None:
-        """Add a new enhancement."""
         dialog = EnhancementEditDialog(self)
         if dialog.exec() == QDialog.Accepted:
             enh = dialog.get_enhancement()
@@ -277,7 +240,6 @@ class EnhancementListWidget(QWidget):
             self.enhancements_changed.emit()
 
     def _edit_enhancement(self, item: QListWidgetItem) -> None:
-        """Edit an enhancement from the list."""
         enh_dict = item.data(Qt.UserRole)
         dialog = EnhancementEditDialog(self, enh_dict)
         if dialog.exec() == QDialog.Accepted:
@@ -290,13 +252,11 @@ class EnhancementListWidget(QWidget):
             self.enhancements_changed.emit()
 
     def _edit_selected_enhancement(self) -> None:
-        """Edit the currently selected enhancement."""
         item = self._enhancement_list.currentItem()
         if item:
             self._edit_enhancement(item)
 
     def _delete_enhancement(self) -> None:
-        """Delete the selected enhancement."""
         item = self._enhancement_list.currentItem()
         if not item:
             return
@@ -319,16 +279,13 @@ class EnhancementListWidget(QWidget):
             self.enhancements_changed.emit()
 
     def load_settings(self) -> None:
-        """Load current settings into the UI."""
         self.refresh_list()
 
     def save_settings(self) -> None:
-        """Save UI values to settings."""
         self._settings.active_enhancement_id = self._active_enhancement_combo.currentData()
 
 
 class EnhancementsTab(QWidget):
-    """Tab for configuring LLM settings and managing enhancements."""
 
     enhancements_changed = Signal()
 
@@ -338,31 +295,24 @@ class EnhancementsTab(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """Build the UI layout by composing child widgets."""
         layout = QVBoxLayout(self)
 
-        # LLM Settings section
         self._llm_settings = LLMSettingsWidget(self._settings, self)
         layout.addWidget(self._llm_settings)
 
-        # Enhancement list section
         self._enhancement_list = EnhancementListWidget(self._settings, self)
         self._enhancement_list.enhancements_changed.connect(self.enhancements_changed.emit)
         layout.addWidget(self._enhancement_list)
 
-        # Push content to top, absorb extra vertical space at bottom
         layout.addStretch(1)
 
     def refresh_enhancement_list(self) -> None:
-        """Refresh the enhancement list (for external callers)."""
         self._enhancement_list.refresh_list()
 
     def load_settings(self) -> None:
-        """Load current settings into the UI."""
         self._llm_settings.load_settings()
         self._enhancement_list.load_settings()
 
     def save_settings(self) -> None:
-        """Save UI values to settings."""
         self._llm_settings.save_settings()
         self._enhancement_list.save_settings()

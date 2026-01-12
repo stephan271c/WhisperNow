@@ -1,6 +1,4 @@
-"""
-Platform-specific utilities for cross-platform compatibility.
-"""
+"""Platform-specific utilities for cross-platform compatibility."""
 
 import platform
 import subprocess
@@ -13,7 +11,6 @@ logger = get_logger(__name__)
 
 
 def get_platform() -> str:
-    """Get the current platform name."""
     system = platform.system()
     if system == "Darwin":
         return "macos"
@@ -37,7 +34,6 @@ def check_accessibility_permissions() -> bool:
             capture_output=True,
             timeout=5
         )
-        # Return code 0 means permission is granted
         return result.returncode == 0
     except subprocess.TimeoutExpired:
         logger.warning("Accessibility permission check timed out")
@@ -48,15 +44,10 @@ def check_accessibility_permissions() -> bool:
 
 
 def request_accessibility_permissions() -> None:
-    """
-    Guide the user to grant accessibility permissions (macOS only).
-    
-    Opens System Preferences to the correct pane.
-    """
+    """Guide the user to grant accessibility permissions (macOS only)."""
     if get_platform() != "macos":
         return
     
-    # Open System Preferences > Security & Privacy > Privacy > Accessibility
     subprocess.run([
         "open",
         "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
@@ -85,7 +76,6 @@ def set_autostart(enabled: bool, app_name: str = "WhisperNow") -> bool:
 
 
 def _set_autostart_windows(enabled: bool, app_name: str) -> bool:
-    """Set autostart on Windows via registry."""
     try:
         import winreg
         
@@ -93,7 +83,6 @@ def _set_autostart_windows(enabled: bool, app_name: str) -> bool:
         
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
             if enabled:
-                # Get the path to the current executable
                 import sys
                 exe_path = sys.executable
                 winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, f'"{exe_path}"')
@@ -101,7 +90,7 @@ def _set_autostart_windows(enabled: bool, app_name: str) -> bool:
                 try:
                     winreg.DeleteValue(key, app_name)
                 except FileNotFoundError:
-                    pass  # Already not set
+                    pass
         
         return True
     except Exception as e:
@@ -110,7 +99,6 @@ def _set_autostart_windows(enabled: bool, app_name: str) -> bool:
 
 
 def _set_autostart_macos(enabled: bool, app_name: str) -> bool:
-    """Set autostart on macOS via LaunchAgents."""
     plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.{app_name.lower()}.plist"
     
     if enabled:
@@ -141,7 +129,6 @@ def _set_autostart_macos(enabled: bool, app_name: str) -> bool:
 
 
 def _set_autostart_linux(enabled: bool, app_name: str) -> bool:
-    """Set autostart on Linux via XDG autostart."""
     autostart_dir = Path.home() / ".config" / "autostart"
     desktop_file = autostart_dir / f"{app_name.lower()}.desktop"
     
@@ -164,9 +151,7 @@ X-GNOME-Autostart-enabled=true
 
 
 def get_app_icon_path() -> Optional[Path]:
-    """Get the path to the application icon."""
     # TODO: Implement icon path resolution
-    # Should check for bundled resources in PyInstaller, etc.
     return None
 
 
@@ -184,33 +169,27 @@ def check_and_request_permissions(settings: "Settings") -> bool:
     Returns:
         True if permissions are granted, False otherwise.
     """
-    # Only relevant on macOS
     if get_platform() != "macos":
         return True
     
-    # If already granted and recorded, verify it's still valid
     if settings.accessibility_permissions_granted:
         if check_accessibility_permissions():
             return True
         else:
-            # Permission was revoked, need to re-request
             logger.warning("Accessibility permission was revoked, prompting user")
-    
-    # Check current status
+
     if check_accessibility_permissions():
         settings.accessibility_permissions_granted = True
         settings.save()
         logger.info("Accessibility permissions already granted")
         return True
-    
-    # Show dialog explaining permissions (import here to avoid circular dependency)
+
     from ..ui.permissions_dialog import PermissionsDialog
     
     logger.info("Showing accessibility permissions dialog")
     dialog = PermissionsDialog()
     dialog.exec()
-    
-    # Update settings with result
+
     granted = check_accessibility_permissions()
     settings.accessibility_permissions_granted = granted
     settings.save()
@@ -223,7 +202,6 @@ def check_and_request_permissions(settings: "Settings") -> bool:
     return granted
 
 
-# Type hint import for Settings
 if TYPE_CHECKING:
     from ..core.settings import Settings
 

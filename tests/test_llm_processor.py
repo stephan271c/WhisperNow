@@ -1,8 +1,4 @@
-"""
-Tests for LLM processor.
-
-Verifies Enhancement dataclass and LLMProcessor functionality.
-"""
+"""Tests for LLM processor."""
 
 import pytest
 from unittest.mock import patch, MagicMock
@@ -16,10 +12,7 @@ from src.transcribe.core.transcript_processor.llm_processor import (
 
 
 class TestEnhancement:
-    """Tests for Enhancement dataclass."""
-    
     def test_creation(self):
-        """Test basic enhancement creation."""
         enh = Enhancement(
             id="test_id",
             title="Test Enhancement",
@@ -30,7 +23,6 @@ class TestEnhancement:
         assert enh.prompt == "Fix the text"
     
     def test_to_dict(self):
-        """Test conversion to dictionary."""
         enh = Enhancement(
             id="test_id",
             title="Test Enhancement",
@@ -44,7 +36,6 @@ class TestEnhancement:
         }
     
     def test_from_dict(self):
-        """Test creation from dictionary."""
         data = {
             "id": "test_id",
             "title": "Test Enhancement",
@@ -56,7 +47,6 @@ class TestEnhancement:
         assert enh.prompt == "Fix the text"
     
     def test_roundtrip(self):
-        """Test dict -> Enhancement -> dict roundtrip."""
         original = {
             "id": "test_id",
             "title": "Test Enhancement",
@@ -68,14 +58,10 @@ class TestEnhancement:
 
 
 class TestDefaultEnhancements:
-    """Tests for default enhancement presets."""
-    
     def test_defaults_exist(self):
-        """Test that default enhancements are defined."""
         assert len(DEFAULT_ENHANCEMENTS) >= 3
     
     def test_defaults_have_required_fields(self):
-        """Test that default enhancements have required fields."""
         for enh in DEFAULT_ENHANCEMENTS:
             assert enh.id
             assert enh.title
@@ -83,42 +69,33 @@ class TestDefaultEnhancements:
 
 
 class TestLLMProcessor:
-    """Tests for LLMProcessor class."""
-    
     def test_initialization(self):
-        """Test processor initialization."""
         processor = LLMProcessor(model="gpt-4o-mini", api_key="test-key")
         assert processor.model == "gpt-4o-mini"
         assert processor.api_key == "test-key"
     
     def test_initialization_defaults(self):
-        """Test processor with default values."""
         processor = LLMProcessor()
         assert processor.model == "gpt-4o-mini"
         assert processor.api_key is None
     
     def test_is_configured_with_api_key(self):
-        """Test is_configured returns True when API key is set."""
         processor = LLMProcessor(api_key="test-key")
         assert processor.is_configured() is True
     
     def test_is_configured_without_api_key(self):
-        """Test is_configured returns False when no API key."""
         processor = LLMProcessor()
         # Clear any environment variables
         with patch.dict('os.environ', {}, clear=True):
             assert processor.is_configured() is False
     
     def test_is_configured_with_env_var(self):
-        """Test is_configured returns True when env var is set."""
         processor = LLMProcessor()
         with patch.dict('os.environ', {'OPENAI_API_KEY': 'env-key'}):
             assert processor.is_configured() is True
     
     @patch('src.transcribe.core.transcript_processor.llm_processor.completion')
     def test_process_calls_completion(self, mock_completion):
-        """Test that process calls litellm completion and returns LLMResponse."""
-        # Setup mock response
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Fixed text"
@@ -134,7 +111,6 @@ class TestLLMProcessor:
         
         result = processor.process("Original text", enhancement)
         
-        # Result is now LLMResponse object
         assert isinstance(result, LLMResponse)
         assert result.content == "Fixed text"
         mock_completion.assert_called_once()
@@ -149,7 +125,6 @@ class TestLLMProcessor:
     
     @patch('src.transcribe.core.transcript_processor.llm_processor.completion')
     def test_process_returns_original_on_error(self, mock_completion):
-        """Test that process returns original text in LLMResponse on error."""
         mock_completion.side_effect = Exception("API error")
         
         processor = LLMProcessor(model="gpt-4o-mini", api_key="test-key")
@@ -161,7 +136,6 @@ class TestLLMProcessor:
         assert result.content == "Original text"
     
     def test_process_empty_text(self):
-        """Test that process returns empty text unchanged in LLMResponse."""
         processor = LLMProcessor(model="gpt-4o-mini", api_key="test-key")
         enhancement = Enhancement(id="test", title="Test", prompt="Fix")
         

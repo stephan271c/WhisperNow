@@ -1,8 +1,4 @@
-"""
-Tests for AudioProcessor and audio chunking functionality.
-
-Tests silence detection, chunk splitting, and transcription combining.
-"""
+"""Tests for AudioProcessor and audio chunking functionality."""
 
 import numpy as np
 import pytest
@@ -17,10 +13,7 @@ from src.transcribe.core.audio.audio_processor import (
 
 
 class TestNeedsChunking:
-    """Tests for needs_chunking function."""
-    
     def test_short_audio_does_not_need_chunking(self):
-        """Test audio under 30s threshold returns False."""
         sample_rate = 16000
         # 10 seconds of audio
         audio_data = np.zeros(10 * sample_rate, dtype=np.float32)
@@ -28,7 +21,6 @@ class TestNeedsChunking:
         assert needs_chunking(audio_data, sample_rate) is False
     
     def test_long_audio_needs_chunking(self):
-        """Test audio over 30s threshold returns True."""
         sample_rate = 16000
         # 45 seconds of audio
         audio_data = np.zeros(45 * sample_rate, dtype=np.float32)
@@ -36,7 +28,6 @@ class TestNeedsChunking:
         assert needs_chunking(audio_data, sample_rate) is True
     
     def test_exactly_threshold_does_not_need_chunking(self):
-        """Test audio exactly at threshold returns False."""
         sample_rate = 16000
         # Exactly 30 seconds
         audio_data = np.zeros(int(MAX_DURATION_SECONDS * sample_rate), dtype=np.float32)
@@ -45,10 +36,7 @@ class TestNeedsChunking:
 
 
 class TestAudioChunkInfo:
-    """Tests for AudioChunkInfo dataclass."""
-    
     def test_chunk_info_creation(self):
-        """Test AudioChunkInfo can be created with all fields."""
         chunk = AudioChunkInfo(
             start_sample=0,
             end_sample=16000,
@@ -59,7 +47,6 @@ class TestAudioChunkInfo:
         assert chunk.duration_seconds == 1.0
     
     def test_sample_count_property(self):
-        """Test sample_count property calculates correctly."""
         chunk = AudioChunkInfo(
             start_sample=1000,
             end_sample=5000,
@@ -69,10 +56,7 @@ class TestAudioChunkInfo:
 
 
 class TestAudioPreview:
-    """Tests for AudioPreview dataclass."""
-    
     def test_preview_creation(self):
-        """Test AudioPreview can be created with all fields."""
         preview = AudioPreview(
             duration_seconds=45.5,
             sample_rate=16000,
@@ -85,7 +69,6 @@ class TestAudioPreview:
         assert preview.estimated_chunks == 2
     
     def test_duration_formatted_seconds(self):
-        """Test duration_formatted for less than 1 minute."""
         preview = AudioPreview(
             duration_seconds=25.0,
             sample_rate=16000,
@@ -96,7 +79,6 @@ class TestAudioPreview:
         assert preview.duration_formatted == "25s"
     
     def test_duration_formatted_minutes(self):
-        """Test duration_formatted for over 1 minute."""
         preview = AudioPreview(
             duration_seconds=95.0,
             sample_rate=16000,
@@ -108,10 +90,7 @@ class TestAudioPreview:
 
 
 class TestAudioProcessorSplitting:
-    """Tests for AudioProcessor splitting functionality."""
-    
     def test_short_audio_returns_single_chunk(self):
-        """Test audio under threshold returns unchanged as single chunk."""
         processor = AudioProcessor()
         sample_rate = 16000
         # 10 seconds of silence
@@ -123,7 +102,6 @@ class TestAudioProcessorSplitting:
         assert len(chunks[0]) == len(audio_data)
     
     def test_long_silence_creates_multiple_chunks(self):
-        """Test long audio with silence creates multiple chunks."""
         processor = AudioProcessor(max_duration=10.0, min_chunk_duration=2.0)
         sample_rate = 16000
         # 25 seconds of silence (should create ~3 chunks with 10s max)
@@ -137,7 +115,6 @@ class TestAudioProcessorSplitting:
         assert total_samples >= len(audio_data)
     
     def test_split_at_silence_points(self):
-        """Test that splits occur at silence points, not in loud audio."""
         processor = AudioProcessor(
             max_duration=5.0, 
             min_chunk_duration=1.0,
@@ -158,7 +135,6 @@ class TestAudioProcessorSplitting:
         assert len(chunks) >= 2
     
     def test_fallback_to_time_based_splitting(self):
-        """Test fallback splitting when no silence is found."""
         processor = AudioProcessor(
             max_duration=5.0,
             min_chunk_duration=1.0,
@@ -176,10 +152,7 @@ class TestAudioProcessorSplitting:
 
 
 class TestAudioProcessorPreview:
-    """Tests for AudioProcessor preview functionality."""
-    
     def test_preview_short_audio(self):
-        """Test preview of short audio indicates no chunking needed."""
         processor = AudioProcessor()
         sample_rate = 16000
         audio_data = np.zeros(10 * sample_rate, dtype=np.float32)
@@ -191,7 +164,6 @@ class TestAudioProcessorPreview:
         assert preview.duration_seconds == 10.0
     
     def test_preview_long_audio(self):
-        """Test preview of long audio indicates chunking needed."""
         processor = AudioProcessor()
         sample_rate = 16000
         audio_data = np.zeros(60 * sample_rate, dtype=np.float32)
@@ -203,10 +175,7 @@ class TestAudioProcessorPreview:
 
 
 class TestTranscriptionCombining:
-    """Tests for combining transcriptions from multiple chunks."""
-    
     def test_combine_single_transcription(self):
-        """Test combining a single transcription returns it unchanged."""
         processor = AudioProcessor()
         
         result = processor.combine_transcriptions(["Hello world"])
@@ -214,7 +183,6 @@ class TestTranscriptionCombining:
         assert result == "Hello world"
     
     def test_combine_multiple_transcriptions(self):
-        """Test combining multiple transcriptions joins with spaces."""
         processor = AudioProcessor()
         
         result = processor.combine_transcriptions([
@@ -226,7 +194,6 @@ class TestTranscriptionCombining:
         assert result == "Hello world how are you"
     
     def test_combine_handles_trailing_spaces(self):
-        """Test combining handles transcriptions with trailing spaces."""
         processor = AudioProcessor()
         
         result = processor.combine_transcriptions([
@@ -237,7 +204,6 @@ class TestTranscriptionCombining:
         assert result == "Hello world"
     
     def test_combine_removes_double_spaces(self):
-        """Test combining removes double spaces."""
         processor = AudioProcessor()
         
         result = processor.combine_transcriptions([
@@ -248,7 +214,6 @@ class TestTranscriptionCombining:
         assert result == "Hello world"
     
     def test_combine_empty_list(self):
-        """Test combining empty list returns empty string."""
         processor = AudioProcessor()
         
         result = processor.combine_transcriptions([])
@@ -256,7 +221,6 @@ class TestTranscriptionCombining:
         assert result == ""
     
     def test_combine_filters_empty_transcriptions(self):
-        """Test combining filters out empty transcriptions."""
         processor = AudioProcessor()
         
         result = processor.combine_transcriptions([
@@ -270,7 +234,6 @@ class TestTranscriptionCombining:
         assert result == "Hello world !"
     
     def test_combine_none_in_list(self):
-        """Test combining handles None values gracefully."""
         processor = AudioProcessor()
         
         # Filter out None before passing (as the real code does)
@@ -283,10 +246,7 @@ class TestTranscriptionCombining:
 
 
 class TestAudioProcessorConfiguration:
-    """Tests for AudioProcessor configuration."""
-    
     def test_default_configuration(self):
-        """Test default configuration values."""
         processor = AudioProcessor()
         
         assert processor.max_duration == 30.0
@@ -294,7 +254,6 @@ class TestAudioProcessorConfiguration:
         assert processor.silence_threshold == 0.02
     
     def test_custom_configuration(self):
-        """Test custom configuration values."""
         processor = AudioProcessor(
             max_duration=60.0,
             min_chunk_duration=10.0,

@@ -1,9 +1,4 @@
-"""
-Background transcription worker thread.
 
-Performs transcription and LLM enhancement in a background thread
-to keep the UI responsive during processing.
-"""
 
 from typing import Optional
 from datetime import datetime
@@ -47,18 +42,7 @@ class TranscriptionWorkerThread(QThread):
         enhancement: Optional[Enhancement],
         parent=None
     ):
-        """
-        Initialize the transcription worker.
-        
-        Args:
-            transcriber: The TranscriptionEngine to use
-            audio_data: Audio samples to transcribe
-            sample_rate: Sample rate of the audio
-            vocabulary_replacements: Dict of text replacements to apply
-            llm_processor: Optional LLMProcessor for text enhancement
-            enhancement: Optional Enhancement config for LLM processing
-            parent: Parent QObject
-        """
+
         super().__init__(parent)
         self._transcriber = transcriber
         self._audio_data = audio_data
@@ -68,12 +52,11 @@ class TranscriptionWorkerThread(QThread):
         self._enhancement = enhancement
     
     def run(self):
-        """Execute transcription and enhancement in background thread."""
         import time
         start_time = time.time()
         
         try:
-            # Step 1: Transcribe the audio
+
             logger.info(f"Background transcription started: {len(self._audio_data)} samples")
             raw_text = self._transcriber.transcribe_chunked(
                 self._audio_data, 
@@ -88,13 +71,13 @@ class TranscriptionWorkerThread(QThread):
             duration = time.time() - start_time
             logger.info(f"Transcription completed in {duration:.2f}s: '{raw_text[:50]}{'...' if len(raw_text) > 50 else ''}'")
             
-            # Step 2: Apply vocabulary replacements
+
             processed_text = apply_vocabulary_replacements(
                 raw_text,
                 self._vocabulary_replacements
             )
             
-            # Step 3: Apply LLM enhancement if configured
+
             final_text = processed_text
             enhanced_text = None
             enhancement_name = None
@@ -111,8 +94,7 @@ class TranscriptionWorkerThread(QThread):
                 else:
                     logger.warning("LLM processor not configured, skipping enhancement")
             
-            # If vocabulary replacements were applied but no LLM enhancement,
-            # record the processed text as the "enhanced" version
+
             if enhanced_text is None and processed_text != raw_text:
                 enhanced_text = processed_text
                 enhancement_name = "Vocabulary Replacement"
@@ -120,7 +102,7 @@ class TranscriptionWorkerThread(QThread):
             total_duration = time.time() - start_time
             logger.info(f"Total processing completed in {total_duration:.2f}s")
             
-            # Emit success with all results
+
             self.finished.emit(final_text, raw_text, enhanced_text, enhancement_name, cost)
             
         except Exception as e:

@@ -1,5 +1,3 @@
-"""LLM processing and text enhancements."""
-
 from .llm_processor import (
     Enhancement,
     LLMProcessor,

@@ -1,18 +1,15 @@
-"""Home tab with welcome/overview content."""
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 from PySide6.QtCore import Qt
 
 
 class HomeTab(QWidget):
-    """Home tab with a brief overview of the application."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """Build the UI layout."""
         layout = QVBoxLayout(self)
 
         title = QLabel("Get started")

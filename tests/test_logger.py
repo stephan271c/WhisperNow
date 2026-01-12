@@ -1,8 +1,4 @@
-"""
-Tests for logging infrastructure.
-
-Verifies logger configuration, file creation, and rotation.
-"""
+"""Tests for logging infrastructure."""
 
 import logging
 from pathlib import Path
@@ -15,22 +11,17 @@ from src.transcribe.utils.logger import get_logger, get_log_dir
 
 
 class TestLoggerConfiguration:
-    """Tests for logger setup and configuration."""
-    
     def test_get_logger_returns_logger(self):
-        """Test get_logger returns a Logger instance."""
         logger = get_logger("test")
         assert isinstance(logger, logging.Logger)
     
     def test_get_logger_singleton(self):
-        """Test get_logger returns same instance for root logger."""
         logger1 = get_logger("transcribe")
         logger2 = get_logger("transcribe")
         assert logger1 is logger2
     
     @patch("src.transcribe.utils.logger.get_log_dir")
     def test_log_directory_creation(self, mock_get_log_dir, tmp_path):
-        """Test log directory is created."""
         log_dir = tmp_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         mock_get_log_dir.return_value = log_dir
@@ -43,16 +34,13 @@ class TestLoggerConfiguration:
     
     @patch("src.transcribe.utils.logger.get_log_dir")
     def test_logger_writes_to_file(self, mock_get_log_dir, tmp_path):
-        """Test logger writes messages to file."""
         log_dir = tmp_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         mock_get_log_dir.return_value = log_dir
         
-        # Force re-initialization
         import src.transcribe.utils.logger as logger_module
         logger_module._logger_instance = None
         
-        # Clear any existing handlers from the transcribe logger
         root_logger = logging.getLogger("transcribe")
         root_logger.handlers.clear()
         
@@ -68,24 +56,17 @@ class TestLoggerConfiguration:
 
 
 class TestLogRotation:
-    """Tests for log rotation functionality."""
-    
     @patch("src.transcribe.utils.logger.get_log_dir")
     def test_log_rotation_when_size_exceeded(self, mock_get_log_dir, tmp_path):
-        """Test log rotation occurs when max size is exceeded."""
         log_dir = tmp_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         mock_get_log_dir.return_value = log_dir
         
-        # Force re-initialization with small max size
         import src.transcribe.utils.logger as logger_module
         logger_module._logger_instance = None
         
-        # Patch the RotatingFileHandler to use smaller size for testing
         with patch("src.transcribe.utils.logger.RotatingFileHandler") as mock_handler_class:
             from logging.handlers import RotatingFileHandler
-            
-            # Create real handler with small size
             log_file = tmp_path / "logs" / "app.log"
             log_file.parent.mkdir(parents=True, exist_ok=True)
             
@@ -99,12 +80,6 @@ class TestLogRotation:
             
             logger = get_logger("transcribe")
             
-            # Write enough data to trigger rotation
             for i in range(100):
                 logger.info(f"Test message {i} with some padding to increase size")
-            
-            # Check if backup file was created (rotation occurred)
-            backup_file = Path(str(log_file) + ".1")
-            # Rotation may or may not have occurred depending on handler buffering
-            # Just verify the logger can be called many times without error
             assert log_file.exists()

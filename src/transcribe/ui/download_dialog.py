@@ -1,8 +1,4 @@
-"""
-Model download progress dialog.
 
-Shows download progress when fetching ASR models from HuggingFace.
-"""
 
 from typing import Optional
 
@@ -47,7 +43,6 @@ class DownloadDialog(QDialog):
         self._setup_ui(model_name)
     
     def _setup_ui(self, model_name: str) -> None:
-        """Create the dialog UI."""
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -87,7 +82,6 @@ class DownloadDialog(QDialog):
         layout.addLayout(button_layout)
     
     def set_model_name(self, model_name: str) -> None:
-        """Update the model name display."""
         self.model_label.setText(model_name)
     
     def set_progress(self, progress: float) -> None:
@@ -106,11 +100,9 @@ class DownloadDialog(QDialog):
             self.status_label.setText("Download complete, loading model...")
     
     def set_status(self, status: str) -> None:
-        """Update the status label text."""
         self.status_label.setText(status)
     
     def _on_cancel(self) -> None:
-        """Handle cancel button click."""
         self._cancelled = True
         self.cancel_button.setEnabled(False)
         self.cancel_button.setText("Cancelling...")
@@ -119,7 +111,6 @@ class DownloadDialog(QDialog):
     
     @property
     def is_cancelled(self) -> bool:
-        """Check if download was cancelled."""
         return self._cancelled
     
     def finish(self, success: bool = True) -> None:
