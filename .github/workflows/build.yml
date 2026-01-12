@@ -10,7 +10,8 @@ on:
 
 env:
   APP_NAME: WhisperNow
-  APP_VERSION: "0.1.0"
+  # Version is set from git tag for releases, fallback to 0.1.0 for dev builds
+  APP_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '0.1.0' }}
 
 jobs:
   # ============================================================================
@@ -77,9 +78,16 @@ jobs:
 
     - name: Create DMG
       run: |
+        # First, verify the .app bundle exists
+        if [ ! -d "dist/WhisperNow.app" ]; then
+          echo "Error: dist/WhisperNow.app not found!"
+          ls -la dist/
+          exit 1
+        fi
+        
+        # Try styled DMG first, fall back to simple hdiutil if it fails
         create-dmg \
           --volname "${{ env.APP_NAME }}" \
-          --volicon "dist/WhisperNow.app/Contents/Resources/icon.icns" 2>/dev/null || true \
           --window-pos 200 120 \
           --window-size 600 400 \
           --icon-size 100 \
@@ -88,7 +96,6 @@ jobs:
           --app-drop-link 425 190 \
           "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS.dmg" \
           "dist/WhisperNow.app" || \
-        # Fallback: simple DMG creation if styled version fails
         hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "dist/WhisperNow.app" -ov -format UDZO "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS.dmg"
         
     - name: Upload macOS DMG
@@ -108,6 +115,15 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Free up disk space
+      run: |
+        # Remove large unused software to free up ~30GB
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        df -h
+    
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -119,7 +135,8 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y xclip fuse libfuse2
+        # libfuse2 is required for AppImage (uses fuse2, not fuse3)
+        sudo apt-get install -y libfuse2
       
     - name: Install Dependencies
       run: uv sync --group dev
