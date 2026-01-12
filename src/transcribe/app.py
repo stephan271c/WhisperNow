@@ -15,7 +15,7 @@ from PySide6.QtCore import QTimer, QObject
 from . import __app_name__, __version__
 from .core.settings import get_settings, TranscriptionRecord, add_history_record
 from .core.audio import AudioRecorder
-from .core.asr import TranscriptionEngine, EngineState, ModelLoaderThread
+from .core.asr import TranscriptionEngine, EngineState, ModelLoaderThread, TranscriptionWorkerThread
 from .core.input import HotkeyListener
 from .core.transcript_processor import LLMProcessor
 from .core.output import TextOutputController
@@ -68,6 +68,7 @@ class TranscribeApp(QObject):
         self._text_output = TextOutputController(on_complete=self._finish_typing)
         self._download_dialog: Optional[DownloadDialog] = None
         self._model_loader_thread: Optional[ModelLoaderThread] = None
+        self._transcription_worker: Optional[TranscriptionWorkerThread] = None
         
         # Typing state for non-blocking character output
         self._typing_text: str = ""
@@ -88,11 +89,19 @@ class TranscribeApp(QObject):
         check_and_request_permissions(self._settings)
     
     def _on_engine_state_change(self, state: EngineState, message: str) -> None:
-        """Handle transcription engine state changes."""
-        # Skip PROCESSING state - we stay IDLE (green) during transcription
-        # The only color change should be RECORDING (red) when hotkeys are held
-        if state == EngineState.PROCESSING:
-            return
+        """Handle transcription engine state changes.
+        
+        Note: Only handles model loading states. Transcription states (PROCESSING,
+        READY after transcribe, ERROR during transcribe) are skipped because they
+        may be called from the TranscriptionWorkerThread, which would cause Qt
+        threading errors. Those states are managed by the worker's signals.
+        """
+        # Only handle model loading/downloading states
+        # Skip PROCESSING, READY, ERROR as they may come from worker thread
+        if state in (EngineState.PROCESSING, EngineState.READY, EngineState.ERROR):
+            # Check if this is from model loading (no active transcription worker)
+            if self._transcription_worker is not None and self._transcription_worker.isRunning():
+                return  # Skip - this is from transcription in worker thread
         
         status_map = {
             EngineState.NOT_LOADED: TrayStatus.IDLE,
@@ -150,10 +159,7 @@ class TranscribeApp(QObject):
             logger.error(f"Recording error: {error_msg}")
     
     def _stop_recording(self) -> None:
-        """Stop recording and transcribe."""
-        import time
-        start_time = time.time()
-        
+        """Stop recording and start background transcription."""
         logger.debug("Stopping audio recording")
         audio_data = self._recorder.stop()
         self._audio_level_timer.stop()
@@ -166,40 +172,50 @@ class TranscribeApp(QObject):
             self._tray.set_status(TrayStatus.IDLE)
             return
         
-        logger.info(f"Captured {len(audio_data)} audio samples, starting transcription")
+        logger.info(f"Captured {len(audio_data)} audio samples, starting background transcription")
         
-        # Transcribe the audio (auto-chunks if over 30 seconds)
-        raw_text = self._transcriber.transcribe_chunked(audio_data, self._settings.sample_rate)
+        # Set processing state immediately and force UI update
+        self._tray.set_status(TrayStatus.PROCESSING)
+        QApplication.processEvents()  # Force tray icon to repaint before thread starts
         
-        duration = time.time() - start_time
+        # Get current enhancement config
+        enhancement = self._settings.get_active_enhancement()
         
-        if raw_text:
-            logger.info(f"Transcription completed in {duration:.2f}s: '{raw_text[:50]}{'...' if len(raw_text) > 50 else ''}'")
-            
-            # Apply vocabulary replacements
-            from .core.transcript_processor import apply_vocabulary_replacements
-            processed_text = apply_vocabulary_replacements(
-                raw_text,
-                self._settings.vocabulary_replacements
-            )
-            
-            # Apply LLM enhancement if active
-            final_text, enhanced_text, enhancement_name, cost = self._apply_enhancement(processed_text)
-            
-            # If vocabulary replacements were applied but no LLM enhancement,
-            # record the processed text as the "enhanced" version
-            if enhanced_text is None and processed_text != raw_text:
-                enhanced_text = processed_text
-                enhancement_name = "Vocabulary Replacement"
-            
-            # Record transcription to history
-            self._record_transcription(raw_text, enhanced_text, enhancement_name, cost)
-            
-            # Type the result
-            self._type_text(final_text)
-        else:
-            logger.warning(f"Transcription returned empty result after {duration:.2f}s")
-            self._tray.set_status(TrayStatus.IDLE)
+        # Start background transcription
+        self._transcription_worker = TranscriptionWorkerThread(
+            transcriber=self._transcriber,
+            audio_data=audio_data,
+            sample_rate=self._settings.sample_rate,
+            vocabulary_replacements=self._settings.vocabulary_replacements,
+            llm_processor=self._llm_processor,
+            enhancement=enhancement,
+            parent=self
+        )
+        self._transcription_worker.finished.connect(self._on_transcription_complete)
+        self._transcription_worker.error.connect(self._on_transcription_error)
+        self._transcription_worker.start()
+    
+    def _on_transcription_complete(
+        self,
+        final_text: str,
+        raw_text: str,
+        enhanced_text: Optional[str],
+        enhancement_name: Optional[str],
+        cost: Optional[float]
+    ) -> None:
+        """Handle successful transcription from background thread."""
+        logger.info(f"Background transcription complete: '{final_text[:50]}{'...' if len(final_text) > 50 else ''}'")
+        
+        # Record transcription to history
+        self._record_transcription(raw_text, enhanced_text, enhancement_name, cost)
+        
+        # Type the result
+        self._type_text(final_text)
+    
+    def _on_transcription_error(self, error_message: str) -> None:
+        """Handle transcription error from background thread."""
+        logger.error(f"Background transcription failed: {error_message}")
+        self._tray.set_status(TrayStatus.ERROR, error_message)
     
     def _init_llm_processor(self) -> None:
         """Initialize or reinitialize the LLM processor."""

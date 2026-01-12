@@ -11,6 +11,7 @@ from .backends import (
 )
 from .model_loader import ModelLoaderThread
 from .transcriber import TranscriptionEngine, EngineState
+from .transcription_worker import TranscriptionWorkerThread
 
 __all__ = [
     "ASRBackend",
@@ -23,4 +24,6 @@ __all__ = [
     "ModelLoaderThread",
     "TranscriptionEngine",
     "EngineState",
+    "TranscriptionWorkerThread",
 ]
+

@@ -82,7 +82,8 @@ def mock_dependencies():
 
 @patch('src.transcribe.core.output.text_output.subprocess.run')
 @patch('src.transcribe.app.TextOutputController')
-def test_full_transcription_flow(MockTextOutput, mock_subprocess, mock_dependencies, cleanup_app, qtbot):
+@patch('src.transcribe.app.TranscriptionWorkerThread')
+def test_full_transcription_flow(MockWorkerThread, MockTextOutput, mock_subprocess, mock_dependencies, cleanup_app, qtbot):
     """Test the complete flow: Hotkey -> Record -> Transcribe -> Type"""
     
     # Set to instant typing (uses paste via subprocess)
@@ -92,6 +93,11 @@ def test_full_transcription_flow(MockTextOutput, mock_subprocess, mock_dependenc
     
     # Setup mock text output
     mock_text_output_instance = MockTextOutput.return_value
+    
+    # Setup mock worker thread - make it call the finished callback immediately
+    mock_worker_instance = MockWorkerThread.return_value
+    mock_worker_instance.finished = MagicMock()
+    mock_worker_instance.error = MagicMock()
     
     # Initialize App
     app = cleanup_app(TranscribeApp())
@@ -109,9 +115,13 @@ def test_full_transcription_flow(MockTextOutput, mock_subprocess, mock_dependenc
     # Verify recording stopped
     mock_dependencies['recorder'].stop.assert_called_once()
     
-    # Verify transcription (using chunked method now)
-    mock_dependencies['transcriber'].transcribe_chunked.assert_called_once_with(b"audio_data", 16000)
-
+    # Verify worker thread was started
+    MockWorkerThread.assert_called_once()
+    mock_worker_instance.start.assert_called_once()
+    
+    # Simulate the worker finishing - call the callback directly
+    app._on_transcription_complete("Hello World", "Hello World", None, None, None)
+    
     # Verify that text was output via TextOutputController
     mock_text_output_instance.output_text.assert_called_once()
     call_args = mock_text_output_instance.output_text.call_args

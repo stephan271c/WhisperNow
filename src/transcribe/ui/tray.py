@@ -16,6 +16,7 @@ class TrayStatus(Enum):
     IDLE = auto()        # Ready, waiting for input
     LOADING = auto()     # Model loading/downloading
     RECORDING = auto()   # Currently recording
+    PROCESSING = auto()  # Transcribing/enhancing
     ERROR = auto()       # Error state
 
 
@@ -84,6 +85,7 @@ class SystemTray(QObject):
             TrayStatus.IDLE: "Ready - Hold hotkey to speak",
             TrayStatus.LOADING: "Loading model...",
             TrayStatus.RECORDING: "🔴 Recording...",
+            TrayStatus.PROCESSING: "⏳ Processing...",
             TrayStatus.ERROR: f"Error: {message}"
         }
         self._status_action.setText(status_texts.get(status, "Unknown"))
@@ -95,6 +97,7 @@ class SystemTray(QObject):
             TrayStatus.IDLE: QColor("#4CAF50"),       # Green
             TrayStatus.LOADING: QColor("#FF9800"),    # Orange
             TrayStatus.RECORDING: QColor("#F44336"),  # Red
+            TrayStatus.PROCESSING: QColor("#FF9800"), # Orange
             TrayStatus.ERROR: QColor("#F44336"),      # Red
         }
         
@@ -103,6 +106,7 @@ class SystemTray(QObject):
             TrayStatus.IDLE: "WhisperNow - Ready",
             TrayStatus.LOADING: "WhisperNow - Loading...",
             TrayStatus.RECORDING: "WhisperNow - Recording",
+            TrayStatus.PROCESSING: "WhisperNow - Processing...",
             TrayStatus.ERROR: "WhisperNow - Error",
         }
         
