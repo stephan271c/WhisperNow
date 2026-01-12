@@ -2,10 +2,10 @@ name: Build Desktop App
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
     tags: [ "v*" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "master" ]
   workflow_dispatch:  # Allow manual triggering
 
 env:
