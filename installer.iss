@@ -5,7 +5,7 @@
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "WhisperNow"
 #define MyAppURL "https://github.com/whispernow/whispernow"
-#define MyAppExeName "whispernow.exe"
+#define MyAppExeName "WhisperNow.exe"
 
 [Setup]
 ; Unique application identifier - NEVER change this after first release
@@ -46,7 +46,7 @@ Name: "startupicon"; Description: "Start WhisperNow when Windows starts"; GroupD
 
 [Files]
 ; Install all files from the Briefcase build folder
-Source: "build\whispernow\windows\app\WhisperNow\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "build\whispernow\windows\app\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
