@@ -103,7 +103,6 @@ class Settings(BaseModel):
 
     hotkey: HotkeyConfig = Field(default_factory=HotkeyConfig)
     model_name: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
-    use_gpu: bool = True
 
     start_minimized: bool = False
     auto_start_on_login: bool = False

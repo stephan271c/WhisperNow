@@ -26,28 +26,24 @@ class ModelLoaderThread(QThread):
     progress = Signal(float)
     state_changed = Signal(EngineState, str)
 
-    def __init__(self, model_name: str, use_gpu: bool = True, parent=None):
+    def __init__(self, model_name: str, parent=None):
         super().__init__(parent)
         self._model_name = model_name
-        self._use_gpu = use_gpu
         self._engine: TranscriptionEngine = None
 
     def run(self):
-        logger.info(
-            f"Background loading model: {self._model_name} (GPU={self._use_gpu})"
-        )
+        logger.info(f"Background loading model: {self._model_name}")
 
         try:
             self._engine = TranscriptionEngine(
                 model_name=self._model_name,
-                use_gpu=self._use_gpu,
                 on_state_change=self._on_state_change,
                 on_download_progress=self._on_progress,
             )
 
             self._engine.load_model()
 
-            message = f"Model loaded on {self._engine.device.upper()}"
+            message = "Model loaded on CPU"
             logger.info(f"Background model loading complete: {message}")
             self.finished.emit(True, message)
 

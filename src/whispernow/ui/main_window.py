@@ -47,11 +47,9 @@ class SettingsWindow(QDialog):
                 self._loading_overlay = self._create_loading_overlay()
             self._loading_overlay.show()
             self._loading_overlay.raise_()
-            self._configuration_tab.set_gpu_enabled(False)
         else:
             if self._loading_overlay is not None:
                 self._loading_overlay.hide()
-            self._configuration_tab.set_gpu_enabled(True)
 
     def _create_loading_overlay(self) -> QFrame:
         overlay = QFrame(self)

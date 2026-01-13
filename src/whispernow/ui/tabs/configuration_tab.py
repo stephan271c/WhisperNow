@@ -71,8 +71,6 @@ class _DownloadThread(QThread):
 
 class ConfigurationTab(QWidget):
 
-    gpu_setting_changed = Signal(bool)
-
     reset_requested = Signal()
 
     def __init__(self, settings: Settings, parent=None):
@@ -271,9 +269,6 @@ class ConfigurationTab(QWidget):
         self._custom_model_instructions.hide()
         model_layout.addRow("", self._custom_model_instructions)
 
-        self._use_gpu_cb = QCheckBox("Use GPU acceleration (if available)")
-        model_layout.addRow("", self._use_gpu_cb)
-
         layout.addWidget(model_group)
 
         # Download thread reference
@@ -446,9 +441,6 @@ class ConfigurationTab(QWidget):
         else:
             return self._model_combo.currentData() or ""
 
-    def set_gpu_enabled(self, enabled: bool) -> None:
-        self._use_gpu_cb.setEnabled(enabled)
-
     def load_settings(self) -> None:
         self._speed_slider.setValue(self._settings.characters_per_second)
         self._instant_type_cb.setChecked(self._settings.instant_type)
@@ -456,7 +448,6 @@ class ConfigurationTab(QWidget):
 
         self._start_minimized_cb.setChecked(self._settings.start_minimized)
         self._autostart_cb.setChecked(self._settings.auto_start_on_login)
-        self._use_gpu_cb.setChecked(self._settings.use_gpu)
 
         self._load_model_selection(self._settings.model_name)
 
@@ -483,7 +474,7 @@ class ConfigurationTab(QWidget):
         self._settings.instant_type = self._instant_type_cb.isChecked()
         self._settings.start_minimized = self._start_minimized_cb.isChecked()
         self._settings.auto_start_on_login = self._autostart_cb.isChecked()
-        self._settings.use_gpu = self._use_gpu_cb.isChecked()
+
         self._settings.sample_rate = self._sample_rate_combo.currentData()
         self._settings.input_device = self._device_combo.currentData()
 

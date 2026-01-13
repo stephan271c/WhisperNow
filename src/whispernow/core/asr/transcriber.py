@@ -52,7 +52,6 @@ class TranscriptionEngine:
         self,
         model_name: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
         backend_type: BackendType = BackendType.AUTO,
-        use_gpu: bool = True,
         on_state_change: Optional[Callable[[EngineState, str], None]] = None,
         on_download_progress: Optional[Callable[[float], None]] = None,
     ):
@@ -62,12 +61,10 @@ class TranscriptionEngine:
         Args:
             model_name: HuggingFace model name or local path
             backend_type: ASR backend to use (AUTO, NEMO, or HUGGINGFACE)
-            use_gpu: Whether to use GPU if available
             on_state_change: Callback for state changes (state, message)
             on_download_progress: Callback for download progress (0.0-1.0)
         """
         self.model_name = model_name
-        self.use_gpu = use_gpu
         self.on_state_change = on_state_change
         self.on_download_progress = on_download_progress
 
@@ -130,7 +127,6 @@ class TranscriptionEngine:
         self._backend = create_backend(self._backend_type)
         self._backend.load(
             model_path=self.model_name,
-            use_gpu=self.use_gpu,
             on_progress=self.on_download_progress,
         )
 

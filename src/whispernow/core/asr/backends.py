@@ -4,6 +4,7 @@ ASR Backend Abstraction Layer.
 Provides a unified interface for ASR using Sherpa-ONNX.
 """
 
+import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from typing import Callable, Optional
 
 import numpy as np
 import platformdirs
+
+logger = logging.getLogger(__name__)
 
 
 class BackendType(Enum):
@@ -33,7 +36,6 @@ class ASRBackend(ABC):
     def load(
         self,
         model_path: str,
-        use_gpu: bool = True,
         on_progress: Optional[Callable[[float], None]] = None,
     ) -> None:
         pass
@@ -75,7 +77,6 @@ class SherpaOnnxBackend(ASRBackend):
     def load(
         self,
         model_path: str,
-        use_gpu: bool = True,
         on_progress: Optional[Callable[[float], None]] = None,
     ) -> None:
         import sherpa_onnx
@@ -116,8 +117,8 @@ class SherpaOnnxBackend(ASRBackend):
                 f"Missing model files in {model_path}: {', '.join(missing)}"
             )
 
-        provider = "cuda" if use_gpu else "cpu"
-        self._device = provider
+        self._device = "cpu"
+        logger.info("Loading model with CPU provider")
 
         try:
             self._recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
@@ -126,7 +127,7 @@ class SherpaOnnxBackend(ASRBackend):
                 joiner=joiner,
                 tokens=tokens,
                 num_threads=4,
-                provider=provider,
+                provider="cpu",
                 debug=False,
                 decoding_method="greedy_search",
                 model_type="nemo_transducer",

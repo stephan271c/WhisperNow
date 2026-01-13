@@ -58,7 +58,6 @@ class TranscribeApp(QObject):
         )
         self._transcriber = TranscriptionEngine(
             model_name=self._settings.model_name,
-            use_gpu=self._settings.use_gpu,
             on_state_change=self._on_engine_state_change,
             on_download_progress=self._on_download_progress,
         )
@@ -296,7 +295,6 @@ class TranscribeApp(QObject):
 
     def _on_settings_changed(self) -> None:
         old_model = self._transcriber.model_name
-        old_gpu = self._transcriber.use_gpu
 
         self._settings = get_settings()
 
@@ -307,22 +305,16 @@ class TranscribeApp(QObject):
         self._init_llm_processor()
 
         model_changed = old_model != self._settings.model_name
-        gpu_changed = old_gpu != self._settings.use_gpu
-        if model_changed or gpu_changed:
-            change_reason = []
-            if model_changed:
-                change_reason.append(
-                    f"model: {old_model} -> {self._settings.model_name}"
-                )
-            if gpu_changed:
-                change_reason.append(f"GPU: {old_gpu} -> {self._settings.use_gpu}")
-            logger.info(f"Reloading transcription engine ({', '.join(change_reason)})")
+        if model_changed:
+            logger.info(
+                f"Reloading transcription engine (model: {old_model} -> {self._settings.model_name})"
+            )
             self._transcriber.unload()
 
             if self._settings_window is not None:
                 self._settings_window.set_loading(True)
 
-            self._start_model_loading(self._settings.model_name, self._settings.use_gpu)
+            self._start_model_loading(self._settings.model_name)
 
         set_autostart(self._settings.auto_start_on_login, "WhisperNow")
 
@@ -345,7 +337,7 @@ class TranscribeApp(QObject):
         self._recording_toast.set_level(self._latest_audio_level)
         self._recording_toast.set_spectrum(self._latest_audio_spectrum)
 
-    def _start_model_loading(self, model_name: str, use_gpu: bool) -> None:
+    def _start_model_loading(self, model_name: str) -> None:
         if (
             self._model_loader_thread is not None
             and self._model_loader_thread.isRunning()
@@ -353,7 +345,7 @@ class TranscribeApp(QObject):
             self._model_loader_thread.wait()
 
         self._model_loader_thread = ModelLoaderThread(
-            model_name=model_name, use_gpu=use_gpu, parent=self
+            model_name=model_name, parent=self
         )
         self._model_loader_thread.state_changed.connect(self._on_engine_state_change)
         self._model_loader_thread.progress.connect(self._on_download_progress)
@@ -398,7 +390,7 @@ class TranscribeApp(QObject):
 
     def _start_deferred_model_loading(self) -> None:
         logger.info("Starting deferred transcription model loading...")
-        self._start_model_loading(self._settings.model_name, self._settings.use_gpu)
+        self._start_model_loading(self._settings.model_name)
 
 
 def main():
