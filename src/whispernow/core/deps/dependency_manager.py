@@ -2,7 +2,10 @@
 Dependency Manager for WhisperNow.
 
 Handles detection and installation of heavy ML dependencies (PyTorch, NeMo, etc.)
-into an isolated virtual environment at first run.
+into a local site-packages directory at first run.
+
+NOTE: We use `pip install --target` instead of a venv because AppImage bundles
+Python in a way that creates broken venvs with symlinks to temp extraction paths.
 """
 
 import subprocess
@@ -50,44 +53,33 @@ CUDA_PACKAGES = {"torch", "torchaudio", "torchvision"}
 
 class DependencyManager:
     def __init__(self):
-        self._venv_dir = Path(platformdirs.user_data_dir("WhisperNow")) / "python"
+        self._install_dir = Path(platformdirs.user_data_dir("WhisperNow")) / "packages"
         self._status = DependencyStatus.NOT_INSTALLED
         self._cancel_requested = False
 
     @property
-    def venv_dir(self) -> Path:
-        return self._venv_dir
+    def install_dir(self) -> Path:
+        return self._install_dir
 
+    # Keep legacy property for compatibility with bootstrap.py
     @property
     def site_packages_dir(self) -> Path:
-        if sys.platform == "win32":
-            return self._venv_dir / "Lib" / "site-packages"
-        else:
-            return (
-                self._venv_dir
-                / "lib"
-                / f"python{sys.version_info.major}.{sys.version_info.minor}"
-                / "site-packages"
-            )
-
-    @property
-    def python_executable(self) -> Path:
-        if sys.platform == "win32":
-            return self._venv_dir / "Scripts" / "python.exe"
-        else:
-            return self._venv_dir / "bin" / "python"
+        return self._install_dir
 
     @property
     def status(self) -> DependencyStatus:
         return self._status
 
-    def add_venv_to_path(self) -> None:
-        site_pkg = str(self.site_packages_dir)
-        if self.site_packages_dir.exists() and site_pkg not in sys.path:
-            sys.path.insert(0, site_pkg)
+    def add_to_path(self) -> None:
+        install_path = str(self._install_dir)
+        if self._install_dir.exists() and install_path not in sys.path:
+            sys.path.insert(0, install_path)
+
+    # Legacy alias
+    add_venv_to_path = add_to_path
 
     def check_dependencies_installed(self) -> bool:
-        self.add_venv_to_path()
+        self.add_to_path()
         try:
             import importlib.util
 
@@ -101,7 +93,7 @@ class DependencyManager:
             return False
 
     def get_missing_dependencies(self) -> list[str]:
-        self.add_venv_to_path()
+        self.add_to_path()
         missing = []
         try:
             import importlib.util
@@ -133,36 +125,11 @@ class DependencyManager:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
 
-    def _create_venv(self) -> bool:
-        if self._venv_dir.exists():
-            return True
+    def _ensure_install_dir(self) -> bool:
         try:
-            self._venv_dir.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(
-                [sys.executable, "-m", "venv", str(self._venv_dir)],
-                check=True,
-                capture_output=True,
-            )
+            self._install_dir.mkdir(parents=True, exist_ok=True)
             return True
-        except subprocess.CalledProcessError:
-            return False
-
-    def _upgrade_pip(self) -> bool:
-        try:
-            subprocess.run(
-                [
-                    str(self.python_executable),
-                    "-m",
-                    "pip",
-                    "install",
-                    "--upgrade",
-                    "pip",
-                ],
-                check=True,
-                capture_output=True,
-            )
-            return True
-        except subprocess.CalledProcessError:
+        except OSError:
             return False
 
     def cancel_installation(self) -> None:
@@ -174,7 +141,7 @@ class DependencyManager:
         progress_callback: Optional[Callable[[InstallProgress], None]] = None,
     ) -> tuple[bool, str]:
         """
-        Install heavy dependencies into the local venv.
+        Install heavy dependencies into the local site-packages.
 
         Args:
             use_gpu: If True, install CUDA-enabled PyTorch
@@ -186,14 +153,10 @@ class DependencyManager:
         self._status = DependencyStatus.INSTALLING
         self._cancel_requested = False
 
-        # Create venv if needed
-        if not self._create_venv():
+        # Ensure install dir exists
+        if not self._ensure_install_dir():
             self._status = DependencyStatus.FAILED
-            return False, "Failed to create virtual environment"
-
-        if not self._upgrade_pip():
-            self._status = DependencyStatus.FAILED
-            return False, "Failed to upgrade pip"
+            return False, "Failed to create installation directory"
 
         missing = self.get_missing_dependencies()
         if not missing:
@@ -238,7 +201,16 @@ class DependencyManager:
         return True, "Dependencies installed successfully"
 
     def _install_package(self, package: str, use_gpu: bool) -> tuple[bool, str]:
-        cmd = [str(self.python_executable), "-m", "pip", "install", "--no-input"]
+        # Use sys.executable (AppImage python) and --target
+        cmd = [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--target",
+            str(self._install_dir),
+            "--no-input",
+        ]
 
         # Handle CUDA packages
         base_pkg = package.split("[")[0]
@@ -248,11 +220,12 @@ class DependencyManager:
         cmd.append(package)
 
         try:
+            # increased timeout for large torch downloads
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600,  # 10 min timeout per package
+                timeout=1200,
             )
             if result.returncode != 0:
                 return False, f"Failed to install {package}: {result.stderr}"

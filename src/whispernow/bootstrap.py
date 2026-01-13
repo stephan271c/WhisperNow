@@ -4,27 +4,18 @@ from pathlib import Path
 import platformdirs
 
 
-def get_venv_site_packages() -> Path:
-    venv_dir = Path(platformdirs.user_data_dir("WhisperNow")) / "python"
-    if sys.platform == "win32":
-        return venv_dir / "Lib" / "site-packages"
-    else:
-        return (
-            venv_dir
-            / "lib"
-            / f"python{sys.version_info.major}.{sys.version_info.minor}"
-            / "site-packages"
-        )
+def get_site_packages() -> Path:
+    return Path(platformdirs.user_data_dir("WhisperNow")) / "packages"
 
 
-def setup_venv_path() -> None:
-    site_packages = get_venv_site_packages()
+def setup_path() -> None:
+    site_packages = get_site_packages()
     if site_packages.exists() and str(site_packages) not in sys.path:
         sys.path.insert(0, str(site_packages))
 
 
 def check_dependencies_available() -> bool:
-    setup_venv_path()
+    setup_path()
     try:
         import importlib.util
 
@@ -113,7 +104,7 @@ def main():
             print("Setup cancelled or failed. Exiting.")
             sys.exit(1)
 
-        setup_venv_path()
+        setup_path()
 
         if not check_dependencies_available():
             print("Dependencies not found after installation. Please try again.")
