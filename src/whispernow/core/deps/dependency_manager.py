@@ -163,44 +163,26 @@ class DependencyManager:
             self._status = DependencyStatus.INSTALLED
             return True, "All dependencies already installed"
 
-        total = len(missing)
+        # Batch installation
+        success, msg = self._install_packages_batched(
+            missing,
+            use_gpu,
+            progress_callback=progress_callback,
+        )
 
-        for i, package in enumerate(missing):
-            if self._cancel_requested:
-                self._status = DependencyStatus.FAILED
-                return False, "Installation cancelled"
-
-            if progress_callback:
-                progress_callback(
-                    InstallProgress(
-                        package=package,
-                        progress=(i / total),
-                        status=f"Installing {package}...",
-                        total_packages=total,
-                        current_package=i + 1,
-                    )
-                )
-
-            success, msg = self._install_package(package, use_gpu)
-            if not success:
-                self._status = DependencyStatus.FAILED
-                return False, msg
-
-        if progress_callback:
-            progress_callback(
-                InstallProgress(
-                    package="",
-                    progress=1.0,
-                    status="Installation complete!",
-                    total_packages=total,
-                    current_package=total,
-                )
-            )
+        if not success:
+            self._status = DependencyStatus.FAILED
+            return False, msg
 
         self._status = DependencyStatus.INSTALLED
         return True, "Dependencies installed successfully"
 
-    def _install_package(self, package: str, use_gpu: bool) -> tuple[bool, str]:
+    def _install_packages_batched(
+        self,
+        packages: list[str],
+        use_gpu: bool,
+        progress_callback: Optional[Callable[[InstallProgress], None]] = None,
+    ) -> tuple[bool, str]:
         # Use sys.executable (AppImage python) and --target
         cmd = [
             sys.executable,
@@ -212,28 +194,104 @@ class DependencyManager:
             "--no-input",
         ]
 
-        # Handle CUDA packages
-        base_pkg = package.split("[")[0]
-        if use_gpu and base_pkg in CUDA_PACKAGES:
-            cmd.extend(["--index-url", CUDA_INDEX_URL])
+        # Use extra-index-url for CUDA packages so we can still find standard packages on PyPI
+        if use_gpu:
+            cmd.extend(["--extra-index-url", CUDA_INDEX_URL])
 
-        cmd.append(package)
+        cmd.extend(packages)
 
         try:
-            # increased timeout for large torch downloads
-            result = subprocess.run(
+            # use Popen to capture output in real-time
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=1200,
+                bufsize=1,  # Line buffered
+                universal_newlines=True,
             )
-            if result.returncode != 0:
-                return False, f"Failed to install {package}: {result.stderr}"
+
+            last_line = ""
+            total_packages = len(packages)
+
+            # Simple progress tracking variables
+            current_stage = "Initializing..."
+
+            # Read stdout line by line
+            while True:
+                # Check for cancellation
+                if self._cancel_requested:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    return False, "Installation cancelled"
+
+                output_line = process.stdout.readline()
+                if output_line == "" and process.poll() is not None:
+                    break
+
+                if output_line:
+                    line = output_line.strip()
+                    last_line = line
+
+                    # Heuristics for progress description
+                    if line.startswith("Collecting"):
+                        pkg = line.split("Collecting")[-1].strip()
+                        current_stage = f"Downloading {pkg}..."
+                    elif line.startswith("Installing"):
+                        current_stage = f"Installing..."
+                    elif "Downloading" in line:
+                        # Keep the downloading details, maybe shorten
+                        if len(line) > 50:
+                            current_stage = f"{line[:47]}..."
+                        else:
+                            current_stage = line
+
+                    if progress_callback:
+                        # Since we don't have accurate per-package progress in batched mode without elaborate parsing,
+                        # we'll use a "pulse" or indefinite style progress, or just 50% fixed.
+                        # However, the UI expects 0-100 float.
+                        # We can try to approximate based on "Collecting" counts if we really wanted to,
+                        # but for now, let's just show activity.
+
+                        # Let's send a "busy" progress which might just cycle or stay at a point.
+                        # Or rely on the UI's existing implementation which might just show a bar.
+                        # The existing UI sets value(percent).
+
+                        # Better approach: Just show the text update and keep progress at 50%
+                        # until finished, or slowly increment if we could count lines (not reliable).
+                        # Let's just forward the status.
+                        progress_callback(
+                            InstallProgress(
+                                package="Batched Install",
+                                progress=0.5,  # Indeterminate state
+                                status=current_stage,
+                                total_packages=total_packages,
+                                current_package=1,
+                            )
+                        )
+
+            return_code = process.poll()
+            if return_code != 0:
+                return False, f"Failed to install packages: {last_line}"
+
+            if progress_callback:
+                progress_callback(
+                    InstallProgress(
+                        package="",
+                        progress=1.0,
+                        status="Installation complete!",
+                        total_packages=total_packages,
+                        current_package=total_packages,
+                    )
+                )
+
             return True, ""
-        except subprocess.TimeoutExpired:
-            return False, f"Timeout installing {package}"
+
         except Exception as e:
-            return False, f"Error installing {package}: {e}"
+            return False, f"Error installing packages: {e}"
 
     def get_estimated_download_size(self, use_gpu: bool) -> str:
         if use_gpu:
