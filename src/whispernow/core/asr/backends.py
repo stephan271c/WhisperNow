@@ -91,9 +91,15 @@ class SherpaOnnxBackend(ASRBackend):
             )
 
         # Detect model files
-        encoder = self._find_file(model_path, ["encoder.onnx", "encoder.int8.onnx"])
-        decoder = self._find_file(model_path, ["decoder.onnx", "decoder.int8.onnx"])
-        joiner = self._find_file(model_path, ["joiner.onnx", "joiner.int8.onnx"])
+        encoder = self._find_file(
+            model_path, ["encoder.onnx", "encoder.int8.onnx", "encoder.fp16.onnx"]
+        )
+        decoder = self._find_file(
+            model_path, ["decoder.onnx", "decoder.int8.onnx", "decoder.fp16.onnx"]
+        )
+        joiner = self._find_file(
+            model_path, ["joiner.onnx", "joiner.int8.onnx", "joiner.fp16.onnx"]
+        )
         tokens = self._find_file(model_path, ["tokens.txt"])
 
         if not all([encoder, decoder, joiner, tokens]):
@@ -199,9 +205,9 @@ class SherpaOnnxBackend(ASRBackend):
 
         # Check for required files
         required = ["tokens.txt"]
-        encoder_candidates = ["encoder.onnx", "encoder.int8.onnx"]
-        decoder_candidates = ["decoder.onnx", "decoder.int8.onnx"]
-        joiner_candidates = ["joiner.onnx", "joiner.int8.onnx"]
+        encoder_candidates = ["encoder.onnx", "encoder.int8.onnx", "encoder.fp16.onnx"]
+        decoder_candidates = ["decoder.onnx", "decoder.int8.onnx", "decoder.fp16.onnx"]
+        joiner_candidates = ["joiner.onnx", "joiner.int8.onnx", "joiner.fp16.onnx"]
 
         for f in required:
             if not os.path.exists(os.path.join(model_path, f)):

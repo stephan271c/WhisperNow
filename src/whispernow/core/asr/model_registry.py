@@ -58,9 +58,11 @@ def is_model_downloaded(model_id: str) -> bool:
 
     # Check for required files
     has_tokens = os.path.exists(os.path.join(model_path, "tokens.txt"))
-    has_encoder = os.path.exists(
-        os.path.join(model_path, "encoder.onnx")
-    ) or os.path.exists(os.path.join(model_path, "encoder.int8.onnx"))
+    has_encoder = (
+        os.path.exists(os.path.join(model_path, "encoder.onnx"))
+        or os.path.exists(os.path.join(model_path, "encoder.int8.onnx"))
+        or os.path.exists(os.path.join(model_path, "encoder.fp16.onnx"))
+    )
 
     return has_tokens and has_encoder
 
