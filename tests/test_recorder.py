@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from src.transcribe.core.audio.recorder import AudioDevice, AudioRecorder
+from src.whispernow.core.audio.recorder import AudioDevice, AudioRecorder
 
 
 class TestAudioDevice:
@@ -20,7 +20,7 @@ class TestAudioDevice:
 
 
 class TestAudioRecorderDeviceEnumeration:
-    @patch("src.transcribe.core.audio.recorder.sd.query_devices")
+    @patch("src.whispernow.core.audio.recorder.sd.query_devices")
     def test_list_devices_returns_input_devices(self, mock_query):
         mock_query.return_value = [
             {
@@ -51,7 +51,7 @@ class TestAudioRecorderDeviceEnumeration:
         assert devices[1].name == "Mic 2"
         assert devices[1].channels == 1
 
-    @patch("src.transcribe.core.audio.recorder.sd.query_devices")
+    @patch("src.whispernow.core.audio.recorder.sd.query_devices")
     def test_list_devices_empty(self, mock_query):
         mock_query.return_value = []
 
@@ -64,7 +64,7 @@ class TestAudioRecorderState:
         recorder = AudioRecorder()
         assert recorder.is_recording is False
 
-    @patch("src.transcribe.core.audio.recorder.sd.InputStream")
+    @patch("src.whispernow.core.audio.recorder.sd.InputStream")
     def test_start_sets_recording(self, mock_stream_class):
         mock_stream = MagicMock()
         mock_stream_class.return_value = mock_stream
@@ -75,7 +75,7 @@ class TestAudioRecorderState:
         assert recorder.is_recording is True
         mock_stream.start.assert_called_once()
 
-    @patch("src.transcribe.core.audio.recorder.sd.InputStream")
+    @patch("src.whispernow.core.audio.recorder.sd.InputStream")
     def test_stop_clears_recording(self, mock_stream_class):
         mock_stream = MagicMock()
         mock_stream_class.return_value = mock_stream
@@ -96,8 +96,8 @@ class TestAudioRecorderState:
         mock_stream.stop.assert_called_once()
         mock_stream.close.assert_called_once()
 
-    @patch("src.transcribe.core.audio.recorder.sd.query_devices")
-    @patch("src.transcribe.core.audio.recorder.sd.InputStream")
+    @patch("src.whispernow.core.audio.recorder.sd.query_devices")
+    @patch("src.whispernow.core.audio.recorder.sd.InputStream")
     def test_stop_performs_resampling(self, mock_stream_class, mock_query):
         mock_query.return_value = {"default_samplerate": 48000.0}
 
@@ -125,7 +125,7 @@ class TestAudioRecorderState:
         audio = recorder.stop()
         assert audio is None
 
-    @patch("src.transcribe.core.audio.recorder.sd.InputStream")
+    @patch("src.whispernow.core.audio.recorder.sd.InputStream")
     def test_start_twice_is_idempotent(self, mock_stream_class):
         mock_stream = MagicMock()
         mock_stream_class.return_value = mock_stream
@@ -156,7 +156,7 @@ class TestAudioRecorderConfiguration:
 
 
 class TestAudioCallback:
-    @patch("src.transcribe.core.audio.recorder.sd.InputStream")
+    @patch("src.whispernow.core.audio.recorder.sd.InputStream")
     def test_audio_level_callback(self, mock_stream_class):
         mock_stream = MagicMock()
         mock_stream_class.return_value = mock_stream

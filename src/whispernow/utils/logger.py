@@ -17,7 +17,7 @@ def get_log_dir() -> Path:
     else:  # Linux and others
         base = Path.home() / ".config"
 
-    log_dir = base / "transcribe" / "logs"
+    log_dir = base / "whispernow" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 
@@ -25,18 +25,18 @@ def get_log_dir() -> Path:
 _logger_instance: Optional[logging.Logger] = None
 
 
-def get_logger(name: str = "transcribe") -> logging.Logger:
+def get_logger(name: str = "whispernow") -> logging.Logger:
     global _logger_instance
 
-    if name.startswith("src.transcribe."):
-        name = name.replace("src.transcribe.", "transcribe.", 1)
-    elif name == "src.transcribe":
-        name = "transcribe"
+    if name.startswith("src.whispernow."):
+        name = name.replace("src.whispernow.", "whispernow.", 1)
+    elif name == "src.whispernow":
+        name = "whispernow"
 
     if _logger_instance is None:
         from ..core.settings.config import LOG_TO_CONSOLE, get_log_level
 
-        root_logger = logging.getLogger("transcribe")
+        root_logger = logging.getLogger("whispernow")
 
         if root_logger.handlers:
             _logger_instance = root_logger
@@ -70,7 +70,7 @@ def get_logger(name: str = "transcribe") -> logging.Logger:
 
             _logger_instance = root_logger
 
-    if name == "transcribe":
+    if name == "whispernow":
         return _logger_instance
 
     return logging.getLogger(name)

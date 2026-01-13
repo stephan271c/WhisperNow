@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.transcribe.core.transcript_processor.vocabulary_processor import (
+from src.whispernow.core.transcript_processor.vocabulary_processor import (
     apply_vocabulary_replacements,
 )
 

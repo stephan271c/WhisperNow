@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from src.transcribe.core.audio.audio_processor import (
+from src.whispernow.core.audio.audio_processor import (
     MAX_DURATION_SECONDS,
     AudioChunkInfo,
     AudioPreview,

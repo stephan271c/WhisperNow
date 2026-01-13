@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.transcribe.core.asr.backends import BackendType, detect_backend_type
-from src.transcribe.core.asr.transcriber import EngineState, TranscriptionEngine
+from src.whispernow.core.asr.backends import BackendType, detect_backend_type
+from src.whispernow.core.asr.transcriber import EngineState, TranscriptionEngine
 
 
 class TestBackendDetection:
@@ -83,7 +83,7 @@ class TestEngineUnload:
 
 
 class TestTranscribeChunked:
-    @patch("src.transcribe.core.asr.transcriber.needs_chunking")
+    @patch("src.whispernow.core.asr.transcriber.needs_chunking")
     def test_transcribe_chunked_orchestration(self, mock_needs_chunking):
         # Setup mocks
         mock_needs_chunking.return_value = True

@@ -51,11 +51,11 @@ def build():
 
         # Show output location based on platform
         if plat == "linux":
-            build_dir = project_root / "build" / "transcribe" / "linux" / "appimage"
+            build_dir = project_root / "build" / "whispernow" / "linux" / "appimage"
         elif plat == "darwin":
-            build_dir = project_root / "build" / "transcribe" / "macos" / "app"
+            build_dir = project_root / "build" / "whispernow" / "macos" / "app"
         elif plat == "windows":
-            build_dir = project_root / "build" / "transcribe" / "windows" / "app"
+            build_dir = project_root / "build" / "whispernow" / "windows" / "app"
 
         if build_dir.exists():
             print(f"Build output: {build_dir}")

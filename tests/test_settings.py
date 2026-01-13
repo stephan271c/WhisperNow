@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.transcribe.core.settings import (
+from src.whispernow.core.settings import (
     HotkeyConfig,
     Settings,
     get_config_dir,
@@ -44,7 +44,7 @@ class TestSettings:
         config_dir.mkdir()
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             # Create settings with custom values
@@ -77,7 +77,7 @@ class TestSettings:
         config_dir.mkdir()
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -93,7 +93,7 @@ class TestSettings:
         config_file.write_text("{ this is not valid json }")
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -139,7 +139,7 @@ class TestSettingsValidation:
         config_file.write_text(json.dumps({"sample_rate": -1000}))
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -147,7 +147,7 @@ class TestSettingsValidation:
         config_file.write_text(json.dumps({"sample_rate": 999999}))
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -156,7 +156,7 @@ class TestSettingsValidation:
         config_file.write_text(json.dumps({"sample_rate": 100}))
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -170,7 +170,7 @@ class TestSettingsValidation:
         config_file.write_text(json.dumps({"model_name": ""}))
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -184,7 +184,7 @@ class TestSettingsValidation:
         config_file.write_text(json.dumps({"characters_per_second": -50}))
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -199,7 +199,7 @@ class TestSettingsValidation:
         )
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -215,7 +215,7 @@ class TestSettingsValidation:
         )
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -239,7 +239,7 @@ class TestSettingsValidation:
         logger.propagate = True
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             with caplog.at_level(logging.WARNING, logger="transcribe"):
@@ -263,7 +263,7 @@ class TestSettingsValidation:
         config_file.write_text(json.dumps(valid_settings))
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -276,7 +276,7 @@ class TestSettingsValidation:
 
 class TestPerProviderSettings:
     def test_get_set_provider_settings(self):
-        from src.transcribe.core.settings import LLMProviderSettings
+        from src.whispernow.core.settings import LLMProviderSettings
 
         settings = Settings()
 
@@ -294,7 +294,7 @@ class TestPerProviderSettings:
         assert openai_settings.api_key == "sk-test-key"
 
     def test_provider_settings_isolation(self):
-        from src.transcribe.core.settings import LLMProviderSettings
+        from src.whispernow.core.settings import LLMProviderSettings
 
         settings = Settings()
 
@@ -316,7 +316,7 @@ class TestPerProviderSettings:
         assert ollama.api_key is None
 
     def test_backward_compatible_properties(self):
-        from src.transcribe.core.settings import LLMProviderSettings
+        from src.whispernow.core.settings import LLMProviderSettings
 
         settings = Settings()
         settings.llm_provider = "anthropic"
@@ -345,7 +345,7 @@ class TestPerProviderSettings:
         config_file.write_text(json.dumps(old_settings))
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
@@ -357,13 +357,13 @@ class TestPerProviderSettings:
             assert settings.llm_provider == "openrouter"
 
     def test_per_provider_save_load_cycle(self, tmp_path):
-        from src.transcribe.core.settings import LLMProviderSettings
+        from src.whispernow.core.settings import LLMProviderSettings
 
         config_dir = tmp_path / "config"
         config_dir.mkdir()
 
         with patch(
-            "src.transcribe.core.settings.settings.get_config_dir",
+            "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings()

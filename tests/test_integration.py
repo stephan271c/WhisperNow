@@ -4,10 +4,10 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from src.transcribe.app import TranscribeApp
-from src.transcribe.core.asr.transcriber import EngineState
-from src.transcribe.core.input.hotkey import HotkeyListener
-from src.transcribe.core.settings import HotkeyConfig, Settings
+from src.whispernow.app import TranscribeApp
+from src.whispernow.core.asr.transcriber import EngineState
+from src.whispernow.core.input.hotkey import HotkeyListener
+from src.whispernow.core.settings import HotkeyConfig, Settings
 
 
 @pytest.fixture
@@ -38,14 +38,14 @@ def cleanup_app():
 @pytest.fixture
 def mock_dependencies():
     with (
-        patch("src.transcribe.app.get_settings") as mock_get_settings,
-        patch("src.transcribe.app.SystemTray") as MockTray,
-        patch("src.transcribe.app.AudioRecorder") as MockRecorder,
-        patch("src.transcribe.app.TranscriptionEngine") as MockTranscriber,
-        patch("src.transcribe.app.HotkeyListener", wraps=HotkeyListener) as MockHotkey,
-        patch("src.transcribe.app.check_and_request_permissions", return_value=True),
-        patch("src.transcribe.app.set_autostart") as mock_set_autostart,
-        patch("src.transcribe.app.ModelLoaderThread") as MockLoaderThread,
+        patch("src.whispernow.app.get_settings") as mock_get_settings,
+        patch("src.whispernow.app.SystemTray") as MockTray,
+        patch("src.whispernow.app.AudioRecorder") as MockRecorder,
+        patch("src.whispernow.app.TranscriptionEngine") as MockTranscriber,
+        patch("src.whispernow.app.HotkeyListener", wraps=HotkeyListener) as MockHotkey,
+        patch("src.whispernow.app.check_and_request_permissions", return_value=True),
+        patch("src.whispernow.app.set_autostart") as mock_set_autostart,
+        patch("src.whispernow.app.ModelLoaderThread") as MockLoaderThread,
     ):
 
         settings = Settings()
@@ -76,9 +76,9 @@ def mock_dependencies():
         }
 
 
-@patch("src.transcribe.core.output.text_output.subprocess.run")
-@patch("src.transcribe.app.TextOutputController")
-@patch("src.transcribe.app.TranscriptionWorkerThread")
+@patch("src.whispernow.core.output.text_output.subprocess.run")
+@patch("src.whispernow.app.TextOutputController")
+@patch("src.whispernow.app.TranscriptionWorkerThread")
 def test_full_transcription_flow(
     MockWorkerThread,
     MockTextOutput,
@@ -117,7 +117,7 @@ def test_full_transcription_flow(
 
 
 def test_settings_hotkey_update(mock_dependencies, cleanup_app, qtbot):
-    with patch("src.transcribe.app.HotkeyListener") as MockListener:
+    with patch("src.whispernow.app.HotkeyListener") as MockListener:
         mock_listener_instance = MockListener.return_value
 
         app = cleanup_app(TranscribeApp())
@@ -131,7 +131,7 @@ def test_settings_hotkey_update(mock_dependencies, cleanup_app, qtbot):
 
 def test_autostart_update(mock_dependencies, cleanup_app, qtbot):
 
-    with patch("src.transcribe.app.HotkeyListener") as MockListener:
+    with patch("src.whispernow.app.HotkeyListener") as MockListener:
         app = cleanup_app(TranscribeApp())
 
         new_settings = Settings(auto_start_on_login=True)

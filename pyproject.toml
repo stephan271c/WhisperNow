@@ -5,20 +5,24 @@ description = "Push-to-talk speech transcription desktop app"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "litellm>=1.80.11",
-    "nemo-toolkit[asr]>=2.6.0",
+    # Core dependencies - bundled with installer
     "platformdirs>=4.5.1",
     "pydantic>=2.12.5",
     "pynput>=1.8.1",
     "PySide6>=6.6.0",
-    "scipy>=1.16.3",
     "sounddevice>=0.5.3",
-    "torch>=2.9.1",
-    "torchaudio>=2.9.1",
-    "torchvision>=0.24.1",
+    "numpy>=1.26.0",
 ]
 
 [project.optional-dependencies]
+# Heavy ML dependencies - downloaded on first run
+ml = [
+    "litellm>=1.80.11",
+    "nemo-toolkit[asr]>=2.6.0",
+    "scipy>=1.16.3",
+    "torch>=2.9.1",
+    "torchaudio>=2.9.1",
+]
 # HuggingFace Transformers backend (for Whisper, Wav2Vec2, etc.)
 huggingface = [
     "transformers>=4.40.0",
@@ -26,15 +30,14 @@ huggingface = [
 ]
 # Install all backends
 all = [
-    "transformers>=4.40.0",
-    "accelerate>=0.27.0",
+    "whispernow[ml,huggingface]",
 ]
 
 [project.gui-scripts]
-whispernow = "transcribe.app:main"
+whispernow = "whispernow.bootstrap:main"
 
 [project.scripts]
-whispernow-cli = "transcribe.app:main"
+whispernow-cli = "whispernow.bootstrap:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -72,19 +75,25 @@ version = "0.1.0"
 author = "WhisperNow Team"
 license.text = "MIT"
 
-[tool.briefcase.app.transcribe]
+[tool.briefcase.app.whispernow]
 formal_name = "WhisperNow"
 description = "Push-to-talk speech transcription desktop app"
-sources = ["src/transcribe"]
+sources = ["src/whispernow"]
 icon = ""
 requires = [
-    "wget>=3.2",  # Pre-install for nemo-toolkit compatibility
+    # Core deps only - ML deps downloaded at runtime
+    "platformdirs>=4.5.1",
+    "pydantic>=2.12.5",
+    "pynput>=1.8.1",
+    "PySide6>=6.6.0",
+    "sounddevice>=0.5.3",
+    "numpy>=1.26.0",
 ]
 
-[tool.briefcase.app.transcribe.macOS]
+[tool.briefcase.app.whispernow.macOS]
 min_os_version = "12.0"
 
-[tool.briefcase.app.transcribe.linux.appimage]
+[tool.briefcase.app.whispernow.linux.appimage]
 manylinux = "manylinux_2_28"
 
-[tool.briefcase.app.transcribe.windows]
+[tool.briefcase.app.whispernow.windows]

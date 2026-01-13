@@ -42,8 +42,8 @@ jobs:
     - name: Debug - Show build output
       run: |
         echo "=== Briefcase output ==="
-        Get-ChildItem -Recurse build/transcribe/windows/app -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum
-        Get-ChildItem build/transcribe/windows/app -Recurse -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 20
+        Get-ChildItem -Recurse build/whispernow/windows/app -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum
+        Get-ChildItem build/whispernow/windows/app -Recurse -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 20
 
     - name: Create Installer with Inno Setup
       run: iscc /O+ installer.iss
@@ -84,8 +84,8 @@ jobs:
     - name: Debug - Show build output
       run: |
         echo "=== Briefcase output ==="
-        du -sh build/transcribe/macos/app/ || true
-        ls -la build/transcribe/macos/app/ || true
+        du -sh build/whispernow/macos/app/ || true
+        ls -la build/whispernow/macos/app/ || true
       
     - name: Install create-dmg
       run: brew install create-dmg
@@ -93,7 +93,7 @@ jobs:
     - name: Create DMG
       run: |
         # Find the .app bundle in Briefcase output
-        APP_PATH="build/transcribe/macos/app/WhisperNow.app"
+        APP_PATH="build/whispernow/macos/app/WhisperNow.app"
         
         if [ ! -d "$APP_PATH" ]; then
           echo "Looking for .app bundle..."
@@ -165,8 +165,8 @@ jobs:
     - name: Debug - Show build output
       run: |
         echo "=== Briefcase output ==="
-        du -sh build/transcribe/linux/appimage/ || true
-        ls -la build/transcribe/linux/appimage/ || true
+        du -sh build/whispernow/linux/appimage/ || true
+        ls -la build/whispernow/linux/appimage/ || true
         find build -name "*.AppImage" 2>/dev/null || true
 
     - name: Package AppImage

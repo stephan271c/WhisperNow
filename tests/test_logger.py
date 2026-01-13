@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.transcribe.utils.logger import get_log_dir, get_logger
+from src.whispernow.utils.logger import get_log_dir, get_logger
 
 
 class TestLoggerConfiguration:
@@ -20,7 +20,7 @@ class TestLoggerConfiguration:
         logger2 = get_logger("transcribe")
         assert logger1 is logger2
 
-    @patch("src.transcribe.utils.logger.get_log_dir")
+    @patch("src.whispernow.utils.logger.get_log_dir")
     def test_log_directory_creation(self, mock_get_log_dir, tmp_path):
         log_dir = tmp_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -32,13 +32,13 @@ class TestLoggerConfiguration:
         assert result.is_dir()
         assert result.name == "logs"
 
-    @patch("src.transcribe.utils.logger.get_log_dir")
+    @patch("src.whispernow.utils.logger.get_log_dir")
     def test_logger_writes_to_file(self, mock_get_log_dir, tmp_path):
         log_dir = tmp_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         mock_get_log_dir.return_value = log_dir
 
-        import src.transcribe.utils.logger as logger_module
+        import src.whispernow.utils.logger as logger_module
 
         logger_module._logger_instance = None
 
@@ -57,18 +57,18 @@ class TestLoggerConfiguration:
 
 
 class TestLogRotation:
-    @patch("src.transcribe.utils.logger.get_log_dir")
+    @patch("src.whispernow.utils.logger.get_log_dir")
     def test_log_rotation_when_size_exceeded(self, mock_get_log_dir, tmp_path):
         log_dir = tmp_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         mock_get_log_dir.return_value = log_dir
 
-        import src.transcribe.utils.logger as logger_module
+        import src.whispernow.utils.logger as logger_module
 
         logger_module._logger_instance = None
 
         with patch(
-            "src.transcribe.utils.logger.RotatingFileHandler"
+            "src.whispernow.utils.logger.RotatingFileHandler"
         ) as mock_handler_class:
             from logging.handlers import RotatingFileHandler
 

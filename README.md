@@ -40,7 +40,7 @@ uv sync
 
 # Run the application
 source .venv/bin/activate
-uv run python -m src.transcribe.app
+uv run python -m src.whispernow.app
 ```
 
 ### Pre-built Releases
