@@ -10,7 +10,6 @@ from typing import Callable, List, Optional, Set
 
 import platformdirs
 
-# Configuration Constants
 CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
 ESTIMATED_SIZE_GB = 8.7
 ESTIMATED_SIZE_BYTES = int(ESTIMATED_SIZE_GB * 1024 * 1024 * 1024)
@@ -71,7 +70,6 @@ class DependencyManager:
         return self._status
 
     def add_to_path(self) -> None:
-        """Adds the custom install directory to sys.path if it exists."""
         install_path = str(self._install_dir)
         if self._install_dir.exists() and install_path not in sys.path:
             sys.path.insert(0, install_path)
@@ -102,7 +100,6 @@ class DependencyManager:
         return missing
 
     def detect_gpu_available(self) -> bool:
-        """Checks for NVIDIA GPU availability via nvidia-smi."""
         try:
             result = subprocess.run(
                 ["nvidia-smi"],
@@ -228,8 +225,22 @@ class DependencyManager:
                     if line.startswith("Collecting"):
                         pkg = line.split("Collecting")[-1].strip()
                         current_stage = f"Downloading {pkg}..."
-                        if pkg not in seen_packages:
+
+                        # Only track progress for top-level requested packages
+                        clean_pkg = pkg.lower().split("[")[0]
+
+                        # check if this collected package matches any of our requested packages
+                        is_requested = False
+                        for req in packages:
+                            clean_req = req.lower().split("[")[0]
+                            # Check for exact match or if one contains the other (e.g. version specifiers)
+                            if clean_req == clean_pkg:
+                                is_requested = True
+                                break
+
+                        if is_requested and pkg not in seen_packages:
                             seen_packages.add(pkg)
+
                     elif line.startswith("Installing"):
                         current_stage = "Installing..."
                     elif "Downloading" in line:
@@ -256,8 +267,9 @@ class DependencyManager:
                         )
                         total_progress = base_progress + size_progress
 
-                        display_total = max(len(packages), len(seen_packages))
-                        display_current = len(seen_packages)
+                        # Only show total for what we requested, not what we found (transitive deps)
+                        display_total = len(packages)
+                        display_current = min(len(seen_packages), display_total)
 
                         progress_callback(
                             InstallProgress(
