@@ -16,8 +16,8 @@ class TestLoggerConfiguration:
         assert isinstance(logger, logging.Logger)
 
     def test_get_logger_singleton(self):
-        logger1 = get_logger("transcribe")
-        logger2 = get_logger("transcribe")
+        logger1 = get_logger("whispernow")
+        logger2 = get_logger("whispernow")
         assert logger1 is logger2
 
     @patch("src.whispernow.utils.logger.get_log_dir")
@@ -42,10 +42,10 @@ class TestLoggerConfiguration:
 
         logger_module._logger_instance = None
 
-        root_logger = logging.getLogger("transcribe")
+        root_logger = logging.getLogger("whispernow")
         root_logger.handlers.clear()
 
-        logger = get_logger("transcribe")
+        logger = get_logger("whispernow")
         logger.info("Test message")
 
         log_file = log_dir / "app.log"
@@ -83,7 +83,7 @@ class TestLogRotation:
             )
             mock_handler_class.return_value = handler
 
-            logger = get_logger("transcribe")
+            logger = get_logger("whispernow")
 
             for i in range(100):
                 logger.info(f"Test message {i} with some padding to increase size")

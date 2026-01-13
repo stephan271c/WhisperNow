@@ -235,14 +235,14 @@ class TestSettingsValidation:
             )
         )
 
-        logger = logging.getLogger("transcribe")
+        logger = logging.getLogger("whispernow")
         logger.propagate = True
 
         with patch(
             "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
-            with caplog.at_level(logging.WARNING, logger="transcribe"):
+            with caplog.at_level(logging.WARNING, logger="whispernow"):
                 settings = Settings.load()
 
                 assert "Invalid sample_rate" in caplog.text
