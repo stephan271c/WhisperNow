@@ -1,13 +1,56 @@
 """Platform-specific utilities for cross-platform compatibility."""
 
+import os
 import platform
 import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from .logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def get_executable_path() -> str:
+
+    system = get_platform()
+
+    if system == "linux":
+        appimage_path = os.environ.get("APPIMAGE")
+        if appimage_path and Path(appimage_path).exists():
+            logger.debug(f"Running as AppImage: {appimage_path}")
+            return appimage_path
+
+        exe_path = Path(sys.executable).resolve()
+        # Look for .app in the path (e.g., /Applications/WhisperNow.app/Contents/MacOS/python)
+        for parent in exe_path.parents:
+            if parent.suffix == ".app":
+                logger.debug(f"Running as macOS .app bundle: {parent}")
+                return str(parent)
+
+    if system == "windows":
+        if getattr(sys, "frozen", False):
+            logger.debug(f"Running as frozen Windows exe: {sys.executable}")
+            return sys.executable
+
+    logger.debug(f"Running in development mode: {sys.executable}")
+    return sys.executable
+
+
+def is_packaged() -> bool:
+
+    system = get_platform()
+
+    if system == "linux":
+        return bool(os.environ.get("APPIMAGE"))
+    elif system == "macos":
+        exe_path = Path(sys.executable).resolve()
+        return any(p.suffix == ".app" for p in exe_path.parents)
+    elif system == "windows":
+        return getattr(sys, "frozen", False)
+
+    return False
 
 
 def get_platform() -> str:
@@ -18,12 +61,7 @@ def get_platform() -> str:
 
 
 def check_accessibility_permissions() -> bool:
-    """
-    Check if the app has accessibility permissions (macOS only).
 
-    On macOS, accessibility permissions are required for keyboard listening.
-    On other platforms, always returns True.
-    """
     if get_platform() != "macos":
         return True
 
@@ -44,7 +82,7 @@ def check_accessibility_permissions() -> bool:
 
 
 def request_accessibility_permissions() -> None:
-    """Guide the user to grant accessibility permissions (macOS only)."""
+
     if get_platform() != "macos":
         return
 
@@ -58,16 +96,7 @@ def request_accessibility_permissions() -> None:
 
 
 def set_autostart(enabled: bool, app_name: str = "WhisperNow") -> bool:
-    """
-    Enable or disable auto-start on login.
 
-    Args:
-        enabled: Whether to enable auto-start
-        app_name: Name of the application
-
-    Returns:
-        True if successful, False otherwise.
-    """
     system = get_platform()
 
     if system == "windows":
@@ -88,13 +117,17 @@ def _set_autostart_windows(enabled: bool, app_name: str) -> bool:
             winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE
         ) as key:
             if enabled:
-                import sys
-
-                exe_path = sys.executable
-                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, f'"{exe_path}"')
+                exe_path = get_executable_path()
+                if is_packaged():
+                    startup_cmd = f'"{exe_path}"'
+                else:
+                    startup_cmd = f'"{exe_path}" -m whispernow'
+                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, startup_cmd)
+                logger.info(f"Windows autostart enabled: {startup_cmd}")
             else:
                 try:
                     winreg.DeleteValue(key, app_name)
+                    logger.info("Windows autostart disabled")
                 except FileNotFoundError:
                     pass
 
@@ -110,9 +143,11 @@ def _set_autostart_macos(enabled: bool, app_name: str) -> bool:
     )
 
     if enabled:
-        import sys
+        exe_path = get_executable_path()
+        packaged = is_packaged()
 
-        plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+        if packaged:
+            plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -120,9 +155,26 @@ def _set_autostart_macos(enabled: bool, app_name: str) -> bool:
     <string>com.{app_name.lower()}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{sys.executable}</string>
+        <string>/usr/bin/open</string>
+        <string>{exe_path}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+"""
+        else:
+            plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.{app_name.lower()}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe_path}</string>
         <string>-m</string>
-        <string>transcribe</string>
+        <string>whispernow</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -131,8 +183,10 @@ def _set_autostart_macos(enabled: bool, app_name: str) -> bool:
 """
         plist_path.parent.mkdir(parents=True, exist_ok=True)
         plist_path.write_text(plist_content)
+        logger.info(f"macOS autostart enabled: {plist_path}")
     else:
         plist_path.unlink(missing_ok=True)
+        logger.info("macOS autostart disabled")
 
     return True
 
@@ -142,20 +196,29 @@ def _set_autostart_linux(enabled: bool, app_name: str) -> bool:
     desktop_file = autostart_dir / f"{app_name.lower()}.desktop"
 
     if enabled:
-        import sys
+        exe_path = get_executable_path()
+        packaged = is_packaged()
+
+        if packaged:
+            exec_cmd = exe_path
+        else:
+            exec_cmd = f"{exe_path} -m whispernow"
 
         desktop_content = f"""[Desktop Entry]
 Type=Application
 Name={app_name}
-Exec={sys.executable} -m transcribe
+Exec={exec_cmd}
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
+Comment=Voice-to-text transcription with AI enhancement
 """
         autostart_dir.mkdir(parents=True, exist_ok=True)
         desktop_file.write_text(desktop_content)
+        logger.info(f"Linux autostart enabled: {desktop_file} -> {exec_cmd}")
     else:
         desktop_file.unlink(missing_ok=True)
+        logger.info("Linux autostart disabled")
 
     return True
 
@@ -166,19 +229,7 @@ def get_app_icon_path() -> Optional[Path]:
 
 
 def check_and_request_permissions(settings: "Settings") -> bool:
-    """
-    Check for required permissions and request them if needed (macOS only).
 
-    On macOS, accessibility permissions are required for keyboard listening.
-    Shows a dialog explaining permissions if not granted.
-    Updates settings.accessibility_permissions_granted.
-
-    Args:
-        settings: Settings object to update with permission status
-
-    Returns:
-        True if permissions are granted, False otherwise.
-    """
     if get_platform() != "macos":
         return True
 
