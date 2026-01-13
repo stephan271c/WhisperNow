@@ -1,11 +1,3 @@
-"""
-Bootstrap entry point for WhisperNow.
-
-This module handles first-run dependency installation before the main app loads.
-It detects whether heavy ML dependencies (PyTorch, NeMo) are installed and if not,
-shows a setup wizard to download them.
-"""
-
 import sys
 from pathlib import Path
 
@@ -13,7 +5,6 @@ import platformdirs
 
 
 def get_venv_site_packages() -> Path:
-    """Get the path to the local venv's site-packages."""
     venv_dir = Path(platformdirs.user_data_dir("WhisperNow")) / "python"
     if sys.platform == "win32":
         return venv_dir / "Lib" / "site-packages"
@@ -27,14 +18,12 @@ def get_venv_site_packages() -> Path:
 
 
 def setup_venv_path() -> None:
-    """Add local venv site-packages to sys.path if it exists."""
     site_packages = get_venv_site_packages()
     if site_packages.exists() and str(site_packages) not in sys.path:
         sys.path.insert(0, str(site_packages))
 
 
 def check_dependencies_available() -> bool:
-    """Check if heavy dependencies are installed without importing them."""
     setup_venv_path()
     try:
         import importlib.util
@@ -49,12 +38,6 @@ def check_dependencies_available() -> bool:
 
 
 def run_dependency_wizard() -> bool:
-    """
-    Run a minimal Qt app to install dependencies.
-
-    Returns:
-        True if installation succeeded, False otherwise
-    """
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import (
         QApplication,
@@ -73,13 +56,11 @@ def run_dependency_wizard() -> bool:
 
     manager = DependencyManager()
 
-    # Create a simple wizard
     wizard = QWizard()
     wizard.setWindowTitle("WhisperNow - First Time Setup")
     wizard.setWizardStyle(QWizard.ModernStyle)
     wizard.setMinimumSize(550, 400)
 
-    # Welcome page
     welcome_page = QWizardPage()
     welcome_page.setTitle("Welcome to WhisperNow")
     welcome_page.setSubTitle("First-time setup required")
@@ -99,11 +80,9 @@ def run_dependency_wizard() -> bool:
 
     wizard.addPage(welcome_page)
 
-    # Dependency setup page
     dep_page = DependencySetupPage(manager)
     wizard.addPage(dep_page)
 
-    # Complete page
     complete_page = QWizardPage()
     complete_page.setTitle("Setup Complete!")
     complete_page.setSubTitle("WhisperNow is ready to use.")
@@ -119,7 +98,6 @@ def run_dependency_wizard() -> bool:
 
     wizard.addPage(complete_page)
 
-    # Run wizard
     result = wizard.exec()
 
     if result == QWizard.Accepted:
@@ -129,23 +107,18 @@ def run_dependency_wizard() -> bool:
 
 
 def main():
-    """Bootstrap entry point - checks deps and either installs or runs app."""
     if not check_dependencies_available():
-        # Need to install dependencies
         success = run_dependency_wizard()
         if not success:
             print("Setup cancelled or failed. Exiting.")
             sys.exit(1)
 
-        # Refresh path after installation
         setup_venv_path()
 
-        # Verify installation worked
         if not check_dependencies_available():
             print("Dependencies not found after installation. Please try again.")
             sys.exit(1)
 
-    # Dependencies available - run main app
     from whispernow.app import main as app_main
 
     app_main()
