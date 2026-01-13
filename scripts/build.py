@@ -52,7 +52,7 @@ def build():
         # Show output location based on platform
         if plat == "linux":
             build_dir = project_root / "build" / "whispernow" / "linux" / "appimage"
-        elif plat == "darwin":
+        elif plat == "macos":
             build_dir = project_root / "build" / "whispernow" / "macos" / "app"
         elif plat == "windows":
             build_dir = project_root / "build" / "whispernow" / "windows" / "app"

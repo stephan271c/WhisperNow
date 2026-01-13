@@ -46,7 +46,7 @@ Name: "startupicon"; Description: "Start WhisperNow when Windows starts"; GroupD
 
 [Files]
 ; Install all files from the Briefcase build folder
-Source: "build\whispernow\windows\app\whispernow\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "build\whispernow\windows\app\WhisperNow\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
