@@ -1,91 +1,57 @@
 """
 Utility functions for ASR model management.
 
-Provides functions to discover installed/cached ASR models from the
-HuggingFace Hub cache.
+Provides functions to discover installed/cached ASR models.
 """
 
+import os
 from typing import List
 
-from .backends import _HUGGINGFACE_ASR_PREFIXES, _NEMO_PREFIXES
+from .backends import get_models_dir
 
 
 def get_installed_asr_models() -> List[str]:
     """
-    Get list of installed ASR models from the HuggingFace cache.
-
-    Scans the HuggingFace Hub cache directory and returns model names
-    that match known ASR model prefixes (NeMo and HuggingFace ASR models).
-
-    Returns:
-        List of model names (e.g., ["nvidia/parakeet-tdt-0.6b-v3", "openai/whisper-large-v3"])
+    Get list of installed ASR models from the local models directory.
     """
-    try:
-        from huggingface_hub import scan_cache_dir
+    models_dir = get_models_dir()
 
-        cache_info = scan_cache_dir()
-        asr_models = []
-
-        for repo in cache_info.repos:
-            repo_id = repo.repo_id
-            repo_lower = repo_id.lower()
-
-            is_nemo = any(
-                repo_lower.startswith(prefix) or prefix in repo_lower
-                for prefix in _NEMO_PREFIXES
-            )
-
-            is_hf_asr = any(
-                repo_lower.startswith(prefix) for prefix in _HUGGINGFACE_ASR_PREFIXES
-            )
-
-            if is_nemo or is_hf_asr:
-                asr_models.append(repo_id)
-
-        asr_models.sort()
-        return asr_models
-
-    except Exception:
+    if not os.path.exists(models_dir):
         return []
+
+    models = []
+    for name in os.listdir(models_dir):
+        model_path = os.path.join(models_dir, name)
+        if os.path.isdir(model_path):
+            # Check if it looks like a valid sherpa-onnx model
+            has_tokens = os.path.exists(os.path.join(model_path, "tokens.txt"))
+            has_encoder = os.path.exists(
+                os.path.join(model_path, "encoder.onnx")
+            ) or os.path.exists(os.path.join(model_path, "encoder.int8.onnx"))
+            if has_tokens and has_encoder:
+                models.append(name)
+
+    models.sort()
+    return models
 
 
 def delete_asr_model(model_name: str) -> tuple[bool, str]:
     """
-    Delete an ASR model from the HuggingFace cache.
-
-    Args:
-        model_name: The model name to delete (e.g., "nvidia/parakeet-tdt-0.6b-v3")
-
-    Returns:
-        Tuple of (success: bool, message: str) where message contains
-        freed space on success or error description on failure.
+    Delete an ASR model from the local models directory.
     """
+    import shutil
+
+    models_dir = get_models_dir()
+    model_path = os.path.join(models_dir, model_name)
+
+    if not os.path.exists(model_path):
+        return False, f"Model '{model_name}' not found"
+
+    if not os.path.isdir(model_path):
+        return False, f"'{model_name}' is not a directory"
+
     try:
-        from huggingface_hub import scan_cache_dir
-
-        cache_info = scan_cache_dir()
-
-        target_repo = None
-        for repo in cache_info.repos:
-            if repo.repo_id == model_name:
-                target_repo = repo
-                break
-
-        if target_repo is None:
-            return False, f"Model '{model_name}' not found in cache"
-
-        revision_hashes = [rev.commit_hash for rev in target_repo.revisions]
-
-        if not revision_hashes:
-            return False, f"No revisions found for model '{model_name}'"
-
-        delete_strategy = cache_info.delete_revisions(*revision_hashes)
-
-        freed_size_str = delete_strategy.expected_freed_size_str
-
-        delete_strategy.execute()
-
-        return True, f"Deleted '{model_name}', freed {freed_size_str}"
-
+        shutil.rmtree(model_path)
+        return True, f"Deleted '{model_name}'"
     except Exception as e:
         return False, f"Failed to delete model: {str(e)}"

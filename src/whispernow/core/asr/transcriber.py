@@ -12,7 +12,6 @@ from enum import Enum, auto
 from typing import Callable, Optional
 
 import numpy as np
-import torch
 
 from ...utils.logger import get_logger
 from ..audio.audio_processor import AudioProcessor, needs_chunking
@@ -41,24 +40,17 @@ class TranscriptionEngine:
     The model is downloaded on first use and cached locally.
     Emits callbacks for state changes and progress updates.
 
-    Supports multiple ASR backends:
-    - NeMo: nvidia/parakeet-*, nvidia/canary-*, etc.
-    - HuggingFace: openai/whisper-*, facebook/wav2vec2-*, etc.
+    Uses Sherpa-ONNX as the ASR backend with pre-trained models.
 
     Example:
-        # Auto-detect backend based on model name
-        engine = TranscriptionEngine(model_name="nvidia/parakeet-tdt-0.6b-v3")
-
-        # Explicitly specify backend
         engine = TranscriptionEngine(
-            model_name="openai/whisper-large-v3",
-            backend_type=BackendType.HUGGINGFACE
+            model_name="sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
         )
     """
 
     def __init__(
         self,
-        model_name: str = "nvidia/parakeet-tdt-0.6b-v3",
+        model_name: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
         backend_type: BackendType = BackendType.AUTO,
         use_gpu: bool = True,
         on_state_change: Optional[Callable[[EngineState, str], None]] = None,
@@ -87,7 +79,7 @@ class TranscriptionEngine:
 
         self._backend: Optional[ASRBackend] = None
         self._state = EngineState.NOT_LOADED
-        self._device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
+        self._device = "cpu"  # Will be updated by backend load
         self._audio_processor = AudioProcessor()
         self.logger = get_logger(__name__)
 
@@ -137,7 +129,7 @@ class TranscriptionEngine:
         )
         self._backend = create_backend(self._backend_type)
         self._backend.load(
-            model_name=self.model_name,
+            model_path=self.model_name,
             use_gpu=self.use_gpu,
             on_progress=self.on_download_progress,
         )
@@ -288,9 +280,6 @@ class TranscriptionEngine:
         if self._backend is not None:
             self._backend.unload()
             self._backend = None
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
         gc.collect()
         self._set_state(EngineState.NOT_LOADED, "Model unloaded")

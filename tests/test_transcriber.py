@@ -9,23 +9,9 @@ from src.whispernow.core.asr.transcriber import EngineState, TranscriptionEngine
 
 
 class TestBackendDetection:
-    def test_detect_nemo_nvidia_model(self):
-        assert detect_backend_type("nvidia/parakeet-tdt-0.6b-v3") == BackendType.NEMO
-        assert detect_backend_type("nvidia/canary-1b") == BackendType.NEMO
-
-    def test_detect_huggingface_whisper(self):
-        assert detect_backend_type("openai/whisper-base") == BackendType.HUGGINGFACE
-        assert detect_backend_type("openai/whisper-large-v3") == BackendType.HUGGINGFACE
-
-    def test_detect_huggingface_wav2vec(self):
-        assert (
-            detect_backend_type("facebook/wav2vec2-large-960h")
-            == BackendType.HUGGINGFACE
-        )
-
-    def test_unknown_model_defaults_to_huggingface(self):
-        result = detect_backend_type("unknown/custom-model")
-        assert result == BackendType.HUGGINGFACE
+    def test_detect_backend_always_sherpa(self):
+        assert detect_backend_type("any/model") == BackendType.SHERPA_ONNX
+        assert detect_backend_type("nvidia/parakeet") == BackendType.SHERPA_ONNX
 
 
 class TestEngineState:
@@ -70,8 +56,8 @@ class TestEngineConfiguration:
 
     def test_backend_type_auto_resolves(self):
         engine = TranscriptionEngine(model_name="nvidia/parakeet-tdt-0.6b-v3")
-        # AUTO resolves to NEMO for nvidia models
-        assert engine.backend_type == BackendType.NEMO
+        # AUTO resolves to SHERPA_ONNX
+        assert engine.backend_type == BackendType.SHERPA_ONNX
 
 
 class TestEngineUnload:

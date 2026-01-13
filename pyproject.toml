@@ -12,26 +12,11 @@ dependencies = [
     "PySide6>=6.6.0",
     "sounddevice>=0.5.3",
     "numpy>=1.26.0",
+    "sherpa-onnx>=1.12.21",
+    "litellm>=1.80.16",
 ]
 
-[project.optional-dependencies]
-# Heavy ML dependencies - downloaded on first run
-ml = [
-    "litellm>=1.80.11",
-    "nemo-toolkit[asr]>=2.6.0",
-    "scipy>=1.16.3",
-    "torch>=2.9.1",
-    "torchaudio>=2.9.1",
-]
-# HuggingFace Transformers backend (for Whisper, Wav2Vec2, etc.)
-huggingface = [
-    "transformers>=4.40.0",
-    "accelerate>=0.27.0",
-]
-# Install all backends
-all = [
-    "whispernow[ml,huggingface]",
-]
+
 
 [project.gui-scripts]
 whispernow = "whispernow.bootstrap:main"
@@ -72,7 +57,7 @@ markers = [
 project_name = "WhisperNow"
 bundle = "com.whispernow"
 version = "0.1.0"
-author = "WhisperNow Team"
+author = "WhisperNow"
 license.text = "MIT"
 
 [tool.briefcase.app.whispernow]

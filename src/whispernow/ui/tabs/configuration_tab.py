@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -19,12 +20,53 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...core.asr.model_downloader import ModelDownloader
+from ...core.asr.model_registry import (
+    AVAILABLE_MODELS,
+    get_all_models_with_status,
+    is_model_downloaded,
+)
 from ...core.asr.model_utils import delete_asr_model, get_installed_asr_models
 from ...core.audio import AudioRecorder
 from ...core.settings import HotkeyConfig, Settings
 
 # Special value for custom model entry in combo box
 _CUSTOM_MODEL_ENTRY = "__custom_model__"
+
+
+class _DownloadThread(QThread):
+    """Background thread for downloading models."""
+
+    progress = Signal(int, int)  # bytes_downloaded, total_bytes
+    status_changed = Signal(str)  # status message
+    finished = Signal(bool)  # success
+    error = Signal(str)  # error message
+
+    def __init__(self, model_id: str):
+        super().__init__()
+        self._model_id = model_id
+        self._downloader = ModelDownloader()
+
+    def run(self):
+        try:
+            success = self._downloader.download(
+                self._model_id,
+                on_progress=self._on_progress,
+                on_status=self._on_status,
+            )
+            self.finished.emit(success)
+        except Exception as e:
+            self.error.emit(str(e))
+            self.finished.emit(False)
+
+    def _on_progress(self, downloaded: int, total: int):
+        self.progress.emit(downloaded, total)
+
+    def _on_status(self, status: str):
+        self.status_changed.emit(status)
+
+    def cancel(self):
+        self._downloader.cancel()
 
 
 class ConfigurationTab(QWidget):
@@ -184,6 +226,12 @@ class ConfigurationTab(QWidget):
         self._model_combo.setStyleSheet("font-family: monospace;")
         model_row_layout.addWidget(self._model_combo, 1)
 
+        self._download_btn = QPushButton("Download")
+        self._download_btn.setFixedWidth(80)
+        self._download_btn.setToolTip("Download selected model")
+        self._download_btn.clicked.connect(self._on_download_clicked)
+        model_row_layout.addWidget(self._download_btn)
+
         self._delete_model_btn = QPushButton("🗑")
         self._delete_model_btn.setFixedWidth(30)
         self._delete_model_btn.setToolTip("Delete selected model from cache")
@@ -195,25 +243,41 @@ class ConfigurationTab(QWidget):
 
         model_layout.addRow("Model:", model_row_layout)
 
+        # Download progress bar
+        self._download_progress = QProgressBar()
+        self._download_progress.setRange(0, 100)
+        self._download_progress.hide()
+        model_layout.addRow("", self._download_progress)
+
+        self._cancel_download_btn = QPushButton("Cancel")
+        self._cancel_download_btn.hide()
+        self._cancel_download_btn.clicked.connect(self._on_cancel_download)
+        model_layout.addRow("", self._cancel_download_btn)
+
         self._custom_model_edit = QLineEdit()
-        self._custom_model_edit.setPlaceholderText("e.g. nvidia/parakeet-tdt-0.6b-v3")
+        self._custom_model_edit.setPlaceholderText(
+            "e.g. sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"
+        )
         self._custom_model_edit.setStyleSheet("font-family: monospace;")
-        self._custom_model_edit.hide()  # Hidden until "Custom model..." is selected
+        self._custom_model_edit.hide()
         model_layout.addRow("", self._custom_model_edit)
 
         self._custom_model_instructions = QLabel(
-            "Enter a valid HuggingFace or NVIDIA model name.\n"
-            "Model will be validated and downloaded on save."
+            "Enter the name of a sherpa-onnx model directory.\n"
+            "Model will be validated on save."
         )
         self._custom_model_instructions.setStyleSheet("color: gray; font-size: 11px;")
         self._custom_model_instructions.setWordWrap(True)
-        self._custom_model_instructions.hide()  # Hidden until "Custom model..." is selected
+        self._custom_model_instructions.hide()
         model_layout.addRow("", self._custom_model_instructions)
 
         self._use_gpu_cb = QCheckBox("Use GPU acceleration (if available)")
         model_layout.addRow("", self._use_gpu_cb)
 
         layout.addWidget(model_group)
+
+        # Download thread reference
+        self._download_thread: Optional[_DownloadThread] = None
 
         reset_btn = QPushButton("Reset All Settings to Defaults")
         reset_btn.clicked.connect(self.reset_requested.emit)
@@ -226,9 +290,18 @@ class ConfigurationTab(QWidget):
         )
         self._model_combo.clear()
 
+        # Add available models from registry with status indicators
+        for model, status in get_all_models_with_status():
+            indicator = "✓" if status == "downloaded" else "↓"
+            display_text = f"{model.id}  {indicator}"
+            self._model_combo.addItem(display_text, model.id)
+
+        # Add installed models not in registry
         installed_models = get_installed_asr_models()
+        registry_ids = {m.id for m in AVAILABLE_MODELS}
         for model in installed_models:
-            self._model_combo.addItem(model, model)
+            if model not in registry_ids:
+                self._model_combo.addItem(f"{model}  ✓", model)
 
         self._model_combo.addItem("Custom model...", _CUSTOM_MODEL_ENTRY)
 
@@ -237,27 +310,97 @@ class ConfigurationTab(QWidget):
             if idx >= 0:
                 self._model_combo.setCurrentIndex(idx)
 
-        self._update_delete_button_state()
+        self._update_button_states()
 
     def refresh_model_list(self) -> None:
         """Public method to refresh the model list. Called after model loading."""
         self._refresh_model_list()
 
-    def _update_delete_button_state(self) -> None:
+    def _update_button_states(self) -> None:
         current_data = self._model_combo.currentData()
         is_custom = current_data == _CUSTOM_MODEL_ENTRY
         is_active_model = current_data == self._settings.model_name
-        self._delete_model_btn.setEnabled(not is_custom and not is_active_model)
+        downloaded = (
+            is_model_downloaded(current_data)
+            if current_data and not is_custom
+            else True
+        )
+
+        # Delete button state
+        self._delete_model_btn.setEnabled(
+            not is_custom and not is_active_model and downloaded
+        )
         if is_active_model and not is_custom:
             self._delete_model_btn.setToolTip("Cannot delete currently active model")
         else:
             self._delete_model_btn.setToolTip("Delete selected model from cache")
 
+        # Download button state
+        self._download_btn.setEnabled(not is_custom and not downloaded)
+        self._download_btn.setVisible(not is_custom)
+
     def _on_model_combo_changed(self, index: int) -> None:
         is_custom = self._model_combo.currentData() == _CUSTOM_MODEL_ENTRY
         self._custom_model_edit.setVisible(is_custom)
         self._custom_model_instructions.setVisible(is_custom)
-        self._update_delete_button_state()
+        self._update_button_states()
+
+    def _on_download_clicked(self) -> None:
+        model_id = self._model_combo.currentData()
+        if not model_id or model_id == _CUSTOM_MODEL_ENTRY:
+            return
+
+        # Show progress UI
+        self._download_progress.setValue(0)
+        self._download_progress.show()
+        self._cancel_download_btn.show()
+        self._download_btn.setEnabled(False)
+        self._model_combo.setEnabled(False)
+
+        # Start download thread
+        self._download_thread = _DownloadThread(model_id)
+        self._download_thread.progress.connect(self._on_download_progress)
+        self._download_thread.status_changed.connect(self._on_download_status)
+        self._download_thread.finished.connect(self._on_download_finished)
+        self._download_thread.error.connect(self._on_download_error)
+        self._download_thread.start()
+
+    def _on_download_progress(self, downloaded: int, total: int) -> None:
+        if total > 0:
+            percent = int((downloaded / total) * 100)
+            self._download_progress.setValue(percent)
+            self._download_progress.setFormat(f"{percent}%")
+
+    def _on_download_status(self, status: str) -> None:
+        self._download_progress.setFormat(status)
+
+    def _on_download_finished(self, success: bool) -> None:
+        self._download_progress.hide()
+        self._cancel_download_btn.hide()
+        self._model_combo.setEnabled(True)
+        self._download_thread = None
+
+        if success:
+            self._refresh_model_list()
+            QMessageBox.information(
+                self, "Download Complete", "Model downloaded successfully!"
+            )
+        self._update_button_states()
+
+    def _on_download_error(self, error_msg: str) -> None:
+        QMessageBox.warning(
+            self, "Download Failed", f"Failed to download model:\n{error_msg}"
+        )
+
+    def _on_cancel_download(self) -> None:
+        if self._download_thread:
+            self._download_thread.cancel()
+            self._cancel_download_btn.setEnabled(False)
+            self._cancel_download_btn.setText("Cancelling...")
+
+    def _update_delete_button_state(self) -> None:
+        # Kept for backwards compatibility, calls new unified method
+        self._update_button_states()
 
     def _on_delete_model_clicked(self) -> None:
         model_name = self._model_combo.currentData()
@@ -354,22 +497,12 @@ class ConfigurationTab(QWidget):
         return True
 
     def _validate_model_name(self, model_name: str) -> bool:
-        if "/" not in model_name or len(model_name.split("/")) != 2:
+        # Basic validation - just ensure it's not empty and looks reasonable
+        if not model_name or len(model_name) < 3:
             QMessageBox.warning(
                 self,
                 "Invalid Model Name",
-                f"Model name '{model_name}' is not in the correct format.\n\n"
-                "Expected format: organization/model-name\n"
-                "Example: nvidia/parakeet-tdt-0.6b-v3 or openai/whisper-large-v3",
-            )
-            return False
-
-        org, model = model_name.split("/")
-        if not org or not model:
-            QMessageBox.warning(
-                self,
-                "Invalid Model Name",
-                "Both organization and model name must be provided.",
+                "Please enter a valid model name.",
             )
             return False
 

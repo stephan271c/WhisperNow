@@ -102,7 +102,7 @@ class Settings(BaseModel):
     instant_type: bool = False
 
     hotkey: HotkeyConfig = Field(default_factory=HotkeyConfig)
-    model_name: str = "nvidia/parakeet-tdt-0.6b-v3"
+    model_name: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
     use_gpu: bool = True
 
     start_minimized: bool = False

@@ -1,4 +1,5 @@
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -207,7 +208,13 @@ class LLMProcessor:
             result_text = response.choices[0].message.content
 
             try:
-                cost = completion_cost(completion_response=response)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Pydantic serializer warnings",
+                        category=UserWarning,
+                    )
+                    cost = completion_cost(completion_response=response)
             except Exception:
                 cost = None
 
