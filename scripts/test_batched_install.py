@@ -28,9 +28,7 @@ def main():
             print(f"PROGRESS: {p.status} ({p.progress*100:.1f}%)")
 
         print("Starting installation...")
-        success, msg = manager.install_dependencies(
-            use_gpu=False, progress_callback=progress_callback
-        )
+        success, msg = manager.install_dependencies(progress_callback=progress_callback)
 
         if success:
             print("\nSUCCESS: Installation completed.")

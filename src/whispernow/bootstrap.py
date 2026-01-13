@@ -60,7 +60,7 @@ def run_dependency_wizard() -> bool:
         "This is a one-time setup that will:\n"
         "• Download PyTorch and speech recognition models\n"
         "• May take 5-15 minutes depending on your connection\n"
-        "• Requires approximately 500 MB - 2.5 GB of disk space\n\n"
+        "• Requires ~8.7 GB of disk space\n\n"
         "Click Next to begin."
     )
     welcome_label.setWordWrap(True)

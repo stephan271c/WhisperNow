@@ -40,7 +40,7 @@ uv sync
 
 # Run the application
 source .venv/bin/activate
-uv run python -m src.whispernow.app
+uv run python -m src.whispernow.bootstrap
 ```
 
 ### Pre-built Releases
@@ -155,10 +155,12 @@ Define custom word/phrase replacements. Useful for:
 
 ```
 whispernow/
-├── src/transcribe/
+├── src/whispernow/
 │   ├── app.py                # Application entry point
+│   ├── bootstrap.py          # Dependency check & setup wizard
 │   ├── core/
 │   │   ├── asr/              # Speech recognition backends
+│   │   ├── deps/             # Dependency management & installation
 │   │   ├── audio/            # Audio recording
 │   │   ├── input/            # Hotkey handling
 │   │   ├── output/           # Text output controller
@@ -168,6 +170,7 @@ whispernow/
 │   │   ├── main_window.py    # Settings window
 │   │   ├── tray.py           # System tray icon
 │   │   ├── setup_wizard.py   # First-run wizard
+│   │   ├── dependency_setup_page.py # Installation UI
 │   │   ├── recording_toast.py    # Recording indicator
 │   │   └── tabs/             # Settings tabs
 │   └── utils/
@@ -197,7 +200,7 @@ uv run pytest
 uv run pytest -m "not slow"
 
 # Run with coverage
-uv run pytest --cov=src/transcribe
+uv run pytest --cov=src/whispernow
 ```
 
 ### Building Distributables
@@ -208,9 +211,9 @@ uv run python scripts/build.py
 ```
 
 **Output locations:**
-- Windows: `build/transcribe/windows/app/` + `installer-output/*.exe`
-- macOS: `build/transcribe/macos/app/WhisperNow.app` + `*.dmg`
-- Linux: `build/transcribe/linux/appimage/*.AppImage`
+- Windows: `build/whispernow/windows/app/` + `installer-output/*.exe`
+- macOS: `build/whispernow/macos/app/WhisperNow.app` + `*.dmg`
+- Linux: `build/whispernow/linux/appimage/*.AppImage`
 
 ### CI/CD
 
@@ -229,14 +232,20 @@ Tagged releases (`v*`) automatically create draft GitHub releases with all platf
 
 ## Dependencies
 
-### Core
+### Core (Bundled)
+These packages are included in the lightweight installer:
 | Package | Purpose |
 |---------|---------|
 | PySide6 | Qt-based GUI framework |
-| nemo-toolkit | NVIDIA NeMo ASR models |
-| torch / torchaudio | Neural network inference |
 | pynput | Global hotkey capture |
 | sounddevice | Audio recording |
+
+### Machine Learning (Downloaded on First Run)
+These heavy dependencies are downloaded automatically by the setup wizard:
+| Package | Purpose |
+|---------|---------|
+| torch / torchaudio | Neural network inference |
+| nemo-toolkit | NVIDIA NeMo ASR models |
 | litellm | Unified LLM API client |
 
 ### Optional
