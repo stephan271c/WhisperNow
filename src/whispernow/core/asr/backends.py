@@ -17,7 +17,6 @@ from enum import Enum, auto
 from typing import Callable, Optional
 
 import numpy as np
-import scipy.io.wavfile as wav
 
 
 class BackendType(Enum):
@@ -138,6 +137,8 @@ class NeMoBackend(ASRBackend):
     def transcribe(
         self, audio_data: np.ndarray, sample_rate: int = 16000
     ) -> TranscriptionResult:
+        import scipy.io.wavfile as wav
+
         if self._model is None:
             raise RuntimeError("Model not loaded. Call load() first.")
 
