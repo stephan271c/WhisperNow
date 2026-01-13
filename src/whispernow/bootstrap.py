@@ -15,16 +15,14 @@ def setup_path() -> None:
 
 
 def check_dependencies_available() -> bool:
-    setup_path()
     try:
-        import importlib.util
+        from whispernow.core.deps import DependencyManager
 
-        required_modules = ["torch", "nemo"]
-        for module in required_modules:
-            if importlib.util.find_spec(module) is None:
-                return False
-        return True
-    except Exception:
+        manager = DependencyManager()
+        return manager.check_dependencies_installed()
+    except Exception as e:
+        # Fallback only if absolutely necessary, but generally we want to fail open to wizard
+        print(f"Error checking dependencies: {e}")
         return False
 
 

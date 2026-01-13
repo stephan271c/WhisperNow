@@ -45,16 +45,11 @@ class ModelLoaderThread(QThread):
                 on_download_progress=self._on_progress,
             )
 
-            success = self._engine.load_model()
+            self._engine.load_model()
 
-            if success:
-                message = f"Model loaded on {self._engine.device.upper()}"
-                logger.info(f"Background model loading complete: {message}")
-                self.finished.emit(True, message)
-            else:
-                message = "Failed to load model"
-                logger.error(f"Background model loading failed")
-                self.finished.emit(False, message)
+            message = f"Model loaded on {self._engine.device.upper()}"
+            logger.info(f"Background model loading complete: {message}")
+            self.finished.emit(True, message)
 
         except Exception as e:
             message = f"Error loading model: {e}"

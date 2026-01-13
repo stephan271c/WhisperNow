@@ -124,31 +124,29 @@ class TranscriptionEngine:
 
         Returns:
             True if model loaded successfully, False otherwise.
+
+        Raises:
+            Exception: If model loading fails.
         """
         if self._backend is not None and self._backend.is_loaded:
             return True
 
-        try:
-            self._set_state(
-                EngineState.LOADING,
-                f"Loading {self.backend_name} model: {self.model_name}...",
-            )
-            self._backend = create_backend(self._backend_type)
-            self._backend.load(
-                model_name=self.model_name,
-                use_gpu=self.use_gpu,
-                on_progress=self.on_download_progress,
-            )
+        self._set_state(
+            EngineState.LOADING,
+            f"Loading {self.backend_name} model: {self.model_name}...",
+        )
+        self._backend = create_backend(self._backend_type)
+        self._backend.load(
+            model_name=self.model_name,
+            use_gpu=self.use_gpu,
+            on_progress=self.on_download_progress,
+        )
 
-            self._set_state(
-                EngineState.READY,
-                f"Model loaded on {self._backend.device.upper()} ({self.backend_name})",
-            )
-            return True
-
-        except Exception as e:
-            self._set_state(EngineState.ERROR, f"Failed to load model: {e}")
-            return False
+        self._set_state(
+            EngineState.READY,
+            f"Model loaded on {self._backend.device.upper()} ({self.backend_name})",
+        )
+        return True
 
     def transcribe(
         self, audio_data: np.ndarray, sample_rate: int = 16000
@@ -164,7 +162,10 @@ class TranscriptionEngine:
             Transcribed text, or None if transcription failed.
         """
         if not self.is_ready:
-            if not self.load_model():
+            try:
+                self.load_model()
+            except Exception as e:
+                self._set_state(EngineState.ERROR, f"Failed to load model: {e}")
                 return None
 
         self._set_state(EngineState.PROCESSING, "Transcribing...")
@@ -251,7 +252,10 @@ class TranscriptionEngine:
             or None if transcription failed.
         """
         if not self.is_ready:
-            if not self.load_model():
+            try:
+                self.load_model()
+            except Exception as e:
+                self._set_state(EngineState.ERROR, f"Failed to load model: {e}")
                 return None
 
         self._set_state(EngineState.PROCESSING, "Transcribing...")
