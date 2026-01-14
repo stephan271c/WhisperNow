@@ -4,6 +4,7 @@ Model registry for available sherpa-onnx ASR models.
 Provides a curated list of models available for download from GitHub releases.
 """
 
+import json
 import os
 from dataclasses import dataclass
 from typing import List, Literal
@@ -19,23 +20,27 @@ GITHUB_RELEASE_BASE = (
 class ModelInfo:
     id: str
     name: str
-    size_mb: int
-    description: str
 
     @property
     def url(self) -> str:
         return f"{GITHUB_RELEASE_BASE}/{self.id}.tar.bz2"
 
 
-# Curated list of models - add more as needed
-AVAILABLE_MODELS: List[ModelInfo] = [
-    ModelInfo(
-        id="sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16",
-        name="Parakeet TDT 0.6B (FP16)",
-        size_mb=1200,
-        description="High-quality English ASR model",
-    ),
-]
+def load_models() -> List[ModelInfo]:
+    """Load models from models.json in the same directory."""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        json_path = os.path.join(current_dir, "models.json")
+
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return [ModelInfo(**item) for item in data]
+    except Exception as e:
+        print(f"Error loading models.json: {e}")
+        return []
+
+
+AVAILABLE_MODELS: List[ModelInfo] = load_models()
 
 
 DownloadStatus = Literal["downloaded", "not_downloaded"]
@@ -56,7 +61,6 @@ def is_model_downloaded(model_id: str) -> bool:
     if not os.path.isdir(model_path):
         return False
 
-    # Check for required files
     has_tokens = os.path.exists(os.path.join(model_path, "tokens.txt"))
     has_encoder = (
         os.path.exists(os.path.join(model_path, "encoder.onnx"))

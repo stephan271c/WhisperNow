@@ -18,7 +18,6 @@ class TestModelRegistry:
         for model in AVAILABLE_MODELS:
             assert model.id
             assert model.name
-            assert model.size_mb > 0
             assert model.url.startswith("https://")
             assert model.url.endswith(".tar.bz2")
 

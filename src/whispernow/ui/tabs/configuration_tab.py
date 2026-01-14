@@ -288,7 +288,7 @@ class ConfigurationTab(QWidget):
         # Add available models from registry with status indicators
         for model, status in get_all_models_with_status():
             indicator = "✓" if status == "downloaded" else "↓"
-            display_text = f"{model.id}  {indicator}"
+            display_text = f"{model.name}  {indicator}"
             self._model_combo.addItem(display_text, model.id)
 
         # Add installed models not in registry
