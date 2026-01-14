@@ -1,5 +1,3 @@
-"""Application runtime."""
-
 import signal
 import sys
 from datetime import datetime
@@ -8,29 +6,29 @@ from typing import Optional, Tuple
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication
 
-from whispernow import __app_name__, __version__
-from whispernow.core.asr import (
+from . import __app_name__, __version__
+from .core.asr import (
     EngineState,
     ModelLoaderThread,
     TranscriptionEngine,
     TranscriptionWorkerThread,
 )
-from whispernow.core.audio import AudioRecorder
-from whispernow.core.input import HotkeyListener
-from whispernow.core.output import TextOutputController
-from whispernow.core.settings import (
+from .core.audio import AudioRecorder
+from .core.input import HotkeyListener
+from .core.output import TextOutputController
+from .core.settings import (
     TranscriptionRecord,
     add_history_record,
     get_settings,
 )
-from whispernow.core.transcript_processor import LLMProcessor
-from whispernow.ui.download_dialog import DownloadDialog
-from whispernow.ui.main_window import SettingsWindow
-from whispernow.ui.recording_toast import RecordingToast
-from whispernow.ui.setup_wizard import SetupWizard
-from whispernow.ui.tray import SystemTray, TrayStatus
-from whispernow.utils.logger import get_logger
-from whispernow.utils.platform import check_and_request_permissions, set_autostart
+from .core.transcript_processor import LLMProcessor
+from .ui.download_dialog import DownloadDialog
+from .ui.main_window import SettingsWindow
+from .ui.recording_toast import RecordingToast
+from .ui.setup_wizard import SetupWizard
+from .ui.tray import SystemTray, TrayStatus
+from .utils.logger import get_logger
+from .utils.platform import check_and_request_permissions, set_autostart
 
 logger = get_logger(__name__)
 
@@ -213,13 +211,6 @@ class TranscribeApp(QObject):
     def _apply_enhancement(
         self, text: str
     ) -> Tuple[str, Optional[str], Optional[str], Optional[float]]:
-        """
-        Apply the active enhancement to the text, if configured.
-
-        Returns:
-            Tuple of (final_text, enhanced_text, enhancement_name, cost_usd).
-            If no enhancement applied, enhanced_text/enhancement_name/cost will be None.
-        """
         if not self._llm_processor:
             return text, None, None, None
 
