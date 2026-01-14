@@ -1,9 +1,3 @@
-"""
-Model downloader for sherpa-onnx ASR models.
-
-Downloads models from GitHub releases as tar.bz2 archives and extracts them.
-"""
-
 import os
 import tarfile
 import tempfile
@@ -20,8 +14,6 @@ StatusCallback = Callable[[str], None]
 
 
 class ModelDownloader:
-    """Downloads and extracts sherpa-onnx models from GitHub releases."""
-
     def __init__(self):
         self._cancelled = False
         self._logger = get_logger(__name__)
@@ -32,17 +24,6 @@ class ModelDownloader:
         on_progress: Optional[ProgressCallback] = None,
         on_status: Optional[StatusCallback] = None,
     ) -> bool:
-        """
-        Download and extract a model.
-
-        Args:
-            model_id: The model ID to download
-            on_progress: Callback with (bytes_downloaded, total_bytes)
-            on_status: Callback with status message (e.g. "Downloading", "Extracting files...")
-
-        Returns:
-            True if successful, False if cancelled or failed
-        """
         self._cancelled = False
 
         model_info = get_model_by_id(model_id)
@@ -102,5 +83,4 @@ class ModelDownloader:
                 os.unlink(tmp_path)
 
     def cancel(self) -> None:
-        """Cancel the current download."""
         self._cancelled = True

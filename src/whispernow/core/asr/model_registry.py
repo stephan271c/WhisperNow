@@ -1,9 +1,3 @@
-"""
-Model registry for available sherpa-onnx ASR models.
-
-Provides a curated list of models available for download from GitHub releases.
-"""
-
 import json
 import os
 from dataclasses import dataclass
@@ -27,7 +21,6 @@ class ModelInfo:
 
 
 def load_models() -> List[ModelInfo]:
-    """Load models from models.json in the same directory."""
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         json_path = os.path.join(current_dir, "models.json")
@@ -54,7 +47,6 @@ def get_model_by_id(model_id: str) -> ModelInfo | None:
 
 
 def is_model_downloaded(model_id: str) -> bool:
-    """Check if a model is downloaded and valid."""
     models_dir = get_models_dir()
     model_path = os.path.join(models_dir, model_id)
 
@@ -76,5 +68,4 @@ def get_model_download_status(model_id: str) -> DownloadStatus:
 
 
 def get_all_models_with_status() -> List[tuple[ModelInfo, DownloadStatus]]:
-    """Get all available models with their download status."""
     return [(model, get_model_download_status(model.id)) for model in AVAILABLE_MODELS]

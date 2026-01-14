@@ -1,9 +1,3 @@
-"""
-Background model loading thread.
-
-Provides async model loading to keep the UI responsive during model initialization.
-"""
-
 from PySide6.QtCore import QThread, Signal
 
 from ...utils.logger import get_logger
@@ -13,15 +7,6 @@ logger = get_logger(__name__)
 
 
 class ModelLoaderThread(QThread):
-    """
-    Background thread for loading ASR models without blocking the UI.
-
-    Signals:
-        finished: Emitted when loading completes (success: bool, message: str)
-        progress: Emitted during download progress (value: float 0.0-1.0)
-        state_changed: Emitted when engine state changes (state: EngineState, message: str)
-    """
-
     finished = Signal(bool, str)
     progress = Signal(float)
     state_changed = Signal(EngineState, str)
@@ -60,9 +45,4 @@ class ModelLoaderThread(QThread):
 
     @property
     def engine(self) -> TranscriptionEngine:
-        """
-        Get the loaded TranscriptionEngine.
-
-        Only valid after the finished signal is emitted with success=True.
-        """
         return self._engine

@@ -34,20 +34,6 @@ class EngineState(Enum):
 
 
 class TranscriptionEngine:
-    """
-    Manages ASR model loading and transcription with pluggable backends.
-
-    The model is downloaded on first use and cached locally.
-    Emits callbacks for state changes and progress updates.
-
-    Uses Sherpa-ONNX as the ASR backend with pre-trained models.
-
-    Example:
-        engine = TranscriptionEngine(
-            model_name="sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
-        )
-    """
-
     def __init__(
         self,
         model_name: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
@@ -55,15 +41,6 @@ class TranscriptionEngine:
         on_state_change: Optional[Callable[[EngineState, str], None]] = None,
         on_download_progress: Optional[Callable[[float], None]] = None,
     ):
-        """
-        Initialize the transcription engine.
-
-        Args:
-            model_name: HuggingFace model name or local path
-            backend_type: ASR backend to use (AUTO, NEMO, or HUGGINGFACE)
-            on_state_change: Callback for state changes (state, message)
-            on_download_progress: Callback for download progress (0.0-1.0)
-        """
         self.model_name = model_name
         self.on_state_change = on_state_change
         self.on_download_progress = on_download_progress
@@ -108,15 +85,6 @@ class TranscriptionEngine:
             self.on_state_change(state, message)
 
     def load_model(self) -> bool:
-        """
-        Load the ASR model. Downloads if not cached.
-
-        Returns:
-            True if model loaded successfully, False otherwise.
-
-        Raises:
-            Exception: If model loading fails.
-        """
         if self._backend is not None and self._backend.is_loaded:
             return True
 
@@ -139,16 +107,6 @@ class TranscriptionEngine:
     def transcribe(
         self, audio_data: np.ndarray, sample_rate: int = 16000
     ) -> Optional[str]:
-        """
-        Transcribe audio data to text.
-
-        Args:
-            audio_data: Numpy array of audio samples
-            sample_rate: Sample rate of the audio
-
-        Returns:
-            Transcribed text, or None if transcription failed.
-        """
         if not self.is_ready:
             try:
                 self.load_model()
@@ -189,21 +147,7 @@ class TranscriptionEngine:
     def transcribe_chunked(
         self, audio_data: np.ndarray, sample_rate: int = 16000
     ) -> Optional[str]:
-        """
-        Transcribe audio data, automatically chunking if too long.
-
-        For audio over 30 seconds, splits into smaller chunks using
-        silence detection for optimal split points, transcribes each
-        chunk, and combines the results.
-
-        Args:
-            audio_data: Numpy array of audio samples
-            sample_rate: Sample rate of the audio
-
-        Returns:
-            Transcribed text, or None if transcription failed.
-        """
-        # Check if chunking is needed
+        """Transcribe audio, automatically chunking if over 30 seconds."""
         if not needs_chunking(audio_data, sample_rate):
             return self.transcribe(audio_data, sample_rate)
 
@@ -228,17 +172,7 @@ class TranscriptionEngine:
     def transcribe_with_metadata(
         self, audio_data: np.ndarray, sample_rate: int = 16000
     ) -> Optional[TranscriptionResult]:
-        """
-        Transcribe audio data and return full result with metadata.
-
-        Args:
-            audio_data: Numpy array of audio samples
-            sample_rate: Sample rate of the audio
-
-        Returns:
-            TranscriptionResult with text, confidence, and timestamps,
-            or None if transcription failed.
-        """
+        """Transcribe audio and return TranscriptionResult with metadata."""
         if not self.is_ready:
             try:
                 self.load_model()
@@ -283,32 +217,14 @@ class TranscriptionEngine:
     def switch_model(
         self, model_name: str, backend_type: BackendType = BackendType.AUTO
     ) -> bool:
-        """
-        Switch to a different model (unloads current model first).
-
-        Args:
-            model_name: New model to load
-            backend_type: Backend type for the new model
-
-        Returns:
-            True if switch was successful, False otherwise.
-        """
         self.unload()
-
         self.model_name = model_name
         if backend_type == BackendType.AUTO:
             self._backend_type = detect_backend_type(model_name)
         else:
             self._backend_type = backend_type
-
         return self.load_model()
 
     def is_model_cached(self) -> bool:
-        """
-        Check if the model is already downloaded/cached.
-
-        Returns:
-            True if model files exist locally.
-        """
         backend = create_backend(self._backend_type, self.model_name)
         return backend.is_model_cached(self.model_name)

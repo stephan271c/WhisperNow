@@ -30,12 +30,10 @@ from ...core.asr.model_utils import delete_asr_model, get_installed_asr_models
 from ...core.audio import AudioRecorder
 from ...core.settings import HotkeyConfig, Settings
 
-# Special value for custom model entry in combo box
 _CUSTOM_MODEL_ENTRY = "__custom_model__"
 
 
 class _DownloadThread(QThread):
-    """Background thread for downloading models."""
 
     progress = Signal(int, int)  # bytes_downloaded, total_bytes
     status_changed = Signal(str)  # status message
@@ -241,7 +239,6 @@ class ConfigurationTab(QWidget):
 
         model_layout.addRow("Model:", model_row_layout)
 
-        # Download progress bar
         self._download_progress = QProgressBar()
         self._download_progress.setRange(0, 100)
         self._download_progress.hide()
@@ -271,7 +268,6 @@ class ConfigurationTab(QWidget):
 
         layout.addWidget(model_group)
 
-        # Download thread reference
         self._download_thread: Optional[_DownloadThread] = None
 
         reset_btn = QPushButton("Reset All Settings to Defaults")
@@ -285,13 +281,11 @@ class ConfigurationTab(QWidget):
         )
         self._model_combo.clear()
 
-        # Add available models from registry with status indicators
         for model, status in get_all_models_with_status():
             indicator = "✓" if status == "downloaded" else "↓"
             display_text = f"{model.name}  {indicator}"
             self._model_combo.addItem(display_text, model.id)
 
-        # Add installed models not in registry
         installed_models = get_installed_asr_models()
         registry_ids = {m.id for m in AVAILABLE_MODELS}
         for model in installed_models:
@@ -308,7 +302,6 @@ class ConfigurationTab(QWidget):
         self._update_button_states()
 
     def refresh_model_list(self) -> None:
-        """Public method to refresh the model list. Called after model loading."""
         self._refresh_model_list()
 
     def _update_button_states(self) -> None:
@@ -321,7 +314,6 @@ class ConfigurationTab(QWidget):
             else True
         )
 
-        # Delete button state
         self._delete_model_btn.setEnabled(
             not is_custom and not is_active_model and downloaded
         )
@@ -330,7 +322,6 @@ class ConfigurationTab(QWidget):
         else:
             self._delete_model_btn.setToolTip("Delete selected model from cache")
 
-        # Download button state
         self._download_btn.setEnabled(not is_custom and not downloaded)
         self._download_btn.setVisible(not is_custom)
 
@@ -345,14 +336,12 @@ class ConfigurationTab(QWidget):
         if not model_id or model_id == _CUSTOM_MODEL_ENTRY:
             return
 
-        # Show progress UI
         self._download_progress.setValue(0)
         self._download_progress.show()
         self._cancel_download_btn.show()
         self._download_btn.setEnabled(False)
         self._model_combo.setEnabled(False)
 
-        # Start download thread
         self._download_thread = _DownloadThread(model_id)
         self._download_thread.progress.connect(self._on_download_progress)
         self._download_thread.status_changed.connect(self._on_download_status)
@@ -394,7 +383,6 @@ class ConfigurationTab(QWidget):
             self._cancel_download_btn.setText("Cancelling...")
 
     def _update_delete_button_state(self) -> None:
-        # Kept for backwards compatibility, calls new unified method
         self._update_button_states()
 
     def _on_delete_model_clicked(self) -> None:
@@ -426,7 +414,6 @@ class ConfigurationTab(QWidget):
     def _load_model_selection(self, model_name: str) -> None:
         idx = self._model_combo.findData(model_name)
         if idx >= 0:
-            # Model is in the list, select it
             self._model_combo.setCurrentIndex(idx)
         else:
             custom_idx = self._model_combo.findData(_CUSTOM_MODEL_ENTRY)
@@ -488,7 +475,6 @@ class ConfigurationTab(QWidget):
         return True
 
     def _validate_model_name(self, model_name: str) -> bool:
-        # Basic validation - just ensure it's not empty and looks reasonable
         if not model_name or len(model_name) < 3:
             QMessageBox.warning(
                 self,

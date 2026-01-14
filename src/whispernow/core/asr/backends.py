@@ -1,9 +1,3 @@
-"""
-ASR Backend Abstraction Layer.
-
-Provides a unified interface for ASR using Sherpa-ONNX.
-"""
-
 import logging
 import os
 from abc import ABC, abstractmethod

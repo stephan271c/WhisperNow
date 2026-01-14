@@ -19,13 +19,6 @@ logger = get_logger(__name__)
 
 
 class TextOutputController:
-    """
-    Controller for outputting transcribed text to the active application.
-
-    Supports two modes:
-    - Instant paste: Uses clipboard + Ctrl/Cmd+V for fast output
-    - Character typing: Types one character at a time for natural appearance
-    """
 
     def __init__(self, on_complete: Optional[Callable[[], None]] = None):
         self._keyboard = KeyboardController()

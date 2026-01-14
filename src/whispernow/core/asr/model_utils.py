@@ -1,9 +1,3 @@
-"""
-Utility functions for ASR model management.
-
-Provides functions to discover installed/cached ASR models.
-"""
-
 import os
 from typing import List
 
@@ -11,9 +5,6 @@ from .backends import get_models_dir
 
 
 def get_installed_asr_models() -> List[str]:
-    """
-    Get list of installed ASR models from the local models directory.
-    """
     models_dir = get_models_dir()
 
     if not os.path.exists(models_dir):
@@ -36,9 +27,6 @@ def get_installed_asr_models() -> List[str]:
 
 
 def delete_asr_model(model_name: str) -> tuple[bool, str]:
-    """
-    Delete an ASR model from the local models directory.
-    """
     import shutil
 
     models_dir = get_models_dir()
