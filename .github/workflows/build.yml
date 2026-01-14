@@ -51,6 +51,7 @@ jobs:
     - name: Run Tests
       env:
         QT_QPA_PLATFORM: offscreen
+        PYNPUT_BACKEND: dummy
       run: uv run pytest -v
 
   # ============================================================================
