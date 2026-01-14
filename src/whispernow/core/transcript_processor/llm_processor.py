@@ -62,36 +62,40 @@ def get_models_for_provider(provider: str) -> List[str]:
         return _get_fallback_models(provider)
 
 
+from typing import List
+
+
 def _get_fallback_models(provider: str) -> List[str]:
     models = {
         "openai": [
-            "gpt-4o-mini",
+            "gpt-5.2",
+            "gpt-5-nano",
             "gpt-4o",
-            "gpt-4-turbo",
-            "gpt-3.5-turbo",
-            "o1-preview",
-            "o1-mini",
+            "o3",
+            "o4-mini",
         ],
         "anthropic": [
+            "claude-sonnet-4-5-20250929",
+            "claude-opus-4-5-20251101",
+            "claude-haiku-4-5-20251001",
             "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
-            "claude-3-opus-20240229",
         ],
         "openrouter": [
             "openrouter/auto",
-            "openrouter/anthropic/claude-3.5-sonnet",
-            "openrouter/openai/gpt-4o",
+            "openrouter/openai/gpt-5.2",
+            "openrouter/anthropic/claude-sonnet-4.5",
+            "openrouter/google/gemini-3-flash",
         ],
         "ollama": [
-            "ollama/llama3.2",
+            "ollama/llama3.3",
+            "ollama/gemma3",
             "ollama/mistral",
-            "ollama/codellama",
-            "ollama/phi3",
+            "ollama/phi4",
         ],
         "gemini": [
-            "gemini/gemini-2.0-flash",
-            "gemini/gemini-1.5-flash",
-            "gemini/gemini-1.5-pro",
+            "gemini/gemini-3-flash",
+            "gemini/gemini-3-pro",
+            "gemini/gemini-2.5-flash",
         ],
     }
     return models.get(provider, [])

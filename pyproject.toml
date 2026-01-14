@@ -9,7 +9,7 @@ dependencies = [
     "platformdirs>=4.5.1",
     "pydantic>=2.12.5",
     "pynput>=1.8.1",
-    "PySide6>=6.6.0",
+    "PySide6-Essentials>=6.6.0",
     "sounddevice>=0.5.3",
     "numpy>=1.26.0",
     "sherpa-onnx>=1.12.21",
@@ -66,13 +66,14 @@ description = "Push-to-talk speech transcription desktop app"
 sources = ["src/whispernow"]
 icon = ""
 requires = [
-    # Core deps only - ML deps downloaded at runtime
     "platformdirs>=4.5.1",
     "pydantic>=2.12.5",
     "pynput>=1.8.1",
-    "PySide6>=6.6.0",
+    "PySide6-Essentials>=6.6.0",
     "sounddevice>=0.5.3",
     "numpy>=1.26.0",
+    "sherpa-onnx>=1.12.21",
+    "litellm>=1.80.16",
 ]
 
 [tool.briefcase.app.whispernow.macOS]

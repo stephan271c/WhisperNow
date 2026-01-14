@@ -2,15 +2,14 @@
 
 **Push-to-talk speech transcription for desktop** – fast, private, and cross-platform.
 
-WhisperNow is a desktop application that transcribes your speech in real-time with a simple push-to-talk hotkey. It runs locally using NVIDIA NeMo and HuggingFace ASR models, keeping your voice data private while delivering high-quality transcriptions.
+WhisperNow is a desktop application that transcribes your speech in real-time with a simple push-to-talk hotkey. It runs locally using Sherpa-ONNX ASR models, keeping your voice data private while delivering high-quality transcriptions.
 
 ---
 
 ## Features
 
 - **Push-to-Talk Recording** – Hold a customizable hotkey to record, release to transcribe
-- **High-Quality ASR** – Uses NVIDIA NeMo and HuggingFace ASR models
-- **GPU Acceleration** – CUDA support for fast transcription on compatible hardware
+- **High-Quality ASR** – Uses Sherpa-ONNX models including NVIDIA Parakeet and OpenAI Whisper
 - **System Tray Integration** – Runs quietly in the background
 - **LLM Enhancement** – Optional post-processing via OpenAI, Anthropic, Google, or local Ollama
 - **Vocabulary Replacement** – Define custom word/phrase substitutions
@@ -26,7 +25,6 @@ WhisperNow is a desktop application that transcribes your speech in real-time wi
 
 - **Python 3.12+**
 - **uv** package manager ([install uv](https://github.com/astral-sh/uv))
-- **CUDA** (optional, for GPU acceleration)
 
 ### From Source
 
@@ -74,7 +72,7 @@ graph TD
 ## Quick Start
 
 1. **Launch WhisperNow** – The app starts in the system tray
-2. **Wait for model loading** – First run downloads the ASR model
+2. **Wait for model download** – First run downloads the ASR model (~500MB-2GB depending on model)
 3. **Press and hold** your hotkey (default: `Ctrl+Shift`) to record
 4. **Release** to transcribe – text is automatically typed into the active window
 
@@ -83,7 +81,7 @@ graph TD
 On first launch, a setup wizard guides you through:
 - Microphone permission requests
 - Hotkey configuration
-- GPU/CPU selection
+- Model selection
 
 ---
 
@@ -91,23 +89,24 @@ On first launch, a setup wizard guides you through:
 
 ### ASR Models
 
-WhisperNow supports Nvidia NeMo and HuggingFace pipeline compatible ASR models, including OpenAI Whisper models. We recommend using parakeet-tdt-0.6b-v3 for the best performance.
+WhisperNow uses Sherpa-ONNX for fast, efficient speech recognition. Models are automatically downloaded from GitHub on first use.
 
 | Model | Description |
 |-------|-------------|
-| `nvidia/parakeet-tdt-0.6b-v3` | NVIDIA NeMo ASR model |
-| `nvidia/canary-1b-v2` | NVIDIA NeMo ASR model |
-| `openai/whisper-large-v3-turbo` | OpenAI Whisper model |
-| `openai/whisper-small` | OpenAI Whisper model |
+| `Parakeet TDT 0.6B (FP16)` | NVIDIA Parakeet - Best accuracy, larger size |
+| `Parakeet TDT 0.6B (Int8)` | NVIDIA Parakeet - Quantized, smaller size |
+| `Whisper Distil Large v3.5` | Distilled Whisper - Good balance of speed/accuracy |
+| `Whisper Small` | OpenAI Whisper Small - Moderate size |
+| `Whisper Tiny` | OpenAI Whisper Tiny - Fastest, smallest |
+| `Whisper Large v3` | OpenAI Whisper Large - High accuracy |
 
 ### LLM Models
 
-WhisperNow uses litellm to interface with LLMs. You can use any LLM that litellm supports. Since the llm is used for simple post-processing, we recommend using a small model.
+WhisperNow uses litellm to interface with LLMs. You can use any LLM that litellm supports. Since the LLM is used for simple post-processing, we recommend using a small model.
 
 | Model | Description |
 |-------|-------------|
 | `ollama/gemma3:1b` | Ollama Google Gemma model |
-nvidia/nemotron-3-nano-30b-a3b:free` | OpenRouter model |
 | `openai/gpt-5-nano` | OpenAI GPT-5 nano model |
 | `anthropic/claude-sonnet-4-5` | Anthropic Claude model |
 | `gemini/gemini-flash-latest` | Google Gemini model |
@@ -126,7 +125,6 @@ Access settings by clicking the tray icon → **Settings**.
 | Sample Rate | Audio sample rate (default: 16000 Hz) |
 | Input Device | Select microphone |
 | ASR Model | Select from available ASR models |
-| Use GPU | Enable CUDA acceleration |
 
 ### Mode Tab
 Configure optional LLM post-processing:
@@ -157,11 +155,10 @@ Define custom word/phrase replacements. Useful for:
 whispernow/
 ├── src/whispernow/
 │   ├── app.py                # Application entry point
-│   ├── bootstrap.py          # Dependency check & setup wizard
+│   ├── bootstrap.py          # Bootstrap & entry point
 │   ├── core/
-│   │   ├── asr/              # Speech recognition backends
-│   │   ├── deps/             # Dependency management & installation
-│   │   ├── audio/            # Audio recording
+│   │   ├── asr/              # Speech recognition (Sherpa-ONNX)
+│   │   ├── audio/            # Audio recording & processing
 │   │   ├── input/            # Hotkey handling
 │   │   ├── output/           # Text output controller
 │   │   ├── settings/         # Configuration management
@@ -170,7 +167,7 @@ whispernow/
 │   │   ├── main_window.py    # Settings window
 │   │   ├── tray.py           # System tray icon
 │   │   ├── setup_wizard.py   # First-run wizard
-│   │   ├── dependency_setup_page.py # Installation UI
+│   │   ├── download_dialog.py    # Model download dialog
 │   │   ├── recording_toast.py    # Recording indicator
 │   │   └── tabs/             # Settings tabs
 │   └── utils/
@@ -232,32 +229,24 @@ Tagged releases (`v*`) automatically create draft GitHub releases with all platf
 
 ## Dependencies
 
-### Core (Bundled)
-These packages are included in the lightweight installer:
+### Core
 | Package | Purpose |
 |---------|---------|
-| PySide6 | Qt-based GUI framework |
+| PySide6-Essentials | Qt-based GUI framework |
 | pynput | Global hotkey capture |
 | sounddevice | Audio recording |
-
-### Machine Learning (Downloaded on First Run)
-These heavy dependencies are downloaded automatically by the setup wizard:
-| Package | Purpose |
-|---------|---------|
-| torch / torchaudio | Neural network inference |
-| nemo-toolkit | NVIDIA NeMo ASR models |
+| sherpa-onnx | ASR inference engine |
 | litellm | Unified LLM API client |
-
-### Optional
-| Package | Purpose |
-|---------|---------|
-| transformers + accelerate | HuggingFace model backend |
+| pydantic | Settings validation |
+| platformdirs | Cross-platform paths |
+| numpy | Numerical operations |
 
 ### Development
 | Package | Purpose |
 |---------|---------|
 | pytest + pytest-qt | Testing framework |
 | briefcase | Application bundling |
+| black + isort | Code formatting |
 
 ---
 
@@ -292,5 +281,3 @@ These heavy dependencies are downloaded automatically by the setup wizard:
 ## License
 
 This project is licensed under the MIT License
-
-

@@ -57,7 +57,7 @@ class TranscribeApp(QObject):
             on_audio_spectrum=self._capture_audio_spectrum,
         )
         self._transcriber = TranscriptionEngine(
-            model_name=self._settings.model_name,
+            model_name=self._settings.model_id,
             on_state_change=self._on_engine_state_change,
             on_download_progress=self._on_download_progress,
         )
@@ -109,7 +109,7 @@ class TranscribeApp(QObject):
 
     def _show_download_dialog(self) -> None:
         if self._download_dialog is None:
-            self._download_dialog = DownloadDialog(model_name=self._settings.model_name)
+            self._download_dialog = DownloadDialog(model_name=self._settings.model_id)
             self._download_dialog.cancelled.connect(self._on_download_cancelled)
         self._download_dialog.show()
 
@@ -304,17 +304,17 @@ class TranscribeApp(QObject):
 
         self._init_llm_processor()
 
-        model_changed = old_model != self._settings.model_name
+        model_changed = old_model != self._settings.model_id
         if model_changed:
             logger.info(
-                f"Reloading transcription engine (model: {old_model} -> {self._settings.model_name})"
+                f"Reloading transcription engine (model: {old_model} -> {self._settings.model_id})"
             )
             self._transcriber.unload()
 
             if self._settings_window is not None:
                 self._settings_window.set_loading(True)
 
-            self._start_model_loading(self._settings.model_name)
+            self._start_model_loading(self._settings.model_id)
 
         set_autostart(self._settings.auto_start_on_login, "WhisperNow")
 
@@ -372,7 +372,7 @@ class TranscribeApp(QObject):
     def run(self) -> None:
         logger.info(f"Starting {__app_name__} v{__version__}")
         logger.info(
-            f"Settings: model={self._settings.model_name}, sample_rate={self._settings.sample_rate}"
+            f"Settings: model={self._settings.model_id}, sample_rate={self._settings.sample_rate}"
         )
 
         logger.info(
@@ -390,7 +390,7 @@ class TranscribeApp(QObject):
 
     def _start_deferred_model_loading(self) -> None:
         logger.info("Starting deferred transcription model loading...")
-        self._start_model_loading(self._settings.model_name)
+        self._start_model_loading(self._settings.model_id)
 
 
 def main():
