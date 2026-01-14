@@ -96,18 +96,16 @@ class TestAudioRecorderState:
         mock_stream.stop.assert_called_once()
         mock_stream.close.assert_called_once()
 
-    @patch("src.whispernow.core.audio.recorder.sd.query_devices")
     @patch("src.whispernow.core.audio.recorder.sd.InputStream")
-    def test_stop_performs_resampling(self, mock_stream_class, mock_query):
-        mock_query.return_value = {"default_samplerate": 48000.0}
-
+    def test_stop_returns_recorded_audio(self, mock_stream_class):
         mock_stream = MagicMock()
         mock_stream_class.return_value = mock_stream
 
         recorder = AudioRecorder(sample_rate=16000)
         recorder.start()
 
-        chunk_size = 24000
+        # Simulate recorded audio at target sample rate
+        chunk_size = 8000  # 0.5 seconds at 16kHz
         recorder._audio_buffer = [
             np.zeros((chunk_size, 1), dtype=np.float32),
             np.zeros((chunk_size, 1), dtype=np.float32),
@@ -115,9 +113,9 @@ class TestAudioRecorderState:
 
         audio = recorder.stop()
 
-        expected_samples = 16000
+        expected_samples = 16000  # 1 second of audio
         assert audio is not None
-        assert abs(len(audio) - expected_samples) < 10
+        assert len(audio) == expected_samples
         assert recorder.sample_rate == 16000
 
     def test_stop_without_start_returns_none(self):

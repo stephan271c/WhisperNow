@@ -43,16 +43,10 @@ class TestEngineCallbacks:
 
 class TestEngineConfiguration:
     def test_model_name_stored(self):
-        engine = TranscriptionEngine(model_name="nvidia/parakeet-tdt-0.6b-v3")
-        assert engine.model_name == "nvidia/parakeet-tdt-0.6b-v3"
-
-    def test_use_gpu_default_true(self):
-        engine = TranscriptionEngine(model_name="test/model")
-        assert engine.use_gpu is True
-
-    def test_use_gpu_can_be_disabled(self):
-        engine = TranscriptionEngine(model_name="test/model", use_gpu=False)
-        assert engine.use_gpu is False
+        engine = TranscriptionEngine(
+            model_name="sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+        )
+        assert engine.model_name == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
 
     def test_backend_type_auto_resolves(self):
         engine = TranscriptionEngine(model_name="nvidia/parakeet-tdt-0.6b-v3")

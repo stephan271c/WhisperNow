@@ -314,7 +314,7 @@ class ConfigurationTab(QWidget):
     def _update_button_states(self) -> None:
         current_data = self._model_combo.currentData()
         is_custom = current_data == _CUSTOM_MODEL_ENTRY
-        is_active_model = current_data == self._settings.model_name
+        is_active_model = current_data == self._settings.model_id
         downloaded = (
             is_model_downloaded(current_data)
             if current_data and not is_custom
@@ -449,7 +449,7 @@ class ConfigurationTab(QWidget):
         self._start_minimized_cb.setChecked(self._settings.start_minimized)
         self._autostart_cb.setChecked(self._settings.auto_start_on_login)
 
-        self._load_model_selection(self._settings.model_name)
+        self._load_model_selection(self._settings.model_id)
 
         hotkey = self._settings.hotkey
         key_sequence = "+".join(hotkey.modifiers + [hotkey.key])
@@ -466,7 +466,7 @@ class ConfigurationTab(QWidget):
 
     def save_settings(self) -> bool:
         model_name = self._get_selected_model_name()
-        if model_name and model_name != self._settings.model_name:
+        if model_name and model_name != self._settings.model_id:
             if not self._validate_model_name(model_name):
                 return False
 
@@ -479,7 +479,7 @@ class ConfigurationTab(QWidget):
         self._settings.input_device = self._device_combo.currentData()
 
         if model_name:
-            self._settings.model_name = model_name
+            self._settings.model_id = model_name
 
         hotkey_config = self._parse_key_sequence()
         if hotkey_config:

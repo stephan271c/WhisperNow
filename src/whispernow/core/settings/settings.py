@@ -102,7 +102,7 @@ class Settings(BaseModel):
     instant_type: bool = False
 
     hotkey: HotkeyConfig = Field(default_factory=HotkeyConfig)
-    model_name: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+    model_id: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
 
     start_minimized: bool = False
     auto_start_on_login: bool = False
@@ -117,11 +117,11 @@ class Settings(BaseModel):
 
     window_geometry: Optional[Tuple[int, int, int, int]] = None
 
-    @field_validator("model_name")
+    @field_validator("model_id")
     @classmethod
-    def model_name_not_empty(cls, v):
+    def model_id_not_empty(cls, v):
         if not isinstance(v, str) or not v.strip():
-            raise ValueError("model_name must be a non-empty string")
+            raise ValueError("model_id must be a non-empty string")
         return v
 
     @classmethod

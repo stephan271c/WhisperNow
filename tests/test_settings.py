@@ -36,8 +36,7 @@ class TestSettings:
         settings = Settings()
         assert settings.sample_rate == 16000
         assert settings.input_device is None
-        assert settings.model_name == "nvidia/parakeet-tdt-0.6b-v3"
-        assert settings.use_gpu is True
+        assert settings.model_id == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
 
     def test_save_load_cycle(self, tmp_path):
         config_dir = tmp_path / "config"
@@ -54,8 +53,7 @@ class TestSettings:
                 characters_per_second=200,
                 instant_type=True,
                 hotkey=HotkeyConfig(modifiers=["alt"], key="r"),
-                model_name="openai/whisper-base",
-                use_gpu=False,
+                model_id="openai/whisper-base",
             )
             original.save()
 
@@ -69,8 +67,7 @@ class TestSettings:
             assert loaded.instant_type is True
             assert loaded.hotkey.modifiers == ["alt"]
             assert loaded.hotkey.key == "r"
-            assert loaded.model_name == "openai/whisper-base"
-            assert loaded.use_gpu is False
+            assert loaded.model_id == "openai/whisper-base"
 
     def test_load_nonexistent_returns_defaults(self, tmp_path):
         config_dir = tmp_path / "empty_config"
@@ -84,7 +81,7 @@ class TestSettings:
             default = Settings()
 
             assert settings.sample_rate == default.sample_rate
-            assert settings.model_name == default.model_name
+            assert settings.model_id == default.model_id
 
     def test_load_corrupted_json_returns_defaults(self, tmp_path):
         config_dir = tmp_path / "corrupt_config"
@@ -103,12 +100,12 @@ class TestSettings:
     def test_reset_to_defaults(self):
         settings = Settings(
             sample_rate=44100,
-            model_name="custom/model",
+            model_id="custom/model",
         )
         settings.reset_to_defaults()
 
         assert settings.sample_rate == 16000
-        assert settings.model_name == "nvidia/parakeet-tdt-0.6b-v3"
+        assert settings.model_id == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
 
 
 class TestConfigPaths:
@@ -162,19 +159,19 @@ class TestSettingsValidation:
             settings = Settings.load()
             assert settings.sample_rate == 16000
 
-    def test_empty_model_name_resets_to_default(self, tmp_path):
+    def test_empty_model_id_resets_to_default(self, tmp_path):
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         config_file = config_dir / "settings.json"
 
-        config_file.write_text(json.dumps({"model_name": ""}))
+        config_file.write_text(json.dumps({"model_id": ""}))
 
         with patch(
             "src.whispernow.core.settings.settings.get_config_dir",
             return_value=config_dir,
         ):
             settings = Settings.load()
-            assert settings.model_name == "nvidia/parakeet-tdt-0.6b-v3"
+            assert settings.model_id == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
 
     def test_negative_characters_per_second_resets(self, tmp_path):
         config_dir = tmp_path / "config"
@@ -231,7 +228,7 @@ class TestSettingsValidation:
 
         config_file.write_text(
             json.dumps(
-                {"sample_rate": -1000, "model_name": "", "characters_per_second": -50}
+                {"sample_rate": -1000, "model_id": "", "characters_per_second": -50}
             )
         )
 
@@ -246,7 +243,7 @@ class TestSettingsValidation:
                 settings = Settings.load()
 
                 assert "Invalid sample_rate" in caplog.text
-                assert "Invalid model_name" in caplog.text
+                assert "Invalid model_id" in caplog.text
                 assert "Invalid characters_per_second" in caplog.text
 
     def test_valid_settings_pass_validation(self, tmp_path):
@@ -256,7 +253,7 @@ class TestSettingsValidation:
 
         valid_settings = {
             "sample_rate": 44100,
-            "model_name": "custom/model",
+            "model_id": "custom/model",
             "characters_per_second": 200,
             "hotkey": {"modifiers": ["alt", "shift"], "key": "r"},
         }
@@ -268,7 +265,7 @@ class TestSettingsValidation:
         ):
             settings = Settings.load()
             assert settings.sample_rate == 44100
-            assert settings.model_name == "custom/model"
+            assert settings.model_id == "custom/model"
             assert settings.characters_per_second == 200
             assert settings.hotkey.modifiers == ["alt", "shift"]
             assert settings.hotkey.key == "r"
