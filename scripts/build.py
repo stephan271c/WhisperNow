@@ -7,7 +7,6 @@ from pathlib import Path
 
 
 def get_platform_target() -> tuple[str, str]:
-    """Return (platform, format) tuple for the current OS."""
     system = platform.system().lower()
     if system == "linux":
         return ("linux", "appimage")
@@ -20,7 +19,6 @@ def get_platform_target() -> tuple[str, str]:
 
 
 def build():
-    """Run the Briefcase build process for the current platform."""
     project_root = Path(__file__).parent.parent
     plat, fmt = get_platform_target()
 
@@ -29,7 +27,6 @@ def build():
     print("=" * 60)
 
     try:
-        # Step 1: Create the application scaffold
         print(f"\n[1/2] Creating application scaffold for {plat}/{fmt}...")
         subprocess.run(
             [sys.executable, "-m", "briefcase", "create", plat, fmt],
@@ -37,7 +34,6 @@ def build():
             check=True,
         )
 
-        # Step 2: Build the application
         print(f"\n[2/2] Building application for {plat}/{fmt}...")
         subprocess.run(
             [sys.executable, "-m", "briefcase", "build", plat, fmt],
@@ -49,7 +45,6 @@ def build():
         print("Build successful!")
         print("=" * 60)
 
-        # Show output location based on platform
         if plat == "linux":
             build_dir = project_root / "build" / "whispernow" / "linux" / "appimage"
         elif plat == "macos":
