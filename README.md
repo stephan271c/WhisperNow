@@ -38,7 +38,7 @@ uv sync
 
 # Run the application
 source .venv/bin/activate
-uv run python -m src.whispernow.bootstrap
+whispernow
 ```
 
 ### Pre-built Releases
@@ -56,7 +56,7 @@ Download installers for your platform from the [Releases](https://github.com/ste
 ## How it works
 
 ```mermaid
-graph TD
+graph LR
     A[User Produces Speech] --> B(ASR Model)
     B -->|Transcription| C{Vocabulary<br>Substitution?}
     C -->|Yes| D[Replace Keywords/Abbreviations]
@@ -72,7 +72,7 @@ graph TD
 ## Quick Start
 
 1. **Launch WhisperNow** – The app starts in the system tray
-2. **Wait for model download** – First run downloads the ASR model (~500MB-2GB depending on model)
+2. **Wait for model download** – First run downloads the ASR model (~100MB-1GB depending on model)
 3. **Press and hold** your hotkey (default: `Ctrl+Shift`) to record
 4. **Release** to transcribe – text is automatically typed into the active window
 
@@ -93,8 +93,8 @@ WhisperNow uses Sherpa-ONNX for fast, efficient speech recognition. Models are a
 
 | Model | Description |
 |-------|-------------|
-| `Parakeet TDT 0.6B (FP16)` | NVIDIA Parakeet - Best accuracy, larger size |
-| `Parakeet TDT 0.6B (Int8)` | NVIDIA Parakeet - Quantized, smaller size |
+| `Parakeet TDT v2 0.6B (FP16)` | NVIDIA Parakeet - Best accuracy, larger size |
+| `Parakeet TDT v2 0.6B (Int8)` | NVIDIA Parakeet - Quantized, smaller size |
 | `Whisper Distil Large v3.5` | Distilled Whisper - Good balance of speed/accuracy |
 | `Whisper Small` | OpenAI Whisper Small - Moderate size |
 | `Whisper Tiny` | OpenAI Whisper Tiny - Fastest, smallest |
