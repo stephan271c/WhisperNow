@@ -1,11 +1,3 @@
-"""
-Transcription engine using pluggable ASR backends.
-
-Handles model loading, downloading, and transcription with support for
-multiple ASR backends (NeMo, HuggingFace Transformers).
-Emits signals for progress updates (loading, ready, processing).
-"""
-
 import gc
 import time
 from enum import Enum, auto
@@ -45,7 +37,6 @@ class TranscriptionEngine:
         self.on_state_change = on_state_change
         self.on_download_progress = on_download_progress
 
-        # Determine backend type
         if backend_type == BackendType.AUTO:
             self._backend_type = detect_backend_type(model_name)
         else:
@@ -147,7 +138,6 @@ class TranscriptionEngine:
     def transcribe_chunked(
         self, audio_data: np.ndarray, sample_rate: int = 16000
     ) -> Optional[str]:
-        """Transcribe audio, automatically chunking if over 30 seconds."""
         if not needs_chunking(audio_data, sample_rate):
             return self.transcribe(audio_data, sample_rate)
 
@@ -172,7 +162,6 @@ class TranscriptionEngine:
     def transcribe_with_metadata(
         self, audio_data: np.ndarray, sample_rate: int = 16000
     ) -> Optional[TranscriptionResult]:
-        """Transcribe audio and return TranscriptionResult with metadata."""
         if not self.is_ready:
             try:
                 self.load_model()

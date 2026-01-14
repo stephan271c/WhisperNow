@@ -1,10 +1,3 @@
-"""
-Audio processing utilities for handling long audio recordings.
-
-Provides automatic splitting of long audio using silence detection
-for optimal split points, without interrupting speech.
-"""
-
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -57,8 +50,6 @@ def needs_chunking(audio_data: np.ndarray, sample_rate: int) -> bool:
 
 
 class AudioProcessor:
-    """Handles audio processing including smart splitting with silence detection."""
-
     def __init__(
         self,
         max_duration: float = MAX_DURATION_SECONDS,
@@ -178,7 +169,6 @@ class AudioProcessor:
 
         search_start = min_chunk_samples
         while search_start < len(audio_data):
-            # If the remaining audio fits within the max chunk duration, stop splitting
             if len(audio_data) - last_split <= max_chunk_samples:
                 break
 
