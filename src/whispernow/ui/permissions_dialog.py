@@ -19,12 +19,6 @@ logger = get_logger(__name__)
 
 
 class PermissionsDialog(QDialog):
-    """
-    Dialog explaining why accessibility permissions are needed.
-
-    Shows on macOS when permissions haven't been granted yet.
-    """
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Accessibility Permission Required")
@@ -38,7 +32,6 @@ class PermissionsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
 
-        # Title
         title = QLabel("Accessibility Permission Required")
         title_font = QFont()
         title_font.setPointSize(14)
@@ -46,7 +39,6 @@ class PermissionsDialog(QDialog):
         title.setFont(title_font)
         layout.addWidget(title)
 
-        # Explanation
         explanation = QLabel(
             "WhisperNow needs accessibility permission to:\n\n"
             "• Listen for your push-to-talk hotkey\n"
@@ -57,7 +49,6 @@ class PermissionsDialog(QDialog):
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
 
-        # Status indicator
         self._status_frame = QFrame()
         self._status_frame.setFrameShape(QFrame.StyledPanel)
         status_layout = QVBoxLayout(self._status_frame)
@@ -68,7 +59,6 @@ class PermissionsDialog(QDialog):
 
         layout.addWidget(self._status_frame)
 
-        # Instructions
         instructions = QLabel(
             "<b>How to grant permission:</b><br>"
             "1. Click 'Open System Preferences' below<br>"
@@ -80,7 +70,6 @@ class PermissionsDialog(QDialog):
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
 
-        # Buttons
         button_layout = QHBoxLayout()
 
         self._open_prefs_btn = QPushButton("Open System Preferences")

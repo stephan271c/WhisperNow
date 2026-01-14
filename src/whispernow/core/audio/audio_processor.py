@@ -178,6 +178,10 @@ class AudioProcessor:
 
         search_start = min_chunk_samples
         while search_start < len(audio_data):
+            # If the remaining audio fits within the max chunk duration, stop splitting
+            if len(audio_data) - last_split <= max_chunk_samples:
+                break
+
             search_end = min(
                 search_start + max_chunk_samples - min_chunk_samples, len(audio_data)
             )
