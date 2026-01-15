@@ -126,7 +126,10 @@ Access settings by clicking the tray icon → **Settings**.
 | Input Device | Select microphone |
 | ASR Model | Select from available ASR models |
 
-### Mode Tab
+### Home Tab
+The home tab provides a quick-start guide and includes an **Uninstall** button to remove all WhisperNow data (settings, history, and downloaded models).
+
+### Enhancements Tab
 Configure optional LLM post-processing:
 | Provider | Description |
 |----------|-------------|
@@ -154,30 +157,31 @@ Define custom word/phrase replacements. Useful for:
 ```
 whispernow/
 ├── src/whispernow/
-│   ├── app.py                # Application entry point
-│   ├── bootstrap.py          # Bootstrap & entry point
+│   ├── app.py                     # Application entry point
+│   ├── bootstrap.py               # Bootstrap & entry point
 │   ├── core/
-│   │   ├── asr/              # Speech recognition (Sherpa-ONNX)
-│   │   ├── audio/            # Audio recording & processing
-│   │   ├── input/            # Hotkey handling
-│   │   ├── output/           # Text output controller
-│   │   ├── settings/         # Configuration management
+│   │   ├── asr/                   # Speech recognition (Sherpa-ONNX)
+│   │   ├── audio/                 # Audio recording & processing
+│   │   ├── input/                 # Hotkey handling
+│   │   ├── output/                # Text output controller
+│   │   ├── settings/              # Configuration management
 │   │   └── transcript_processor/  # LLM & vocabulary processing
 │   ├── ui/
-│   │   ├── main_window.py    # Settings window
-│   │   ├── tray.py           # System tray icon
-│   │   ├── setup_wizard.py   # First-run wizard
-│   │   ├── download_dialog.py    # Model download dialog
-│   │   ├── recording_toast.py    # Recording indicator
-│   │   └── tabs/             # Settings tabs
+│   │   ├── main_window.py         # Settings window
+│   │   ├── tray.py                # System tray icon
+│   │   ├── setup_wizard.py        # First-run wizard
+│   │   ├── download_dialog.py     # Model download dialog
+│   │   ├── recording_toast.py     # Recording indicator
+│   │   ├── permissions_dialog.py  # Permissions request dialog
+│   │   └── tabs/                  # Settings tabs (home, config, enhancements, vocabulary, history)
 │   └── utils/
-│       ├── logger.py         # Logging configuration
-│       └── platform.py       # Platform-specific utilities
-├── tests/                    # Test suite
+│       ├── logger.py              # Logging configuration
+│       └── platform.py            # Platform-specific utilities
+├── tests/                         # Test suite
 ├── scripts/
-│   └── build.py              # Briefcase build script
-├── pyproject.toml            # Project metadata & dependencies
-└── installer.iss             # Windows Inno Setup script
+│   └── build.py                   # Briefcase build script
+├── pyproject.toml                 # Project metadata & dependencies
+└── installer.iss                  # Windows Inno Setup script
 ```
 
 ---
