@@ -19,6 +19,12 @@ WhisperNow is a desktop application that transcribes your speech in real-time wi
 
 ---
 
+## Demo
+
+https://github.com/user-attachments/assets/de9c0117-008f-4eb0-a389-31cad485c19a
+
+---
+
 ## Installation
 
 ### Prerequisites
