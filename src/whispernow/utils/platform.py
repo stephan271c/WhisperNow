@@ -5,11 +5,23 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from .logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def get_subprocess_kwargs(**extra: Any) -> Dict[str, Any]:
+    """Return subprocess kwargs with platform-specific flags.
+
+    On Windows, adds CREATE_NO_WINDOW to prevent console flash.
+    Pass any additional kwargs which will be merged in.
+    """
+    kwargs: Dict[str, Any] = {**extra}
+    if platform.system() == "Windows":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    return kwargs
 
 
 def get_executable_path() -> str:

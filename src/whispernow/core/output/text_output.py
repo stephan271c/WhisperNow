@@ -5,7 +5,6 @@ Handles platform-specific text output via clipboard paste or
 character-by-character keyboard typing.
 """
 
-import platform
 import subprocess
 import time
 from typing import Callable, Optional
@@ -14,6 +13,7 @@ from pynput.keyboard import Controller as KeyboardController
 from pynput.keyboard import Key
 
 from ...utils.logger import get_logger
+from ...utils.platform import get_subprocess_kwargs
 
 logger = get_logger(__name__)
 
@@ -85,7 +85,8 @@ class TextOutputController:
     def _get_clipboard(self, paste_cmd: list) -> str:
         try:
             result = subprocess.run(
-                paste_cmd, capture_output=True, text=True, timeout=1
+                paste_cmd,
+                **get_subprocess_kwargs(capture_output=True, text=True, timeout=1),
             )
             return result.stdout if result.returncode == 0 else ""
         except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -93,7 +94,10 @@ class TextOutputController:
 
     def _set_clipboard(self, copy_cmd: list, text: str) -> bool:
         try:
-            subprocess.run(copy_cmd, input=text, text=True, timeout=1, check=True)
+            subprocess.run(
+                copy_cmd,
+                **get_subprocess_kwargs(input=text, text=True, timeout=1, check=True),
+            )
             return True
         except (
             subprocess.TimeoutExpired,
