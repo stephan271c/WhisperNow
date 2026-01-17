@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from whispernow.core.asr.backends import get_model_type
+from src.whispernow.core.asr.backends import get_model_type
 
 
 def test_get_model_type_valid():
@@ -19,7 +19,7 @@ def test_get_model_type_invalid():
 
 
 def test_models_json_exists():
-    import whispernow.core.asr.backends as backends_module
+    import src.whispernow.core.asr.backends as backends_module
 
     expected_path = Path(backends_module.__file__).parent / "models" / "models.json"
     assert expected_path.exists(), f"models.json not found at {expected_path}"
