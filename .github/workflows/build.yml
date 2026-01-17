@@ -106,10 +106,10 @@ jobs:
         if-no-files-found: error
 
   # ============================================================================
-  # macOS Build - Creates .app bundle and .dmg disk image
+  # macOS Build (Apple Silicon) - Creates .app bundle and .dmg for ARM64
   # ============================================================================
-  build-macos:
-    name: Build macOS DMG
+  build-macos-arm64:
+    name: Build macOS DMG (Apple Silicon)
     needs: test
     runs-on: macos-latest
 
@@ -128,22 +128,26 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/Library/Caches/uv
-        key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+        key: uv-${{ runner.os }}-arm64-${{ hashFiles('uv.lock') }}
         restore-keys: |
-          uv-${{ runner.os }}-
+          uv-${{ runner.os }}-arm64-
       
     - name: Install Dependencies
       run: uv sync --group dev
         
-    - name: Build with Briefcase
-      env:
-        # Force pip to prefer universal2 wheels over ARM64-only wheels.
-        # This ensures sherpa-onnx and other native libs work on both Intel and Apple Silicon.
-        _PYTHON_HOST_PLATFORM: macosx-10.15-universal2
+    - name: Configure Briefcase for ARM64-only build
       run: |
-        uv run python scripts/build.py
+        # Disable universal builds - we want ARM64 only for this job
+        cat >> pyproject.toml << 'EOF'
 
-    - name: Verify universal2 binaries
+        [tool.briefcase.app.whispernow.macOS.app]
+        universal_build = false
+        EOF
+        
+    - name: Build with Briefcase
+      run: uv run python scripts/build.py
+
+    - name: Verify ARM64 binaries
       run: |
         APP_PACKAGES="build/whispernow/macos/app/WhisperNow.app/Contents/Resources/app_packages"
         echo "Checking sherpa-onnx architecture..."
@@ -160,7 +164,6 @@ jobs:
 
     - name: Create DMG
       run: |
-        # Find the .app bundle in Briefcase output
         APP_PATH="build/whispernow/macos/app/WhisperNow.app"
         
         if [ ! -d "$APP_PATH" ]; then
@@ -170,7 +173,6 @@ jobs:
           exit 1
         fi
         
-        # Try styled DMG first, fall back to simple hdiutil if it fails
         create-dmg \
           --volname "${{ env.APP_NAME }}" \
           --window-pos 200 120 \
@@ -179,15 +181,102 @@ jobs:
           --icon "${{ env.APP_NAME }}.app" 175 190 \
           --hide-extension "${{ env.APP_NAME }}.app" \
           --app-drop-link 425 190 \
-          "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS.dmg" \
+          "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS-ARM64.dmg" \
           "$APP_PATH" || \
-        hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "$APP_PATH" -ov -format UDZO "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS.dmg"
+        hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "$APP_PATH" -ov -format UDZO "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS-ARM64.dmg"
         
-    - name: Upload macOS DMG
+    - name: Upload macOS ARM64 DMG
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.APP_NAME }}-macOS-DMG
-        path: "*.dmg"
+        name: ${{ env.APP_NAME }}-macOS-ARM64-DMG
+        path: "*-ARM64.dmg"
+        if-no-files-found: error
+
+  # ============================================================================
+  # macOS Build (Intel) - Creates .app bundle and .dmg for x86_64
+  # ============================================================================
+  build-macos-intel:
+    name: Build macOS DMG (Intel)
+    needs: test
+    runs-on: macos-13
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Restore uv cache
+      uses: actions/cache@v4
+      with:
+        path: ~/Library/Caches/uv
+        key: uv-${{ runner.os }}-intel-${{ hashFiles('uv.lock') }}
+        restore-keys: |
+          uv-${{ runner.os }}-intel-
+      
+    - name: Install Dependencies
+      run: uv sync --group dev
+        
+    - name: Configure Briefcase for Intel-only build
+      run: |
+        # Disable universal builds - we want x86_64 only for this job
+        cat >> pyproject.toml << 'EOF'
+
+        [tool.briefcase.app.whispernow.macOS.app]
+        universal_build = false
+        EOF
+        
+    - name: Build with Briefcase
+      run: uv run python scripts/build.py
+
+    - name: Verify Intel binaries
+      run: |
+        APP_PACKAGES="build/whispernow/macos/app/WhisperNow.app/Contents/Resources/app_packages"
+        echo "Checking sherpa-onnx architecture..."
+        file "$APP_PACKAGES/sherpa_onnx/lib/"*.dylib 2>/dev/null || echo "No dylibs found"
+        
+    - name: Debug - Show build output
+      run: |
+        echo "=== Briefcase output ==="
+        du -sh build/whispernow/macos/app/ || true
+        ls -la build/whispernow/macos/app/ || true
+      
+    - name: Install create-dmg
+      run: brew install create-dmg
+
+    - name: Create DMG
+      run: |
+        APP_PATH="build/whispernow/macos/app/WhisperNow.app"
+        
+        if [ ! -d "$APP_PATH" ]; then
+          echo "Looking for .app bundle..."
+          find build -name "*.app" -type d 2>/dev/null || true
+          echo "Error: .app bundle not found at expected path: $APP_PATH"
+          exit 1
+        fi
+        
+        create-dmg \
+          --volname "${{ env.APP_NAME }}" \
+          --window-pos 200 120 \
+          --window-size 600 400 \
+          --icon-size 100 \
+          --icon "${{ env.APP_NAME }}.app" 175 190 \
+          --hide-extension "${{ env.APP_NAME }}.app" \
+          --app-drop-link 425 190 \
+          "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS-Intel.dmg" \
+          "$APP_PATH" || \
+        hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "$APP_PATH" -ov -format UDZO "${{ env.APP_NAME }}-${{ env.APP_VERSION }}-macOS-Intel.dmg"
+        
+    - name: Upload macOS Intel DMG
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.APP_NAME }}-macOS-Intel-DMG
+        path: "*-Intel.dmg"
         if-no-files-found: error
 
   # ============================================================================
@@ -274,7 +363,7 @@ jobs:
   # ============================================================================
   release:
     name: Create Release
-    needs: [build-windows, build-macos, build-linux]
+    needs: [build-windows, build-macos-arm64, build-macos-intel, build-linux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
