@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...core.settings.uninstaller import get_all_data_dirs, uninstall_user_data
+from ...core.settings.data_manager import clear_user_data, get_all_data_dirs
 from ...utils.logger import shutdown_logging
 
 
@@ -109,7 +109,7 @@ class HomeTab(QWidget):
         # Shutdown logging to release file locks on log files
         shutdown_logging()
 
-        success, errors = uninstall_user_data()
+        success, errors = clear_user_data(skip_logging=True)
 
         if success:
             QMessageBox.information(

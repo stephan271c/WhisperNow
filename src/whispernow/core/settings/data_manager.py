@@ -1,5 +1,5 @@
 """
-Module for removing WhisperNow user data.
+Module for managing WhisperNow user data.
 """
 
 import shutil
@@ -33,7 +33,9 @@ def get_all_data_dirs() -> List[Path]:
     return dirs
 
 
-def uninstall_user_data(dry_run: bool = False) -> Tuple[bool, List[str]]:
+def clear_user_data(
+    dry_run: bool = False, skip_logging: bool = False
+) -> Tuple[bool, List[str]]:
     errors = []
     dirs_to_delete = get_all_data_dirs()
 
@@ -43,13 +45,16 @@ def uninstall_user_data(dry_run: bool = False) -> Tuple[bool, List[str]]:
     for dir_path in dirs_to_delete:
         try:
             if dry_run:
-                logger.info(f"[DRY RUN] Would delete {dir_path}")
+                if not skip_logging:
+                    logger.info(f"[DRY RUN] Would delete {dir_path}")
             else:
-                logger.info(f"Deleting {dir_path}")
+                if not skip_logging:
+                    logger.info(f"Deleting {dir_path}")
                 shutil.rmtree(dir_path)
         except Exception as e:
             error_msg = f"Failed to delete {dir_path}: {e}"
-            logger.error(error_msg)
+            if not skip_logging:
+                logger.error(error_msg)
             errors.append(error_msg)
 
     return len(errors) == 0, errors
