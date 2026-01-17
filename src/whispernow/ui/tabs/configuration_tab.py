@@ -19,12 +19,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...core.asr.model_downloader import ModelDownloader
-from ...core.asr.model_registry import (
+from ...core.asr.models.downloader import ModelDownloader
+from ...core.asr.models.registry import (
+    delete_asr_model,
     get_all_models_with_status,
     is_model_downloaded,
 )
-from ...core.asr.model_utils import delete_asr_model
 from ...core.audio import AudioRecorder
 from ...core.settings import HotkeyConfig, Settings
 

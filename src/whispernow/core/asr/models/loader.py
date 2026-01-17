@@ -1,7 +1,7 @@
 from PySide6.QtCore import QThread, Signal
 
-from ...utils.logger import get_logger
-from .transcriber import EngineState, TranscriptionEngine
+from ....utils.logger import get_logger
+from ..transcriber import EngineState, TranscriptionEngine
 
 logger = get_logger(__name__)
 

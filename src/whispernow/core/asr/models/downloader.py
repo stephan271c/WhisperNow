@@ -5,9 +5,9 @@ from typing import Callable, Optional
 
 import requests
 
-from ...utils.logger import get_logger
-from .backends import get_models_dir
-from .model_registry import get_model_by_id
+from ....utils.logger import get_logger
+from ..file_utils import get_models_dir
+from .registry import get_model_by_id
 
 ProgressCallback = Callable[[int, int], None]
 StatusCallback = Callable[[str], None]
@@ -45,7 +45,6 @@ class ModelDownloader:
             ) as tmp_file:
                 tmp_path = tmp_file.name
 
-                # Download with progress
                 response = requests.get(url, stream=True, timeout=30)
                 response.raise_for_status()
 
@@ -64,7 +63,6 @@ class ModelDownloader:
                     if on_progress and total_size > 0:
                         on_progress(downloaded, total_size)
 
-            # Extract archive
             self._logger.info(f"Extracting to {models_dir}")
             if on_status:
                 on_status("Extracting files...")
@@ -78,7 +76,6 @@ class ModelDownloader:
             self._logger.error(f"Download failed: {e}")
             raise
         finally:
-            # Cleanup temp file
             if "tmp_path" in locals() and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 

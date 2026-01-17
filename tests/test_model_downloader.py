@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.whispernow.core.asr.model_registry import (
+from src.whispernow.core.asr.models import (
     AVAILABLE_MODELS,
     get_all_models_with_status,
     get_model_by_id,
