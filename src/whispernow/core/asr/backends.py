@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _load_models_json() -> list[dict]:
-    models_path = Path(__file__).parent / "models.json"
+    models_path = Path(__file__).parent / "models" / "models.json"
     if models_path.exists():
         with open(models_path, "r") as f:
             return json.load(f)
