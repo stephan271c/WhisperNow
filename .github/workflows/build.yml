@@ -139,6 +139,38 @@ jobs:
       run: |
         uv run python scripts/build.py
 
+    - name: Replace sherpa-onnx with universal2 wheel
+      run: |
+        # Briefcase installs the ARM64-only wheel on Apple Silicon runners.
+        # We need to replace it with the universal2 wheel so the app works
+        # on both Intel (x86_64) and Apple Silicon (ARM64) Macs.
+        
+        APP_PACKAGES="build/whispernow/macos/app/WhisperNow.app/Contents/Resources/app_packages"
+        
+        if [ -d "$APP_PACKAGES/sherpa_onnx" ]; then
+          echo "Removing arch-specific sherpa_onnx..."
+          rm -rf "$APP_PACKAGES/sherpa_onnx"
+          rm -rf "$APP_PACKAGES/sherpa_onnx-"*.dist-info
+          
+          echo "Downloading universal2 wheel..."
+          pip download sherpa-onnx==1.12.21 \
+            --platform macosx_10_15_universal2 \
+            --python-version 312 \
+            --only-binary=:all: \
+            --no-deps \
+            -d /tmp/wheels
+          
+          echo "Installing universal2 wheel into app bundle..."
+          unzip -q /tmp/wheels/sherpa_onnx-*.whl -d "$APP_PACKAGES"
+          
+          echo "Verifying installation..."
+          ls -la "$APP_PACKAGES/sherpa_onnx/lib/"
+          file "$APP_PACKAGES/sherpa_onnx/lib/"*.dylib 2>/dev/null || true
+        else
+          echo "Warning: sherpa_onnx not found at $APP_PACKAGES"
+          ls -la "$APP_PACKAGES/" || true
+        fi
+
     - name: Debug - Show build output
       run: |
         echo "=== Briefcase output ==="

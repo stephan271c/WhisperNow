@@ -1,5 +1,3 @@
-"""Platform-specific utilities for cross-platform compatibility."""
-
 import os
 import platform
 import subprocess
@@ -13,21 +11,10 @@ logger = get_logger(__name__)
 
 
 def get_subprocess_kwargs(**extra: Any) -> Dict[str, Any]:
-    """Return subprocess kwargs with platform-specific flags.
-
-    On Windows, adds CREATE_NO_WINDOW to prevent console flash.
-    When using 'input' parameter on Windows, also redirects stdout/stderr
-    to DEVNULL to prevent subprocess hangs (processes without a console
-    can hang if they try to write to unhandled streams).
-
-    Pass any additional kwargs which will be merged in.
-    """
+    """Return subprocess kwargs with platform-specific flags."""
     kwargs: Dict[str, Any] = {**extra}
     if platform.system() == "Windows":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        # When using stdin input with CREATE_NO_WINDOW, we must redirect
-        # stdout/stderr to prevent hangs (subprocess may block waiting to
-        # write to non-existent console streams)
         if "input" in extra and "capture_output" not in extra:
             if "stdout" not in extra:
                 kwargs["stdout"] = subprocess.DEVNULL
@@ -47,7 +34,6 @@ def get_executable_path() -> str:
             return appimage_path
 
         exe_path = Path(sys.executable).resolve()
-        # Look for .app in the path (e.g., /Applications/WhisperNow.app/Contents/MacOS/python)
         for parent in exe_path.parents:
             if parent.suffix == ".app":
                 logger.debug(f"Running as macOS .app bundle: {parent}")
@@ -90,7 +76,6 @@ def check_accessibility_permissions() -> bool:
         return True
 
     try:
-        # Attempt a minimal System Events interaction to test accessibility
         result = subprocess.run(
             ["osascript", "-e", 'tell application "System Events" to keystroke ""'],
             capture_output=True,
@@ -119,6 +104,41 @@ def request_accessibility_permissions() -> None:
     )
 
 
+def check_microphone_permissions() -> bool:
+
+    if get_platform() != "macos":
+        return True
+
+    try:
+        import sounddevice as sd
+
+        devices = sd.query_devices()
+        has_inputs = any(d.get("max_input_channels", 0) > 0 for d in devices)
+        if has_inputs:
+            logger.debug("Microphone permission check: input devices accessible")
+            return True
+        else:
+            logger.warning("Microphone permission check: no input devices found")
+            return False
+    except Exception as e:
+        logger.warning(f"Microphone permission check failed: {e}")
+        return False
+
+
+def request_microphone_permissions() -> None:
+
+    if get_platform() != "macos":
+        return
+
+    subprocess.run(
+        [
+            "open",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        ],
+        check=False,
+    )
+
+
 def set_autostart(enabled: bool, app_name: str = "WhisperNow") -> bool:
 
     system = get_platform()
@@ -127,7 +147,7 @@ def set_autostart(enabled: bool, app_name: str = "WhisperNow") -> bool:
         return _set_autostart_windows(enabled, app_name)
     elif system == "macos":
         return _set_autostart_macos(enabled, app_name)
-    else:  # Linux
+    else:
         return _set_autostart_linux(enabled, app_name)
 
 
@@ -248,7 +268,6 @@ Comment=Voice-to-text transcription with AI enhancement
 
 
 def get_app_icon_path() -> Optional[Path]:
-    # TODO: Implement icon path resolution
     return None
 
 
@@ -259,32 +278,39 @@ def check_and_request_permissions(settings: "Settings") -> bool:
 
     if settings.accessibility_permissions_granted:
         if check_accessibility_permissions():
-            return True
+            pass
         else:
             logger.warning("Accessibility permission was revoked, prompting user")
 
+    accessibility_granted = False
     if check_accessibility_permissions():
         settings.accessibility_permissions_granted = True
         settings.save()
         logger.info("Accessibility permissions already granted")
-        return True
-
-    from ..ui.permissions_dialog import PermissionsDialog
-
-    logger.info("Showing accessibility permissions dialog")
-    dialog = PermissionsDialog()
-    dialog.exec()
-
-    granted = check_accessibility_permissions()
-    settings.accessibility_permissions_granted = granted
-    settings.save()
-
-    if granted:
-        logger.info("User granted accessibility permissions")
+        accessibility_granted = True
     else:
-        logger.warning("User continued without accessibility permissions")
+        from ..ui.permissions_dialog import PermissionsDialog
 
-    return granted
+        logger.info("Showing accessibility permissions dialog")
+        dialog = PermissionsDialog()
+        dialog.exec()
+
+        accessibility_granted = check_accessibility_permissions()
+        settings.accessibility_permissions_granted = accessibility_granted
+        settings.save()
+
+        if accessibility_granted:
+            logger.info("User granted accessibility permissions")
+        else:
+            logger.warning("User continued without accessibility permissions")
+
+    if not check_microphone_permissions():
+        logger.warning(
+            "Microphone permission not granted. Recording may fail. "
+            "Grant access in System Settings > Privacy & Security > Microphone"
+        )
+
+    return accessibility_granted
 
 
 if TYPE_CHECKING:
