@@ -171,6 +171,22 @@ jobs:
           ls -la "$APP_PACKAGES/" || true
         fi
 
+    - name: Re-sign app bundle (ad-hoc)
+      run: |
+        # After modifying the app bundle (replacing sherpa-onnx), the code
+        # signature is invalidated. We need to re-sign with an ad-hoc signature
+        # so macOS Gatekeeper doesn't reject it as "damaged".
+        APP_PATH="build/whispernow/macos/app/WhisperNow.app"
+        
+        echo "Removing existing signatures..."
+        codesign --remove-signature "$APP_PATH" 2>/dev/null || true
+        
+        echo "Re-signing app bundle with ad-hoc signature..."
+        codesign --force --deep --sign - "$APP_PATH"
+        
+        echo "Verifying signature..."
+        codesign --verify --verbose "$APP_PATH"
+        
     - name: Debug - Show build output
       run: |
         echo "=== Briefcase output ==="
