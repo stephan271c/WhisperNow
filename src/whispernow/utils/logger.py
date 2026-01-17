@@ -52,7 +52,7 @@ def get_logger(name: str = "whispernow") -> logging.Logger:
             log_file = get_log_dir() / "app.log"
             file_handler = RotatingFileHandler(
                 log_file,
-                maxBytes=10 * 1024 * 1024,  # 10MB
+                maxBytes=1 * 1024 * 1024,  # 1MB
                 backupCount=5,
                 encoding="utf-8",
             )

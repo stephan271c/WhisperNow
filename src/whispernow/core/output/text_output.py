@@ -5,6 +5,7 @@ Handles platform-specific text output via clipboard paste or
 character-by-character keyboard typing.
 """
 
+import platform
 import subprocess
 import time
 from typing import Callable, Optional
