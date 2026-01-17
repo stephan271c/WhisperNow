@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QKeySequenceEdit,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -22,15 +21,12 @@ from PySide6.QtWidgets import (
 
 from ...core.asr.model_downloader import ModelDownloader
 from ...core.asr.model_registry import (
-    AVAILABLE_MODELS,
     get_all_models_with_status,
     is_model_downloaded,
 )
-from ...core.asr.model_utils import delete_asr_model, get_installed_asr_models
+from ...core.asr.model_utils import delete_asr_model
 from ...core.audio import AudioRecorder
 from ...core.settings import HotkeyConfig, Settings
-
-_CUSTOM_MODEL_ENTRY = "__custom_model__"
 
 
 class _DownloadThread(QThread):
@@ -249,23 +245,6 @@ class ConfigurationTab(QWidget):
         self._cancel_download_btn.clicked.connect(self._on_cancel_download)
         model_layout.addRow("", self._cancel_download_btn)
 
-        self._custom_model_edit = QLineEdit()
-        self._custom_model_edit.setPlaceholderText(
-            "e.g. sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"
-        )
-        self._custom_model_edit.setStyleSheet("font-family: monospace;")
-        self._custom_model_edit.hide()
-        model_layout.addRow("", self._custom_model_edit)
-
-        self._custom_model_instructions = QLabel(
-            "Enter the name of a sherpa-onnx model directory.\n"
-            "Model will be validated on save."
-        )
-        self._custom_model_instructions.setStyleSheet("color: gray; font-size: 11px;")
-        self._custom_model_instructions.setWordWrap(True)
-        self._custom_model_instructions.hide()
-        model_layout.addRow("", self._custom_model_instructions)
-
         layout.addWidget(model_group)
 
         self._download_thread: Optional[_DownloadThread] = None
@@ -286,14 +265,6 @@ class ConfigurationTab(QWidget):
             display_text = f"{model.name}  {indicator}"
             self._model_combo.addItem(display_text, model.id)
 
-        installed_models = get_installed_asr_models()
-        registry_ids = {m.id for m in AVAILABLE_MODELS}
-        for model in installed_models:
-            if model not in registry_ids:
-                self._model_combo.addItem(f"{model}  ✓", model)
-
-        self._model_combo.addItem("Custom model...", _CUSTOM_MODEL_ENTRY)
-
         if current_data:
             idx = self._model_combo.findData(current_data)
             if idx >= 0:
@@ -306,34 +277,23 @@ class ConfigurationTab(QWidget):
 
     def _update_button_states(self) -> None:
         current_data = self._model_combo.currentData()
-        is_custom = current_data == _CUSTOM_MODEL_ENTRY
         is_active_model = current_data == self._settings.model_id
-        downloaded = (
-            is_model_downloaded(current_data)
-            if current_data and not is_custom
-            else True
-        )
+        downloaded = is_model_downloaded(current_data) if current_data else True
 
-        self._delete_model_btn.setEnabled(
-            not is_custom and not is_active_model and downloaded
-        )
-        if is_active_model and not is_custom:
+        self._delete_model_btn.setEnabled(not is_active_model and downloaded)
+        if is_active_model:
             self._delete_model_btn.setToolTip("Cannot delete currently active model")
         else:
             self._delete_model_btn.setToolTip("Delete selected model from cache")
 
-        self._download_btn.setEnabled(not is_custom and not downloaded)
-        self._download_btn.setVisible(not is_custom)
+        self._download_btn.setEnabled(not downloaded)
 
     def _on_model_combo_changed(self, index: int) -> None:
-        is_custom = self._model_combo.currentData() == _CUSTOM_MODEL_ENTRY
-        self._custom_model_edit.setVisible(is_custom)
-        self._custom_model_instructions.setVisible(is_custom)
         self._update_button_states()
 
     def _on_download_clicked(self) -> None:
         model_id = self._model_combo.currentData()
-        if not model_id or model_id == _CUSTOM_MODEL_ENTRY:
+        if not model_id:
             return
 
         self._download_progress.setValue(0)
@@ -387,7 +347,7 @@ class ConfigurationTab(QWidget):
 
     def _on_delete_model_clicked(self) -> None:
         model_name = self._model_combo.currentData()
-        if not model_name or model_name == _CUSTOM_MODEL_ENTRY:
+        if not model_name:
             return
 
         reply = QMessageBox.question(
@@ -415,18 +375,9 @@ class ConfigurationTab(QWidget):
         idx = self._model_combo.findData(model_name)
         if idx >= 0:
             self._model_combo.setCurrentIndex(idx)
-        else:
-            custom_idx = self._model_combo.findData(_CUSTOM_MODEL_ENTRY)
-            if custom_idx >= 0:
-                self._model_combo.setCurrentIndex(custom_idx)
-            self._custom_model_edit.setText(model_name)
-            self._on_model_combo_changed(self._model_combo.currentIndex())
 
     def _get_selected_model_name(self) -> str:
-        if self._model_combo.currentData() == _CUSTOM_MODEL_ENTRY:
-            return self._custom_model_edit.text().strip()
-        else:
-            return self._model_combo.currentData() or ""
+        return self._model_combo.currentData() or ""
 
     def load_settings(self) -> None:
         self._speed_slider.setValue(self._settings.characters_per_second)

@@ -1,14 +1,42 @@
+import json
 import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
-import platformdirs
+
+from .file_utils import find_file_by_suffix, find_file_exact, get_models_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _load_models_json() -> list[dict]:
+    models_path = Path(__file__).parent / "models.json"
+    if models_path.exists():
+        with open(models_path, "r") as f:
+            return json.load(f)
+    return []
+
+
+def get_model_type(model_id: str) -> str:
+    models = _load_models_json()
+    for model in models:
+        if model.get("id") == model_id:
+            model_type = model.get("type")
+            if not model_type:
+                raise ValueError(
+                    f"Model '{model_id}' in models.json is missing a 'type' field. "
+                    f"Please add 'type': 'whisper' or 'type': 'transducer' to the model entry."
+                )
+            return model_type
+    raise ValueError(
+        f"Model '{model_id}' not found in models.json. "
+        f"Please add an entry for this model with 'id', 'name', and 'type' fields."
+    )
 
 
 class BackendType(Enum):
@@ -59,13 +87,6 @@ class ASRBackend(ABC):
         pass
 
 
-def get_models_dir() -> str:
-    # appauthor=False prevents nested structure (WhisperNow/WhisperNow) on Windows
-    return os.path.join(
-        platformdirs.user_data_dir("WhisperNow", appauthor=False), "models"
-    )
-
-
 class SherpaOnnxBackend(ASRBackend):
     def __init__(self):
         self._recognizer = None
@@ -78,27 +99,78 @@ class SherpaOnnxBackend(ASRBackend):
     ) -> None:
         import sherpa_onnx
 
-        # Resolve model path - if it's just a name, look in our models directory
         if not os.path.isabs(model_path):
-            model_path = os.path.join(get_models_dir(), model_path)
+            full_model_path = os.path.join(get_models_dir(), model_path)
+            model_id = model_path  # The original is the model ID
+        else:
+            full_model_path = model_path
+            model_id = os.path.basename(model_path)
 
-        if not os.path.isdir(model_path):
+        if not os.path.isdir(full_model_path):
             raise RuntimeError(
-                f"Model directory not found: {model_path}. "
+                f"Model directory not found: {full_model_path}. "
                 f"Please download the model first."
             )
 
-        # Detect model files
-        encoder = self._find_file(
+        model_type = get_model_type(model_id)
+        logger.info(f"Loading model '{model_id}' as type '{model_type}'")
+
+        self._device = "cpu"
+        logger.info("Loading model with CPU provider")
+
+        try:
+            if model_type == "whisper":
+                self._load_whisper_model(sherpa_onnx, full_model_path)
+            else:
+                self._load_transducer_model(sherpa_onnx, full_model_path)
+        except Exception as e:
+            self._recognizer = None
+            raise RuntimeError(
+                f"Failed to load model from '{full_model_path}': {e}"
+            ) from e
+
+    def _load_whisper_model(self, sherpa_onnx, model_path: str) -> None:
+        encoder = find_file_by_suffix(model_path, "-encoder.onnx", "-encoder.int8.onnx")
+        decoder = find_file_by_suffix(model_path, "-decoder.onnx", "-decoder.int8.onnx")
+        tokens = find_file_by_suffix(model_path, "-tokens", "tokens.txt")
+
+        if not encoder or not decoder or not tokens:
+            missing = []
+            if not encoder:
+                missing.append("encoder (*-encoder.onnx)")
+            if not decoder:
+                missing.append("decoder (*-decoder.onnx)")
+            if not tokens:
+                missing.append("tokens (*-tokens)")
+            raise RuntimeError(
+                f"Missing Whisper model files in {model_path}: {', '.join(missing)}"
+            )
+
+        logger.info(
+            f"Loading Whisper model: encoder={encoder}, decoder={decoder}, tokens={tokens}"
+        )
+
+        self._recognizer = sherpa_onnx.OfflineRecognizer.from_whisper(
+            encoder=encoder,
+            decoder=decoder,
+            tokens=tokens,
+            num_threads=4,
+            provider="cpu",
+            debug=False,
+            decoding_method="greedy_search",
+        )
+
+    def _load_transducer_model(self, sherpa_onnx, model_path: str) -> None:
+        encoder = find_file_exact(
             model_path, ["encoder.onnx", "encoder.int8.onnx", "encoder.fp16.onnx"]
         )
-        decoder = self._find_file(
+        decoder = find_file_exact(
             model_path, ["decoder.onnx", "decoder.int8.onnx", "decoder.fp16.onnx"]
         )
-        joiner = self._find_file(
+        joiner = find_file_exact(
             model_path, ["joiner.onnx", "joiner.int8.onnx", "joiner.fp16.onnx"]
         )
-        tokens = self._find_file(model_path, ["tokens.txt"])
+        tokens = find_file_exact(model_path, ["tokens.txt"])
 
         if not all([encoder, decoder, joiner, tokens]):
             missing = []
@@ -111,34 +183,24 @@ class SherpaOnnxBackend(ASRBackend):
             if not tokens:
                 missing.append("tokens")
             raise RuntimeError(
-                f"Missing model files in {model_path}: {', '.join(missing)}"
+                f"Missing Transducer model files in {model_path}: {', '.join(missing)}"
             )
 
-        self._device = "cpu"
-        logger.info("Loading model with CPU provider")
+        logger.info(
+            f"Loading Transducer model: encoder={encoder}, decoder={decoder}, joiner={joiner}"
+        )
 
-        try:
-            self._recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
-                encoder=encoder,
-                decoder=decoder,
-                joiner=joiner,
-                tokens=tokens,
-                num_threads=4,
-                provider="cpu",
-                debug=False,
-                decoding_method="greedy_search",
-                model_type="nemo_transducer",
-            )
-        except Exception as e:
-            self._recognizer = None
-            raise RuntimeError(f"Failed to load model from '{model_path}': {e}") from e
-
-    def _find_file(self, directory: str, candidates: list[str]) -> Optional[str]:
-        for name in candidates:
-            path = os.path.join(directory, name)
-            if os.path.exists(path):
-                return path
-        return None
+        self._recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
+            encoder=encoder,
+            decoder=decoder,
+            joiner=joiner,
+            tokens=tokens,
+            num_threads=4,
+            provider="cpu",
+            debug=False,
+            decoding_method="greedy_search",
+            model_type="nemo_transducer",
+        )
 
     def transcribe(
         self, audio_data: np.ndarray, sample_rate: int = 16000
@@ -146,13 +208,11 @@ class SherpaOnnxBackend(ASRBackend):
         if self._recognizer is None:
             raise RuntimeError("Model not loaded. Call load() first.")
 
-        # Convert to float32 if needed
         if audio_data.dtype == np.int16:
             audio_float = audio_data.astype(np.float32) / 32768.0
         else:
             audio_float = audio_data.astype(np.float32)
 
-        # Flatten to mono if stereo
         if audio_float.ndim > 1:
             audio_float = (
                 audio_float[:, 0] if audio_float.shape[1] > 1 else audio_float.flatten()
@@ -196,20 +256,40 @@ class SherpaOnnxBackend(ASRBackend):
 
     def is_model_cached(self, model_path: str) -> bool:
         if not os.path.isabs(model_path):
-            model_path = os.path.join(get_models_dir(), model_path)
+            full_model_path = os.path.join(get_models_dir(), model_path)
+            model_id = model_path
+        else:
+            full_model_path = model_path
+            model_id = os.path.basename(model_path)
 
-        if not os.path.isdir(model_path):
+        if not os.path.isdir(full_model_path):
             return False
 
-        # Check for required files
-        required = ["tokens.txt"]
+        model_type = get_model_type(model_id)
+
+        if model_type == "whisper":
+            return self._is_whisper_model_cached(full_model_path)
+        else:
+            return self._is_transducer_model_cached(full_model_path)
+
+    def _is_whisper_model_cached(self, model_path: str) -> bool:
+        has_encoder = (
+            find_file_by_suffix(model_path, "-encoder.onnx", "-encoder.int8.onnx")
+            is not None
+        )
+        has_decoder = (
+            find_file_by_suffix(model_path, "-decoder.onnx", "-decoder.int8.onnx")
+            is not None
+        )
+        has_tokens = (
+            find_file_by_suffix(model_path, "-tokens", "tokens.txt") is not None
+        )
+        return has_encoder and has_decoder and has_tokens
+
+    def _is_transducer_model_cached(self, model_path: str) -> bool:
         encoder_candidates = ["encoder.onnx", "encoder.int8.onnx", "encoder.fp16.onnx"]
         decoder_candidates = ["decoder.onnx", "decoder.int8.onnx", "decoder.fp16.onnx"]
         joiner_candidates = ["joiner.onnx", "joiner.int8.onnx", "joiner.fp16.onnx"]
-
-        for f in required:
-            if not os.path.exists(os.path.join(model_path, f)):
-                return False
 
         has_encoder = any(
             os.path.exists(os.path.join(model_path, c)) for c in encoder_candidates
@@ -220,8 +300,9 @@ class SherpaOnnxBackend(ASRBackend):
         has_joiner = any(
             os.path.exists(os.path.join(model_path, c)) for c in joiner_candidates
         )
+        has_tokens = os.path.exists(os.path.join(model_path, "tokens.txt"))
 
-        return has_encoder and has_decoder and has_joiner
+        return has_encoder and has_decoder and has_joiner and has_tokens
 
 
 def detect_backend_type(model_name: str) -> BackendType:

@@ -1,7 +1,7 @@
 import os
 from typing import List
 
-from .backends import get_models_dir
+from .file_utils import get_models_dir, has_file_with_suffix
 
 
 def get_installed_asr_models() -> List[str]:
@@ -14,11 +14,16 @@ def get_installed_asr_models() -> List[str]:
     for name in os.listdir(models_dir):
         model_path = os.path.join(models_dir, name)
         if os.path.isdir(model_path):
-            # Check if it looks like a valid sherpa-onnx model
-            has_tokens = os.path.exists(os.path.join(model_path, "tokens.txt"))
-            has_encoder = os.path.exists(
-                os.path.join(model_path, "encoder.onnx")
-            ) or os.path.exists(os.path.join(model_path, "encoder.int8.onnx"))
+            has_tokens = has_file_with_suffix(model_path, "-tokens.txt", "tokens.txt")
+            has_encoder = has_file_with_suffix(
+                model_path,
+                "-encoder.onnx",
+                "-encoder.int8.onnx",
+                "-encoder.fp16.onnx",
+                "encoder.onnx",
+                "encoder.int8.onnx",
+                "encoder.fp16.onnx",
+            )
             if has_tokens and has_encoder:
                 models.append(name)
 

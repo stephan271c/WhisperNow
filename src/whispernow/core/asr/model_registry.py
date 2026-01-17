@@ -3,7 +3,7 @@ import os
 from dataclasses import dataclass
 from typing import List, Literal
 
-from .backends import get_models_dir
+from .file_utils import get_models_dir, has_file_with_suffix
 
 GITHUB_RELEASE_BASE = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
@@ -14,6 +14,7 @@ GITHUB_RELEASE_BASE = (
 class ModelInfo:
     id: str
     name: str
+    type: str
 
     @property
     def url(self) -> str:
@@ -53,11 +54,16 @@ def is_model_downloaded(model_id: str) -> bool:
     if not os.path.isdir(model_path):
         return False
 
-    has_tokens = os.path.exists(os.path.join(model_path, "tokens.txt"))
-    has_encoder = (
-        os.path.exists(os.path.join(model_path, "encoder.onnx"))
-        or os.path.exists(os.path.join(model_path, "encoder.int8.onnx"))
-        or os.path.exists(os.path.join(model_path, "encoder.fp16.onnx"))
+    has_tokens = has_file_with_suffix(model_path, "-tokens.txt", "tokens.txt")
+
+    has_encoder = has_file_with_suffix(
+        model_path,
+        "-encoder.onnx",
+        "-encoder.int8.onnx",
+        "-encoder.fp16.onnx",
+        "encoder.onnx",
+        "encoder.int8.onnx",
+        "encoder.fp16.onnx",
     )
 
     return has_tokens and has_encoder

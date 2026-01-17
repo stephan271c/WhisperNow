@@ -1,26 +1,32 @@
 [
     {
         "id": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16",
-        "name": "Parakeet TDT v2 0.6B (FP16)"
+        "name": "Parakeet TDT v2 0.6B (FP16)",
+        "type": "transducer"
     },
     {
         "id": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
-        "name": "Parakeet TDT v2 0.6B (Int8)"
+        "name": "Parakeet TDT v2 0.6B (Int8)",
+        "type": "transducer"
     },
     {
         "id": "sherpa-onnx-whisper-distil-large-v3.5",
-        "name": "Whisper Distil Large v3.5"
+        "name": "Whisper Distil Large v3.5",
+        "type": "whisper"
     },
     {
         "id": "sherpa-onnx-whisper-small",
-        "name": "Whisper Small"
+        "name": "Whisper Small",
+        "type": "whisper"
     },
     {
         "id": "sherpa-onnx-whisper-tiny",
-        "name": "Whisper Tiny"
+        "name": "Whisper Tiny",
+        "type": "whisper"
     },
     {
         "id": "sherpa-onnx-whisper-large-v3",
-        "name": "Whisper Large v3"
+        "name": "Whisper Large v3",
+        "type": "whisper"
     }
 ]
