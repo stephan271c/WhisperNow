@@ -58,6 +58,22 @@ Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: st
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
-; Note: Previous [UninstallDelete] section removed.
-; User data in {localappdata}\WhisperNow (settings, models) is preserved on uninstall.
-; This allows users to reinstall without losing their configuration or re-downloading models.
+[UninstallDelete]
+; Clean up user data directories
+Type: filesandordirs; Name: "{localappdata}\WhisperNow"
+Type: filesandordirs; Name: "{localappdata}\whispernow"
+Type: filesandordirs; Name: "{userappdata}\whispernow"
+
+[Code]
+// Kill the WhisperNow process before uninstalling to release file locks
+function InitializeUninstall(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  // Use taskkill to terminate any running WhisperNow processes
+  // /F = Force termination, /IM = Image name, /T = Terminate child processes
+  Exec('taskkill.exe', '/F /IM WhisperNow.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Small delay to ensure process is fully terminated
+  Sleep(500);
+  Result := True;
+end;

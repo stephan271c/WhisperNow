@@ -1,5 +1,5 @@
 """
-Uninstaller module for removing WhisperNow user data.
+Module for removing WhisperNow user data.
 """
 
 import shutil
@@ -8,7 +8,7 @@ from typing import List, Tuple
 
 from platformdirs import user_config_path, user_data_path
 
-from ...utils.logger import get_logger
+from ...utils.logger import get_log_dir, get_logger
 
 logger = get_logger(__name__)
 
@@ -25,6 +25,10 @@ def get_all_data_dirs() -> List[Path]:
     data_dir = user_data_path(APP_NAME_DATA, appauthor=False)
     if data_dir.exists():
         dirs.append(data_dir)
+
+    log_dir = get_log_dir()
+    if log_dir.exists():
+        dirs.append(log_dir)
 
     return dirs
 

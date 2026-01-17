@@ -74,3 +74,13 @@ def get_logger(name: str = "whispernow") -> logging.Logger:
         return _logger_instance
 
     return logging.getLogger(name)
+
+
+def shutdown_logging() -> None:
+    """Shutdown logging and close all file handlers to release file locks."""
+    global _logger_instance
+    root_logger = logging.getLogger("whispernow")
+    for handler in root_logger.handlers[:]:
+        handler.close()
+        root_logger.removeHandler(handler)
+    _logger_instance = None

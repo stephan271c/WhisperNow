@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.settings.uninstaller import get_all_data_dirs, uninstall_user_data
+from ...utils.logger import shutdown_logging
 
 
 class HomeTab(QWidget):
@@ -43,25 +44,25 @@ class HomeTab(QWidget):
 
         layout.addStretch()
 
-        # Uninstall section
+        # Clear data section
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
         separator.setFrameShadow(QFrame.Sunken)
         layout.addWidget(separator)
 
-        uninstall_title = QLabel("Uninstall")
-        uninstall_title.setStyleSheet("font-size: 14px; font-weight: 600;")
-        layout.addWidget(uninstall_title)
+        clear_data_title = QLabel("Clear Data")
+        clear_data_title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        layout.addWidget(clear_data_title)
 
-        uninstall_desc = QLabel(
-            "Remove all WhisperNow data including settings, history, and downloaded models."
+        clear_data_desc = QLabel(
+            "Remove all WhisperNow data including settings, logs, history, and downloaded models."
         )
-        uninstall_desc.setWordWrap(True)
-        uninstall_desc.setStyleSheet("color: #888;")
-        layout.addWidget(uninstall_desc)
+        clear_data_desc.setWordWrap(True)
+        clear_data_desc.setStyleSheet("color: #888;")
+        layout.addWidget(clear_data_desc)
 
-        self._uninstall_btn = QPushButton("Uninstall WhisperNow")
-        self._uninstall_btn.setStyleSheet(
+        self._clear_data_btn = QPushButton("Clear All Data")
+        self._clear_data_btn.setStyleSheet(
             """
             QPushButton {
                 background-color: #dc3545;
@@ -78,11 +79,11 @@ class HomeTab(QWidget):
             }
             """
         )
-        self._uninstall_btn.setFixedWidth(180)
-        self._uninstall_btn.clicked.connect(self._on_uninstall_clicked)
-        layout.addWidget(self._uninstall_btn)
+        self._clear_data_btn.setFixedWidth(180)
+        self._clear_data_btn.clicked.connect(self._on_clear_data_clicked)
+        layout.addWidget(self._clear_data_btn)
 
-    def _on_uninstall_clicked(self) -> None:
+    def _on_clear_data_clicked(self) -> None:
         dirs = get_all_data_dirs()
         if not dirs:
             QMessageBox.information(
@@ -95,7 +96,7 @@ class HomeTab(QWidget):
         dirs_list = "\n".join(f"  • {d}" for d in dirs)
         reply = QMessageBox.warning(
             self,
-            "Confirm Uninstall",
+            "Confirm Clear Data",
             f"This will permanently delete:\n\n{dirs_list}\n\n"
             "This action cannot be undone. Continue?",
             QMessageBox.Yes | QMessageBox.Cancel,
@@ -105,12 +106,15 @@ class HomeTab(QWidget):
         if reply != QMessageBox.Yes:
             return
 
+        # Shutdown logging to release file locks on log files
+        shutdown_logging()
+
         success, errors = uninstall_user_data()
 
         if success:
             QMessageBox.information(
                 self,
-                "Uninstall Complete",
+                "Clear Data Complete",
                 "All WhisperNow data has been removed.\n\n"
                 "The application will now close.",
             )
@@ -118,6 +122,6 @@ class HomeTab(QWidget):
         else:
             QMessageBox.critical(
                 self,
-                "Uninstall Error",
+                "Clear Data Error",
                 "Some files could not be removed:\n\n" + "\n".join(errors),
             )
