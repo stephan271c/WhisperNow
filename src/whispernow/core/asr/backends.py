@@ -60,7 +60,10 @@ class ASRBackend(ABC):
 
 
 def get_models_dir() -> str:
-    return os.path.join(platformdirs.user_data_dir("WhisperNow"), "models")
+    # appauthor=False prevents nested structure (WhisperNow/WhisperNow) on Windows
+    return os.path.join(
+        platformdirs.user_data_dir("WhisperNow", appauthor=False), "models"
+    )
 
 
 class SherpaOnnxBackend(ASRBackend):

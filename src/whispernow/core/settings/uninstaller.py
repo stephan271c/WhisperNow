@@ -18,11 +18,11 @@ APP_NAME_DATA = "WhisperNow"
 
 def get_all_data_dirs() -> List[Path]:
     dirs = []
-    config_dir = user_config_path(APP_NAME_CONFIG)
+    config_dir = user_config_path(APP_NAME_CONFIG, appauthor=False)
     if config_dir.exists():
         dirs.append(config_dir)
 
-    data_dir = user_data_path(APP_NAME_DATA)
+    data_dir = user_data_path(APP_NAME_DATA, appauthor=False)
     if data_dir.exists():
         dirs.append(data_dir)
 

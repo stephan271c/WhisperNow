@@ -27,11 +27,11 @@ def _get_default_enhancements() -> List[dict]:
 
 
 def get_config_dir() -> Path:
-    return user_config_path(APP_NAME, ensure_exists=True)
+    return user_config_path(APP_NAME, appauthor=False, ensure_exists=True)
 
 
 def get_data_dir() -> Path:
-    return user_data_path(APP_NAME, ensure_exists=True)
+    return user_data_path(APP_NAME, appauthor=False, ensure_exists=True)
 
 
 class HotkeyConfig(BaseModel):
