@@ -136,56 +136,18 @@ jobs:
       run: uv sync --group dev
         
     - name: Build with Briefcase
+      env:
+        # Force pip to prefer universal2 wheels over ARM64-only wheels.
+        # This ensures sherpa-onnx and other native libs work on both Intel and Apple Silicon.
+        _PYTHON_HOST_PLATFORM: macosx-10.15-universal2
       run: |
         uv run python scripts/build.py
 
-    - name: Replace sherpa-onnx with universal2 wheel
+    - name: Verify universal2 binaries
       run: |
-        # Briefcase installs the ARM64-only wheel on Apple Silicon runners.
-        # We need to replace it with the universal2 wheel so the app works
-        # on both Intel (x86_64) and Apple Silicon (ARM64) Macs.
-        
         APP_PACKAGES="build/whispernow/macos/app/WhisperNow.app/Contents/Resources/app_packages"
-        
-        if [ -d "$APP_PACKAGES/sherpa_onnx" ]; then
-          echo "Removing arch-specific sherpa_onnx..."
-          rm -rf "$APP_PACKAGES/sherpa_onnx"
-          rm -rf "$APP_PACKAGES/sherpa_onnx-"*.dist-info
-          
-          echo "Downloading universal2 wheel..."
-          pip download sherpa-onnx==1.12.21 \
-            --platform macosx_10_15_universal2 \
-            --python-version 312 \
-            --only-binary=:all: \
-            --no-deps \
-            -d /tmp/wheels
-          
-          echo "Installing universal2 wheel into app bundle..."
-          unzip -q /tmp/wheels/sherpa_onnx-*.whl -d "$APP_PACKAGES"
-          
-          echo "Verifying installation..."
-          ls -la "$APP_PACKAGES/sherpa_onnx/lib/"
-          file "$APP_PACKAGES/sherpa_onnx/lib/"*.dylib 2>/dev/null || true
-        else
-          echo "Warning: sherpa_onnx not found at $APP_PACKAGES"
-          ls -la "$APP_PACKAGES/" || true
-        fi
-
-    - name: Re-sign app bundle (ad-hoc)
-      run: |
-        # After modifying the app bundle (replacing sherpa-onnx), the code
-        # signature is invalidated. We need to re-sign with an ad-hoc signature
-        # so macOS Gatekeeper doesn't reject it as "damaged".
-        APP_PATH="build/whispernow/macos/app/WhisperNow.app"
-        
-        echo "Removing existing signatures..."
-        codesign --remove-signature "$APP_PATH" 2>/dev/null || true
-        
-        echo "Re-signing app bundle with ad-hoc signature..."
-        codesign --force --deep --sign - "$APP_PATH"
-        
-        echo "Verifying signature..."
-        codesign --verify --verbose "$APP_PATH"
+        echo "Checking sherpa-onnx architecture..."
+        file "$APP_PACKAGES/sherpa_onnx/lib/"*.dylib 2>/dev/null || echo "No dylibs found"
         
     - name: Debug - Show build output
       run: |
