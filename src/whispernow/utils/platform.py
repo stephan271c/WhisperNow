@@ -16,11 +16,23 @@ def get_subprocess_kwargs(**extra: Any) -> Dict[str, Any]:
     """Return subprocess kwargs with platform-specific flags.
 
     On Windows, adds CREATE_NO_WINDOW to prevent console flash.
+    When using 'input' parameter on Windows, also redirects stdout/stderr
+    to DEVNULL to prevent subprocess hangs (processes without a console
+    can hang if they try to write to unhandled streams).
+
     Pass any additional kwargs which will be merged in.
     """
     kwargs: Dict[str, Any] = {**extra}
     if platform.system() == "Windows":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        # When using stdin input with CREATE_NO_WINDOW, we must redirect
+        # stdout/stderr to prevent hangs (subprocess may block waiting to
+        # write to non-existent console streams)
+        if "input" in extra and "capture_output" not in extra:
+            if "stdout" not in extra:
+                kwargs["stdout"] = subprocess.DEVNULL
+            if "stderr" not in extra:
+                kwargs["stderr"] = subprocess.DEVNULL
     return kwargs
 
 

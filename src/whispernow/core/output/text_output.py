@@ -90,7 +90,11 @@ class TextOutputController:
                 **get_subprocess_kwargs(capture_output=True, text=True, timeout=1),
             )
             return result.stdout if result.returncode == 0 else ""
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            logger.debug(f"Failed to get clipboard: {e}")
+            return ""
+        except Exception as e:
+            logger.warning(f"Unexpected error getting clipboard: {e}")
             return ""
 
     def _set_clipboard(self, copy_cmd: list, text: str) -> bool:
@@ -106,4 +110,7 @@ class TextOutputController:
             subprocess.CalledProcessError,
         ) as e:
             logger.error(f"Failed to set clipboard: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error setting clipboard: {e}")
             return False
