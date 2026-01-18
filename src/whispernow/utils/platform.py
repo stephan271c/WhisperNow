@@ -11,7 +11,6 @@ logger = get_logger(__name__)
 
 
 def get_subprocess_kwargs(**extra: Any) -> Dict[str, Any]:
-    """Return subprocess kwargs with platform-specific flags."""
     kwargs: Dict[str, Any] = {**extra}
     if platform.system() == "Windows":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -76,16 +75,17 @@ def check_accessibility_permissions() -> bool:
         return True
 
     try:
-        from pynput import keyboard
+        import ctypes
 
-        listener = keyboard.Listener(on_press=lambda k: None)
-        listener.start()
-        is_trusted = getattr(listener, "IS_TRUSTED", True)
-        listener.stop()
-        logger.debug(f"pynput IS_TRUSTED check: {is_trusted}")
+        app_services = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+        )
+        app_services.AXIsProcessTrusted.restype = ctypes.c_bool
+        is_trusted = app_services.AXIsProcessTrusted()
+        logger.debug(f"AXIsProcessTrusted check: {is_trusted}")
         return is_trusted
     except Exception as e:
-        logger.warning(f"Failed to check accessibility via pynput: {e}")
+        logger.warning(f"Failed to check accessibility via AXIsProcessTrusted: {e}")
 
     try:
         result = subprocess.run(
