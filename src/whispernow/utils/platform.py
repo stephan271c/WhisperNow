@@ -74,19 +74,13 @@ def check_accessibility_permissions() -> bool:
     if get_platform() != "macos":
         return True
 
-    # Use subprocess to check accessibility permissions.
-    # We avoid ctypes-based AXIsProcessTrusted because it can trigger internal
-    # HIToolbox code paths that assert main thread access, causing crashes
-    # when called from background threads or Qt signal handlers.
     try:
         result = subprocess.run(
             ["osascript", "-e", 'tell application "System Events" to keystroke ""'],
             capture_output=True,
             timeout=5,
         )
-        is_granted = result.returncode == 0
-        logger.debug(f"Accessibility permission check (osascript): {is_granted}")
-        return is_granted
+        return result.returncode == 0
     except subprocess.TimeoutExpired:
         logger.warning("Accessibility permission check timed out")
         return False
