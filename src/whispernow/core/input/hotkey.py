@@ -18,24 +18,76 @@ logger = get_logger(__name__)
 
 
 # Virtual key codes for macOS (from HIToolbox/Events.h)
+# These are physical key positions on ANSI US keyboard layout
 MAC_KEYCODE_MAP = {
-    "space": 49,
-    "return": 36,
-    "tab": 48,
-    "escape": 53,
-    "delete": 51,
-    "f1": 122,
-    "f2": 120,
-    "f3": 99,
-    "f4": 118,
-    "f5": 96,
-    "f6": 97,
-    "f7": 98,
-    "f8": 100,
-    "f9": 101,
-    "f10": 109,
-    "f11": 103,
-    "f12": 111,
+    # Letter keys (ANSI US layout positions)
+    "a": 0x00,
+    "s": 0x01,
+    "d": 0x02,
+    "f": 0x03,
+    "h": 0x04,
+    "g": 0x05,
+    "z": 0x06,
+    "x": 0x07,
+    "c": 0x08,
+    "v": 0x09,
+    "b": 0x0B,
+    "q": 0x0C,
+    "w": 0x0D,
+    "e": 0x0E,
+    "r": 0x0F,
+    "y": 0x10,
+    "t": 0x11,
+    "o": 0x1F,
+    "u": 0x20,
+    "i": 0x22,
+    "p": 0x23,
+    "l": 0x25,
+    "j": 0x26,
+    "k": 0x28,
+    "n": 0x2D,
+    "m": 0x2E,
+    # Number keys (top row)
+    "1": 0x12,
+    "2": 0x13,
+    "3": 0x14,
+    "4": 0x15,
+    "5": 0x17,
+    "6": 0x16,
+    "7": 0x1A,
+    "8": 0x1C,
+    "9": 0x19,
+    "0": 0x1D,
+    # Special keys
+    "space": 0x31,
+    "return": 0x24,
+    "tab": 0x30,
+    "escape": 0x35,
+    "delete": 0x33,
+    "enter": 0x24,  # Same as return
+    # Function keys
+    "f1": 0x7A,
+    "f2": 0x78,
+    "f3": 0x63,
+    "f4": 0x76,
+    "f5": 0x60,
+    "f6": 0x61,
+    "f7": 0x62,
+    "f8": 0x64,
+    "f9": 0x65,
+    "f10": 0x6D,
+    "f11": 0x67,
+    "f12": 0x6F,
+    # Arrow keys
+    "left": 0x7B,
+    "right": 0x7C,
+    "down": 0x7D,
+    "up": 0x7E,
+    # Other common keys
+    "home": 0x73,
+    "end": 0x77,
+    "pageup": 0x74,
+    "pagedown": 0x79,
 }
 
 # Modifier flags for macOS NSEvent
@@ -86,14 +138,16 @@ class HotkeyListener(QObject):
         self._required_modifier_types: Set[str] = set(settings.hotkey.modifiers)
         self._trigger_key = settings.hotkey.key
         key_lower = settings.hotkey.key.lower()
-        # Look up keycode: use map for named keys, ord() only for single characters
+
         if key_lower in MAC_KEYCODE_MAP:
             self._trigger_keycode = MAC_KEYCODE_MAP[key_lower]
-        elif len(key_lower) == 1:
-            self._trigger_keycode = ord(key_lower)
         else:
-            # Fallback for unknown multi-character keys
-            self._trigger_keycode = MAC_KEYCODE_MAP.get("space", 49)
+            # Unknown key - log warning and fall back to space
+            logger.warning(
+                f"Unknown hotkey '{key_lower}' not in MAC_KEYCODE_MAP, "
+                f"falling back to 'space'"
+            )
+            self._trigger_keycode = MAC_KEYCODE_MAP.get("space", 0x31)
 
     def start(self) -> None:
         self._impl.start()
@@ -142,7 +196,18 @@ class _MacHotkeyListenerImpl:
             self._up_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
                 NSKeyUpMask | NSFlagsChangedMask, self._on_key_up
             )
-            logger.info("macOS native hotkey listener started")
+
+            if self._down_monitor is None or self._up_monitor is None:
+                logger.error(
+                    "NSEvent monitors returned None - accessibility permissions "
+                    "NOT granted. Add WhisperNow.app to System Settings > "
+                    "Privacy & Security > Accessibility"
+                )
+            else:
+                logger.info(
+                    f"macOS native hotkey listener started: expecting keycode={self._trigger_keycode}, "
+                    f"modifiers={self._required_modifiers}"
+                )
         except ImportError as e:
             logger.error(f"Failed to import AppKit for macOS hotkey listener: {e}")
         except Exception as e:
@@ -174,9 +239,15 @@ class _MacHotkeyListenerImpl:
             keycode = event.keyCode()
             modifier_flags = event.modifierFlags()
 
+            logger.debug(
+                f"Key down: keycode={keycode} (expecting {self._trigger_keycode}), "
+                f"modifiers=0x{modifier_flags:08x}"
+            )
+
             if keycode == self._trigger_keycode and self._check_modifiers(
                 modifier_flags
             ):
+                logger.info("Hotkey pressed!")
                 self._listener._on_hotkey_pressed()
         except Exception as e:
             logger.error(f"Error in macOS key down handler: {e}")
@@ -186,6 +257,7 @@ class _MacHotkeyListenerImpl:
             keycode = event.keyCode()
 
             if keycode == self._trigger_keycode:
+                logger.debug("Hotkey released")
                 self._listener._on_hotkey_released()
         except Exception as e:
             logger.error(f"Error in macOS key up handler: {e}")
