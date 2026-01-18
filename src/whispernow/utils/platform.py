@@ -76,6 +76,18 @@ def check_accessibility_permissions() -> bool:
         return True
 
     try:
+        from pynput import keyboard
+
+        listener = keyboard.Listener(on_press=lambda k: None)
+        listener.start()
+        is_trusted = getattr(listener, "IS_TRUSTED", True)
+        listener.stop()
+        logger.debug(f"pynput IS_TRUSTED check: {is_trusted}")
+        return is_trusted
+    except Exception as e:
+        logger.warning(f"Failed to check accessibility via pynput: {e}")
+
+    try:
         result = subprocess.run(
             ["osascript", "-e", 'tell application "System Events" to keystroke ""'],
             capture_output=True,

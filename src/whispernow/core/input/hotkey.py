@@ -10,7 +10,10 @@ from typing import Optional
 from pynput import keyboard
 from PySide6.QtCore import QObject, Signal
 
+from ...utils.logger import get_logger
 from ..settings.settings import Settings, get_settings
+
+logger = get_logger(__name__)
 
 
 class HotkeyListener(QObject):
@@ -104,6 +107,14 @@ class HotkeyListener(QObject):
             on_press=self._on_press, on_release=self._on_release
         )
         self._listener.start()
+
+        if hasattr(self._listener, "IS_TRUSTED"):
+            logger.info(f"Keyboard listener IS_TRUSTED: {self._listener.IS_TRUSTED}")
+            if not self._listener.IS_TRUSTED:
+                logger.warning(
+                    "Hotkey listener is NOT TRUSTED. Accessibility permissions not granted. "
+                    "Add WhisperNow.app to System Settings > Privacy & Security > Accessibility"
+                )
 
     def stop(self) -> None:
         if self._listener:

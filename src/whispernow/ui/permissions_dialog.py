@@ -61,10 +61,12 @@ class PermissionsDialog(QDialog):
 
         instructions = QLabel(
             "<b>How to grant permission:</b><br>"
-            "1. Click 'Open System Preferences' below<br>"
+            "1. Click 'Open System Settings' below<br>"
             "2. Click the lock icon to make changes<br>"
-            "3. Find and check 'WhisperNow' in the list<br>"
-            "4. Click 'Check Again' to verify"
+            "3. Click '+' and navigate to Applications<br>"
+            "4. Select <b>WhisperNow.app</b> and add it<br>"
+            "5. Ensure the checkbox next to 'WhisperNow' is checked<br>"
+            "6. Click 'Check Again' to verify"
         )
         instructions.setTextFormat(Qt.RichText)
         instructions.setWordWrap(True)
@@ -72,7 +74,7 @@ class PermissionsDialog(QDialog):
 
         button_layout = QHBoxLayout()
 
-        self._open_prefs_btn = QPushButton("Open System Preferences")
+        self._open_prefs_btn = QPushButton("Open System Settings")
         self._open_prefs_btn.clicked.connect(self._open_preferences)
         button_layout.addWidget(self._open_prefs_btn)
 
