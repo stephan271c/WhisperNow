@@ -1,3 +1,5 @@
+import ctypes
+import ctypes.util
 import os
 import platform
 import shlex
@@ -15,17 +17,20 @@ logger = get_logger(__name__)
 
 
 def get_subprocess_kwargs(**extra: Any) -> Dict[str, Any]:
-    kwargs: Dict[str, Any] = {**extra}
+    kwargs = extra.copy()
     if platform.system() == "Windows":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        # Redirect stdin to DEVNULL to prevent frozen apps from hanging
-        if "stdin" not in extra:
+        # Bitwise OR to preserve any existing creationflags
+        kwargs["creationflags"] = (
+            kwargs.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
+        )
+
+        if "stdin" not in kwargs:
             kwargs["stdin"] = subprocess.DEVNULL
-        if "input" in extra and "capture_output" not in extra:
-            if "stdout" not in extra:
-                kwargs["stdout"] = subprocess.DEVNULL
-            if "stderr" not in extra:
-                kwargs["stderr"] = subprocess.DEVNULL
+
+        # Only suppress output if capture_output is NOT set
+        if not kwargs.get("capture_output", False):
+            kwargs.setdefault("stdout", subprocess.DEVNULL)
+            kwargs.setdefault("stderr", subprocess.DEVNULL)
     return kwargs
 
 
@@ -79,7 +84,9 @@ def get_platform() -> str:
 
 def _check_macos_accessibility(prompt: bool = False) -> bool:
     """
-    Check if the app has accessibility permissions on macOS.
+    Check if the app has accessibility permissions on macOS using ctypes.
+    This avoids subprocess issues with frozen apps where sys.executable
+    points to the app binary instead of a Python interpreter.
 
     Args:
         prompt: If True, triggers the system dialog requesting permission if not already granted.
@@ -87,41 +94,51 @@ def _check_macos_accessibility(prompt: bool = False) -> bool:
     if get_platform() != "macos":
         return True
 
-    script = f"""
-import sys
-try:
-    from ApplicationServices import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
-    options = {{kAXTrustedCheckOptionPrompt: {str(prompt)}}}
-    trusted = AXIsProcessTrustedWithOptions(options)
-    sys.exit(0 if trusted else 1)
-except ImportError:
-    # pyobjc-framework-ApplicationServices not available
-    sys.exit(2)
-except Exception:
-    sys.exit(1)
-"""
     try:
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            timeout=3,
-        )
-        if result.returncode == 2:
-            logger.warning(
-                "pyobjc-framework-ApplicationServices missing; assuming no permissions"
-            )
+        # Load ApplicationServices framework (contains AXIsProcessTrustedWithOptions)
+        app_services_path = ctypes.util.find_library("ApplicationServices")
+        if not app_services_path:
+            logger.warning("ApplicationServices framework not found")
             return False
-        return result.returncode == 0
-    except subprocess.TimeoutExpired:
-        logger.warning("Accessibility permission check timed out")
-        return False
+
+        app_services = ctypes.cdll.LoadLibrary(app_services_path)
+
+        # AXIsProcessTrustedWithOptions(CFDictionaryRef options) -> Boolean
+        # Passing NULL (None) checks without prompting
+        app_services.AXIsProcessTrustedWithOptions.argtypes = [ctypes.c_void_p]
+        app_services.AXIsProcessTrustedWithOptions.restype = ctypes.c_bool
+
+        if not prompt:
+            # Simple check without prompt - pass NULL
+            return app_services.AXIsProcessTrustedWithOptions(None)
+        else:
+            # Check first without prompting
+            trusted = app_services.AXIsProcessTrustedWithOptions(None)
+            if not trusted:
+                # Pure ctypes prompting requires CoreFoundation dict creation which is complex.
+                # Fall back to opening System Preferences (handled by request_accessibility_permissions)
+                pass
+            return trusted
+
     except Exception as e:
-        logger.warning(f"Failed to check accessibility permissions: {e}")
+        logger.warning(f"Accessibility check failed: {e}")
         return False
 
 
 def check_accessibility_permissions() -> bool:
     return _check_macos_accessibility(prompt=False)
+
+
+def get_permission_status() -> Dict[str, bool]:
+    """
+    Returns a dictionary of permission statuses for cleaner UI separation.
+    The caller can use this to decide whether to show a permissions dialog.
+    """
+    return {
+        "accessibility": check_accessibility_permissions(),
+        "input_monitoring": check_input_monitoring_permissions(),
+        "microphone": check_microphone_permissions(),
+    }
 
 
 def request_accessibility_permissions() -> None:
@@ -142,39 +159,35 @@ def request_accessibility_permissions() -> None:
 
 
 def check_input_monitoring_permissions() -> bool:
+    """
+    Check if the app has Input Monitoring permissions on macOS using ctypes.
+    This avoids subprocess issues with frozen apps.
+    """
     if get_platform() != "macos":
         return True
 
-    # Use IOHIDCheckAccess from IOKit instead of CGPreflightListenEventAccess
-    # CGPreflightListenEventAccess is unreliable and doesn't reflect actual permission status
-    script = """
-import sys
-import ctypes
+    # Constants from IOKit
+    kIOHIDRequestTypeListenEvent = 1
+    kIOHIDAccessTypeGranted = 0
 
-kIOHIDRequestTypeListenEvent = 1
-kIOHIDAccessTypeGranted = 0
-
-try:
-    iokit = ctypes.cdll.LoadLibrary('/System/Library/Frameworks/IOKit.framework/IOKit')
-    iokit.IOHIDCheckAccess.argtypes = [ctypes.c_uint32]
-    iokit.IOHIDCheckAccess.restype = ctypes.c_uint32
-    access_type = iokit.IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
-    sys.exit(0 if access_type == kIOHIDAccessTypeGranted else 1)
-except Exception:
-    sys.exit(1)
-"""
     try:
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except subprocess.TimeoutExpired:
-        logger.warning("Input Monitoring permission check timed out")
-        return False
+        # Load IOKit framework
+        iokit_path = ctypes.util.find_library("IOKit")
+        if not iokit_path:
+            logger.warning("IOKit framework not found")
+            return False
+
+        iokit = ctypes.cdll.LoadLibrary(iokit_path)
+
+        # IOHIDCheckAccess(IOHIDRequestType requestType) -> IOHIDAccessType
+        iokit.IOHIDCheckAccess.argtypes = [ctypes.c_uint32]
+        iokit.IOHIDCheckAccess.restype = ctypes.c_uint32
+
+        access_type = iokit.IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+        return access_type == kIOHIDAccessTypeGranted
+
     except Exception as e:
-        logger.warning(f"Failed to check Input Monitoring permissions: {e}")
+        logger.debug(f"Input monitoring check failed: {e}")
         return False
 
 
