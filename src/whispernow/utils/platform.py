@@ -69,14 +69,32 @@ def get_platform() -> str:
     return system.lower()
 
 
-def check_accessibility_permissions() -> bool:
+def _check_macos_accessibility(prompt: bool = False) -> bool:
+    """
+    Check if the app has accessibility permissions on macOS.
 
+    Args:
+        prompt: If True, triggers the system dialog requesting permission if not already granted.
+    """
     if get_platform() != "macos":
         return True
 
+    script = f"""
+import sys
+try:
+    from ApplicationServices import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
+    options = {{kAXTrustedCheckOptionPrompt: {str(prompt)}}}
+    trusted = AXIsProcessTrustedWithOptions(options)
+    sys.exit(0 if trusted else 1)
+except ImportError:
+    # Fallback if ApplicationServices import fails (shouldn't happen if deps are correct)
+    sys.exit(1)
+except Exception:
+    sys.exit(1)
+"""
     try:
         result = subprocess.run(
-            ["osascript", "-e", 'tell application "System Events" to keystroke ""'],
+            [sys.executable, "-c", script],
             capture_output=True,
             timeout=5,
         )
@@ -89,25 +107,18 @@ def check_accessibility_permissions() -> bool:
         return False
 
 
-def check_input_monitoring_permissions() -> bool:
-
-    if get_platform() != "macos":
-        return True
-
-    try:
-        from Quartz import CGPreflightListenEventAccess
-
-        return bool(CGPreflightListenEventAccess())
-    except Exception as e:
-        logger.warning(f"Failed to check Input Monitoring permissions: {e}")
-        return False
+def check_accessibility_permissions() -> bool:
+    return _check_macos_accessibility(prompt=False)
 
 
 def request_accessibility_permissions() -> None:
-
     if get_platform() != "macos":
         return
 
+    # Trigger the prompt
+    _check_macos_accessibility(prompt=True)
+
+    # Also open System Settings as a backup/convenience helper
     subprocess.run(
         [
             "open",
@@ -115,6 +126,43 @@ def request_accessibility_permissions() -> None:
         ],
         check=False,
     )
+
+
+def check_input_monitoring_permissions() -> bool:
+    if get_platform() != "macos":
+        return True
+
+    # Use IOHIDCheckAccess from IOKit instead of CGPreflightListenEventAccess
+    # CGPreflightListenEventAccess is unreliable and doesn't reflect actual permission status
+    script = """
+import sys
+import ctypes
+
+kIOHIDRequestTypeListenEvent = 1
+kIOHIDAccessTypeGranted = 0
+
+try:
+    iokit = ctypes.cdll.LoadLibrary('/System/Library/Frameworks/IOKit.framework/IOKit')
+    iokit.IOHIDCheckAccess.argtypes = [ctypes.c_uint32]
+    iokit.IOHIDCheckAccess.restype = ctypes.c_uint32
+    access_type = iokit.IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+    sys.exit(0 if access_type == kIOHIDAccessTypeGranted else 1)
+except Exception:
+    sys.exit(1)
+"""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        logger.warning("Input Monitoring permission check timed out")
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to check Input Monitoring permissions: {e}")
+        return False
 
 
 def request_input_monitoring_permissions() -> None:

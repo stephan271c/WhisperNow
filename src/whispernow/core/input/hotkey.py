@@ -2,11 +2,14 @@
 Hotkey listener for global keyboard shortcuts.
 
 Listens for configurable hotkey combinations.
-On macOS, uses native NSEvent API to avoid threading issues.
+On macOS, uses subprocess-based CGEventTap to avoid threading issues.
 On other platforms, uses pynput.
 """
 
+import subprocess
 import sys
+import threading
+from pathlib import Path
 from typing import Optional, Set
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -168,20 +171,27 @@ class HotkeyListener(QObject):
 
 class _MacHotkeyListenerImpl:
     """
-    Native macOS hotkey listener using CGEventTap.
+    Native macOS hotkey listener using subprocess-based CGEventTap.
 
-    CGEventTap is more reliable than NSEvent global monitors for capturing
-    all keyboard events including system hotkeys. It intercepts events at
-    the system level before they're dispatched to applications.
+    Spawns a separate Python process that runs CGEventTap on its main thread,
+    avoiding HIToolbox threading violations that occur when integrating
+    CGEventTap with Qt's event loop. Events are received via stdout IPC.
     """
+
+    # Modifier flag masks from Quartz (defined here to avoid importing Quartz in main process)
+    _MODIFIER_CONTROL = 0x40000  # kCGEventFlagMaskControl
+    _MODIFIER_ALTERNATE = 0x80000  # kCGEventFlagMaskAlternate
+    _MODIFIER_SHIFT = 0x20000  # kCGEventFlagMaskShift
+    _MODIFIER_COMMAND = 0x100000  # kCGEventFlagMaskCommand
 
     def __init__(self, listener: HotkeyListener):
         self._listener = listener
-        self._tap = None
-        self._run_loop_source = None
+        self._process: Optional[subprocess.Popen] = None
+        self._reader_thread: Optional[threading.Thread] = None
         self._trigger_keycode = listener._trigger_keycode
         self._required_modifiers = listener._required_modifier_types
         self._is_hotkey_down = False
+        self._stopping = False
 
     def update_config(
         self, trigger_key: str, modifiers: Set[str], trigger_keycode: int
@@ -190,138 +200,88 @@ class _MacHotkeyListenerImpl:
         self._required_modifiers = modifiers
 
     def start(self) -> None:
+        self._stopping = False
+
+        listener_script = Path(__file__).parent / "mac_listener.py"
+        if not listener_script.exists():
+            logger.error(f"macOS listener script not found: {listener_script}")
+            return
+
         try:
-            import Quartz
-            from Quartz import (
-                CFMachPortCreateRunLoopSource,
-                CFRunLoopAddSource,
-                CFRunLoopGetCurrent,
-                CGEventMaskBit,
-                CGEventTapCreate,
-                CGEventTapEnable,
-                CGPreflightListenEventAccess,
-                CGRequestListenEventAccess,
-                kCFRunLoopCommonModes,
-                kCGEventFlagsChanged,
-                kCGEventKeyDown,
-                kCGEventKeyUp,
-                kCGEventTapOptionListenOnly,
-                kCGHeadInsertEventTap,
-                kCGSessionEventTap,
+            self._process = subprocess.Popen(
+                [sys.executable, str(listener_script)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
             )
 
-            try:
-                if not CGPreflightListenEventAccess():
-                    logger.warning(
-                        "Input Monitoring permission not granted. Hotkeys may not be captured."
-                    )
-                    CGRequestListenEventAccess()
-            except Exception as e:
-                logger.debug(f"Unable to check Input Monitoring permissions: {e}")
-
-            # Create event mask for key events
-            event_mask = (
-                CGEventMaskBit(kCGEventKeyDown)
-                | CGEventMaskBit(kCGEventKeyUp)
-                | CGEventMaskBit(kCGEventFlagsChanged)
+            self._reader_thread = threading.Thread(
+                target=self._read_events, daemon=True
             )
-
-            # Create the event tap
-            self._tap = CGEventTapCreate(
-                kCGSessionEventTap,  # Tap at session level
-                kCGHeadInsertEventTap,  # Insert at head
-                kCGEventTapOptionListenOnly,  # Listen-only (don't modify events)
-                event_mask,
-                self._event_callback,
-                None,  # User info
-            )
-
-            if self._tap is None:
-                logger.error(
-                    "CGEventTapCreate returned None - accessibility permissions "
-                    "NOT granted. Add WhisperNow.app to System Settings > "
-                    "Privacy & Security > Accessibility"
-                )
-                return
-
-            # Create run loop source and add to current run loop
-            self._run_loop_source = CFMachPortCreateRunLoopSource(None, self._tap, 0)
-            CFRunLoopAddSource(
-                CFRunLoopGetCurrent(), self._run_loop_source, kCFRunLoopCommonModes
-            )
-
-            # Enable the tap
-            CGEventTapEnable(self._tap, True)
+            self._reader_thread.start()
 
             logger.info(
-                f"macOS CGEventTap hotkey listener started: expecting keycode={self._trigger_keycode}, "
+                f"macOS subprocess hotkey listener started: expecting keycode={self._trigger_keycode}, "
                 f"modifiers={self._required_modifiers}"
             )
-        except ImportError as e:
-            logger.error(f"Failed to import Quartz for macOS hotkey listener: {e}")
         except Exception as e:
-            logger.error(f"Failed to start macOS hotkey listener: {e}")
+            logger.error(f"Failed to start macOS hotkey subprocess: {e}")
 
     def stop(self) -> None:
+        self._stopping = True
+
+        if self._process:
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+            except Exception as e:
+                logger.debug(f"Error stopping hotkey subprocess: {e}")
+            finally:
+                self._process = None
+
+        logger.info("macOS subprocess hotkey listener stopped")
+
+    def _read_events(self) -> None:
+        if not self._process or not self._process.stdout:
+            return
+
         try:
-            from Quartz import (
-                CFRunLoopGetCurrent,
-                CFRunLoopRemoveSource,
-                CGEventTapEnable,
-                kCFRunLoopCommonModes,
-            )
+            for line in self._process.stdout:
+                if self._stopping:
+                    break
 
-            if self._tap:
-                CGEventTapEnable(self._tap, False)
+                line = line.strip()
+                if not line:
+                    continue
 
-            if self._run_loop_source:
-                CFRunLoopRemoveSource(
-                    CFRunLoopGetCurrent(), self._run_loop_source, kCFRunLoopCommonModes
-                )
-                self._run_loop_source = None
+                if line == "READY":
+                    logger.info("macOS hotkey subprocess is ready")
+                    continue
 
-            self._tap = None
-            logger.info("macOS CGEventTap hotkey listener stopped")
+                if line.startswith("ERROR:"):
+                    error_msg = line[6:]
+                    logger.error(f"macOS hotkey subprocess error: {error_msg}")
+                    continue
+
+                if line.startswith("KEY_DOWN:"):
+                    self._handle_key_down(line)
+                elif line.startswith("KEY_UP:"):
+                    self._handle_key_up(line)
+
         except Exception as e:
-            logger.error(f"Failed to stop macOS hotkey listener: {e}")
+            if not self._stopping:
+                logger.error(f"Error reading from hotkey subprocess: {e}")
 
-    def _check_modifiers(self, flags: int) -> bool:
-        from Quartz import (
-            kCGEventFlagMaskAlternate,
-            kCGEventFlagMaskCommand,
-            kCGEventFlagMaskControl,
-            kCGEventFlagMaskShift,
-        )
-
-        for mod in self._required_modifiers:
-            if mod == "ctrl":
-                if not (flags & kCGEventFlagMaskControl):
-                    return False
-            elif mod == "alt":
-                if not (flags & kCGEventFlagMaskAlternate):
-                    return False
-            elif mod == "shift":
-                if not (flags & kCGEventFlagMaskShift):
-                    return False
-            elif mod in ("cmd", "meta"):
-                if not (flags & kCGEventFlagMaskCommand):
-                    return False
-        return True
-
-    def _event_callback(self, proxy, event_type, event, refcon):
+    def _handle_key_down(self, line: str) -> None:
         try:
-            from Quartz import (
-                CGEventGetFlags,
-                CGEventGetIntegerValueField,
-                kCGEventKeyDown,
-                kCGEventKeyUp,
-                kCGKeyboardEventKeycode,
-            )
+            parts = line.split(":")
+            if len(parts) >= 3:
+                keycode = int(parts[1])
+                flags = int(parts[2])
 
-            keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
-            flags = CGEventGetFlags(event)
-
-            if event_type == kCGEventKeyDown:
                 logger.debug(
                     f"key down: keycode={keycode} (expecting {self._trigger_keycode}), "
                     f"modifiers=0x{flags:08x}"
@@ -331,19 +291,39 @@ class _MacHotkeyListenerImpl:
                     if not self._is_hotkey_down:
                         self._is_hotkey_down = True
                         logger.info("Hotkey pressed!")
-                        self._listener._on_hotkey_pressed()
+                        QTimer.singleShot(0, self._listener._on_hotkey_pressed)
+        except (ValueError, IndexError) as e:
+            logger.debug(f"Failed to parse KEY_DOWN: {line}, error: {e}")
 
-            elif event_type == kCGEventKeyUp:
+    def _handle_key_up(self, line: str) -> None:
+        try:
+            parts = line.split(":")
+            if len(parts) >= 2:
+                keycode = int(parts[1])
+
                 if keycode == self._trigger_keycode:
                     if self._is_hotkey_down:
                         self._is_hotkey_down = False
                         logger.debug("Hotkey released")
-                        self._listener._on_hotkey_released()
+                        QTimer.singleShot(0, self._listener._on_hotkey_released)
+        except (ValueError, IndexError) as e:
+            logger.debug(f"Failed to parse KEY_UP: {line}, error: {e}")
 
-        except Exception as e:
-            logger.error(f"Error in macOS event callback: {e}")
-
-        return event
+    def _check_modifiers(self, flags: int) -> bool:
+        for mod in self._required_modifiers:
+            if mod == "ctrl":
+                if not (flags & self._MODIFIER_CONTROL):
+                    return False
+            elif mod == "alt":
+                if not (flags & self._MODIFIER_ALTERNATE):
+                    return False
+            elif mod == "shift":
+                if not (flags & self._MODIFIER_SHIFT):
+                    return False
+            elif mod in ("cmd", "meta"):
+                if not (flags & self._MODIFIER_COMMAND):
+                    return False
+        return True
 
 
 class _PynputHotkeyListenerImpl:

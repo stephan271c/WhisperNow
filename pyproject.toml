@@ -80,7 +80,17 @@ requires = [
 
 [tool.briefcase.app.whispernow.macOS]
 min_os_version = "12.0"
-info_plist = { NSInputMonitoringUsageDescription = "WhisperNow listens for your push-to-talk hotkey." }
+requires = [
+    "pyobjc-framework-ApplicationServices>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
+]
+
+[tool.briefcase.app.whispernow.macOS.info_plist]
+NSMicrophoneUsageDescription = "WhisperNow needs microphone access for speech recognition."
+NSAccessibilityUsageDescription = "WhisperNow needs accessibility permissions to paste transcribed text."
+NSInputMonitoringUsageDescription = "WhisperNow listens for your push-to-talk hotkey."
+
+
 
 [tool.briefcase.app.whispernow.linux.appimage]
 manylinux = "manylinux_2_28"
