@@ -74,26 +74,19 @@ def check_accessibility_permissions() -> bool:
     if get_platform() != "macos":
         return True
 
-    try:
-        import ctypes
-
-        app_services = ctypes.cdll.LoadLibrary(
-            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
-        )
-        app_services.AXIsProcessTrusted.restype = ctypes.c_bool
-        is_trusted = app_services.AXIsProcessTrusted()
-        logger.debug(f"AXIsProcessTrusted check: {is_trusted}")
-        return is_trusted
-    except Exception as e:
-        logger.warning(f"Failed to check accessibility via AXIsProcessTrusted: {e}")
-
+    # Use subprocess to check accessibility permissions.
+    # We avoid ctypes-based AXIsProcessTrusted because it can trigger internal
+    # HIToolbox code paths that assert main thread access, causing crashes
+    # when called from background threads or Qt signal handlers.
     try:
         result = subprocess.run(
             ["osascript", "-e", 'tell application "System Events" to keystroke ""'],
             capture_output=True,
             timeout=5,
         )
-        return result.returncode == 0
+        is_granted = result.returncode == 0
+        logger.debug(f"Accessibility permission check (osascript): {is_granted}")
+        return is_granted
     except subprocess.TimeoutExpired:
         logger.warning("Accessibility permission check timed out")
         return False
