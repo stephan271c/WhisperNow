@@ -369,7 +369,7 @@ class TranscribeApp(QObject):
         logger.info(
             f"Starting hotkey listener: {self._settings.hotkey.to_display_string()}"
         )
-        self._hotkey_listener.start()
+        QTimer.singleShot(0, self._hotkey_listener.start)
 
         if not self._settings.start_minimized:
             self._show_settings()

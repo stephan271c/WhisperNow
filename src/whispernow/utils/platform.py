@@ -1,11 +1,15 @@
 import os
 import platform
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from .logger import get_logger
+
+if TYPE_CHECKING:
+    from ..core.settings import Settings
 
 logger = get_logger(__name__)
 
@@ -14,6 +18,9 @@ def get_subprocess_kwargs(**extra: Any) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {**extra}
     if platform.system() == "Windows":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        # Redirect stdin to DEVNULL to prevent frozen apps from hanging
+        if "stdin" not in extra:
+            kwargs["stdin"] = subprocess.DEVNULL
         if "input" in extra and "capture_output" not in extra:
             if "stdout" not in extra:
                 kwargs["stdout"] = subprocess.DEVNULL
@@ -23,7 +30,6 @@ def get_subprocess_kwargs(**extra: Any) -> Dict[str, Any]:
 
 
 def get_executable_path() -> str:
-
     system = get_platform()
 
     if system == "linux":
@@ -32,11 +38,13 @@ def get_executable_path() -> str:
             logger.debug(f"Running as AppImage: {appimage_path}")
             return appimage_path
 
-        exe_path = Path(sys.executable).resolve()
-        for parent in exe_path.parents:
-            if parent.suffix == ".app":
-                logger.debug(f"Running as macOS .app bundle: {parent}")
-                return str(parent)
+    if system == "macos":
+        if getattr(sys, "frozen", False):
+            exe_path = Path(sys.executable).resolve()
+            for parent in exe_path.parents:
+                if parent.suffix == ".app":
+                    logger.debug(f"Running as macOS .app bundle: {parent}")
+                    return str(parent)
 
     if system == "windows":
         if getattr(sys, "frozen", False):
@@ -87,8 +95,8 @@ try:
     trusted = AXIsProcessTrustedWithOptions(options)
     sys.exit(0 if trusted else 1)
 except ImportError:
-    # Fallback if ApplicationServices import fails (shouldn't happen if deps are correct)
-    sys.exit(1)
+    # pyobjc-framework-ApplicationServices not available
+    sys.exit(2)
 except Exception:
     sys.exit(1)
 """
@@ -96,8 +104,13 @@ except Exception:
         result = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True,
-            timeout=5,
+            timeout=3,
         )
+        if result.returncode == 2:
+            logger.warning(
+                "pyobjc-framework-ApplicationServices missing; assuming no permissions"
+            )
+            return False
         return result.returncode == 0
     except subprocess.TimeoutExpired:
         logger.warning("Accessibility permission check timed out")
@@ -180,21 +193,35 @@ def request_input_monitoring_permissions() -> None:
 
 
 def check_microphone_permissions() -> bool:
-
     if get_platform() != "macos":
         return True
 
     try:
         import sounddevice as sd
 
+        # Check for physical devices first
         devices = sd.query_devices()
         has_inputs = any(d.get("max_input_channels", 0) > 0 for d in devices)
-        if has_inputs:
-            logger.debug("Microphone permission check: input devices accessible")
-            return True
-        else:
+        if not has_inputs:
             logger.warning("Microphone permission check: no input devices found")
             return False
+
+        # Attempt to open a stream briefly to verify actual permission.
+        # On macOS, querying devices doesn't always reflect privacy settings.
+        try:
+            with sd.InputStream(channels=1, samplerate=16000):
+                pass
+            logger.debug("Microphone permission check: stream opened successfully")
+            return True
+        except Exception:
+            logger.warning(
+                "Input devices found but failed to open stream (permission denied?)"
+            )
+            return False
+
+    except ImportError:
+        logger.error("sounddevice library not found")
+        return False
     except Exception as e:
         logger.warning(f"Microphone permission check failed: {e}")
         return False
@@ -300,12 +327,20 @@ def _set_autostart_macos(enabled: bool, app_name: str) -> bool:
 </dict>
 </plist>
 """
-        plist_path.parent.mkdir(parents=True, exist_ok=True)
-        plist_path.write_text(plist_content)
-        logger.info(f"macOS autostart enabled: {plist_path}")
+        try:
+            plist_path.parent.mkdir(parents=True, exist_ok=True)
+            plist_path.write_text(plist_content)
+            logger.info(f"macOS autostart enabled: {plist_path}")
+        except OSError as e:
+            logger.error(f"Failed to write LaunchAgent: {e}")
+            return False
     else:
-        plist_path.unlink(missing_ok=True)
-        logger.info("macOS autostart disabled")
+        try:
+            plist_path.unlink(missing_ok=True)
+            logger.info("macOS autostart disabled")
+        except OSError as e:
+            logger.error(f"Failed to remove LaunchAgent: {e}")
+            return False
 
     return True
 
@@ -318,10 +353,13 @@ def _set_autostart_linux(enabled: bool, app_name: str) -> bool:
         exe_path = get_executable_path()
         packaged = is_packaged()
 
+        # Quote paths to handle spaces in directory names
+        quoted_exe = shlex.quote(str(exe_path))
+
         if packaged:
-            exec_cmd = exe_path
+            exec_cmd = quoted_exe
         else:
-            exec_cmd = f"{exe_path} -m whispernow"
+            exec_cmd = f"{quoted_exe} -m whispernow"
 
         desktop_content = f"""[Desktop Entry]
 Type=Application
@@ -332,12 +370,20 @@ NoDisplay=false
 X-GNOME-Autostart-enabled=true
 Comment=Voice-to-text transcription with AI enhancement
 """
-        autostart_dir.mkdir(parents=True, exist_ok=True)
-        desktop_file.write_text(desktop_content)
-        logger.info(f"Linux autostart enabled: {desktop_file} -> {exec_cmd}")
+        try:
+            autostart_dir.mkdir(parents=True, exist_ok=True)
+            desktop_file.write_text(desktop_content)
+            logger.info(f"Linux autostart enabled: {desktop_file} -> {exec_cmd}")
+        except OSError as e:
+            logger.error(f"Failed to write autostart file: {e}")
+            return False
     else:
-        desktop_file.unlink(missing_ok=True)
-        logger.info("Linux autostart disabled")
+        try:
+            desktop_file.unlink(missing_ok=True)
+            logger.info("Linux autostart disabled")
+        except OSError as e:
+            logger.error(f"Failed to remove autostart file: {e}")
+            return False
 
     return True
 
@@ -392,7 +438,3 @@ def check_and_request_permissions(settings: "Settings") -> bool:
         )
 
     return accessibility_granted and input_monitoring_granted
-
-
-if TYPE_CHECKING:
-    from ..core.settings import Settings
