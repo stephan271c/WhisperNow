@@ -12,7 +12,9 @@ from PySide6.QtWidgets import (
 from ..utils.logger import get_logger
 from ..utils.platform import (
     check_accessibility_permissions,
+    check_input_monitoring_permissions,
     request_accessibility_permissions,
+    request_input_monitoring_permissions,
 )
 
 logger = get_logger(__name__)
@@ -21,7 +23,7 @@ logger = get_logger(__name__)
 class PermissionsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Accessibility Permission Required")
+        self.setWindowTitle("Permissions Required")
         self.setMinimumWidth(450)
         self.setModal(True)
 
@@ -32,7 +34,7 @@ class PermissionsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
 
-        title = QLabel("Accessibility Permission Required")
+        title = QLabel("Permissions Required")
         title_font = QFont()
         title_font.setPointSize(14)
         title_font.setBold(True)
@@ -40,10 +42,10 @@ class PermissionsDialog(QDialog):
         layout.addWidget(title)
 
         explanation = QLabel(
-            "WhisperNow needs accessibility permission to:\n\n"
-            "• Listen for your push-to-talk hotkey\n"
-            "• Type the transcribed text into applications\n\n"
-            "Without this permission, the app cannot detect when you "
+            "WhisperNow needs permission to:\n\n"
+            "• Listen for your push-to-talk hotkey (Input Monitoring)\n"
+            "• Type the transcribed text into applications (Accessibility)\n\n"
+            "Without these permissions, the app cannot detect when you "
             "press your hotkey or output the transcribed text."
         )
         explanation.setWordWrap(True)
@@ -60,23 +62,36 @@ class PermissionsDialog(QDialog):
         layout.addWidget(self._status_frame)
 
         instructions = QLabel(
-            "<b>How to grant permission:</b><br>"
-            "1. Click 'Open System Settings' below<br>"
+            "<b>How to grant permissions:</b><br>"
+            "1. Click 'Input Monitoring Settings' below<br>"
             "2. Click the lock icon to make changes<br>"
             "3. Click '+' and navigate to Applications<br>"
             "4. Select <b>WhisperNow.app</b> and add it<br>"
             "5. Ensure the checkbox next to 'WhisperNow' is checked<br>"
-            "6. Click 'Check Again' to verify"
+            "6. Repeat in 'Accessibility Settings'<br>"
+            "7. Click 'Check Again' to verify"
         )
         instructions.setTextFormat(Qt.RichText)
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
 
-        button_layout = QHBoxLayout()
+        open_layout = QHBoxLayout()
 
-        self._open_prefs_btn = QPushButton("Open System Settings")
-        self._open_prefs_btn.clicked.connect(self._open_preferences)
-        button_layout.addWidget(self._open_prefs_btn)
+        self._open_input_monitoring_btn = QPushButton("Input Monitoring Settings")
+        self._open_input_monitoring_btn.clicked.connect(
+            self._open_input_monitoring_preferences
+        )
+        open_layout.addWidget(self._open_input_monitoring_btn)
+
+        self._open_accessibility_btn = QPushButton("Accessibility Settings")
+        self._open_accessibility_btn.clicked.connect(
+            self._open_accessibility_preferences
+        )
+        open_layout.addWidget(self._open_accessibility_btn)
+
+        layout.addLayout(open_layout)
+
+        button_layout = QHBoxLayout()
 
         self._check_btn = QPushButton("Check Again")
         self._check_btn.clicked.connect(self._check_permission)
@@ -91,25 +106,37 @@ class PermissionsDialog(QDialog):
         layout.addLayout(button_layout)
 
     def _update_status(self) -> None:
-        if check_accessibility_permissions():
-            self._status_label.setText("✅ Permission granted!")
+        accessibility_granted = check_accessibility_permissions()
+        input_monitoring_granted = check_input_monitoring_permissions()
+        status_lines = [
+            f"Accessibility: {'Granted' if accessibility_granted else 'Not granted'}",
+            f"Input Monitoring: {'Granted' if input_monitoring_granted else 'Not granted'}",
+        ]
+        self._status_label.setText("\n".join(status_lines))
+
+        if accessibility_granted and input_monitoring_granted:
             self._status_frame.setStyleSheet(
                 "QFrame { background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; }"
             )
-            self._open_prefs_btn.setEnabled(False)
+            self._open_input_monitoring_btn.setEnabled(False)
+            self._open_accessibility_btn.setEnabled(False)
             self._check_btn.setEnabled(False)
             self._continue_btn.setText("Done")
-            logger.info("Accessibility permissions granted")
+            logger.info("Accessibility and Input Monitoring permissions granted")
         else:
-            self._status_label.setText("⚠️ Permission not yet granted")
             self._status_frame.setStyleSheet(
                 "QFrame { background-color: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; }"
             )
-            self._open_prefs_btn.setEnabled(True)
+            self._open_input_monitoring_btn.setEnabled(not input_monitoring_granted)
+            self._open_accessibility_btn.setEnabled(not accessibility_granted)
             self._check_btn.setEnabled(True)
             self._continue_btn.setText("Continue Anyway")
 
-    def _open_preferences(self) -> None:
+    def _open_input_monitoring_preferences(self) -> None:
+        logger.info("Opening System Preferences for Input Monitoring permissions")
+        request_input_monitoring_permissions()
+
+    def _open_accessibility_preferences(self) -> None:
         logger.info("Opening System Preferences for accessibility permissions")
         request_accessibility_permissions()
 
@@ -117,4 +144,6 @@ class PermissionsDialog(QDialog):
         self._update_status()
 
     def permissions_granted(self) -> bool:
-        return check_accessibility_permissions()
+        return (
+            check_accessibility_permissions() and check_input_monitoring_permissions()
+        )

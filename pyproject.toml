@@ -80,6 +80,7 @@ requires = [
 
 [tool.briefcase.app.whispernow.macOS]
 min_os_version = "12.0"
+info_plist = { NSInputMonitoringUsageDescription = "WhisperNow listens for your push-to-talk hotkey." }
 
 [tool.briefcase.app.whispernow.linux.appimage]
 manylinux = "manylinux_2_28"

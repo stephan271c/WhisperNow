@@ -89,6 +89,20 @@ def check_accessibility_permissions() -> bool:
         return False
 
 
+def check_input_monitoring_permissions() -> bool:
+
+    if get_platform() != "macos":
+        return True
+
+    try:
+        from Quartz import CGPreflightListenEventAccess
+
+        return bool(CGPreflightListenEventAccess())
+    except Exception as e:
+        logger.warning(f"Failed to check Input Monitoring permissions: {e}")
+        return False
+
+
 def request_accessibility_permissions() -> None:
 
     if get_platform() != "macos":
@@ -98,6 +112,20 @@ def request_accessibility_permissions() -> None:
         [
             "open",
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        ],
+        check=False,
+    )
+
+
+def request_input_monitoring_permissions() -> None:
+
+    if get_platform() != "macos":
+        return
+
+    subprocess.run(
+        [
+            "open",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
         ],
         check=False,
     )
@@ -282,26 +310,32 @@ def check_and_request_permissions(settings: "Settings") -> bool:
             logger.warning("Accessibility permission was revoked, prompting user")
 
     accessibility_granted = False
-    if check_accessibility_permissions():
+    input_monitoring_granted = False
+    if check_accessibility_permissions() and check_input_monitoring_permissions():
         settings.accessibility_permissions_granted = True
         settings.save()
-        logger.info("Accessibility permissions already granted")
+        logger.info("Accessibility and Input Monitoring permissions already granted")
         accessibility_granted = True
+        input_monitoring_granted = True
     else:
         from ..ui.permissions_dialog import PermissionsDialog
 
-        logger.info("Showing accessibility permissions dialog")
+        logger.info("Showing permissions dialog")
         dialog = PermissionsDialog()
         dialog.exec()
 
         accessibility_granted = check_accessibility_permissions()
+        input_monitoring_granted = check_input_monitoring_permissions()
         settings.accessibility_permissions_granted = accessibility_granted
         settings.save()
 
-        if accessibility_granted:
-            logger.info("User granted accessibility permissions")
+        if accessibility_granted and input_monitoring_granted:
+            logger.info("User granted Accessibility and Input Monitoring permissions")
         else:
-            logger.warning("User continued without accessibility permissions")
+            if not accessibility_granted:
+                logger.warning("User continued without accessibility permissions")
+            if not input_monitoring_granted:
+                logger.warning("User continued without Input Monitoring permissions")
 
     if not check_microphone_permissions():
         logger.warning(
@@ -309,7 +343,7 @@ def check_and_request_permissions(settings: "Settings") -> bool:
             "Grant access in System Settings > Privacy & Security > Microphone"
         )
 
-    return accessibility_granted
+    return accessibility_granted and input_monitoring_granted
 
 
 if TYPE_CHECKING:

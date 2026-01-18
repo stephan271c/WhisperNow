@@ -199,13 +199,25 @@ class _MacHotkeyListenerImpl:
                 CGEventMaskBit,
                 CGEventTapCreate,
                 CGEventTapEnable,
+                CGPreflightListenEventAccess,
+                CGRequestListenEventAccess,
                 kCFRunLoopCommonModes,
                 kCGEventFlagsChanged,
                 kCGEventKeyDown,
                 kCGEventKeyUp,
+                kCGEventTapOptionListenOnly,
                 kCGHeadInsertEventTap,
                 kCGSessionEventTap,
             )
+
+            try:
+                if not CGPreflightListenEventAccess():
+                    logger.warning(
+                        "Input Monitoring permission not granted. Hotkeys may not be captured."
+                    )
+                    CGRequestListenEventAccess()
+            except Exception as e:
+                logger.debug(f"Unable to check Input Monitoring permissions: {e}")
 
             # Create event mask for key events
             event_mask = (
@@ -218,7 +230,7 @@ class _MacHotkeyListenerImpl:
             self._tap = CGEventTapCreate(
                 kCGSessionEventTap,  # Tap at session level
                 kCGHeadInsertEventTap,  # Insert at head
-                0,  # Listen-only (don't modify events)
+                kCGEventTapOptionListenOnly,  # Listen-only (don't modify events)
                 event_mask,
                 self._event_callback,
                 None,  # User info
