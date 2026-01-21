@@ -1,7 +1,7 @@
 """
-Centralized application configuration.
+Development configuration.
 
-Edit the variables below to configure development settings.
+Edit these settings to configure logging and debugging behavior.
 """
 
 import logging
@@ -11,12 +11,6 @@ import logging
 # =============================================================================
 LOG_LEVEL = "DEBUG"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_TO_CONSOLE = True  # Set to True to output logs to terminal
-# =============================================================================
-
-# =============================================================================
-# HISTORY SETTINGS
-# =============================================================================
-MAX_HISTORY_ENTRIES = 20  # Number of transcription history records to keep
 # =============================================================================
 
 

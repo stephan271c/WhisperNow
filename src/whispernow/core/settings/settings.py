@@ -13,9 +13,10 @@ from platformdirs import user_config_path, user_data_path
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ...utils.logger import get_logger
-from .config import MAX_HISTORY_ENTRIES
 
 logger = get_logger(__name__)
+
+MAX_HISTORY_ENTRIES = 20  # Number of transcription history records to keep
 
 APP_NAME = "whispernow"
 

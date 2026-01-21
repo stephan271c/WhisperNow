@@ -32,7 +32,7 @@ def get_logger(name: str = "whispernow") -> logging.Logger:
         name = "whispernow"
 
     if _logger_instance is None:
-        from ..core.settings.config import LOG_TO_CONSOLE, get_log_level
+        from ..config import LOG_TO_CONSOLE, get_log_level
 
         root_logger = logging.getLogger("whispernow")
 
