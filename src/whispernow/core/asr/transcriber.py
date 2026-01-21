@@ -24,7 +24,7 @@ class TranscriptionEngine:
 
     def __init__(
         self,
-        model_name: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+        model_name: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16",
         on_state_change: Optional[Callable[[EngineState, str], None]] = None,
         on_download_progress: Optional[Callable[[float], None]] = None,
     ):

@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...core.asr.models.downloader import ModelDownloader
 from ...core.asr.models.registry import (
     delete_asr_model,
     get_all_models_with_status,
@@ -26,40 +25,7 @@ from ...core.asr.models.registry import (
 )
 from ...core.audio import AudioRecorder
 from ...core.settings import HotkeyConfig, Settings
-
-
-class _DownloadThread(QThread):
-
-    progress = Signal(int, int)  # bytes_downloaded, total_bytes
-    status_changed = Signal(str)  # status message
-    finished = Signal(bool)  # success
-    error = Signal(str)  # error message
-
-    def __init__(self, model_id: str):
-        super().__init__()
-        self._model_id = model_id
-        self._downloader = ModelDownloader()
-
-    def run(self):
-        try:
-            success = self._downloader.download(
-                self._model_id,
-                on_progress=self._on_progress,
-                on_status=self._on_status,
-            )
-            self.finished.emit(success)
-        except Exception as e:
-            self.error.emit(str(e))
-            self.finished.emit(False)
-
-    def _on_progress(self, downloaded: int, total: int):
-        self.progress.emit(downloaded, total)
-
-    def _on_status(self, status: str):
-        self.status_changed.emit(status)
-
-    def cancel(self):
-        self._downloader.cancel()
+from ..download_dialog import ModelDownloadThread
 
 
 class ConfigurationTab(QWidget):
@@ -218,7 +184,7 @@ class ConfigurationTab(QWidget):
 
         layout.addWidget(model_group)
 
-        self._download_thread: Optional[_DownloadThread] = None
+        self._download_thread: Optional[ModelDownloadThread] = None
 
         reset_btn = QPushButton("Reset All Settings to Defaults")
         reset_btn.clicked.connect(self.reset_requested.emit)
@@ -273,7 +239,7 @@ class ConfigurationTab(QWidget):
         self._download_btn.setEnabled(False)
         self._model_combo.setEnabled(False)
 
-        self._download_thread = _DownloadThread(model_id)
+        self._download_thread = ModelDownloadThread(model_id)
         self._download_thread.progress.connect(self._on_download_progress)
         self._download_thread.status_changed.connect(self._on_download_status)
         self._download_thread.finished.connect(self._on_download_finished)

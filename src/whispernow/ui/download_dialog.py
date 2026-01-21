@@ -1,6 +1,6 @@
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -9,6 +9,43 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
+
+from ..core.asr.models.downloader import ModelDownloader
+
+
+class ModelDownloadThread(QThread):
+    """Thread for downloading ASR models without blocking the UI."""
+
+    progress = Signal(int, int)  # bytes_downloaded, total_bytes
+    status_changed = Signal(str)  # status message
+    finished = Signal(bool)  # success
+    error = Signal(str)  # error message
+
+    def __init__(self, model_id: str):
+        super().__init__()
+        self._model_id = model_id
+        self._downloader = ModelDownloader()
+
+    def run(self):
+        try:
+            success = self._downloader.download(
+                self._model_id,
+                on_progress=self._on_progress,
+                on_status=self._on_status,
+            )
+            self.finished.emit(success)
+        except Exception as e:
+            self.error.emit(str(e))
+            self.finished.emit(False)
+
+    def _on_progress(self, downloaded: int, total: int):
+        self.progress.emit(downloaded, total)
+
+    def _on_status(self, status: str):
+        self.status_changed.emit(status)
+
+    def cancel(self):
+        self._downloader.cancel()
 
 
 class DownloadDialog(QDialog):
