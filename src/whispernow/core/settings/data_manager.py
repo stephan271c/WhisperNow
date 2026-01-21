@@ -8,6 +8,7 @@ from typing import List, Tuple
 
 from platformdirs import user_config_path, user_data_path
 
+from ...utils.cleanup import generate_cleanup_script, run_cleanup_script
 from ...utils.logger import get_log_dir, get_logger
 
 logger = get_logger(__name__)
@@ -58,3 +59,22 @@ def clear_user_data(
             errors.append(error_msg)
 
     return len(errors) == 0, errors
+
+
+def schedule_cleanup_and_exit() -> None:
+    """
+    Schedule the deletion of all data directories using an external script
+    and exit the application.
+    """
+    dirs_to_delete = get_all_data_dirs()
+    if not dirs_to_delete:
+        return
+
+    try:
+        script_path = generate_cleanup_script(dirs_to_delete)
+        run_cleanup_script(script_path)
+    except Exception as e:
+        logger.error(f"Failed to schedule cleanup: {e}")
+        # If we can't schedule cleanup, we can't really do much else
+        # The user will have to manually delete
+        pass

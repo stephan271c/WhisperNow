@@ -9,7 +9,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...core.settings.data_manager import clear_user_data, get_all_data_dirs
+from ...core.settings.data_manager import (
+    clear_user_data,
+    get_all_data_dirs,
+    schedule_cleanup_and_exit,
+)
 from ...utils.logger import shutdown_logging
 
 
@@ -98,6 +102,7 @@ class HomeTab(QWidget):
             self,
             "Confirm Clear Data",
             f"This will permanently delete:\n\n{dirs_list}\n\n"
+            "The application will close immediately, and data will be cleared in the background.\n"
             "This action cannot be undone. Continue?",
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
@@ -106,22 +111,5 @@ class HomeTab(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        # Shutdown logging to release file locks on log files
-        shutdown_logging()
-
-        success, errors = clear_user_data(skip_logging=True)
-
-        if success:
-            QMessageBox.information(
-                self,
-                "Clear Data Complete",
-                "All WhisperNow data has been removed.\n\n"
-                "The application will now close.",
-            )
-            QApplication.quit()
-        else:
-            QMessageBox.critical(
-                self,
-                "Clear Data Error",
-                "Some files could not be removed:\n\n" + "\n".join(errors),
-            )
+        schedule_cleanup_and_exit()
+        QApplication.quit()
