@@ -10,9 +10,6 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'linux'",
 ]
 
-[manifest]
-overrides = [{ name = "ml-dtypes", specifier = ">=0.5.4" }]
-
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"

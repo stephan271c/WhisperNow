@@ -39,6 +39,7 @@ class ModelDownloader:
         if on_status:
             on_status("Downloading...")
 
+        tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(
                 suffix=".tar.bz2", delete=False
@@ -67,7 +68,7 @@ class ModelDownloader:
             if on_status:
                 on_status("Extracting files...")
             with tarfile.open(tmp_path, "r:bz2") as tar:
-                tar.extractall(path=models_dir)
+                tar.extractall(path=models_dir, filter="data")
 
             self._logger.info(f"Model {model_id} downloaded successfully")
             return True
@@ -76,7 +77,7 @@ class ModelDownloader:
             self._logger.error(f"Download failed: {e}")
             raise
         finally:
-            if "tmp_path" in locals() and os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
     def cancel(self) -> None:
