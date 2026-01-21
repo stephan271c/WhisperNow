@@ -36,7 +36,7 @@ class TestSettings:
         settings = Settings()
         assert settings.sample_rate == 16000
         assert settings.input_device is None
-        assert settings.model_id == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+        assert settings.model_id == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"
 
     def test_save_load_cycle(self, tmp_path):
         config_dir = tmp_path / "config"
@@ -50,8 +50,6 @@ class TestSettings:
             original = Settings(
                 sample_rate=44100,
                 input_device="Test Mic",
-                characters_per_second=200,
-                instant_type=True,
                 hotkey=HotkeyConfig(modifiers=["alt"], key="r"),
                 model_id="openai/whisper-base",
             )
@@ -63,8 +61,6 @@ class TestSettings:
             loaded = Settings.load()
             assert loaded.sample_rate == 44100
             assert loaded.input_device == "Test Mic"
-            assert loaded.characters_per_second == 200
-            assert loaded.instant_type is True
             assert loaded.hotkey.modifiers == ["alt"]
             assert loaded.hotkey.key == "r"
             assert loaded.model_id == "openai/whisper-base"
@@ -105,7 +101,7 @@ class TestSettings:
         settings.reset_to_defaults()
 
         assert settings.sample_rate == 16000
-        assert settings.model_id == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+        assert settings.model_id == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"
 
 
 class TestConfigPaths:
@@ -171,21 +167,7 @@ class TestSettingsValidation:
             return_value=config_dir,
         ):
             settings = Settings.load()
-            assert settings.model_id == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
-
-    def test_negative_characters_per_second_resets(self, tmp_path):
-        config_dir = tmp_path / "config"
-        config_dir.mkdir()
-        config_file = config_dir / "settings.json"
-
-        config_file.write_text(json.dumps({"characters_per_second": -50}))
-
-        with patch(
-            "src.whispernow.core.settings.settings.get_config_dir",
-            return_value=config_dir,
-        ):
-            settings = Settings.load()
-            assert settings.characters_per_second == 150
+            assert settings.model_id == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"
 
     def test_invalid_hotkey_modifiers_resets(self, tmp_path):
         config_dir = tmp_path / "config"
@@ -226,11 +208,7 @@ class TestSettingsValidation:
         config_dir.mkdir()
         config_file = config_dir / "settings.json"
 
-        config_file.write_text(
-            json.dumps(
-                {"sample_rate": -1000, "model_id": "", "characters_per_second": -50}
-            )
-        )
+        config_file.write_text(json.dumps({"sample_rate": -1000, "model_id": ""}))
 
         logger = logging.getLogger("whispernow")
         logger.propagate = True
@@ -244,7 +222,6 @@ class TestSettingsValidation:
 
                 assert "Invalid sample_rate" in caplog.text
                 assert "Invalid model_id" in caplog.text
-                assert "Invalid characters_per_second" in caplog.text
 
     def test_valid_settings_pass_validation(self, tmp_path):
         config_dir = tmp_path / "config"
@@ -254,7 +231,6 @@ class TestSettingsValidation:
         valid_settings = {
             "sample_rate": 44100,
             "model_id": "custom/model",
-            "characters_per_second": 200,
             "hotkey": {"modifiers": ["alt", "shift"], "key": "r"},
         }
         config_file.write_text(json.dumps(valid_settings))
@@ -266,7 +242,6 @@ class TestSettingsValidation:
             settings = Settings.load()
             assert settings.sample_rate == 44100
             assert settings.model_id == "custom/model"
-            assert settings.characters_per_second == 200
             assert settings.hotkey.modifiers == ["alt", "shift"]
             assert settings.hotkey.key == "r"
 

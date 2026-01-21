@@ -99,11 +99,9 @@ class Settings(BaseModel):
 
     sample_rate: int = Field(default=16000, ge=8000, le=192000)
     input_device: Optional[str] = None
-    characters_per_second: int = Field(default=150, ge=0)
-    instant_type: bool = False
 
     hotkey: HotkeyConfig = Field(default_factory=HotkeyConfig)
-    model_id: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+    model_id: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"
 
     start_minimized: bool = False
     auto_start_on_login: bool = False

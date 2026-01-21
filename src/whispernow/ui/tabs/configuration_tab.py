@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -101,30 +100,6 @@ class ConfigurationTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        typing_group = QGroupBox("Typing Behavior")
-        typing_layout = QFormLayout(typing_group)
-
-        speed_layout = QHBoxLayout()
-        self._speed_slider = QSlider(Qt.Horizontal)
-        self._speed_slider.setRange(0, 300)
-        self._speed_slider.setTickPosition(QSlider.TicksBelow)
-        self._speed_slider.setTickInterval(50)
-        self._speed_label = QLabel("150 chars/sec")
-        self._speed_slider.valueChanged.connect(
-            lambda v: self._speed_label.setText(
-                f"{v} chars/sec" if v > 0 else "Instant"
-            )
-        )
-        speed_layout.addWidget(self._speed_slider)
-        speed_layout.addWidget(self._speed_label)
-        typing_layout.addRow("Typing Speed:", speed_layout)
-
-        self._instant_type_cb = QCheckBox("Instantly output text")
-        self._instant_type_cb.toggled.connect(self._on_instant_type_toggled)
-        typing_layout.addRow("", self._instant_type_cb)
-
-        layout.addWidget(typing_group)
-
         startup_group = QGroupBox("Startup")
         startup_layout = QVBoxLayout(startup_group)
 
@@ -136,10 +111,6 @@ class ConfigurationTab(QWidget):
 
         layout.addWidget(startup_group)
         return widget
-
-    def _on_instant_type_toggled(self, checked: bool) -> None:
-        self._speed_slider.setEnabled(not checked)
-        self._speed_label.setEnabled(not checked)
 
     def _create_audio_section(self) -> QWidget:
         widget = QWidget()
@@ -380,9 +351,6 @@ class ConfigurationTab(QWidget):
         return self._model_combo.currentData() or ""
 
     def load_settings(self) -> None:
-        self._speed_slider.setValue(self._settings.characters_per_second)
-        self._instant_type_cb.setChecked(self._settings.instant_type)
-        self._on_instant_type_toggled(self._settings.instant_type)
 
         self._start_minimized_cb.setChecked(self._settings.start_minimized)
         self._autostart_cb.setChecked(self._settings.auto_start_on_login)
@@ -408,8 +376,6 @@ class ConfigurationTab(QWidget):
             if not self._validate_model_name(model_name):
                 return False
 
-        self._settings.characters_per_second = self._speed_slider.value()
-        self._settings.instant_type = self._instant_type_cb.isChecked()
         self._settings.start_minimized = self._start_minimized_cb.isChecked()
         self._settings.auto_start_on_login = self._autostart_cb.isChecked()
 

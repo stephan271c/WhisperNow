@@ -1,7 +1,7 @@
 import signal
 import sys
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Optional
 
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication
@@ -60,14 +60,10 @@ class TranscribeApp(QObject):
             on_download_progress=self._on_download_progress,
         )
         self._hotkey_listener = HotkeyListener()
-        self._text_output = TextOutputController(on_complete=self._finish_typing)
+        self._text_output = TextOutputController()
         self._download_dialog: Optional[DownloadDialog] = None
         self._model_loader_thread: Optional[ModelLoaderThread] = None
         self._transcription_worker: Optional[TranscriptionWorkerThread] = None
-
-        self._typing_text: str = ""
-        self._typing_index: int = 0
-        self._typing_timer: Optional[QTimer] = None
 
         self._llm_processor: Optional[LLMProcessor] = None
         self._init_llm_processor()
@@ -179,7 +175,8 @@ class TranscribeApp(QObject):
             f"Background transcription complete: '{final_text[:50]}{'...' if len(final_text) > 50 else ''}'"
         )
         self._record_transcription(raw_text, enhanced_text, enhancement_name, cost)
-        self._type_text(final_text)
+        self._text_output.output_text(final_text)
+        self._tray.set_status(TrayStatus.IDLE)
 
     def _on_transcription_error(self, error_message: str) -> None:
         logger.error(f"Background transcription failed: {error_message}")
@@ -206,27 +203,6 @@ class TranscribeApp(QObject):
         else:
             self._llm_processor = None
 
-    def _apply_enhancement(
-        self, text: str
-    ) -> Tuple[str, Optional[str], Optional[str], Optional[float]]:
-        if not self._llm_processor:
-            return text, None, None, None
-
-        enhancement = self._settings.get_active_enhancement()
-        if not enhancement:
-            return text, None, None, None
-
-        if not self._llm_processor.is_configured():
-            logger.warning(
-                "LLM processor not configured (no API key), skipping enhancement"
-            )
-            return text, None, None, None
-
-        logger.info(f"Applying enhancement: {enhancement.title}")
-        response = self._llm_processor.process(text, enhancement)
-
-        return response.content, response.content, enhancement.title, response.cost_usd
-
     def _record_transcription(
         self,
         raw_text: str,
@@ -243,35 +219,6 @@ class TranscribeApp(QObject):
         )
         add_history_record(record)
         logger.debug(f"Recorded transcription to history: {len(raw_text)} chars")
-
-    def _type_text(self, text: str) -> None:
-        if self._settings.instant_type or self._settings.characters_per_second <= 0:
-            self._text_output.output_text(text, instant=True)
-        else:
-            self._typing_text = text
-            self._typing_index = 0
-
-            delay_ms = int(1000.0 / self._settings.characters_per_second)
-            self._typing_timer = QTimer(self)
-            self._typing_timer.timeout.connect(self._type_next_char)
-            self._typing_timer.start(delay_ms)
-
-    def _type_next_char(self) -> None:
-        if self._typing_index < len(self._typing_text):
-            char = self._typing_text[self._typing_index]
-            self._text_output.type_character(char)
-            self._typing_index += 1
-        else:
-            if self._typing_timer:
-                self._typing_timer.stop()
-                self._typing_timer.deleteLater()
-                self._typing_timer = None
-            self._typing_text = ""
-            self._typing_index = 0
-            self._finish_typing()
-
-    def _finish_typing(self) -> None:
-        self._tray.set_status(TrayStatus.IDLE)
 
     def _show_settings(self) -> None:
         if self._settings_window is None:

@@ -1,14 +1,13 @@
 """
-Text output controller for typing transcribed text.
+Text output controller for outputting transcribed text.
 
-Handles platform-specific text output via clipboard paste or
-character-by-character keyboard typing.
+Handles platform-specific text output via clipboard paste.
 """
 
 import platform
 import subprocess
 import time
-from typing import Callable, Optional
+from typing import Optional
 
 from pynput.keyboard import Controller as KeyboardController
 from pynput.keyboard import Key
@@ -21,59 +20,34 @@ logger = get_logger(__name__)
 
 class TextOutputController:
 
-    def __init__(self, on_complete: Optional[Callable[[], None]] = None):
+    def __init__(self):
         self._keyboard = KeyboardController()
-        self._on_complete = on_complete
 
-    def output_text(self, text: str, instant: bool = True) -> None:
-        if instant:
-            self._paste_text(text)
-        else:
-            # For character-by-character, caller should use Qt timer
-            # This is a simple fallback that blocks
-            self._type_text_blocking(text)
-
-        if self._on_complete:
-            self._on_complete()
-
-    def type_character(self, char: str) -> None:
-        self._keyboard.type(char)
-
-    def _type_text_blocking(self, text: str) -> None:
-        self._keyboard.type(text)
-
-    def _paste_text(self, text: str) -> None:
+    def output_text(self, text: str) -> None:
         logger.debug(
             f"Pasting text via clipboard: '{text[:50]}{'...' if len(text) > 50 else ''}'"
         )
 
         system = platform.system()
-
         if system == "Linux":
             copy_cmd = ["xclip", "-selection", "clipboard"]
             paste_cmd = ["xclip", "-selection", "clipboard", "-o"]
-            paste_key = Key.ctrl
         elif system == "Windows":
             copy_cmd = ["clip"]
             paste_cmd = ["powershell", "-command", "Get-Clipboard"]
-            paste_key = Key.ctrl
         else:
-            logger.warning(f"Unknown platform {system}, falling back to direct typing")
-            self._keyboard.type(text)
+            logger.error(f"Unsupported platform: {system}")
             return
 
         old_clipboard = self._get_clipboard(paste_cmd)
 
         if not self._set_clipboard(copy_cmd, text):
-            # Fallback to direct typing
-            self._keyboard.type(text)
+            logger.error("Failed to set clipboard, cannot paste text")
             return
 
         time.sleep(0.05)
-
-        with self._keyboard.pressed(paste_key):
+        with self._keyboard.pressed(Key.ctrl):
             self._keyboard.tap("v")
-
         time.sleep(0.1)
 
         if old_clipboard:

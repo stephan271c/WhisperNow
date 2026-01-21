@@ -48,7 +48,6 @@ def mock_dependencies():
     ):
 
         settings = Settings()
-        settings.characters_per_second = 150  # Use char-by-char typing for tests
         mock_get_settings.return_value = settings
 
         mock_tray = MockTray.return_value
@@ -86,7 +85,7 @@ def test_full_transcription_flow(
     cleanup_app,
     qtbot,
 ):
-    mock_dependencies["settings"].characters_per_second = 0
+
     mock_subprocess.return_value.returncode = 0
     mock_subprocess.return_value.stdout = ""
 
