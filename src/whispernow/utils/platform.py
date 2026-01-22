@@ -14,15 +14,13 @@ logger = get_logger(__name__)
 def get_subprocess_kwargs(**extra: Any) -> Dict[str, Any]:
     kwargs = extra.copy()
     if platform.system() == "Windows":
-        # Bitwise OR to preserve any existing creationflags
         kwargs["creationflags"] = (
             kwargs.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
         )
 
-        if "stdin" not in kwargs:
+        if "stdin" not in kwargs and "input" not in kwargs:
             kwargs["stdin"] = subprocess.DEVNULL
 
-        # Only suppress output if capture_output is NOT set
         if not kwargs.get("capture_output", False):
             kwargs.setdefault("stdout", subprocess.DEVNULL)
             kwargs.setdefault("stderr", subprocess.DEVNULL)
@@ -111,7 +109,6 @@ def _set_autostart_linux(enabled: bool, app_name: str) -> bool:
         exe_path = get_executable_path()
         packaged = is_packaged()
 
-        # Quote paths to handle spaces in directory names
         quoted_exe = shlex.quote(str(exe_path))
 
         if packaged:
