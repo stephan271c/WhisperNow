@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 
 from ...core.settings.data_manager import (
     clear_user_data,
-    get_all_data_dirs,
+    get_all_data_paths,
     schedule_cleanup_and_exit,
 )
 from ...utils.logger import shutdown_logging
@@ -88,20 +88,20 @@ class HomeTab(QWidget):
         layout.addWidget(self._clear_data_btn)
 
     def _on_clear_data_clicked(self) -> None:
-        dirs = get_all_data_dirs()
-        if not dirs:
+        paths = get_all_data_paths()
+        if not paths:
             QMessageBox.information(
                 self,
                 "Nothing to Remove",
-                "No WhisperNow data directories were found.",
+                "No WhisperNow data was found.",
             )
             return
 
-        dirs_list = "\n".join(f"  • {d}" for d in dirs)
+        paths_list = "\n".join(f"  • {p}" for p in paths)
         reply = QMessageBox.warning(
             self,
             "Confirm Clear Data",
-            f"This will permanently delete:\n\n{dirs_list}\n\n"
+            f"This will permanently delete:\n\n{paths_list}\n\n"
             "The application will close immediately, and data will be cleared in the background.\n"
             "This action cannot be undone. Continue?",
             QMessageBox.Yes | QMessageBox.Cancel,
