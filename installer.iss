@@ -2,7 +2,9 @@
 ; Creates a proper Windows installer with Start Menu shortcuts and uninstaller
 
 #define MyAppName "WhisperNow"
-#define MyAppVersion "0.1.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.1.0"
+#endif
 #define MyAppPublisher "WhisperNow"
 #define MyAppURL "https://github.com/whispernow/whispernow"
 #define MyAppExeName "WhisperNow.exe"
