@@ -6,16 +6,9 @@ from typing import Optional
 
 
 def get_log_dir() -> Path:
-    import platform as plat  # Use alias to avoid conflict with Path
+    from platformdirs import user_data_path
 
-    system = plat.system()
-
-    if system == "Windows":
-        base = Path.home() / "AppData" / "Roaming"
-    else:  # Linux and others
-        base = Path.home() / ".config"
-
-    log_dir = base / "whispernow" / "logs"
+    log_dir = user_data_path("WhisperNow", appauthor=False) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 

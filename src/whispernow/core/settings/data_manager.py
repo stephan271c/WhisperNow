@@ -13,17 +13,16 @@ from ...utils.logger import get_log_dir, get_logger
 
 logger = get_logger(__name__)
 
-APP_NAME_CONFIG = "whispernow"
-APP_NAME_DATA = "WhisperNow"
+APP_NAME = "WhisperNow"
 
 
 def get_all_data_dirs() -> List[Path]:
     dirs = []
-    config_dir = user_config_path(APP_NAME_CONFIG, appauthor=False)
+    config_dir = user_config_path(APP_NAME, appauthor=False)
     if config_dir.exists():
         dirs.append(config_dir)
 
-    data_dir = user_data_path(APP_NAME_DATA, appauthor=False)
+    data_dir = user_data_path(APP_NAME, appauthor=False)
     if data_dir.exists():
         dirs.append(data_dir)
 

@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 
 MAX_HISTORY_ENTRIES = 20  # Number of transcription history records to keep
 
-APP_NAME = "whispernow"
+APP_NAME = "WhisperNow"
 
 
 def _get_default_enhancements() -> List[dict]:

@@ -108,12 +108,12 @@ class TestConfigPaths:
     def test_get_config_dir_returns_path(self):
         result = get_config_dir()
         assert isinstance(result, Path)
-        assert "whispernow" in str(result)
+        assert "WhisperNow" in str(result)
 
     def test_get_data_dir_returns_path(self):
         result = get_data_dir()
         assert isinstance(result, Path)
-        assert "whispernow" in str(result)
+        assert "WhisperNow" in str(result)
 
     def test_config_and_data_dirs_exist(self):
         config_dir = get_config_dir()
