@@ -53,10 +53,6 @@ class TextOutputController:
             copy_cmd = ["xclip", "-selection", "clipboard"]
             paste_cmd = ["xclip", "-selection", "clipboard", "-o"]
             paste_key = Key.ctrl
-        elif system == "Darwin":  # macOS
-            copy_cmd = ["pbcopy"]
-            paste_cmd = ["pbpaste"]
-            paste_key = Key.cmd
         elif system == "Windows":
             copy_cmd = ["clip"]
             paste_cmd = ["powershell", "-command", "Get-Clipboard"]

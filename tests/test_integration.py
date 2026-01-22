@@ -43,7 +43,6 @@ def mock_dependencies():
         patch("src.whispernow.app.AudioRecorder") as MockRecorder,
         patch("src.whispernow.app.TranscriptionEngine") as MockTranscriber,
         patch("src.whispernow.app.HotkeyListener", wraps=HotkeyListener) as MockHotkey,
-        patch("src.whispernow.app.check_and_request_permissions", return_value=True),
         patch("src.whispernow.app.set_autostart") as mock_set_autostart,
         patch("src.whispernow.app.ModelLoaderThread") as MockLoaderThread,
     ):

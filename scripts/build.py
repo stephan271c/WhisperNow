@@ -10,8 +10,6 @@ def get_platform_target() -> tuple[str, str]:
     system = platform.system().lower()
     if system == "linux":
         return ("linux", "appimage")
-    elif system == "darwin":
-        return ("macos", "app")
     elif system == "windows":
         return ("windows", "app")
     else:
@@ -47,8 +45,6 @@ def build():
 
         if plat == "linux":
             build_dir = project_root / "build" / "whispernow" / "linux" / "appimage"
-        elif plat == "macos":
-            build_dir = project_root / "build" / "whispernow" / "macos" / "app"
         elif plat == "windows":
             build_dir = project_root / "build" / "whispernow" / "windows" / "app"
 

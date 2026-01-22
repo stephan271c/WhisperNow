@@ -15,11 +15,6 @@ from PySide6.QtWidgets import (
 
 from ..core.audio import AudioRecorder
 from ..core.settings import HotkeyConfig, Settings, get_settings
-from ..utils.platform import (
-    check_accessibility_permissions,
-    get_platform,
-    request_accessibility_permissions,
-)
 
 
 class WelcomePage(QWizardPage):
@@ -42,60 +37,6 @@ class WelcomePage(QWizardPage):
         intro.setWordWrap(True)
         layout.addWidget(intro)
         layout.addStretch()
-
-
-class PermissionsPage(QWizardPage):
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setTitle("Accessibility Permissions")
-        self.setSubTitle("WhisperNow needs permission to type on your behalf.")
-
-        layout = QVBoxLayout(self)
-
-        self._status_label = QLabel()
-        self._status_label.setWordWrap(True)
-        layout.addWidget(self._status_label)
-
-        btn_layout = QHBoxLayout()
-        self._open_prefs_btn = QPushButton("Open System Preferences")
-        self._open_prefs_btn.clicked.connect(request_accessibility_permissions)
-        btn_layout.addWidget(self._open_prefs_btn)
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
-
-        self._check_btn = QPushButton("Check Permission")
-        self._check_btn.clicked.connect(self._check_permission)
-        btn_layout.addWidget(self._check_btn)
-
-        layout.addStretch()
-
-        self._update_status()
-
-    def _update_status(self) -> None:
-        if check_accessibility_permissions():
-            self._status_label.setText(
-                "✅ Accessibility permission granted!\n\n"
-                "You're all set. Click Next to continue."
-            )
-            self._status_label.setStyleSheet("color: green;")
-            self._open_prefs_btn.setEnabled(False)
-        else:
-            self._status_label.setText(
-                "⚠️ Accessibility permission required.\n\n"
-                "WhisperNow needs accessibility access to:\n"
-                "• Listen for your hotkey\n"
-                "• Type the transcribed text\n\n"
-                "Click the button below to open System Preferences, "
-                "then add WhisperNow to the allowed apps."
-            )
-            self._status_label.setStyleSheet("")
-
-    def _check_permission(self) -> None:
-        self._update_status()
-
-    def isComplete(self) -> bool:
-        return True
 
 
 class MicrophonePage(QWizardPage):
@@ -233,9 +174,6 @@ class SetupWizard(QWizard):
 
         self.addPage(WelcomePage())
 
-        if get_platform() == "macos":
-            self.addPage(PermissionsPage())
-
         self._mic_page = MicrophonePage()
         self.addPage(self._mic_page)
 
@@ -248,11 +186,6 @@ class SetupWizard(QWizard):
         self._settings.input_device = self._mic_page.get_selected_device()
 
         self._settings.hotkey = self._hotkey_page.get_hotkey_config()
-
-        if get_platform() == "macos":
-            self._settings.accessibility_permissions_granted = (
-                check_accessibility_permissions()
-            )
 
         self._settings.first_run_complete = True
 

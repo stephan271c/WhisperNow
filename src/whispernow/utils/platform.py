@@ -1,11 +1,10 @@
-"""Platform-specific utilities for cross-platform compatibility."""
-
 import os
 import platform
+import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Dict
 
 from .logger import get_logger
 
@@ -13,31 +12,24 @@ logger = get_logger(__name__)
 
 
 def get_subprocess_kwargs(**extra: Any) -> Dict[str, Any]:
-    """Return subprocess kwargs with platform-specific flags.
-
-    On Windows, adds CREATE_NO_WINDOW to prevent console flash.
-    When using 'input' parameter on Windows, also redirects stdout/stderr
-    to DEVNULL to prevent subprocess hangs (processes without a console
-    can hang if they try to write to unhandled streams).
-
-    Pass any additional kwargs which will be merged in.
-    """
-    kwargs: Dict[str, Any] = {**extra}
+    kwargs = extra.copy()
     if platform.system() == "Windows":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        # When using stdin input with CREATE_NO_WINDOW, we must redirect
-        # stdout/stderr to prevent hangs (subprocess may block waiting to
-        # write to non-existent console streams)
-        if "input" in extra and "capture_output" not in extra:
-            if "stdout" not in extra:
-                kwargs["stdout"] = subprocess.DEVNULL
-            if "stderr" not in extra:
-                kwargs["stderr"] = subprocess.DEVNULL
+        # Bitwise OR to preserve any existing creationflags
+        kwargs["creationflags"] = (
+            kwargs.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
+        )
+
+        if "stdin" not in kwargs:
+            kwargs["stdin"] = subprocess.DEVNULL
+
+        # Only suppress output if capture_output is NOT set
+        if not kwargs.get("capture_output", False):
+            kwargs.setdefault("stdout", subprocess.DEVNULL)
+            kwargs.setdefault("stderr", subprocess.DEVNULL)
     return kwargs
 
 
 def get_executable_path() -> str:
-
     system = get_platform()
 
     if system == "linux":
@@ -45,13 +37,6 @@ def get_executable_path() -> str:
         if appimage_path and Path(appimage_path).exists():
             logger.debug(f"Running as AppImage: {appimage_path}")
             return appimage_path
-
-        exe_path = Path(sys.executable).resolve()
-        # Look for .app in the path (e.g., /Applications/WhisperNow.app/Contents/MacOS/python)
-        for parent in exe_path.parents:
-            if parent.suffix == ".app":
-                logger.debug(f"Running as macOS .app bundle: {parent}")
-                return str(parent)
 
     if system == "windows":
         if getattr(sys, "frozen", False):
@@ -68,9 +53,6 @@ def is_packaged() -> bool:
 
     if system == "linux":
         return bool(os.environ.get("APPIMAGE"))
-    elif system == "macos":
-        exe_path = Path(sys.executable).resolve()
-        return any(p.suffix == ".app" for p in exe_path.parents)
     elif system == "windows":
         return getattr(sys, "frozen", False)
 
@@ -78,45 +60,7 @@ def is_packaged() -> bool:
 
 
 def get_platform() -> str:
-    system = platform.system()
-    if system == "Darwin":
-        return "macos"
-    return system.lower()
-
-
-def check_accessibility_permissions() -> bool:
-
-    if get_platform() != "macos":
-        return True
-
-    try:
-        # Attempt a minimal System Events interaction to test accessibility
-        result = subprocess.run(
-            ["osascript", "-e", 'tell application "System Events" to keystroke ""'],
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except subprocess.TimeoutExpired:
-        logger.warning("Accessibility permission check timed out")
-        return False
-    except Exception as e:
-        logger.warning(f"Failed to check accessibility permissions: {e}")
-        return False
-
-
-def request_accessibility_permissions() -> None:
-
-    if get_platform() != "macos":
-        return
-
-    subprocess.run(
-        [
-            "open",
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-        ],
-        check=False,
-    )
+    return platform.system().lower()
 
 
 def set_autostart(enabled: bool, app_name: str = "WhisperNow") -> bool:
@@ -125,9 +69,7 @@ def set_autostart(enabled: bool, app_name: str = "WhisperNow") -> bool:
 
     if system == "windows":
         return _set_autostart_windows(enabled, app_name)
-    elif system == "macos":
-        return _set_autostart_macos(enabled, app_name)
-    else:  # Linux
+    else:
         return _set_autostart_linux(enabled, app_name)
 
 
@@ -161,60 +103,6 @@ def _set_autostart_windows(enabled: bool, app_name: str) -> bool:
         return False
 
 
-def _set_autostart_macos(enabled: bool, app_name: str) -> bool:
-    plist_path = (
-        Path.home() / "Library" / "LaunchAgents" / f"com.{app_name.lower()}.plist"
-    )
-
-    if enabled:
-        exe_path = get_executable_path()
-        packaged = is_packaged()
-
-        if packaged:
-            plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.{app_name.lower()}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/bin/open</string>
-        <string>{exe_path}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-"""
-        else:
-            plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.{app_name.lower()}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{exe_path}</string>
-        <string>-m</string>
-        <string>whispernow</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-"""
-        plist_path.parent.mkdir(parents=True, exist_ok=True)
-        plist_path.write_text(plist_content)
-        logger.info(f"macOS autostart enabled: {plist_path}")
-    else:
-        plist_path.unlink(missing_ok=True)
-        logger.info("macOS autostart disabled")
-
-    return True
-
-
 def _set_autostart_linux(enabled: bool, app_name: str) -> bool:
     autostart_dir = Path.home() / ".config" / "autostart"
     desktop_file = autostart_dir / f"{app_name.lower()}.desktop"
@@ -223,10 +111,13 @@ def _set_autostart_linux(enabled: bool, app_name: str) -> bool:
         exe_path = get_executable_path()
         packaged = is_packaged()
 
+        # Quote paths to handle spaces in directory names
+        quoted_exe = shlex.quote(str(exe_path))
+
         if packaged:
-            exec_cmd = exe_path
+            exec_cmd = quoted_exe
         else:
-            exec_cmd = f"{exe_path} -m whispernow"
+            exec_cmd = f"{quoted_exe} -m whispernow"
 
         desktop_content = f"""[Desktop Entry]
 Type=Application
@@ -237,55 +128,23 @@ NoDisplay=false
 X-GNOME-Autostart-enabled=true
 Comment=Voice-to-text transcription with AI enhancement
 """
-        autostart_dir.mkdir(parents=True, exist_ok=True)
-        desktop_file.write_text(desktop_content)
-        logger.info(f"Linux autostart enabled: {desktop_file} -> {exec_cmd}")
+        try:
+            autostart_dir.mkdir(parents=True, exist_ok=True)
+            desktop_file.write_text(desktop_content)
+            logger.info(f"Linux autostart enabled: {desktop_file} -> {exec_cmd}")
+        except OSError as e:
+            logger.error(f"Failed to write autostart file: {e}")
+            return False
     else:
-        desktop_file.unlink(missing_ok=True)
-        logger.info("Linux autostart disabled")
+        try:
+            desktop_file.unlink(missing_ok=True)
+            logger.info("Linux autostart disabled")
+        except OSError as e:
+            logger.error(f"Failed to remove autostart file: {e}")
+            return False
 
     return True
 
 
-def get_app_icon_path() -> Optional[Path]:
-    # TODO: Implement icon path resolution
+def get_app_icon_path() -> Path | None:
     return None
-
-
-def check_and_request_permissions(settings: "Settings") -> bool:
-
-    if get_platform() != "macos":
-        return True
-
-    if settings.accessibility_permissions_granted:
-        if check_accessibility_permissions():
-            return True
-        else:
-            logger.warning("Accessibility permission was revoked, prompting user")
-
-    if check_accessibility_permissions():
-        settings.accessibility_permissions_granted = True
-        settings.save()
-        logger.info("Accessibility permissions already granted")
-        return True
-
-    from ..ui.permissions_dialog import PermissionsDialog
-
-    logger.info("Showing accessibility permissions dialog")
-    dialog = PermissionsDialog()
-    dialog.exec()
-
-    granted = check_accessibility_permissions()
-    settings.accessibility_permissions_granted = granted
-    settings.save()
-
-    if granted:
-        logger.info("User granted accessibility permissions")
-    else:
-        logger.warning("User continued without accessibility permissions")
-
-    return granted
-
-
-if TYPE_CHECKING:
-    from ..core.settings import Settings

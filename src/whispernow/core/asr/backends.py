@@ -1,9 +1,7 @@
 import json
 import logging
 import os
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum, auto
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -39,11 +37,6 @@ def get_model_type(model_id: str) -> str:
     )
 
 
-class BackendType(Enum):
-    SHERPA_ONNX = auto()
-    AUTO = auto()
-
-
 @dataclass
 class TranscriptionResult:
     text: str
@@ -53,41 +46,7 @@ class TranscriptionResult:
     durations: Optional[list] = None
 
 
-class ASRBackend(ABC):
-    @abstractmethod
-    def load(
-        self,
-        model_path: str,
-        on_progress: Optional[Callable[[float], None]] = None,
-    ) -> None:
-        pass
-
-    @abstractmethod
-    def transcribe(
-        self, audio_data: np.ndarray, sample_rate: int = 16000
-    ) -> TranscriptionResult:
-        pass
-
-    @abstractmethod
-    def unload(self) -> None:
-        pass
-
-    @property
-    @abstractmethod
-    def is_loaded(self) -> bool:
-        pass
-
-    @property
-    @abstractmethod
-    def device(self) -> str:
-        pass
-
-    @abstractmethod
-    def is_model_cached(self, model_path: str) -> bool:
-        pass
-
-
-class SherpaOnnxBackend(ASRBackend):
+class SherpaOnnxBackend:
     def __init__(self):
         self._recognizer = None
         self._device = "cpu"
@@ -303,13 +262,3 @@ class SherpaOnnxBackend(ASRBackend):
         has_tokens = os.path.exists(os.path.join(model_path, "tokens.txt"))
 
         return has_encoder and has_decoder and has_joiner and has_tokens
-
-
-def detect_backend_type(model_name: str) -> BackendType:
-    return BackendType.SHERPA_ONNX
-
-
-def create_backend(
-    backend_type: BackendType = BackendType.AUTO, model_name: Optional[str] = None
-) -> ASRBackend:
-    return SherpaOnnxBackend()

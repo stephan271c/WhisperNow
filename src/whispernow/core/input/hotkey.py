@@ -1,23 +1,22 @@
 """
 Hotkey listener for global keyboard shortcuts.
 
-Listens for configurable hotkey combinations using pynput.
-Emits Qt signals when hotkeys are pressed/released.
+Uses pynput for Windows and Linux.
 """
 
-from typing import Optional
+from typing import Optional, Set
 
-from pynput import keyboard
 from PySide6.QtCore import QObject, Signal
 
+from ...utils.logger import get_logger
 from ..settings.settings import Settings, get_settings
+
+logger = get_logger(__name__)
 
 
 class HotkeyListener(QObject):
     """
-    Listens for hotkey combinations using pynput.
-
-    Runs in a separate thread to avoid blocking the Qt event loop.
+    Listens for hotkey combinations.
 
     Signals:
         hotkey_pressed: Emitted when the hotkey is pressed
@@ -30,27 +29,72 @@ class HotkeyListener(QObject):
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
 
-        self._listener: Optional[keyboard.Listener] = None
-        self._pressed_keys: set = set()
         self._is_hotkey_active = False
 
         settings = get_settings()
         self._setup_hotkey(settings)
 
+        self._impl = _PynputHotkeyListenerImpl(self)
+
     def update_settings(self, settings: Settings) -> None:
         self._setup_hotkey(settings)
+        self._impl.update_config(self._trigger_key, self._required_modifier_types)
 
     def _setup_hotkey(self, settings: Settings) -> None:
-        self._required_modifier_types = set(settings.hotkey.modifiers)
+        self._required_modifier_types: Set[str] = set(settings.hotkey.modifiers)
+        self._trigger_key = settings.hotkey.key
+
+    def start(self) -> None:
+        self._impl.start()
+
+    def stop(self) -> None:
+        self._impl.stop()
+
+    def _on_hotkey_pressed(self) -> None:
+        if not self._is_hotkey_active:
+            self._is_hotkey_active = True
+            self.hotkey_pressed.emit()
+
+    def _on_hotkey_released(self) -> None:
+        if self._is_hotkey_active:
+            self._is_hotkey_active = False
+            self.hotkey_released.emit()
+
+
+class _PynputHotkeyListenerImpl:
+    """
+    Pynput-based hotkey listener for Windows and Linux.
+    """
+
+    def __init__(self, listener: HotkeyListener):
+        from pynput import keyboard
+
+        self._listener = listener
+        self._keyboard_listener: Optional[keyboard.Listener] = None
+        self._pressed_keys: set = set()
 
         self._trigger_key = keyboard.Key.space
-        if settings.hotkey.key != "space":
+        self._required_modifier_types = listener._required_modifier_types
+        self._update_trigger_key(listener._trigger_key)
+
+    def _update_trigger_key(self, key_name: str) -> None:
+        from pynput import keyboard
+
+        if key_name != "space":
             try:
-                self._trigger_key = getattr(keyboard.Key, settings.hotkey.key)
+                self._trigger_key = getattr(keyboard.Key, key_name)
             except AttributeError:
-                self._trigger_key = keyboard.KeyCode.from_char(settings.hotkey.key)
+                self._trigger_key = keyboard.KeyCode.from_char(key_name)
+        else:
+            self._trigger_key = keyboard.Key.space
+
+    def update_config(self, trigger_key: str, modifiers: Set[str]) -> None:
+        self._required_modifier_types = modifiers
+        self._update_trigger_key(trigger_key)
 
     def _check_hotkey(self) -> bool:
+        from pynput import keyboard
+
         if self._trigger_key not in self._pressed_keys:
             return False
 
@@ -85,9 +129,8 @@ class HotkeyListener(QObject):
     def _on_press(self, key) -> None:
         self._pressed_keys.add(key)
 
-        if not self._is_hotkey_active and self._check_hotkey():
-            self._is_hotkey_active = True
-            self.hotkey_pressed.emit()
+        if self._check_hotkey():
+            self._listener._on_hotkey_pressed()
 
     def _on_release(self, key) -> None:
         try:
@@ -95,17 +138,27 @@ class HotkeyListener(QObject):
         except KeyError:
             pass
 
-        if self._is_hotkey_active and not self._check_hotkey():
-            self._is_hotkey_active = False
-            self.hotkey_released.emit()
+        if not self._check_hotkey():
+            self._listener._on_hotkey_released()
 
     def start(self) -> None:
-        self._listener = keyboard.Listener(
+        from pynput import keyboard
+
+        self._keyboard_listener = keyboard.Listener(
             on_press=self._on_press, on_release=self._on_release
         )
-        self._listener.start()
+        self._keyboard_listener.start()
+
+        if hasattr(self._keyboard_listener, "IS_TRUSTED"):
+            logger.info(
+                f"Keyboard listener IS_TRUSTED: {self._keyboard_listener.IS_TRUSTED}"
+            )
+            if not self._keyboard_listener.IS_TRUSTED:
+                logger.warning(
+                    "Hotkey listener is NOT TRUSTED. Accessibility permissions not granted."
+                )
 
     def stop(self) -> None:
-        if self._listener:
-            self._listener.stop()
-            self._listener = None
+        if self._keyboard_listener:
+            self._keyboard_listener.stop()
+            self._keyboard_listener = None

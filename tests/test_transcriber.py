@@ -2,14 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.whispernow.core.asr.backends import BackendType, detect_backend_type
 from src.whispernow.core.asr.transcriber import EngineState, TranscriptionEngine
-
-
-class TestBackendDetection:
-    def test_detect_backend_always_sherpa(self):
-        assert detect_backend_type("any/model") == BackendType.SHERPA_ONNX
-        assert detect_backend_type("nvidia/parakeet") == BackendType.SHERPA_ONNX
 
 
 class TestEngineState:
@@ -45,10 +38,9 @@ class TestEngineConfiguration:
         )
         assert engine.model_name == "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
 
-    def test_backend_type_auto_resolves(self):
+    def test_backend_name_is_sherpa_onnx(self):
         engine = TranscriptionEngine(model_name="nvidia/parakeet-tdt-0.6b-v3")
-        # AUTO resolves to SHERPA_ONNX
-        assert engine.backend_type == BackendType.SHERPA_ONNX
+        assert engine.backend_name == "SHERPA_ONNX"
 
 
 class TestEngineUnload:

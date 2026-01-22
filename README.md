@@ -1,6 +1,6 @@
 # WhisperNow
 
-**Push-to-talk speech transcription for desktop** – fast, private, and cross-platform.
+**Push-to-talk speech transcription for desktop** – fast, private, and available on Windows and Linux.
 
 WhisperNow is a desktop application that transcribes your speech in real-time with a simple push-to-talk hotkey. It runs locally using Sherpa-ONNX ASR models, keeping your voice data private while delivering high-quality transcriptions.
 
@@ -13,7 +13,7 @@ WhisperNow is a desktop application that transcribes your speech in real-time wi
 - **System Tray Integration** – Runs quietly in the background
 - **LLM Enhancement** – Optional post-processing via OpenAI, Anthropic, Google, or local Ollama
 - **Vocabulary Replacement** – Define custom word/phrase substitutions
-- **Cross-Platform** – Works on Windows, macOS, and Linux
+- **Cross-Platform** – Works on Windows and Linux
 - **Auto-Typing** – Automatically types transcriptions into the active window
 - **Transcription History** – Browse and copy past transcriptions
 
@@ -54,7 +54,6 @@ Download installers for your platform from the [Releases](https://github.com/ste
 | Platform | Format |
 |----------|--------|
 | Windows  | `.exe` installer |
-| macOS    | `.dmg` disk image |
 | Linux    | `.AppImage` |
 
 ---
@@ -219,7 +218,6 @@ uv run python scripts/build.py
 
 **Output locations:**
 - Windows: `build/whispernow/windows/app/` + `installer-output/*.exe`
-- macOS: `build/whispernow/macos/app/WhisperNow.app` + `*.dmg`
 - Linux: `build/whispernow/linux/appimage/*.AppImage`
 
 ### CI/CD
@@ -265,10 +263,6 @@ Tagged releases (`v*`) automatically create draft GitHub releases with all platf
 ### Linux
 - Requires `xclip` for clipboard operations
 - Hotkey capture may need X11 or elevated permissions
-
-### macOS
-- Requires Accessibility permissions for global hotkeys
-- Microphone permission required on first use
 
 ### Windows
 - No special requirements

@@ -7,13 +7,7 @@ import numpy as np
 
 from ...utils.logger import get_logger
 from ..audio.audio_processor import AudioProcessor, needs_chunking
-from .backends import (
-    ASRBackend,
-    BackendType,
-    TranscriptionResult,
-    create_backend,
-    detect_backend_type,
-)
+from .backends import SherpaOnnxBackend, TranscriptionResult
 
 
 class EngineState(Enum):
@@ -26,23 +20,18 @@ class EngineState(Enum):
 
 
 class TranscriptionEngine:
+    BACKEND_NAME = "SHERPA_ONNX"
+
     def __init__(
         self,
         model_name: str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
-        backend_type: BackendType = BackendType.AUTO,
         on_state_change: Optional[Callable[[EngineState, str], None]] = None,
         on_download_progress: Optional[Callable[[float], None]] = None,
     ):
         self.model_name = model_name
         self.on_state_change = on_state_change
         self.on_download_progress = on_download_progress
-
-        if backend_type == BackendType.AUTO:
-            self._backend_type = detect_backend_type(model_name)
-        else:
-            self._backend_type = backend_type
-
-        self._backend: Optional[ASRBackend] = None
+        self._backend: Optional[SherpaOnnxBackend] = None
         self._state = EngineState.NOT_LOADED
         self._device = "cpu"  # Will be updated by backend load
         self._audio_processor = AudioProcessor()
@@ -63,12 +52,8 @@ class TranscriptionEngine:
         return self._device
 
     @property
-    def backend_type(self) -> BackendType:
-        return self._backend_type
-
-    @property
     def backend_name(self) -> str:
-        return self._backend_type.name
+        return self.BACKEND_NAME
 
     def _set_state(self, state: EngineState, message: str = "") -> None:
         self._state = state
@@ -83,7 +68,7 @@ class TranscriptionEngine:
             EngineState.LOADING,
             f"Loading {self.backend_name} model: {self.model_name}...",
         )
-        self._backend = create_backend(self._backend_type)
+        self._backend = SherpaOnnxBackend()
         self._backend.load(
             model_path=self.model_name,
             on_progress=self.on_download_progress,
@@ -203,17 +188,11 @@ class TranscriptionEngine:
         gc.collect()
         self._set_state(EngineState.NOT_LOADED, "Model unloaded")
 
-    def switch_model(
-        self, model_name: str, backend_type: BackendType = BackendType.AUTO
-    ) -> bool:
+    def switch_model(self, model_name: str) -> bool:
         self.unload()
         self.model_name = model_name
-        if backend_type == BackendType.AUTO:
-            self._backend_type = detect_backend_type(model_name)
-        else:
-            self._backend_type = backend_type
         return self.load_model()
 
     def is_model_cached(self) -> bool:
-        backend = create_backend(self._backend_type, self.model_name)
+        backend = SherpaOnnxBackend()
         return backend.is_model_cached(self.model_name)

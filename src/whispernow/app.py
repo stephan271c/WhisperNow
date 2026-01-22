@@ -28,7 +28,7 @@ from .ui.recording_toast import RecordingToast
 from .ui.setup_wizard import SetupWizard
 from .ui.tray import SystemTray, TrayStatus
 from .utils.logger import get_logger
-from .utils.platform import check_and_request_permissions, set_autostart
+from .utils.platform import set_autostart
 
 logger = get_logger(__name__)
 
@@ -76,8 +76,6 @@ class TranscribeApp(QObject):
         self._tray.quit_requested.connect(self._quit)
         self._hotkey_listener.hotkey_pressed.connect(self._start_recording)
         self._hotkey_listener.hotkey_released.connect(self._stop_recording)
-
-        check_and_request_permissions(self._settings)
 
     def _on_engine_state_change(self, state: EngineState, message: str) -> None:
         if state in (EngineState.PROCESSING, EngineState.READY, EngineState.ERROR):
@@ -369,7 +367,7 @@ class TranscribeApp(QObject):
         logger.info(
             f"Starting hotkey listener: {self._settings.hotkey.to_display_string()}"
         )
-        self._hotkey_listener.start()
+        QTimer.singleShot(0, self._hotkey_listener.start)
 
         if not self._settings.start_minimized:
             self._show_settings()

@@ -12,8 +12,6 @@ def get_log_dir() -> Path:
 
     if system == "Windows":
         base = Path.home() / "AppData" / "Roaming"
-    elif system == "Darwin":  # macOS
-        base = Path.home() / "Library" / "Application Support"
     else:  # Linux and others
         base = Path.home() / ".config"
 

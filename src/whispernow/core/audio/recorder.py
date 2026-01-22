@@ -66,7 +66,15 @@ class AudioRecorder:
             return True
 
         except sd.PortAudioError as e:
-            self._last_error = f"Audio device error: {e}"
+            error_str = str(e).lower()
+            # Check for macOS permission-related errors
+            if "permission" in error_str or "not allowed" in error_str:
+                self._last_error = (
+                    "Microphone access denied. Please grant permission in "
+                    "System Settings > Privacy & Security > Microphone"
+                )
+            else:
+                self._last_error = f"Audio device error: {e}"
             self._is_recording = False
             return False
         except Exception as e:

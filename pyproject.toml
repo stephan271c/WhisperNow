@@ -38,11 +38,6 @@ dev = [
     "pytest-qt>=4.5.0",
 ]
 
-[tool.uv]
-override-dependencies = [
-    "ml_dtypes>=0.5.4",
-]
-
 [tool.isort]
 profile = "black"
 
@@ -66,7 +61,6 @@ license.text = "MIT"
 formal_name = "WhisperNow"
 description = "Push-to-talk speech transcription desktop app"
 sources = ["src/whispernow"]
-icon = ""
 requires = [
     "platformdirs>=4.5.1",
     "pydantic>=2.12.5",
@@ -78,10 +72,5 @@ requires = [
     "litellm>=1.80.16",
 ]
 
-[tool.briefcase.app.whispernow.macOS]
-min_os_version = "12.0"
-
 [tool.briefcase.app.whispernow.linux.appimage]
 manylinux = "manylinux_2_28"
-
-[tool.briefcase.app.whispernow.windows]
