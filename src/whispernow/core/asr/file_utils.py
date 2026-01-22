@@ -11,7 +11,6 @@ def get_models_dir() -> str:
 
 
 def find_file_by_suffix(directory: str, *suffixes: str) -> Optional[str]:
-    """Find the first file in directory matching any of the given suffixes."""
     try:
         for filename in os.listdir(directory):
             for suffix in suffixes:
@@ -23,14 +22,60 @@ def find_file_by_suffix(directory: str, *suffixes: str) -> Optional[str]:
 
 
 def has_file_with_suffix(directory: str, *suffixes: str) -> bool:
-    """Check if any file in directory matches any of the given suffixes."""
     return find_file_by_suffix(directory, *suffixes) is not None
 
 
 def find_file_exact(directory: str, candidates: list[str]) -> Optional[str]:
-    """Find the first file in directory matching any of the exact filenames."""
     for name in candidates:
         path = os.path.join(directory, name)
         if os.path.exists(path):
             return path
     return None
+
+
+def is_valid_whisper_model(model_path: str) -> bool:
+    has_encoder = has_file_with_suffix(
+        model_path, "-encoder.onnx", "-encoder.int8.onnx"
+    )
+    has_decoder = has_file_with_suffix(
+        model_path, "-decoder.onnx", "-decoder.int8.onnx"
+    )
+    has_tokens = has_file_with_suffix(model_path, "-tokens", "tokens.txt")
+    return has_encoder and has_decoder and has_tokens
+
+
+def is_valid_transducer_model(model_path: str) -> bool:
+    has_encoder = (
+        find_file_exact(
+            model_path, ["encoder.onnx", "encoder.int8.onnx", "encoder.fp16.onnx"]
+        )
+        is not None
+    )
+    has_decoder = (
+        find_file_exact(
+            model_path, ["decoder.onnx", "decoder.int8.onnx", "decoder.fp16.onnx"]
+        )
+        is not None
+    )
+    has_joiner = (
+        find_file_exact(
+            model_path, ["joiner.onnx", "joiner.int8.onnx", "joiner.fp16.onnx"]
+        )
+        is not None
+    )
+    has_tokens = os.path.exists(os.path.join(model_path, "tokens.txt"))
+    return has_encoder and has_decoder and has_joiner and has_tokens
+
+
+def is_valid_model_dir(model_path: str) -> bool:
+    has_tokens = has_file_with_suffix(model_path, "-tokens.txt", "tokens.txt")
+    has_encoder = has_file_with_suffix(
+        model_path,
+        "-encoder.onnx",
+        "-encoder.int8.onnx",
+        "-encoder.fp16.onnx",
+        "encoder.onnx",
+        "encoder.int8.onnx",
+        "encoder.fp16.onnx",
+    )
+    return has_tokens and has_encoder

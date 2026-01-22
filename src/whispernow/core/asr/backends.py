@@ -7,7 +7,13 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from .file_utils import find_file_by_suffix, find_file_exact, get_models_dir
+from .file_utils import (
+    find_file_by_suffix,
+    find_file_exact,
+    get_models_dir,
+    is_valid_transducer_model,
+    is_valid_whisper_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -227,38 +233,6 @@ class SherpaOnnxBackend:
         model_type = get_model_type(model_id)
 
         if model_type == "whisper":
-            return self._is_whisper_model_cached(full_model_path)
+            return is_valid_whisper_model(full_model_path)
         else:
-            return self._is_transducer_model_cached(full_model_path)
-
-    def _is_whisper_model_cached(self, model_path: str) -> bool:
-        has_encoder = (
-            find_file_by_suffix(model_path, "-encoder.onnx", "-encoder.int8.onnx")
-            is not None
-        )
-        has_decoder = (
-            find_file_by_suffix(model_path, "-decoder.onnx", "-decoder.int8.onnx")
-            is not None
-        )
-        has_tokens = (
-            find_file_by_suffix(model_path, "-tokens", "tokens.txt") is not None
-        )
-        return has_encoder and has_decoder and has_tokens
-
-    def _is_transducer_model_cached(self, model_path: str) -> bool:
-        encoder_candidates = ["encoder.onnx", "encoder.int8.onnx", "encoder.fp16.onnx"]
-        decoder_candidates = ["decoder.onnx", "decoder.int8.onnx", "decoder.fp16.onnx"]
-        joiner_candidates = ["joiner.onnx", "joiner.int8.onnx", "joiner.fp16.onnx"]
-
-        has_encoder = any(
-            os.path.exists(os.path.join(model_path, c)) for c in encoder_candidates
-        )
-        has_decoder = any(
-            os.path.exists(os.path.join(model_path, c)) for c in decoder_candidates
-        )
-        has_joiner = any(
-            os.path.exists(os.path.join(model_path, c)) for c in joiner_candidates
-        )
-        has_tokens = os.path.exists(os.path.join(model_path, "tokens.txt"))
-
-        return has_encoder and has_decoder and has_joiner and has_tokens
+            return is_valid_transducer_model(full_model_path)

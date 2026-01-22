@@ -3,7 +3,7 @@ import os
 from dataclasses import dataclass
 from typing import List, Literal
 
-from ..file_utils import get_models_dir, has_file_with_suffix
+from ..file_utils import get_models_dir, is_valid_model_dir
 
 GITHUB_RELEASE_BASE = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
@@ -54,19 +54,7 @@ def is_model_downloaded(model_id: str) -> bool:
     if not os.path.isdir(model_path):
         return False
 
-    has_tokens = has_file_with_suffix(model_path, "-tokens.txt", "tokens.txt")
-
-    has_encoder = has_file_with_suffix(
-        model_path,
-        "-encoder.onnx",
-        "-encoder.int8.onnx",
-        "-encoder.fp16.onnx",
-        "encoder.onnx",
-        "encoder.int8.onnx",
-        "encoder.fp16.onnx",
-    )
-
-    return has_tokens and has_encoder
+    return is_valid_model_dir(model_path)
 
 
 def get_model_download_status(model_id: str) -> DownloadStatus:
@@ -83,23 +71,12 @@ def get_installed_asr_models() -> List[str]:
     if not os.path.exists(models_dir):
         return []
 
-    models = []
-    for name in os.listdir(models_dir):
-        model_path = os.path.join(models_dir, name)
-        if os.path.isdir(model_path):
-            has_tokens = has_file_with_suffix(model_path, "-tokens.txt", "tokens.txt")
-            has_encoder = has_file_with_suffix(
-                model_path,
-                "-encoder.onnx",
-                "-encoder.int8.onnx",
-                "-encoder.fp16.onnx",
-                "encoder.onnx",
-                "encoder.int8.onnx",
-                "encoder.fp16.onnx",
-            )
-            if has_tokens and has_encoder:
-                models.append(name)
-
+    models = [
+        name
+        for name in os.listdir(models_dir)
+        if os.path.isdir(os.path.join(models_dir, name))
+        and is_valid_model_dir(os.path.join(models_dir, name))
+    ]
     models.sort()
     return models
 

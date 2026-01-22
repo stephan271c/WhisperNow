@@ -1,10 +1,3 @@
-"""
-Settings management with JSON persistence.
-
-Handles loading, saving, and validating application settings.
-Uses platformdirs for cross-platform directory resolution.
-"""
-
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
@@ -192,7 +185,6 @@ class Settings(BaseModel):
 
     @classmethod
     def _load_with_fallbacks(cls, data: dict) -> "Settings":
-        """Load settings with field-level fallback to defaults on validation errors."""
         defaults = cls()
         result_data = {}
 
@@ -263,9 +255,7 @@ class Settings(BaseModel):
 
     @llm_model.setter
     def llm_model(self, value: str) -> None:
-        settings = self.get_provider_settings(self.llm_provider)
-        settings.model = value
-        self.set_provider_settings(self.llm_provider, settings)
+        self._update_provider_setting("model", value)
 
     @property
     def llm_api_key(self) -> Optional[str]:
@@ -273,9 +263,7 @@ class Settings(BaseModel):
 
     @llm_api_key.setter
     def llm_api_key(self, value: Optional[str]) -> None:
-        settings = self.get_provider_settings(self.llm_provider)
-        settings.api_key = value
-        self.set_provider_settings(self.llm_provider, settings)
+        self._update_provider_setting("api_key", value)
 
     @property
     def llm_api_base(self) -> Optional[str]:
@@ -283,9 +271,12 @@ class Settings(BaseModel):
 
     @llm_api_base.setter
     def llm_api_base(self, value: Optional[str]) -> None:
-        settings = self.get_provider_settings(self.llm_provider)
-        settings.api_base = value
-        self.set_provider_settings(self.llm_provider, settings)
+        self._update_provider_setting("api_base", value)
+
+    def _update_provider_setting(self, attr: str, value) -> None:
+        provider_settings = self.get_provider_settings(self.llm_provider)
+        setattr(provider_settings, attr, value)
+        self.set_provider_settings(self.llm_provider, provider_settings)
 
 
 _settings_instance: Optional[Settings] = None
