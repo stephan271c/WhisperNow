@@ -14,6 +14,8 @@ dependencies = [
     "numpy>=1.26.0",
     "sherpa-onnx>=1.12.21",
     "litellm>=1.80.16",
+    "pyperclip>=1.9.0",
+    "sherpa-onnx-core>=1.12.23",
 ]
 
 
@@ -70,6 +72,7 @@ requires = [
     "numpy>=1.26.0",
     "sherpa-onnx>=1.12.21",
     "litellm>=1.80.16",
+    "pyperclip>=1.9.0",
 ]
 
 [tool.briefcase.app.whispernow.linux.appimage]

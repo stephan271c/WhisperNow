@@ -1576,6 +1576,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyperclip"
+version = "1.11.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/52/d87eba7cb129b81563019d1679026e7a112ef76855d6159d24754dbd2a51/pyperclip-1.11.0.tar.gz", hash = "sha256:244035963e4428530d9e3a6101a1ef97209c6825edab1567beac148ccc1db1b6", size = 12185, upload-time = "2025-09-26T14:40:37.245Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/80/fc9d01d5ed37ba4c42ca2b55b4339ae6e200b456be3a1aaddf4a9fa99b8c/pyperclip-1.11.0-py3-none-any.whl", hash = "sha256:299403e9ff44581cb9ba2ffeed69c7aa96a008622ad0c46cb575ca75b5b84273", size = 11063, upload-time = "2025-09-26T14:40:36.069Z" },
+]
+
+[[package]]
 name = "pyproject-hooks"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2013,6 +2022,21 @@ wheels = [
 ]
 
 [[package]]
+name = "sherpa-onnx-core"
+version = "1.12.23"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/b7/167045c9067975f9b63eea59149e1630c721df0a9bd1915a4291cd3dc7f9/sherpa_onnx_core-1.12.23-py3-none-macosx_10_15_universal2.whl", hash = "sha256:100a001612e0f340b63a58552c62870c9862005ebae260e6ec136eb3e45bf5ea", size = 45795421, upload-time = "2026-01-15T08:28:24.106Z" },
+    { url = "https://files.pythonhosted.org/packages/99/ed/f07f7d2a2f72a5d225f88c8d477f5b8e0b863c149c22dcccc9f8c81abc8c/sherpa_onnx_core-1.12.23-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:5535511e18c87d110acb9f8f4f825dc35957adbef770ed08f94ff40049ce1b63", size = 24666354, upload-time = "2026-01-15T09:16:26.629Z" },
+    { url = "https://files.pythonhosted.org/packages/82/e5/9b8f1f41505f301827bb492910aced7f8d90eb9de3037d1e655115b2a4f6/sherpa_onnx_core-1.12.23-py3-none-macosx_11_0_arm64.whl", hash = "sha256:c06b318d0deb944633a999df4a3fea4a2ce7072b10ac48b8c07f9801ce85486e", size = 21144764, upload-time = "2026-01-15T08:52:11.685Z" },
+    { url = "https://files.pythonhosted.org/packages/59/c4/82f8dc2eaa4317f7b3dbdda850645c4dfed2e5077f11346a4d43cb30ca5b/sherpa_onnx_core-1.12.23-py3-none-manylinux2014_aarch64.whl", hash = "sha256:620f93712c3f54c055068ee100946f47a30c6e88c195ce776e7df1e69fdbd375", size = 12065362, upload-time = "2026-01-15T08:28:18.938Z" },
+    { url = "https://files.pythonhosted.org/packages/98/eb/568f23454e8c5a40bc610db7f71000fb5664c7bc8616edcc326ea3508d49/sherpa_onnx_core-1.12.23-py3-none-manylinux2014_x86_64.whl", hash = "sha256:70f5a500d8d73280f1a5c99ab0e54873d90b5b6c285d6e239370e03764819bde", size = 9451059, upload-time = "2026-01-15T08:42:14.155Z" },
+    { url = "https://files.pythonhosted.org/packages/af/3e/9f753686546c95d21a21a234c2c184f77f2b12c385fb32541bcd66ae6c4c/sherpa_onnx_core-1.12.23-py3-none-manylinux_2_35_armv7l.whl", hash = "sha256:48908706455492aec082e24a8350b1b9b2c1bd11d233bf39569ae674c22364cc", size = 9027709, upload-time = "2026-01-15T10:44:37.207Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/57/5c22867381440cdb92601c551df1700a3987089f6abd09c79adee3e98884/sherpa_onnx_core-1.12.23-py3-none-win32.whl", hash = "sha256:af3a4c68e99af8e0234725eb8d9ba670ab4c15d5cf63391b0bea7be67426a7d5", size = 12331282, upload-time = "2026-01-15T08:27:54.702Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/ee/ee45a81c90d5588be8544cc4cad59f5c9ad11bb83db121d69b7e1c28e4ef/sherpa_onnx_core-1.12.23-py3-none-win_amd64.whl", hash = "sha256:5c2d49fb426d2ba8f591f30dbbc6ab2eaca7f8f3edea496a1a65a7c7dbac1238", size = 14180586, upload-time = "2026-01-15T08:28:45.066Z" },
+]
+
+[[package]]
 name = "shiboken6"
 version = "6.10.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2263,8 +2287,10 @@ dependencies = [
     { name = "platformdirs" },
     { name = "pydantic" },
     { name = "pynput" },
+    { name = "pyperclip" },
     { name = "pyside6-essentials" },
     { name = "sherpa-onnx" },
+    { name = "sherpa-onnx-core" },
     { name = "sounddevice" },
 ]
 
@@ -2286,8 +2312,10 @@ requires-dist = [
     { name = "platformdirs", specifier = ">=4.5.1" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pynput", specifier = ">=1.8.1" },
+    { name = "pyperclip", specifier = ">=1.9.0" },
     { name = "pyside6-essentials", specifier = ">=6.6.0" },
     { name = "sherpa-onnx", specifier = ">=1.12.21" },
+    { name = "sherpa-onnx-core", specifier = ">=1.12.23" },
     { name = "sounddevice", specifier = ">=0.5.3" },
 ]
 
