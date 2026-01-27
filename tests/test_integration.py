@@ -74,20 +74,15 @@ def mock_dependencies():
         }
 
 
-@patch("src.whispernow.core.output.text_output.subprocess.run")
 @patch("src.whispernow.app.TextOutputController")
 @patch("src.whispernow.app.TranscriptionWorkerThread")
 def test_full_transcription_flow(
     MockWorkerThread,
     MockTextOutput,
-    mock_subprocess,
     mock_dependencies,
     cleanup_app,
     qtbot,
 ):
-
-    mock_subprocess.return_value.returncode = 0
-    mock_subprocess.return_value.stdout = ""
 
     mock_text_output_instance = MockTextOutput.return_value
     mock_worker_instance = MockWorkerThread.return_value

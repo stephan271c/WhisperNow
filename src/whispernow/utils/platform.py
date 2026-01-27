@@ -1,30 +1,12 @@
 import os
 import platform
 import shlex
-import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict
 
 from .logger import get_logger
 
 logger = get_logger(__name__)
-
-
-def get_subprocess_kwargs(**extra: Any) -> Dict[str, Any]:
-    kwargs = extra.copy()
-    if platform.system() == "Windows":
-        kwargs["creationflags"] = (
-            kwargs.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
-        )
-
-        if "stdin" not in kwargs and "input" not in kwargs:
-            kwargs["stdin"] = subprocess.DEVNULL
-
-        if not kwargs.get("capture_output", False):
-            kwargs.setdefault("stdout", subprocess.DEVNULL)
-            kwargs.setdefault("stderr", subprocess.DEVNULL)
-    return kwargs
 
 
 def get_executable_path() -> str:
