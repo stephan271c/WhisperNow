@@ -123,7 +123,6 @@ Access settings by clicking the tray icon → **Settings**.
 ### Configuration Tab
 | Setting | Description |
 |---------|-------------|
-| Typing speed | Characters per second (0 = instant paste) |
 | Start minimized | Launch to tray without showing window |
 | Auto-start on login | Launch WhisperNow at system startup |
 | Hotkey | Keyboard shortcut for push-to-talk |
@@ -132,7 +131,7 @@ Access settings by clicking the tray icon → **Settings**.
 | ASR Model | Select from available ASR models |
 
 ### Home Tab
-The home tab provides a quick-start guide and includes an **Uninstall** button to remove all WhisperNow data (settings, history, and downloaded models).
+The home tab provides a quick-start guide and includes a **Clear All Data** button to remove all WhisperNow data (settings, history, and downloaded models).
 
 ### Enhancements Tab
 Configure optional LLM post-processing:
@@ -147,7 +146,7 @@ Built-in enhancements include:
 - **Fix Grammar** – Correct grammar and punctuation
 - **Formal Tone** – Convert to professional language
 - **Casual Tone** – Make text more conversational
-- **Summarize** – Condense transcription
+
 
 ### Vocabulary Tab
 Define custom word/phrase replacements. Useful for:
