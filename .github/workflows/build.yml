@@ -1,11 +1,8 @@
 name: Build Desktop App
 
 on:
-  push:
-    branches: [ "master" ]
-    tags: [ "v*" ]
-  pull_request:
-    branches: [ "master" ]
+  release:
+    types: [created]  # Only build when a release is created
   workflow_dispatch:  # Allow manual triggering
 
 env:
@@ -191,7 +188,7 @@ jobs:
     name: Create Release
     needs: [build-windows, build-linux-x64]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # No 'if' needed - this workflow only runs on release creation
     permissions:
       contents: write
     
