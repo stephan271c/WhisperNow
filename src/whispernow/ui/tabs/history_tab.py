@@ -78,7 +78,8 @@ class HistoryTab(QWidget):
             if len(raw_text) > 100:
                 raw_text = raw_text[:100] + "..."
             raw_item = QTableWidgetItem(raw_text)
-            raw_item.setToolTip(record.raw_text)  # Full text on hover
+            # Tooltips disabled: causes AMD GPU driver crash on Ubuntu (AMDGPU page flip bug)
+            # Use right-click -> Copy to get full text
             raw_item.setData(Qt.UserRole, record.raw_text)
             self._history_table.setItem(row, 0, raw_item)
 
@@ -87,7 +88,7 @@ class HistoryTab(QWidget):
                 if len(enhanced_text) > 100:
                     enhanced_text = enhanced_text[:100] + "..."
                 enhanced_item = QTableWidgetItem(enhanced_text)
-                enhanced_item.setToolTip(record.enhanced_text)
+                # Tooltips disabled: AMD GPU driver bug (see above)
                 enhanced_item.setData(Qt.UserRole, record.enhanced_text)
             else:
                 enhanced_item = QTableWidgetItem("—")
