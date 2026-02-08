@@ -32,6 +32,9 @@ from .utils.platform import set_autostart
 
 logger = get_logger(__name__)
 
+# Pattern to detect unknown/garbled tokens from the transcription model
+_UNK_TOKEN_PATTERN = "<unk>"
+
 
 class TranscribeApp(QObject):
 
@@ -171,6 +174,15 @@ class TranscribeApp(QObject):
         enhancement_name: Optional[str],
         cost: Optional[float],
     ) -> None:
+        # Check if transcription contains unknown tokens (model error)
+        if _UNK_TOKEN_PATTERN in raw_text:
+            logger.warning(
+                f"Transcription contains unknown tokens, discarding: '{raw_text[:100]}'"
+            )
+            self._record_transcription("[ERROR]", None, enhancement_name, cost)
+            self._tray.set_status(TrayStatus.IDLE)
+            return
+
         logger.info(
             f"Background transcription complete: '{final_text[:50]}{'...' if len(final_text) > 50 else ''}'"
         )
