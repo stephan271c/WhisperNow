@@ -1,0 +1,20 @@
+# Third-party Rust licenses
+
+Generated from `Cargo.lock`; do not edit the generated notice.
+
+{{#each crates}}
+## {{package.name}} {{package.version}}
+
+License: {{license}}
+{{#if package.repository}}Source: {{package.repository}}{{/if}}
+
+{{/each}}
+
+# License texts
+
+{{#each overview}}
+## {{name}}
+
+{{text}}
+
+{{/each}}

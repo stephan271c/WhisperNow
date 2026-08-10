@@ -11,3 +11,14 @@ wheels/
 
 # personal documentation
 *private*.md
+/priv_docs/
+
+# Cargo and generated desktop/frontend output
+/target/
+/apps/ui/dist/
+/apps/ui/.dioxus/
+/apps/desktop/gen/
+*.pdb
+
+# Credentials are never source artifacts
+/.env

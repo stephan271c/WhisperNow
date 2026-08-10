@@ -1,0 +1,35 @@
+{
+  "sample_rate": 44100,
+  "input_device": "Studio Microphone",
+  "hotkey": {
+    "modifiers": ["ctrl", "shift"],
+    "key": "r"
+  },
+  "model_id": "sherpa-onnx-whisper-small",
+  "start_minimized": true,
+  "auto_start_on_login": true,
+  "first_run_complete": true,
+  "accessibility_permissions_granted": true,
+  "enhancements": [
+    {
+      "id": "notes",
+      "title": "Meeting Notes",
+      "prompt": "Turn this into meeting notes."
+    }
+  ],
+  "active_enhancement_id": "notes",
+  "llm_provider": "ollama",
+  "llm_provider_settings": {
+    "ollama": {
+      "model": "llama3.2",
+      "api_key": null,
+      "api_base": "http://localhost:11434",
+      "saved_models": ["llama3.2", "qwen2.5"]
+    }
+  },
+  "vocabulary_replacements": [
+    ["whisper now", "WhisperNow"],
+    ["rust lang", "Rust"]
+  ],
+  "window_geometry": [120, 80, 1024, 720]
+}

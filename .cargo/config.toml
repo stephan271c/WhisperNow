@@ -1,0 +1,10 @@
+[resolver]
+incompatible-rust-versions = "fallback"
+
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
+
+[alias]
+check-all = "check --workspace --all-targets"
+lint = "clippy --workspace --all-targets -- -D warnings"
+test-all = "test --workspace"
