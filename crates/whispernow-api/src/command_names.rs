@@ -1,0 +1,48 @@
+//! The desktop command catalog.
+//!
+//! This file has no imports so the desktop build script can include it with
+//! `#[path]` and generate Tauri's command permissions from this same list.
+
+/// Exact command names exposed by the desktop shell.
+pub const COMMAND_NAMES: [&str; 40] = [
+    "get_settings",
+    "update_settings",
+    "set_api_key",
+    "clear_api_key",
+    "test_prompt",
+    "list_audio_devices",
+    "test_microphone",
+    "list_models",
+    "download_model",
+    "cancel_download",
+    "select_model",
+    "delete_model",
+    "get_setup_state",
+    "save_setup_checkpoint",
+    "complete_setup",
+    "restart_setup",
+    "get_permissions",
+    "request_permission",
+    "open_permission_settings",
+    "start_test_dictation",
+    "stop_recording",
+    "cancel_recording",
+    "dismiss_recording_overlay",
+    "copy_last_transcript",
+    "open_main_window",
+    "get_state",
+    "get_history",
+    "get_history_audio",
+    "open_recordings_folder",
+    "delete_history_entry",
+    "clear_history",
+    "data_locations",
+    "clear_data",
+    "suspend_shortcuts",
+    "resume_shortcuts",
+    "get_update_state",
+    "check_for_updates",
+    "dismiss_update",
+    "restart_to_update",
+    "open_update_release_page",
+];

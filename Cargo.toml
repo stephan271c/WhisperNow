@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/whispernow-domain",
     "crates/whispernow-core",
+    "crates/whispernow-api",
 ]
 
 [workspace.package]

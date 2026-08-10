@@ -618,6 +618,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "whispernow-api"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "whispernow-domain",
+]
+
+[[package]]
 name = "whispernow-core"
 version = "0.2.0"
 dependencies = [
