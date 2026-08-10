@@ -1,0 +1,44 @@
+use std::path::PathBuf;
+
+use whispernow_core::{ResolvedModel, asr::AsrEngine};
+use whispernow_domain::{ModelAvailability, ModelId, ModelRegistry};
+use whispernow_platform::SherpaAsrEngine;
+
+#[test]
+#[ignore = "manual native model test; requires the official extracted default archive and fixture (see docs/development.md)"]
+fn manual_default_parakeet_fixture_matches_documented_text() {
+    const EXPECTED: &str = "Well, I don't wish to see it any more, observed Phebe, turning away her eyes. It is certainly very like the old portrait.";
+
+    let root = PathBuf::from(
+        std::env::var_os("WHISPERNOW_ASR_MODEL_ROOT")
+            .expect("WHISPERNOW_ASR_MODEL_ROOT must name the extracted default model archive root"),
+    );
+    let definition = ModelRegistry::builtin()
+        .get(ModelId::default())
+        .expect("default model")
+        .clone();
+    assert_eq!(
+        root.file_name().and_then(|name| name.to_str()),
+        Some(definition.id.as_str()),
+        "WHISPERNOW_ASR_MODEL_ROOT must point at the archive root, not its parent"
+    );
+    // The official archive includes this fixture, and the pinned model's documentation records
+    // the transcript asserted below.
+    let fixture = root.join("test_wavs/0.wav");
+    let wave = sherpa_onnx::Wave::read(fixture.to_str().expect("UTF-8 fixture path"))
+        .expect("readable fixture");
+    assert_eq!(wave.sample_rate(), 16_000);
+
+    let mut engine = SherpaAsrEngine::new();
+    engine
+        .load(&ResolvedModel {
+            definition,
+            root,
+            availability: ModelAvailability::Downloaded,
+        })
+        .expect("load Parakeet");
+    let text = engine
+        .transcribe(wave.samples())
+        .expect("transcribe fixture");
+    assert_eq!(text.trim(), EXPECTED);
+}

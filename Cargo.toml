@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/whispernow-domain",
     "crates/whispernow-core",
+    "crates/whispernow-platform",
     "crates/whispernow-api",
 ]
 
@@ -84,3 +85,10 @@ missing_panics_doc = "allow"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+# Upstream 1.13.6's native result JSON already contains Whisper language and
+# segment metadata, but its safe result type discards those fields. Keep the
+# pinned wrapper source with the minimal upstreamable result-shape fix until a
+# published release exposes the complete native result.
+sherpa-onnx = { path = "vendor/sherpa-onnx" }

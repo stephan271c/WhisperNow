@@ -1,0 +1,64 @@
+[package]
+name = "whispernow-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+arboard = { workspace = true }
+bzip2.workspace = true
+cpal.workspace = true
+directories.workspace = true
+flate2.workspace = true
+futures-util = { workspace = true }
+hound.workspace = true
+keyring = { workspace = true }
+libloading.workspace = true
+rig-core = { workspace = true }
+reqwest.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sherpa-onnx.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+whispernow-core = { path = "../whispernow-core" }
+whispernow-domain = { path = "../whispernow-domain" }
+zip.workspace = true
+zeroize = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { workspace = true, features = ["clipboard", "remote_desktop", "screencast"] }
+atspi = { version = "=0.30.0", default-features = false, features = ["connection", "proxies", "tokio"] }
+x11rb = { version = "=0.14.0", default-features = false, features = ["xkb", "xtest"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true, features = ["NSRunningApplication", "NSWorkspace"] }
+objc2-application-services = { workspace = true, features = ["std", "AXAttributeConstants", "AXError", "AXUIElement", "Accessibility", "objc2", "objc2-core-graphics", "objc2-foundation", "libc"] }
+objc2-core-foundation = { workspace = true, features = ["std", "CFString"] }
+objc2-core-graphics = { workspace = true, features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true
