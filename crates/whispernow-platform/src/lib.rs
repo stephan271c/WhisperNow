@@ -1,13 +1,19 @@
 //! Platform adapters and executable-wide observability setup.
 
 mod asr;
+mod atomic_file;
 mod audio;
+mod destination;
 mod llama;
 mod llm;
 mod local_cleanup;
 mod models;
+mod paste_delivery;
+mod paste_keys;
 mod paths;
 mod voice_activity;
+#[cfg(target_os = "linux")]
+pub mod wayland;
 
 pub use asr::SherpaAsrEngine;
 pub use audio::CpalAudioInput;
@@ -18,6 +24,14 @@ pub use models::{
     CudaPackArchive, CudaPackFormat, CudaPackState, DownloadObserver, DownloadProgress,
     DownloadTimeouts, ModelListEntry, ModelStore, ModelStoreError,
 };
+#[cfg(target_os = "macos")]
+pub use paste_delivery::accessibility_trusted;
+#[cfg(target_os = "linux")]
+pub use paste_delivery::x11_paste_injection_available;
+pub use paste_delivery::{
+    ClipboardContents, NativeClipboard, NativePasteError, NativePastePlatform,
+};
+pub use paste_keys::PasteKeys;
 pub use paths::AppPaths;
 use tracing_subscriber::EnvFilter;
 pub use voice_activity::{SileroVoiceActivitySource, silero_vad_model_path};
