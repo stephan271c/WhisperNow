@@ -5,6 +5,7 @@ members = [
     "crates/whispernow-core",
     "crates/whispernow-platform",
     "crates/whispernow-api",
+    "tools/update-signature",
 ]
 
 [workspace.package]

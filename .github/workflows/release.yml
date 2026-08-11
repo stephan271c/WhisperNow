@@ -1,0 +1,673 @@
+name: Rust stable release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.96.0
+
+jobs:
+  supply-chain:
+    name: Supply chain and immutable version contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Prove the stable tag and source version match
+        if: github.event_name == 'push'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          python3 scripts/release_version.py --check --release-tag "$RELEASE_TAG"
+      - name: Prove the dry-run source version is internally consistent
+        if: github.event_name == 'workflow_dispatch'
+        run: python3 scripts/release_version.py --check
+      - name: Reject a published or conflicting existing release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if document="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null)"; then
+            test "$(jq -r .tag_name <<<"$document")" = "$RELEASE_TAG"
+            test "$(jq -r .draft <<<"$document")" = true
+            test "$(jq -r .prerelease <<<"$document")" = false
+          fi
+      - name: Install pinned Rust toolchain
+        run: python3 scripts/check_rust_toolchain.py
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Install audit tools
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo install cargo-deny --version 0.20.2 --locked
+      - name: Test release tools and verify the bundled VAD model
+        run: |
+          python3 -m unittest discover -s scripts/tests -v
+          python3 scripts/stage_model_resources.py --resource-dir resources/vad
+      - name: Audit advisories, licenses, bans, and sources
+        run: |
+          cargo audit
+          cargo deny check bans licenses sources
+
+  bundle:
+    name: Build, sign, and inspect (${{ matrix.platform }})
+    if: github.event_name == 'push'
+    needs: supply-chain
+    environment: release
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-24.04
+          - platform: windows-x86_64
+            os: windows-2025
+          - platform: macos-aarch64
+            os: macos-15
+            macos_arch: arm64
+          - platform: macos-x86_64
+            os: macos-15-intel
+            macos_arch: x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      WHISPERNOW_UPDATER_PUBLIC_KEY: ${{ secrets.WHISPERNOW_UPDATER_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Require protected updater signing material
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          test -n "$WHISPERNOW_UPDATER_PUBLIC_KEY"
+      - name: Install Linux native prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes \
+            at-spi2-core build-essential cpio curl dbus-x11 file libasound2-dev \
+            libayatana-appindicator3-dev libdbus-1-dev libfuse2 libgtk-3-dev \
+            librsvg2-dev libwebkit2gtk-4.1-dev patchelf pkg-config rpm rpm2cpio \
+            weston xdg-desktop-portal xvfb
+      - name: Install pinned toolchain and application CLIs
+        run: |
+          python3 scripts/check_rust_toolchain.py
+          cargo install dioxus-cli --version 0.7.10 --locked
+          cargo install tauri-cli --version 2.11.4 --locked
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Check and test the Rust application
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+      - name: Prove the protected updater key pair matches
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          probe="$RUNNER_TEMP/updater-key-probe"
+          printf 'WhisperNow updater key proof\n' > "$probe"
+          (cd apps/desktop && cargo tauri signer sign "$probe")
+          cargo run -p whispernow-update-signature -- \
+            --payload "$probe" --signature "$probe.sig" \
+            --public-key "$WHISPERNOW_UPDATER_PUBLIC_KEY"
+          rm -f "$probe" "$probe.sig"
+      - name: Build Dioxus web frontend
+        working-directory: apps/ui
+        run: dx build --platform web --release --locked
+      - name: Locate Visual Studio's redistributable Visual C++ runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # llama.cpp's DLLs import msvcp140, vcruntime140, and vcruntime140_1, which a
+          # fresh Windows lacks; stage_llama.py copies them into llama/ beside the DLLs.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "vswhere found no Visual Studio with the C++ tools" }
+          $version = (Get-Content (Join-Path $vs "VC\Auxiliary\Build\Microsoft.VCRedistVersion.default.txt")).Trim()
+          $crt = Get-ChildItem (Join-Path $vs "VC\Redist\MSVC\$version\x64") -Directory -Filter "Microsoft.VC*.CRT" |
+            Sort-Object Name | Select-Object -Last 1
+          if (-not $crt) { throw "no Visual C++ runtime redistributable for $version" }
+          "WHISPERNOW_MSVC_RUNTIME=$($crt.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Stage the pinned static native archive and build desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib_dir="$(python3 scripts/stage_native_dependencies.py \
+            --platform "${{ matrix.platform }}" --output release/native)"
+          export SHERPA_ONNX_LIB_DIR="$lib_dir"
+          echo "SHERPA_ONNX_LIB_DIR=$SHERPA_ONNX_LIB_DIR" >> "$GITHUB_ENV"
+          # llama.cpp's release libraries, which the local cleanup model runs on.
+          python3 scripts/stage_llama.py --platform "${{ matrix.platform }}" --output release/llama \
+            ${WHISPERNOW_MSVC_RUNTIME:+--msvc-runtime "$WHISPERNOW_MSVC_RUNTIME"}
+          # cargo tauri build links the Visual C++ runtime statically on Windows; tauri-build
+          # does not rerun when this changes, so the first build sets it as well.
+          export STATIC_VCRUNTIME=true
+          cargo build -p whispernow-desktop -p whispernow-input-helper --release
+      - name: Import reviewed Windows code-signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE -and -not $env:WINDOWS_CERTIFICATE_PASSWORD) {
+            # Without a certificate the installer ships unsigned: SmartScreen asks users to
+            # choose "More info > Run anyway", and Smart App Control blocks it.
+            "::warning::No Windows code-signing certificate; the NSIS installer is unsigned"
+            exit 0
+          }
+          if (-not $env:WINDOWS_CERTIFICATE -or -not $env:WINDOWS_CERTIFICATE_PASSWORD) {
+            throw "WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD must be set together"
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP "whispernow-release.pfx"
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          if (-not $certificate.HasPrivateKey) { throw "Windows signing certificate has no private key" }
+          "WINDOWS_CERT_THUMBPRINT=$($certificate.Thumbprint)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "WINDOWS_CERT_PATH=$certificatePath" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install a linuxdeploy that can leave host graphics libraries out
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          # Tauri's own linuxdeploy (2024) ignores LINUXDEPLOY_EXCLUDED_LIBRARIES; Tauri uses
+          # whatever copy is already in its tool cache.
+          set -euo pipefail
+          linuxdeploy="${XDG_CACHE_HOME:-$HOME/.cache}/tauri/linuxdeploy-x86_64.AppImage"
+          mkdir -p "$(dirname "$linuxdeploy")"
+          curl --fail --location --retry 3 --output "$linuxdeploy" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          echo "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  $linuxdeploy" | sha256sum --check --strict
+          chmod +x "$linuxdeploy"
+      - name: Build signed Linux updater packages
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        env:
+          # The Vulkan loader and the Wayland client library belong to the host's graphics
+          # stack: an AppImage copy from the build machine can keep a newer distribution's
+          # Vulkan driver or Mesa from loading.
+          LINUXDEPLOY_EXCLUDED_LIBRARIES: "libvulkan.so*;libwayland-client.so*"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/whispernow-release-config.json"
+          python3 - "$config" <<'PY'
+          import json, os, pathlib, sys
+          llama = pathlib.Path("../../release/llama").resolve()
+          document = {
+              "plugins": {"updater": {"pubkey": os.environ["WHISPERNOW_UPDATER_PUBLIC_KEY"]}},
+              "bundle": {
+                  "resources": {f"{llama}/*": "llama/"},
+                  "linux": {"deb": {"depends": [
+                      "at-spi2-core", "libasound2t64", "libayatana-appindicator3-1",
+                      "libgomp1", "libgtk-3-0t64", "libwebkit2gtk-4.1-0", "xdg-desktop-portal"
+                  ]}},
+              },
+          }
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(document), encoding="utf-8")
+          PY
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("../../Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          VERSION="$version" cargo tauri build \
+            --bundles deb,rpm,appimage \
+            --config "$config"
+          deb="$(find ../../target/release/bundle/deb -type f -name '*.deb' -print -quit)"
+          rpm="$(find ../../target/release/bundle/rpm -type f -name '*.rpm' -print -quit)"
+          test -n "$deb"; test -n "$rpm"
+          cargo tauri signer sign "$deb"
+          cargo tauri signer sign "$rpm"
+          test -f "$deb.sig"; test -f "$rpm.sig"
+      - name: Build current-user NSIS updater, Authenticode-signed when a certificate exists
+        if: runner.os == 'Windows'
+        working-directory: apps/desktop
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $llama = (Resolve-Path ../../release/llama).Path -replace '\\', '/'
+          $bundle = @{ resources = @{ "$llama/*" = "llama/" } }
+          if ($env:WINDOWS_CERT_THUMBPRINT) {
+            $bundle.windows = @{
+              certificateThumbprint = $env:WINDOWS_CERT_THUMBPRINT
+              digestAlgorithm = "sha256"
+              timestampUrl = "http://timestamp.digicert.com"
+            }
+          }
+          $config = @{
+            plugins = @{ updater = @{ pubkey = $env:WHISPERNOW_UPDATER_PUBLIC_KEY } }
+            bundle = $bundle
+          } | ConvertTo-Json -Depth 4 -Compress
+          cargo tauri build --bundles nsis --config $config
+          if ($LASTEXITCODE -ne 0) { throw "Tauri NSIS build failed" }
+      - name: Import the self-signed macOS code-signing certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          # Without a paid Developer ID the app is signed with the certificate pinned in
+          # release/macos-signing-certificate.pem (scripts/make_macos_signing_certificate.sh).
+          # Gatekeeper does not trust it, but every release keeps the same designated
+          # requirement, so the user's privacy grants survive updates.
+          set -euo pipefail
+          test -n "$MACOS_CERTIFICATE"; test -n "$MACOS_CERTIFICATE_PASSWORD"
+          pinned="$PWD/release/macos-signing-certificate.pem"
+          test -f "$pinned"
+          keychain="$RUNNER_TEMP/whispernow-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 16)"
+          p12="$RUNNER_TEMP/whispernow-signing.p12"
+          python3 -c 'import base64, os, sys; open(sys.argv[1], "wb").write(base64.b64decode(os.environ["MACOS_CERTIFICATE"]))' "$p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          echo "MACOS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$p12" -k "$keychain" -f pkcs12 -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          existing=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"; existing+=("${line//\"/}")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
+          # codesign builds the signer's chain to a trusted anchor, and this certificate is its
+          # own; trust it for code signing on this runner only.
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$pinned"
+          echo "MACOS_TRUSTED_CERTIFICATE=$pinned" >> "$GITHUB_ENV"
+          fingerprint="$(openssl x509 -in "$pinned" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)"
+          # The imported identity must be the pinned certificate's, and valid for code signing.
+          security find-identity -v -p codesigning "$keychain" | grep -q "$fingerprint"
+          echo "MACOS_SIGNING_IDENTITY=$fingerprint" >> "$GITHUB_ENV"
+      - name: Build the self-signed macOS application
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/whispernow-release-config.json"
+          python3 - "$config" <<'PY'
+          import json, os, pathlib, sys
+          # llama.cpp's libraries go in Contents/Frameworks, where they are signed.
+          llama = pathlib.Path("../../release/llama").resolve()
+          document = {
+              "plugins": {"updater": {"pubkey": os.environ["WHISPERNOW_UPDATER_PUBLIC_KEY"]}},
+              "bundle": {"macOS": {
+                  "frameworks": sorted(str(path) for path in llama.glob("*.dylib")),
+                  "signingIdentity": os.environ["MACOS_SIGNING_IDENTITY"],
+                  # The hardened runtime is for notarization, which needs a Developer ID. Its
+                  # library validation would refuse the Frameworks' llama.cpp libraries,
+                  # whose self-signed signatures carry no Team ID.
+                  "hardenedRuntime": False,
+              }},
+          }
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(document), encoding="utf-8")
+          PY
+          cargo tauri build --bundles app,dmg \
+            --config "$config"
+          dmg="$(find ../../target/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
+          test -n "$dmg"
+      - name: Remove macOS private-key material from the runner
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ -n "${MACOS_KEYCHAIN:-}" ]; then security delete-keychain "$MACOS_KEYCHAIN" || true; fi
+          if [ -n "${MACOS_TRUSTED_CERTIFICATE:-}" ]; then
+            sudo security remove-trusted-cert -d "$MACOS_TRUSTED_CERTIFICATE" || true
+          fi
+      - name: Remove Windows private-key material from the runner
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:WINDOWS_CERT_THUMBPRINT) {
+            Remove-Item "Cert:\CurrentUser\My\$env:WINDOWS_CERT_THUMBPRINT" -Force -ErrorAction SilentlyContinue
+          }
+          if ($env:WINDOWS_CERT_PATH) { Remove-Item $env:WINDOWS_CERT_PATH -Force -ErrorAction SilentlyContinue }
+      - name: Inspect Linux package payloads, native resolution, and clean payload
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb="$(find target/release/bundle/deb -type f -name '*.deb' -print -quit)"
+          rpm="$(find target/release/bundle/rpm -type f -name '*.rpm' -print -quit)"
+          appimage="$(find target/release/bundle/appimage -type f -name '*.AppImage' -print -quit)"
+          test -n "$deb"; test -n "$rpm"; test -n "$appimage"
+          mkdir -p release/inspect/deb release/inspect/rpm release/inspect/appimage
+          dpkg-deb --info "$deb" > release/inspect/deb-info.txt
+          dpkg-deb -x "$deb" release/inspect/deb
+          (cd release/inspect/rpm && rpm2cpio ../../../"$rpm" | cpio -idm --quiet)
+          chmod +x "$appimage"
+          (cd release/inspect/appimage && ../../../"$appimage" --appimage-extract >/dev/null)
+          roots=(release/inspect/deb release/inspect/rpm release/inspect/appimage/squashfs-root)
+          for root in "${roots[@]}"; do
+            bin_dir="$(find "$root" -type d -path '*/usr/bin' -print -quit)"
+            test -n "$bin_dir"
+            binary="$(find "$bin_dir" -maxdepth 1 -type f -executable -print -quit)"
+            test -n "$binary"
+            ldd "$binary" | tee -a release/inspect/linux-ldd.txt
+            ! find "$root" -type f \( -name 'libonnxruntime*.so*' -o -name 'libsherpa-onnx*.so*' \) \
+              -print -quit | grep -q .
+            vad_model="$(find "$root" -type f -path '*/vad/silero_vad.onnx' -print -quit)"
+            test -n "$vad_model"
+            python3 scripts/stage_model_resources.py --resource-dir "$(dirname "$vad_model")"
+            ! find "$root" -iname '*ydotool*' -print -quit | grep -q .
+            test -f "$root/usr/libexec/whispernow/whispernow-input-helper"
+            llama="$(find "$root" -type f -name 'libllama.so.0' -path '*/llama/*' -printf '%h' -quit)"
+            test -n "$llama"
+            python3 scripts/stage_llama.py --platform linux-x86_64 --verify "$llama"
+            ldd "$llama/libllama.so.0" | tee -a release/inspect/linux-ldd.txt
+          done
+          # The packages make the helper setgid input in their post-install
+          # script and ship its uinput rule; the AppImage carries the install
+          # script, which writes the same rule.
+          for root in release/inspect/deb release/inspect/rpm; do
+            cmp "$root/usr/lib/udev/rules.d/60-whispernow-uinput.rules" \
+              apps/desktop/linux/60-whispernow-uinput.rules
+          done
+          ! find release/inspect/appimage/squashfs-root -path '*/udev/rules.d/*' -print -quit | grep -q .
+          ! find release/inspect/appimage/squashfs-root \( -name 'libvulkan.so*' -o -name 'libwayland-client.so*' \) \
+            -print -quit | grep -q .
+          test -f release/inspect/appimage/squashfs-root/usr/share/whispernow/install_input_helper.sh
+          dpkg-deb --ctrl-tarfile "$deb" | tar -xO postinst | grep -q 'chmod 2755'
+          rpm -qp --scripts "$rpm" | grep -q 'chmod 2755'
+          ! grep -q 'not found' release/inspect/linux-ldd.txt
+          ! grep -E -i 'sherpa-onnx|onnxruntime' release/inspect/linux-ldd.txt
+          dependencies="$(dpkg-deb --field "$deb" Depends)"
+          for dependency in at-spi2-core libasound2t64 libayatana-appindicator3-1 libgomp1 libgtk-3-0t64 libwebkit2gtk-4.1-0 xdg-desktop-portal; do
+            grep -Fq "$dependency" <<<"$dependencies"
+          done
+          ! grep -R -I -E 'GDK_BACKEND[ =]x11|ozone-platform(=|[[:space:]])x11' \
+            release/inspect/deb/usr/share/applications \
+            release/inspect/appimage/squashfs-root/AppRun \
+            release/inspect/appimage/squashfs-root/usr/share/applications
+      - name: Smoke-start extracted Linux candidates on X11 and Wayland
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t binaries < <(find release/inspect/deb release/inspect/rpm release/inspect/appimage/squashfs-root \
+            -type f -path '*/usr/bin/*' -executable ! -name '*.so' | sort)
+          test "${#binaries[@]}" -eq 3
+          for binary in "${binaries[@]}"; do
+            set +e
+            python3 scripts/bounded_process.py --timeout-seconds 10 \
+              --label linux-x11-smoke -- dbus-run-session -- xvfb-run -a "$binary"
+            status=$?
+            set -e
+            test "$status" -eq 124
+          done
+          runtime_dir="$(mktemp -d)"
+          chmod 700 "$runtime_dir"
+          XDG_RUNTIME_DIR="$runtime_dir" weston --backend=headless-backend.so \
+            --socket=wayland-ci --idle-time=0 >release/inspect/weston.log 2>&1 &
+          weston_pid=$!
+          trap 'kill "$weston_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do test -S "$runtime_dir/wayland-ci" && break; sleep 0.1; done
+          test -S "$runtime_dir/wayland-ci"
+          for binary in "${binaries[@]}"; do
+            set +e
+            python3 scripts/bounded_process.py --timeout-seconds 10 \
+              --label linux-wayland-smoke -- env XDG_RUNTIME_DIR="$runtime_dir" \
+              WAYLAND_DISPLAY=wayland-ci XDG_SESSION_TYPE=wayland GDK_BACKEND=wayland \
+              dbus-run-session -- "$binary"
+            status=$?
+            set -e
+            test "$status" -eq 124
+          done
+      - name: Inspect Windows installer payload
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem target/release/bundle/nsis -Recurse -Filter *.exe | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer not found" }
+          $expected = if ($env:WINDOWS_CERT_THUMBPRINT) { "Valid" } else { "NotSigned" }
+          $status = (Get-AuthenticodeSignature $installer.FullName).Status
+          if ($status -ne $expected) { throw "NSIS Authenticode status is $status, expected $expected" }
+          New-Item -ItemType Directory -Force release/inspect/windows | Out-Null
+          & 7z x $installer.FullName "-orelease/inspect/windows" -y | Out-Null
+          $binary = Get-ChildItem release/inspect/windows -Recurse -Filter whispernow-desktop.exe | Select-Object -First 1
+          if (-not $binary) { throw "desktop executable not found" }
+          foreach ($library in @("onnxruntime.dll", "sherpa-onnx-c-api.dll", "sherpa-onnx-cxx-api.dll")) {
+            if (@(Get-ChildItem release/inspect/windows -Recurse -Filter $library).Count -ne 0) {
+              throw "static candidate unexpectedly packages $library"
+            }
+          }
+          $vad = @(Get-ChildItem release/inspect/windows -Recurse -Filter silero_vad.onnx)
+          if ($vad.Count -ne 1) { throw "bundled VAD model is missing or duplicated" }
+          python3 scripts/stage_model_resources.py --resource-dir $vad[0].Directory.FullName
+          if ($LASTEXITCODE -ne 0) { throw "bundled VAD model does not match the pinned model" }
+          $llama = @(Get-ChildItem release/inspect/windows -Recurse -Filter llama.dll)
+          if ($llama.Count -ne 1) { throw "bundled llama.cpp libraries are missing or duplicated" }
+          python3 scripts/stage_llama.py --platform windows-x86_64 --verify $llama[0].Directory.FullName
+          if ($LASTEXITCODE -ne 0) { throw "bundled llama.cpp libraries do not match the allowlist" }
+          foreach ($runtime in Get-ChildItem $llama[0].Directory.FullName -Filter "*.dll" | Where-Object Name -match '^(msvcp|vcruntime)') {
+            $signature = Get-AuthenticodeSignature $runtime.FullName
+            if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "O=Microsoft Corporation") {
+              throw "$($runtime.Name) is not a Microsoft-signed Visual C++ runtime"
+            }
+          }
+          python3 scripts/check_windows_imports.py $binary.Directory.FullName
+          if ($LASTEXITCODE -ne 0) { throw "the payload imports a DLL a fresh Windows lacks" }
+          $process = Start-Process $binary.FullName -PassThru
+          Start-Sleep -Seconds 10
+          if ($process.HasExited) { throw "desktop candidate exited during smoke start" }
+          Stop-Process -Id $process.Id -Force
+      - name: Inspect self-signed macOS payload
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$(find target/release/bundle/macos -maxdepth 1 -type d -name '*.app' -print -quit)"
+          dmg="$(find target/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
+          updater="$(find target/release/bundle -type f -name '*.app.tar.gz' -print -quit)"
+          test -n "$app"; test -n "$dmg"; test -n "$updater"; test -f "$updater.sig"
+          executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          binary="$app/Contents/MacOS/$executable_name"
+          test "$(lipo -archs "$binary")" = "${{ matrix.macos_arch }}"
+          otool -L "$binary" | tee -a release/inspect/macos-otool.txt
+          ! find "$app" -type f \( -name 'libonnxruntime*.dylib' -o -name 'libsherpa-onnx*.dylib' \) \
+            -print -quit | grep -q .
+          ! grep -E -i 'sherpa-onnx|onnxruntime' release/inspect/macos-otool.txt
+          ! grep -E '/(Users|private/tmp|opt/homebrew|usr/local)/' release/inspect/macos-otool.txt
+          codesign --verify --deep --strict --verbose=2 "$app"
+          python3 scripts/check_macos_signature.py --certificate release/macos-signing-certificate.pem "$app"
+          vad_model="$(find "$app" -type f -path '*/vad/silero_vad.onnx' -print -quit)"
+          test -n "$vad_model"
+          python3 scripts/stage_model_resources.py --resource-dir "$(dirname "$vad_model")"
+          python3 scripts/stage_llama.py --platform "${{ matrix.platform }}" --verify "$app/Contents/Frameworks"
+          otool -L "$app/Contents/Frameworks/libllama.0.dylib" | tee -a release/inspect/macos-otool.txt
+          ! grep -E '/(Users|private/tmp|opt/homebrew|usr/local)/' release/inspect/macos-otool.txt
+          "$binary" & pid=$!; sleep 10; kill -0 "$pid"; kill -TERM "$pid"; wait "$pid" || true
+      - name: Stage signed packages under canonical release names
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r package; do
+            package="$(realpath "$package")"
+            if [ ! -f "$package.sig" ]; then
+              (cd apps/desktop && cargo tauri signer sign "$package")
+            fi
+          done < <(find target/release/bundle -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.exe' -o -name '*.app.tar.gz' -o -name '*.dmg' \) | sort)
+          cargo build -p whispernow-update-signature --release
+          verifier=target/release/whispernow-update-signature
+          if [ "${{ runner.os }}" = Windows ]; then verifier="$verifier.exe"; fi
+          python3 scripts/update_release.py stage --root target/release/bundle \
+            --output release/publish --platform "${{ matrix.platform }}" \
+            --version "${GITHUB_REF_NAME#v}" \
+            --native-compliance release/native/native-compliance.zip \
+            --signature-verifier "$verifier" --public-key "$WHISPERNOW_UPDATER_PUBLIC_KEY"
+      - name: Upload signed platform packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: whispernow-${{ github.ref_name }}-${{ matrix.platform }}
+          path: release/publish
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-gatekeeper:
+    name: Fresh signature check (${{ matrix.platform }})
+    if: github.event_name == 'push'
+    needs: bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-aarch64
+            os: macos-15
+          - platform: macos-x86_64
+            os: macos-15-intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: |
+            release/macos-signing-certificate.pem
+            scripts/check_macos_signature.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: whispernow-${{ github.ref_name }}-${{ matrix.platform }}
+          path: downloaded
+      - name: Mount and check the downloaded DMG on a runner that does not trust the certificate
+        run: |
+          set -euo pipefail
+          dmg="$(find downloaded -type f -name '*.dmg' -print -quit)"
+          test -n "$dmg"
+          xattr -w com.apple.quarantine '0081;00000000;GitHub Actions;' "$dmg"
+          mount_point="$(mktemp -d)"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" "$dmg"
+          trap 'hdiutil detach "$mount_point"' EXIT
+          app="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          python3 scripts/check_macos_signature.py \
+            --certificate release/macos-signing-certificate.pem "$app"
+
+  release:
+    name: Publish the stable release
+    if: github.event_name == 'push'
+    needs: [bundle, macos-gatekeeper]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_COMMIT: ${{ github.sha }}
+      WHISPERNOW_UPDATER_PUBLIC_KEY: ${{ secrets.WHISPERNOW_UPDATER_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Build the updater signature verifier
+        run: |
+          python3 scripts/check_rust_toolchain.py
+          cargo build -p whispernow-update-signature --release
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: whispernow-${{ github.ref_name }}-*
+          path: release/download
+      - name: Create or resume the matching private draft
+        id: draft
+        run: |
+          set -euo pipefail
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          python3 scripts/release_version.py --check --release-tag "$RELEASE_TAG"
+          version="${RELEASE_TAG#v}"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$RELEASE_TAG" --jq .body > release/release-notes.md
+          test -s release/release-notes.md
+          if document="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null)"; then
+            test "$(jq -r .draft <<<"$document")" = true
+            test "$(jq -r .prerelease <<<"$document")" = false
+            test "$(jq -r .tag_name <<<"$document")" = "$RELEASE_TAG"
+            test "$(jq -r .name <<<"$document")" = "WhisperNow $version"
+            jq -r .body <<<"$document" > release/existing-release-notes.md
+            cmp --silent release/release-notes.md release/existing-release-notes.md
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "WhisperNow $version" --notes-file release/release-notes.md
+            document="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
+          fi
+          echo "release_id=$(jq -r .id <<<"$document")" >> "$GITHUB_OUTPUT"
+          echo "pub_date=$(jq -r .created_at <<<"$document")" >> "$GITHUB_OUTPUT"
+      - name: Generate latest.json and SHA256SUMS
+        run: |
+          set -euo pipefail
+          mapfile -t manifests < <(find release/download -type f -name manifest.json | sort)
+          test "${#manifests[@]}" -eq 4
+          arguments=()
+          for manifest in "${manifests[@]}"; do arguments+=(--manifest "$manifest"); done
+          python3 scripts/update_release.py generate "${arguments[@]}" \
+            --output release/publish --repository "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" --version "${RELEASE_TAG#v}" \
+            --pub-date "${{ steps.draft.outputs.pub_date }}" \
+            --notes-file release/release-notes.md \
+            --signature-verifier target/release/whispernow-update-signature \
+            --public-key "$WHISPERNOW_UPDATER_PUBLIC_KEY"
+          arguments=()
+          while IFS= read -r name; do arguments+=(--artifact "$name"); done \
+            < <(awk '{print $2}' release/publish/SHA256SUMS)
+          python3 scripts/release_version.py --check --release-tag "$RELEASE_TAG" \
+            --updater-metadata release/publish/latest.json "${arguments[@]}"
+      - name: Upload packages and signatures, then latest.json last
+        env:
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p release/served
+          upload_or_compare() {
+            local path="$1" name asset_id
+            name="$(basename "$path")"
+            asset_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate \
+              --jq ".[] | select(.name == \"$name\") | .id")"
+            if test -n "$asset_id"; then
+              gh api -H 'Accept: application/octet-stream' \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "release/served/$name"
+              cmp --silent "$path" "release/served/$name"
+            else
+              gh release upload "$RELEASE_TAG" "$path"
+            fi
+          }
+          while IFS= read -r path; do upload_or_compare "$path"; done \
+            < <(find release/publish -maxdepth 1 -type f ! -name latest.json | sort)
+          upload_or_compare release/publish/latest.json
+      - name: Publish and mark as the latest release
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest

@@ -1,0 +1,341 @@
+{
+  "schema_version": 3,
+  "link_mode": "static",
+  "license_evidence": {
+    "Apache-2.0.txt": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "Unicode-DFS-2016.txt": {
+      "bytes": 2788,
+      "sha256": "be029c50df83105a810e391778b6edcb522d6cb4b4e142332aca54437a499bf7"
+    },
+    "espeak-ng-BSD-2-Clause.txt": {
+      "bytes": 1244,
+      "sha256": "a8b0c1c7d7af6c0415c068be8cf373799d1a42b0707b79dc4ccfcaf593cd902d"
+    },
+    "espeak-ng-GPL-3.0-or-later.txt": {
+      "bytes": 35147,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    "kissfft-BSD-3-Clause.txt": {
+      "bytes": 1830,
+      "sha256": "4d6bcab46f27d6d0c878e8305d4bdcfe040d52bf6656b9771f04c9fb9902c0ed"
+    },
+    "lfm-open-license-v1.0.txt": {
+      "bytes": 10574,
+      "sha256": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c"
+    },
+    "llama.cpp-MIT.txt": {
+      "bytes": 1078,
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+    },
+    "llvm-openmp-Apache-2.0-WITH-LLVM-exception.txt": {
+      "bytes": 19741,
+      "sha256": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4"
+    },
+    "onnxruntime-MIT.txt": {
+      "bytes": 1073,
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+    },
+    "piper-phonemize-MIT.txt": {
+      "bytes": 1071,
+      "sha256": "13746d509d74e55ea2265fbef204bb7cdbf84a8315b0207e988326cb54387028"
+    }
+  },
+  "components": {
+    "sherpa-onnx": {
+      "name": "sherpa-onnx",
+      "version": "1.13.6",
+      "license": "Apache-2.0",
+      "license_files": ["Apache-2.0.txt"],
+      "source": "https://github.com/k2-fsa/sherpa-onnx"
+    },
+    "onnxruntime": {
+      "name": "ONNX Runtime",
+      "version": "1.27.1",
+      "license": "MIT",
+      "license_files": ["onnxruntime-MIT.txt"],
+      "source": "https://github.com/microsoft/onnxruntime"
+    },
+    "kaldi-decoder": {
+      "name": "kaldi-decoder",
+      "version": "0.3.0",
+      "license": "Apache-2.0",
+      "license_files": ["Apache-2.0.txt"],
+      "source": "https://github.com/k2-fsa/kaldi-decoder"
+    },
+    "kaldi-native-fbank": {
+      "name": "kaldi-native-fbank",
+      "version": "1.22.3",
+      "license": "Apache-2.0",
+      "license_files": ["Apache-2.0.txt"],
+      "source": "https://github.com/csukuangfj/kaldi-native-fbank"
+    },
+    "kissfft": {
+      "name": "KISS FFT",
+      "version": "febd4caeed32e33ad8b2e0bb5ea77542c40f18ec",
+      "license": "BSD-3-Clause",
+      "license_files": ["kissfft-BSD-3-Clause.txt"],
+      "source": "https://github.com/mborgerding/kissfft"
+    },
+    "openfst": {
+      "name": "OpenFst",
+      "version": "1.8.5-2026-07-09",
+      "license": "Apache-2.0",
+      "license_files": ["Apache-2.0.txt"],
+      "source": "https://github.com/csukuangfj/openfst"
+    },
+    "simple-sentencepiece": {
+      "name": "simple-sentencepiece",
+      "version": "0.7",
+      "license": "Apache-2.0",
+      "license_files": ["Apache-2.0.txt"],
+      "source": "https://github.com/pkufool/simple-sentencepiece"
+    },
+    "piper-phonemize": {
+      "name": "piper-phonemize",
+      "version": "f3ff95afc03640bc1399e113e83361192a2fafb4",
+      "license": "MIT",
+      "license_files": ["piper-phonemize-MIT.txt"],
+      "source": "https://github.com/csukuangfj/piper-phonemize"
+    },
+    "espeak-ng": {
+      "name": "eSpeak NG",
+      "version": "ed530aa113046142eb5115cf2fc9157854d0ffe1",
+      "license": "GPL-3.0-or-later",
+      "license_files": ["espeak-ng-GPL-3.0-or-later.txt", "espeak-ng-BSD-2-Clause.txt", "Unicode-DFS-2016.txt"],
+      "source": "https://github.com/csukuangfj/espeak-ng",
+      "source_offer": {
+        "name": "espeak-ng-ed530aa113046142eb5115cf2fc9157854d0ffe1.zip",
+        "bytes": 18011501,
+        "sha256": "e4e262cbe34f7fe21f91f1ba3397f2728e1f30eafbae7853f2b753a9ed13f0dd",
+        "source": "https://github.com/csukuangfj/espeak-ng/archive/ed530aa113046142eb5115cf2fc9157854d0ffe1.zip"
+      }
+    },
+    "unicode-data": {
+      "name": "Unicode Data Files",
+      "version": "11.0.0",
+      "license": "Unicode-DFS-2016",
+      "license_files": ["Unicode-DFS-2016.txt"],
+      "source": "https://www.unicode.org/Public/11.0.0/"
+    },
+    "llama.cpp": {
+      "name": "llama.cpp (with ggml)",
+      "version": "b11259",
+      "license": "MIT",
+      "license_files": ["llama.cpp-MIT.txt"],
+      "source": "https://github.com/ggml-org/llama.cpp/tree/b11259"
+    },
+    "cleanup-model": {
+      "name": "WhisperNow cleanup model (a fine-tune of Liquid AI's LFM2.5-350M; downloaded on demand, not bundled)",
+      "version": "r112-full-inst-1e-5-e3 Q8_0",
+      "license": "LFM Open License v1.0",
+      "license_files": ["lfm-open-license-v1.0.txt"],
+      "source": "https://huggingface.co/LiquidAI/LFM2.5-350M"
+    },
+    "cleanup-model-large": {
+      "name": "WhisperNow large cleanup model (a fine-tune of OpenBMB's MiniCPM5-1B; downloaded on demand, not bundled)",
+      "version": "r112-minicpm-full-inst-1e-5-e3 Q8_0",
+      "license": "Apache-2.0",
+      "license_files": ["Apache-2.0.txt"],
+      "source": "https://huggingface.co/openbmb/MiniCPM5-1B"
+    },
+    "llvm-openmp": {
+      "name": "LLVM OpenMP runtime (libomp.dll, Windows only)",
+      "version": "as shipped in llama.cpp b11259",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "license_files": ["llvm-openmp-Apache-2.0-WITH-LLVM-exception.txt"],
+      "source": "https://github.com/llvm/llvm-project/tree/main/openmp"
+    }
+  },
+  "libraries": {
+    "linux-x86_64": [
+      {"name": "libespeak-ng.a", "bytes": 609344, "sha256": "3b3e8c1eb6cc3a09e623db0e081b4115854ad4eab9b191832942d63674cd97b6"},
+      {"name": "libkaldi-decoder-core.a", "bytes": 1251510, "sha256": "eb45fa5e55d43106d183cfc6c486f81af1177edbce83200999a98925ac57fb30"},
+      {"name": "libkaldi-native-fbank-core.a", "bytes": 224976, "sha256": "a8717dee98223732bb4bb37ba7d326b0799fa7fa7a022cd529795ac2adf6a4d7"},
+      {"name": "libkissfft-float.a", "bytes": 28126, "sha256": "93544812ee57e30ab2e65071fac4dfe257a0bd98d5ecbf607791884152c00501"},
+      {"name": "libonnxruntime.a", "bytes": 109507520, "sha256": "9dbbd7bff1db5698d04ae6710a28e995a33d0409adc362f8ff2bb0bf7e8fc2ea"},
+      {"name": "libpiper_phonemize.a", "bytes": 464780, "sha256": "3273dda103418ad954c6a8bf9af8fdded1780525a827c7673affd18427bb8b83"},
+      {"name": "libsherpa-onnx-c-api.a", "bytes": 547234, "sha256": "03770d631e6b729387ed67cd39fa6426e8bd84df585d5461db76312dbcdb3376"},
+      {"name": "libsherpa-onnx-core.a", "bytes": 17633956, "sha256": "d3c7d0f68e0554b34263043bff96c2012daf8c05de25352498e73ce12883d37b"},
+      {"name": "libsherpa-onnx-cxx-api.a", "bytes": 216522, "sha256": "0c73534c8b04bdfe8a0d99a57cfed701e7a7225d0f6bfc4012655c0c059fcc2c"},
+      {"name": "libsherpa-onnx-fst.a", "bytes": 4028034, "sha256": "c100f3369367be2e903359ccfac47d2d6b0a3c3b17aac3a4910e6db08720f7c3"},
+      {"name": "libsherpa-onnx-fstfar.a", "bytes": 37414, "sha256": "31ab5e3584e612e963cd3c0f7e8ded82dcb282ac9d2b448d8a6f061d4586b991"},
+      {"name": "libsherpa-onnx-kaldifst-core.a", "bytes": 2495208, "sha256": "b3bc6900e5311c72fdb1e809a07aeb49640ea4205cec18f685faba3fa7831659"},
+      {"name": "libsherpa-onnx-portaudio_static.a", "bytes": 249050, "sha256": "52ace5dd0b5e8ca993cf20e359a3aeee2f93cb08a52674afe2e5f502b5f11d8d"},
+      {"name": "libssentencepiece_core.a", "bytes": 213436, "sha256": "2b48534bb275b83813abc65b4f40b4326e886320e26503bb913ec5be5993d809"},
+      {"name": "libucd.a", "bytes": 240216, "sha256": "c3cecfa0f77eebc31840d28b2367b9a92b3ecc20000c66d86d958a3f9bb40f9f"}
+    ],
+    "windows-x86_64": [
+      {"name": "espeak-ng.lib", "bytes": 823674, "sha256": "c68788a63e66b141ed76a6f92b13171124da79017599d754f32dd11442ed0928"},
+      {"name": "kaldi-decoder-core.lib", "bytes": 4308664, "sha256": "ef4e576e7aa1bda5aff6b853c55aae734fe7efded086a581e6a695bb5331afc6"},
+      {"name": "kaldi-native-fbank-core.lib", "bytes": 1852382, "sha256": "cd6507e5bb9d57dab48113d091fcbbd913cf9f1d0cf06024ffd29a94ae0ed769"},
+      {"name": "kissfft-float.lib", "bytes": 38212, "sha256": "8520e1a6c5e827f44d2ef47e626df0d326fbfebaeb1c4353b36b177f6b1726d4"},
+      {"name": "onnxruntime.lib", "bytes": 916804662, "sha256": "fc1f5722dd17cbe8c2131cad2b9da6e004392d45bbe71560ff5e54c9dee26f24"},
+      {"name": "piper_phonemize.lib", "bytes": 800124, "sha256": "c0d01a056bf5b3b65af66e988e4034f043c251e6855b6a6494ad9ceabde23849"},
+      {"name": "sherpa-onnx-c-api.lib", "bytes": 1702088, "sha256": "ba5cd29c224efe7bff1928092f947f9ef403bdc781c1cd62c8af9580d7df76a8"},
+      {"name": "sherpa-onnx-core.lib", "bytes": 66397116, "sha256": "f5f5eaa4d8f32182b066fc6a8e5e167ababb5b2b1ee4578809836312c9dda77f"},
+      {"name": "sherpa-onnx-cxx-api.lib", "bytes": 629798, "sha256": "01c18518a1be566a57caa65dba0aeee3d58f071da28cb4c20c4b750c46dd9e19"},
+      {"name": "sherpa-onnx-fst.lib", "bytes": 13558300, "sha256": "1954ce9086b6d0f99fdfdd64c5470b4274c9414822b1c3110a6da6da3b589e38"},
+      {"name": "sherpa-onnx-fstfar.lib", "bytes": 601326, "sha256": "7518c80c3b85f7d722b5cd31bfe1ab33b4598ab17510a773a0e53f85c34ceeca"},
+      {"name": "sherpa-onnx-kaldifst-core.lib", "bytes": 23055672, "sha256": "17d4bc6007606ddf23155fe199c578ce287c70db98d37e6bb65f688d1b0bd3f1"},
+      {"name": "ssentencepiece_core.lib", "bytes": 823206, "sha256": "533134c832ca5a71feb30be895ca16cc23ce3798202fb7a1f2746c8e9407e946"},
+      {"name": "ucd.lib", "bytes": 243106, "sha256": "87bdce57d5d1979cd8cfaf449ada4880ccd20aa4726a9df7495a668b38434ea8"}
+    ],
+    "macos-aarch64": [
+      {"name": "libespeak-ng.a", "bytes": 446248, "sha256": "4e35747cace1df90c59b726ff7c46e135a47ef35f57829dc534cc296f0873a32"},
+      {"name": "libkaldi-decoder-core.a", "bytes": 729056, "sha256": "a328bf7a043faac72b6bf375719b2666b01d92670a4944b5ee66ccf933310a50"},
+      {"name": "libkaldi-native-fbank-core.a", "bytes": 233656, "sha256": "281c230603826fff703ccea5c410584e265df75a775d47fe131ad56e00d2dfe9"},
+      {"name": "libkissfft-float.a", "bytes": 19944, "sha256": "4875d64ab3dac68cf214ba9bcfe24ac34fb7e50ddafddf1302ab3246895873ee"},
+      {"name": "libonnxruntime.a", "bytes": 69439552, "sha256": "93850f85f3778a52d93f873da67d88c743cc9b43495af3e87e2b8df9b5a3998e"},
+      {"name": "libpiper_phonemize.a", "bytes": 381920, "sha256": "e6cb763593c422d1f4895d6e70faa62f000779aa0cf694d1cd8d7ee940818522"},
+      {"name": "libsherpa-onnx-c-api.a", "bytes": 373320, "sha256": "3d531613df72e1a8a864fc21175d6f7f1e56d0b629632915a36b6b3819ab733e"},
+      {"name": "libsherpa-onnx-core.a", "bytes": 14471032, "sha256": "0131f89f5d76e2a503c4b36b464861dc5e9144c113c373d5bbc6ed74bcbe1bdc"},
+      {"name": "libsherpa-onnx-cxx-api.a", "bytes": 150520, "sha256": "c32a0776186d0d1a329d40eac7baab1f3086318bf57cbc86e13ecba3fa63e873"},
+      {"name": "libsherpa-onnx-fst.a", "bytes": 2535400, "sha256": "a799aac2fe39523a84249136e8ace7dfe4222735872b6c3d8b411f77326ec09e"},
+      {"name": "libsherpa-onnx-fstfar.a", "bytes": 55920, "sha256": "b521d7ad6a65ead2847e2d47f57ffba29a0f85b0b3c612c1a313452f4884f0a7"},
+      {"name": "libsherpa-onnx-kaldifst-core.a", "bytes": 1585872, "sha256": "cfbd89811e79a93764ded63e1c2fd051a52512b6e620ab12325364b634c4801b"},
+      {"name": "libsherpa-onnx-portaudio_static.a", "bytes": 124128, "sha256": "18ba984176550439a711ced66359d338e90419ec5524be26332e55f748044340"},
+      {"name": "libssentencepiece_core.a", "bytes": 151000, "sha256": "c4c2961c11954efe43b91798d3613e92d005e55aca5eb0c65a3dfc1f12ece065"},
+      {"name": "libucd.a", "bytes": 206336, "sha256": "63310f3b56097e847b977fdb8f73bdcc525e5af3463a84070f5e6e7cdcb52d56"}
+    ],
+    "macos-x86_64": [
+      {"name": "libespeak-ng.a", "bytes": 448856, "sha256": "0a8f31c5146624db1d05ab8864c3c14e51e3e4bd0c1cdb9ea4c7e2be183d29d6"},
+      {"name": "libkaldi-decoder-core.a", "bytes": 754536, "sha256": "1c20a09c835da96eeee188a0c1f750fdcf3c0a7180cf1339cca13bc67afec50b"},
+      {"name": "libkaldi-native-fbank-core.a", "bytes": 249192, "sha256": "e61c1851e87cca0e6d05304111d3c329a18d4d4ed2ef91f5f2444e0b48f1e75f"},
+      {"name": "libkissfft-float.a", "bytes": 26576, "sha256": "febc287ffef02ac0032de9a825266a8139fa08b63f6eedd804c0e06ad41d54eb"},
+      {"name": "libonnxruntime.a", "bytes": 73141656, "sha256": "3adead55092c9fea94efcfc7eee61dc93961af335b181b69eeb3627623613e38"},
+      {"name": "libpiper_phonemize.a", "bytes": 394512, "sha256": "38e04e7a0965b39afa62613144f6245708a6f20a6ff9a3f80158e730ba4a9154"},
+      {"name": "libsherpa-onnx-c-api.a", "bytes": 377568, "sha256": "258be8af6f7c6888e93ba5c1029f3f19e87fcd08659b4bfb39ec80ff00674e40"},
+      {"name": "libsherpa-onnx-core.a", "bytes": 15274672, "sha256": "6f0ecf5095d76ac3fc5b71862e66f4f8ec56a09784a8e381027415b7f885b8e3"},
+      {"name": "libsherpa-onnx-cxx-api.a", "bytes": 165072, "sha256": "40fb7fa4fa004269788a9fe06da3f0d0e813349b5d447d9270321cc955f31efa"},
+      {"name": "libsherpa-onnx-fst.a", "bytes": 2739864, "sha256": "d75ed9a66ad0aeae4cc533d1e5c073bfe4e92ebfba4ed7093c2cb2e2e3ae3b36"},
+      {"name": "libsherpa-onnx-fstfar.a", "bytes": 62152, "sha256": "96f5160d12b93baecb9919d7a84383caf0c2d1b6ffea2b15023eb46bfb630be8"},
+      {"name": "libsherpa-onnx-kaldifst-core.a", "bytes": 1611680, "sha256": "80b78254b792ab03f2682ef2f6ceffda61aa9d1613b838e3f8aba9f2f3b721e3"},
+      {"name": "libsherpa-onnx-portaudio_static.a", "bytes": 136104, "sha256": "341c9d1bb8c3e53fd0f33c1145c501ad83ae13e955e57779ea11c869acc10846"},
+      {"name": "libssentencepiece_core.a", "bytes": 157664, "sha256": "966e30b8940aff88c6ffbf83bec48b0860bb7da09b7179af19de76b9414668d1"},
+      {"name": "libucd.a", "bytes": 208808, "sha256": "00c954d17cec9230d57643cbdc8a53dc97f8950f743de8b041fecfb8e13d4199"}
+    ]
+  },
+  "source_archives": {
+    "linux-x86_64": {
+      "name": "sherpa-onnx-v1.13.6-linux-x64-static-lib.tar.bz2",
+      "bytes": 22455714,
+      "sha256": "fe4968c3cd2ad3dfd1ea925500e5542aef70dd7119847257ffde95d6260cd629",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.6/sherpa-onnx-v1.13.6-linux-x64-static-lib.tar.bz2"
+    },
+    "windows-x86_64": {
+      "name": "sherpa-onnx-v1.13.6-win-x64-static-MT-Release-lib.tar.bz2",
+      "bytes": 120220640,
+      "sha256": "b22b655e66ea3078cf6c93046b0bd25c5c149578c3eddbef93f8e68351b6973e",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.6/sherpa-onnx-v1.13.6-win-x64-static-MT-Release-lib.tar.bz2"
+    },
+    "macos-aarch64": {
+      "name": "sherpa-onnx-v1.13.6-osx-arm64-static-lib.tar.bz2",
+      "bytes": 19864766,
+      "sha256": "a24c19a6bf030dfd58fee9ef76ef0e2d4b8468b967941a772bd687accd99c300",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.6/sherpa-onnx-v1.13.6-osx-arm64-static-lib.tar.bz2"
+    },
+    "macos-x86_64": {
+      "name": "sherpa-onnx-v1.13.6-osx-x64-static-lib.tar.bz2",
+      "bytes": 19623347,
+      "sha256": "3b789f2ef5809992190cfc2f5512bab8440135407327be04e5fc178812989d29",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.6/sherpa-onnx-v1.13.6-osx-x64-static-lib.tar.bz2"
+    }
+  },
+  "shared_libraries": {
+    "llama": {
+      "component": "llama.cpp",
+      "msvc_runtime": {
+        "windows-x86_64": ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"]
+      },
+      "archives": {
+        "linux-x86_64": {
+          "name": "llama-b11259-bin-ubuntu-vulkan-x64.tar.gz",
+          "bytes": 31347830,
+          "sha256": "d2c69c33f21a2c1e3c873c0812ccc42106ab0d7966cc8083cb99adabcf4f9321",
+          "source": "https://github.com/ggml-org/llama.cpp/releases/download/b11259/llama-b11259-bin-ubuntu-vulkan-x64.tar.gz"
+        },
+        "macos-aarch64": {
+          "name": "llama-b11259-bin-macos-arm64.tar.gz",
+          "bytes": 11767669,
+          "sha256": "abd2b16d698861ac332a1eff1ea0edb0732aa6f7bb729a920dbe8b6502e353d4",
+          "source": "https://github.com/ggml-org/llama.cpp/releases/download/b11259/llama-b11259-bin-macos-arm64.tar.gz"
+        },
+        "macos-x86_64": {
+          "name": "llama-b11259-bin-macos-x64.tar.gz",
+          "bytes": 11320042,
+          "sha256": "1a718a5bc1fd5e44807172fd7fc0ffdcd774d72d7ba777b8865e0483d9fdd162",
+          "source": "https://github.com/ggml-org/llama.cpp/releases/download/b11259/llama-b11259-bin-macos-x64.tar.gz"
+        },
+        "windows-x86_64": {
+          "name": "llama-b11259-bin-win-vulkan-x64.zip",
+          "bytes": 33078808,
+          "sha256": "afb3ddfc5f41413ec38ffb837ffbb81dfa8f1b23f3a775a03ba2afc1f7ce9610",
+          "source": "https://github.com/ggml-org/llama.cpp/releases/download/b11259/llama-b11259-bin-win-vulkan-x64.zip"
+        }
+      },
+      "libraries": {
+        "linux-x86_64": [
+          {"name": "libggml-base.so.0", "member": "llama-b11259/libggml-base.so.0.25.3", "bytes": 930392, "sha256": "0c8442afc073c91c210c164f025d65c742b0683d153e78a77d452559705feb66"},
+          {"name": "libggml-cpu-alderlake.so", "member": "llama-b11259/libggml-cpu-alderlake.so", "bytes": 1395816, "sha256": "746079860100bccaeb56676900da83c8ece7be3e2ab0bcf012971e6af9c93568"},
+          {"name": "libggml-cpu-cannonlake.so", "member": "llama-b11259/libggml-cpu-cannonlake.so", "bytes": 1565376, "sha256": "7a24f1d33cff440dbdfa220b3adf9e1a32ce42eac496f4d14e6c7953d6c455fd"},
+          {"name": "libggml-cpu-cascadelake.so", "member": "llama-b11259/libggml-cpu-cascadelake.so", "bytes": 1577368, "sha256": "69da378eefdc089430c8d2b4731bbdaeab715673bd53a9fba87b35bb1d931396"},
+          {"name": "libggml-cpu-cooperlake.so", "member": "llama-b11259/libggml-cpu-cooperlake.so", "bytes": 1577432, "sha256": "31e93596ec413e9509161a582c4ff0b48552fbfec26558048b5e4be565c664d1"},
+          {"name": "libggml-cpu-haswell.so", "member": "llama-b11259/libggml-cpu-haswell.so", "bytes": 1399912, "sha256": "510bb86530d07fe2fd552e17ed914430452943fb4262952dc1163299cbd48991"},
+          {"name": "libggml-cpu-icelake.so", "member": "llama-b11259/libggml-cpu-icelake.so", "bytes": 1577368, "sha256": "5a5bf870a45e8b0eea79e62cf3761e6f28bbcfeb5945bfa5fe3fa3d68f174cc2"},
+          {"name": "libggml-cpu-ivybridge.so", "member": "llama-b11259/libggml-cpu-ivybridge.so", "bytes": 1343720, "sha256": "6fb22f02e7f1d643aa2011028fc8d98c12e6e8d8dccde8711fdf170dfe362efb"},
+          {"name": "libggml-cpu-piledriver.so", "member": "llama-b11259/libggml-cpu-piledriver.so", "bytes": 1339624, "sha256": "ecff59c97c9d06c7f715c4b40582ac0b18e0ee798a4dc6a55342cb8cc8d1a6d9"},
+          {"name": "libggml-cpu-sandybridge.so", "member": "llama-b11259/libggml-cpu-sandybridge.so", "bytes": 1334408, "sha256": "ead259c309646f6cd3858ec876fdc638026a8afc743b9b210dc8c9d57a3cc023"},
+          {"name": "libggml-cpu-sapphirerapids.so", "member": "llama-b11259/libggml-cpu-sapphirerapids.so", "bytes": 1839672, "sha256": "027fff1c9911b6b0fc4cd8024e096335e8d9047f49588c266de54dfd8c1da74a"},
+          {"name": "libggml-cpu-skylakex.so", "member": "llama-b11259/libggml-cpu-skylakex.so", "bytes": 1565376, "sha256": "1254aa8890c486833947769c08ec6123586b3183d1d4dfafe2e78cc836650b19"},
+          {"name": "libggml-cpu-sse42.so", "member": "llama-b11259/libggml-cpu-sse42.so", "bytes": 942048, "sha256": "4acfbb6b779db7c6b3407ca9ecff888839b3bf62879cbd4e6ddc7497da11ccf0"},
+          {"name": "libggml-cpu-x64.so", "member": "llama-b11259/libggml-cpu-x64.so", "bytes": 934032, "sha256": "f5b2b815695683770e85ee018bf2f246f74643b88e0dd03bf836a92f3cd59cb2"},
+          {"name": "libggml-cpu-zen4.so", "member": "llama-b11259/libggml-cpu-zen4.so", "bytes": 1577432, "sha256": "42d73eba9c6c523a8e3fba3c2509ab1cef71c7e63762a9e1fee58803d0c28b05"},
+          {"name": "libggml-vulkan.so", "member": "llama-b11259/libggml-vulkan.so", "bytes": 44315464, "sha256": "29af097e4da82edb1b641a7827a4b68e1c82840ac28f4164d2999b1dd04ebb65"},
+          {"name": "libggml.so.0", "member": "llama-b11259/libggml.so.0.25.3", "bytes": 55184, "sha256": "569c53469aceca5dd357d2c3e1570014ed73e676abb08d44971be4cb784d855c"},
+          {"name": "libllama.so.0", "member": "llama-b11259/libllama.so.0.5.0", "bytes": 4661032, "sha256": "9eadeb144a488fa976f682d753666d7f8f13671bbbf869ca18f97698cb589c8f"}
+        ],
+        "macos-aarch64": [
+          {"name": "libggml-base.0.dylib", "member": "llama-b11259/libggml-base.0.25.3.dylib", "bytes": 734072, "sha256": "02a9b158f21ae00e72d3cca25b236c18df40b09c0e090c99118d7636cfbf3ff3"},
+          {"name": "libggml-blas.0.dylib", "member": "llama-b11259/libggml-blas.0.25.3.dylib", "bytes": 58776, "sha256": "66521923af97fcd650683917711e2791ff922fa8fcd9868aed444f955adc4878"},
+          {"name": "libggml-cpu.0.dylib", "member": "llama-b11259/libggml-cpu.0.25.3.dylib", "bytes": 957408, "sha256": "ea643646f017372436bde6119960f8e3b02b7493b3fef29666c4e4f33c0db8e2"},
+          {"name": "libggml-metal.0.dylib", "member": "llama-b11259/libggml-metal.0.25.3.dylib", "bytes": 5289352, "sha256": "ab5af9ed102c52cf17501b3688e454a78d455c4cb6454ba89507b3a856f83e34"},
+          {"name": "libggml-rpc.0.dylib", "member": "llama-b11259/libggml-rpc.0.25.3.dylib", "bytes": 191920, "sha256": "d9af4bf21c5a8dc63c1ce207245c8b26b1717c3163465135e9573f19709326b4"},
+          {"name": "libggml.0.dylib", "member": "llama-b11259/libggml.0.25.3.dylib", "bytes": 60128, "sha256": "83e438eb40f86e3f9604ee8946f946b93c2194ebf0a4c5ed638c9b0ea6e6fc42"},
+          {"name": "libllama.0.dylib", "member": "llama-b11259/libllama.0.5.0.dylib", "bytes": 3158512, "sha256": "0f31d7f02ea91c744bfdf6b7b08b622fefee98ec1a17fbb6f29a9c570526c54e"}
+        ],
+        "macos-x86_64": [
+          {"name": "libggml-base.0.dylib", "member": "llama-b11259/libggml-base.0.25.3.dylib", "bytes": 730968, "sha256": "de5da36bbf423ac12661e1c731575285cf477c518508009e2a729f48163ad578"},
+          {"name": "libggml-blas.0.dylib", "member": "llama-b11259/libggml-blas.0.25.3.dylib", "bytes": 33688, "sha256": "18417f06d605a0d67ae8fc7fcb95abcfd225421d6cb9ce7ff05557b92170097a"},
+          {"name": "libggml-cpu.0.dylib", "member": "llama-b11259/libggml-cpu.0.25.3.dylib", "bytes": 1596672, "sha256": "380fa28002e7ebcf7eb2e76e511ef54aba3ad65ad9a01f87f98f7c8cba5dc3fc"},
+          {"name": "libggml-rpc.0.dylib", "member": "llama-b11259/libggml-rpc.0.25.3.dylib", "bytes": 160848, "sha256": "3ed537f6ec8c2454ffb29d09403165007ca5f17158170bdba83eb0c9b900eaa2"},
+          {"name": "libggml.0.dylib", "member": "llama-b11259/libggml.0.25.3.dylib", "bytes": 43336, "sha256": "a3c0839b713759154d17059b54d1afcec3ef22b5b3aa44963dceaee4ca64a0d1"},
+          {"name": "libllama.0.dylib", "member": "llama-b11259/libllama.0.5.0.dylib", "bytes": 3425448, "sha256": "3f543b4c1c9497ec29cc3e118ff0a4131a535b03a11786500a9b0f50e9ea1303"}
+        ],
+        "windows-x86_64": [
+          {"name": "ggml-base.dll", "member": "ggml-base.dll", "bytes": 800768, "sha256": "0396d453898eff5f105baf187cd7bfd0d83edba62ebfda0c76c5a2be40170b49"},
+          {"name": "ggml-cpu-alderlake.dll", "member": "ggml-cpu-alderlake.dll", "bytes": 1424384, "sha256": "da2ce899d47ab23f1542865e57f2df80b1d738b6ebba23a548596b966f7a5d6a"},
+          {"name": "ggml-cpu-cannonlake.dll", "member": "ggml-cpu-cannonlake.dll", "bytes": 1649664, "sha256": "b497e0bdf3e1ead781cb2e10f1601596d3d1afce436a9251ce1368e2168df184"},
+          {"name": "ggml-cpu-cascadelake.dll", "member": "ggml-cpu-cascadelake.dll", "bytes": 1634304, "sha256": "47b6a5490b2a81a253cc3e3b61f68f9ae0338779a95079d5947eae5794e2330b"},
+          {"name": "ggml-cpu-cooperlake.dll", "member": "ggml-cpu-cooperlake.dll", "bytes": 1634816, "sha256": "6ec3ed84e477af453a0879c352e299b690cce2fb1bfa09c55d8304f03dcdc0e5"},
+          {"name": "ggml-cpu-haswell.dll", "member": "ggml-cpu-haswell.dll", "bytes": 1428992, "sha256": "48ff33c73c3cc747522822c4d088621a66e15f7c4ff98b6c7689b833913d7e31"},
+          {"name": "ggml-cpu-icelake.dll", "member": "ggml-cpu-icelake.dll", "bytes": 1640448, "sha256": "ef5669772ac6e26c223a6930f7c99cb6a2985e315320d0a5ca3edbde4b418fff"},
+          {"name": "ggml-cpu-ivybridge.dll", "member": "ggml-cpu-ivybridge.dll", "bytes": 1298944, "sha256": "b6aebe67cd03d570e05d3aa6f20ab5553a66c755f03d623901800a8dfe0e2754"},
+          {"name": "ggml-cpu-piledriver.dll", "member": "ggml-cpu-piledriver.dll", "bytes": 1303040, "sha256": "0f51a00760ad893c44a8e4488bd2d54a6a4e260df7feaa67e6ea6e9968d39fd9"},
+          {"name": "ggml-cpu-sandybridge.dll", "member": "ggml-cpu-sandybridge.dll", "bytes": 1278976, "sha256": "f60089e2b0d2e4402b18ce1424c327ddf382b3cbaeca32598820cef354c233d0"},
+          {"name": "ggml-cpu-sapphirerapids.dll", "member": "ggml-cpu-sapphirerapids.dll", "bytes": 1911296, "sha256": "dc1aa0a345af0a75acce01a6baea881b663cd9320acf3272e8bbf3ec96247390"},
+          {"name": "ggml-cpu-skylakex.dll", "member": "ggml-cpu-skylakex.dll", "bytes": 1643008, "sha256": "cf95e711a1f0863a61217b94fdbda9f68f87c40507838493360c1f5c1eca3cc5"},
+          {"name": "ggml-cpu-sse42.dll", "member": "ggml-cpu-sse42.dll", "bytes": 909312, "sha256": "33920a25b6855a69169355fae4d9d4b4f968e11a22a8ea95b79c3611a909f7fa"},
+          {"name": "ggml-cpu-x64.dll", "member": "ggml-cpu-x64.dll", "bytes": 901632, "sha256": "08a7bb90a1640518a5b27a643b8a8b73f18abcd7fe6f92019236c699ea427481"},
+          {"name": "ggml-cpu-zen4.dll", "member": "ggml-cpu-zen4.dll", "bytes": 1641472, "sha256": "5775c2cafa9bd74be8c14cc77d58163461f8f4ec709b859e26041ee023041135"},
+          {"name": "ggml-vulkan.dll", "member": "ggml-vulkan.dll", "bytes": 45296128, "sha256": "d2d767cc2360cd5fbb4b5301660463605f3d16d433b5a4a94c822c073ee1036d"},
+          {"name": "ggml.dll", "member": "ggml.dll", "bytes": 79872, "sha256": "92b3d587f6e539077932598941fc2a3f33a679480951d0ddc995554d03158a45"},
+          {"name": "libomp.dll", "member": "libomp.dll", "bytes": 768000, "sha256": "a12116ba72d1d6820407cf30be23da04ce79d6bb8a71a5ee71759c5a1faa6f1c"},
+          {"name": "llama.dll", "member": "llama.dll", "bytes": 3203072, "sha256": "11b7b693e5ba137a88be44b1cd2cd21dda64e046a333253acdff3d23bda33d7c"}
+        ]
+      }
+    }
+  }
+}
