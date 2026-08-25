@@ -3,7 +3,10 @@
 mod asr;
 mod atomic_file;
 mod audio;
+mod clear_data;
+mod credential_store;
 mod destination;
+mod file_manager;
 mod llama;
 mod llm;
 mod local_cleanup;
@@ -11,12 +14,17 @@ mod models;
 mod paste_delivery;
 mod paste_keys;
 mod paths;
+mod settings_store;
+mod sqlite_history;
 mod voice_activity;
 #[cfg(target_os = "linux")]
 pub mod wayland;
 
 pub use asr::SherpaAsrEngine;
 pub use audio::CpalAudioInput;
+pub use clear_data::{ClearDataCategory, ClearDataError, DataCleaner};
+pub use credential_store::{CredentialStore, CredentialStoreUnavailable, MemoryCredentialStore};
+pub use file_manager::{PrivacySettingsPage, open_in_file_manager, open_privacy_settings};
 pub use llama::{CUDA_LIBRARIES, Llama};
 pub use llm::{RemoteProvider, RigLlmService};
 pub use local_cleanup::{CleanupModelLocator, CudaPackLocator, LocalCleanupService};
@@ -33,6 +41,8 @@ pub use paste_delivery::{
 };
 pub use paste_keys::PasteKeys;
 pub use paths::AppPaths;
+pub use settings_store::{SettingsNotice, SettingsStore};
+pub use sqlite_history::SqliteHistoryRepository;
 use tracing_subscriber::EnvFilter;
 pub use voice_activity::{SileroVoiceActivitySource, silero_vad_model_path};
 
