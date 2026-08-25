@@ -5,6 +5,7 @@ members = [
     "crates/whispernow-core",
     "crates/whispernow-platform",
     "crates/whispernow-api",
+    "apps/desktop",
     "tools/update-signature",
 ]
 

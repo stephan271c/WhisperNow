@@ -1,0 +1,3 @@
+# Lets the input group create virtual keyboards. WhisperNow's paste helper is
+# setgid input and presses only the paste shortcut on its keyboard.
+KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"

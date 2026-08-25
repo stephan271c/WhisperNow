@@ -1,0 +1,48 @@
+[package]
+name = "whispernow-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "whispernow_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+tauri-plugin-global-shortcut.workspace = true
+tauri-plugin-autostart.workspace = true
+tauri-plugin-single-instance.workspace = true
+tauri-plugin-process.workspace = true
+tauri-plugin-updater.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+whispernow-api = { path = "../../crates/whispernow-api" }
+whispernow-core = { path = "../../crates/whispernow-core" }
+whispernow-domain = { path = "../../crates/whispernow-domain" }
+whispernow-platform = { path = "../../crates/whispernow-platform" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { workspace = true, features = ["global_shortcuts", "notification"] }
+futures-util.workspace = true
+gdk.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

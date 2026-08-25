@@ -1,0 +1,85 @@
+//! Forwards application events to the webviews, the tray, the recording overlay and the
+//! shortcuts.
+//!
+//! The partial transcript carries dictated text and is emitted only to the recording bar.
+//! Tauri still delivers a window-targeted event to a listener registered for any target, so
+//! the other windows must never subscribe to it.
+
+use std::sync::{Arc, mpsc};
+
+use tauri::{Emitter as _, Manager as _};
+use whispernow_api::{AppStateDto, EventPayload, PhaseDto};
+
+use super::Gateway;
+use crate::overlay::RecordingOverlay;
+
+/// Starts the thread that forwards every published event, in publication order. It ends when
+/// the last event sender is dropped.
+pub(crate) fn forward_events(
+    app: tauri::AppHandle,
+    overlay: Arc<RecordingOverlay>,
+    receiver: mpsc::Receiver<EventPayload>,
+) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("whispernow-events".to_owned())
+        .spawn(move || {
+            let mut followed = Followed::default();
+            for event in receiver {
+                if let EventPayload::StateChanged { state } = &event {
+                    followed.observe(&app, &overlay, state);
+                }
+                emit(&app, event);
+            }
+        })
+        .map(drop)
+}
+
+/// What the forwarder remembers from the previous snapshot.
+struct Followed {
+    shortcuts_enabled: bool,
+}
+
+impl Default for Followed {
+    fn default() -> Self {
+        Self {
+            shortcuts_enabled: true,
+        }
+    }
+}
+
+impl Followed {
+    fn observe(&mut self, app: &tauri::AppHandle, overlay: &RecordingOverlay, state: &AppStateDto) {
+        overlay.observe(state);
+        let Some(app_state) = app.try_state::<Gateway>() else {
+            return;
+        };
+        app_state.tray.apply_snapshot(state);
+        app_state.observe_dictation(state.phase.is_busy());
+        let shortcuts_enabled = !matches!(state.phase, PhaseDto::Paused | PhaseDto::Updating);
+        if shortcuts_enabled != self.shortcuts_enabled {
+            self.shortcuts_enabled = shortcuts_enabled;
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                app.state::<Gateway>().sync_shortcuts();
+            });
+        }
+        if app_state
+            .activation
+            .release_deferred_activation(&state.phase)
+        {
+            crate::show_settings_window(app);
+        }
+    }
+}
+
+pub(crate) fn emit(app: &tauri::AppHandle, event: EventPayload) {
+    let event_name = event.event_name();
+    let emitted = if matches!(event, EventPayload::PartialTranscript { .. }) {
+        app.emit_to(crate::RECORDING_BAR_WINDOW, event_name, event)
+    } else {
+        app.emit(event_name, event)
+    };
+    if emitted.is_err() {
+        tracing::error!(event_name, "desktop event emission failed");
+    }
+}

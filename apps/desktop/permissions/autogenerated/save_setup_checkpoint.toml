@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-setup-checkpoint"
+description = "Enables the save_setup_checkpoint command without any pre-configured scope."
+commands.allow = ["save_setup_checkpoint"]
+
+[[permission]]
+identifier = "deny-save-setup-checkpoint"
+description = "Denies the save_setup_checkpoint command without any pre-configured scope."
+commands.deny = ["save_setup_checkpoint"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-copy-last-transcript"
+description = "Enables the copy_last_transcript command without any pre-configured scope."
+commands.allow = ["copy_last_transcript"]
+
+[[permission]]
+identifier = "deny-copy-last-transcript"
+description = "Denies the copy_last_transcript command without any pre-configured scope."
+commands.deny = ["copy_last_transcript"]

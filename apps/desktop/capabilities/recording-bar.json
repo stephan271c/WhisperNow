@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "recording-bar",
+  "description": "State and event access for the non-focusable recording bar, plus the commands its controls run; the only window that subscribes to the transcript-bearing partial-transcript event",
+  "windows": ["recording-bar"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-state",
+    "allow-stop-recording",
+    "allow-cancel-recording",
+    "allow-dismiss-recording-overlay",
+    "allow-copy-last-transcript",
+    "allow-open-main-window"
+  ]
+}

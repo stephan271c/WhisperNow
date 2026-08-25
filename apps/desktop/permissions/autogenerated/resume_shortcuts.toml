@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resume-shortcuts"
+description = "Enables the resume_shortcuts command without any pre-configured scope."
+commands.allow = ["resume_shortcuts"]
+
+[[permission]]
+identifier = "deny-resume-shortcuts"
+description = "Denies the resume_shortcuts command without any pre-configured scope."
+commands.deny = ["resume_shortcuts"]

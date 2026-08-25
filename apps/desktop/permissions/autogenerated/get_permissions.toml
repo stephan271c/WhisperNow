@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-permissions"
+description = "Enables the get_permissions command without any pre-configured scope."
+commands.allow = ["get_permissions"]
+
+[[permission]]
+identifier = "deny-get-permissions"
+description = "Denies the get_permissions command without any pre-configured scope."
+commands.deny = ["get_permissions"]

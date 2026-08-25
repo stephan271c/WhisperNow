@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": [
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libasound2",
+          "libgomp1",
+          "libgtk-3-0",
+          "libwebkit2gtk-4.1-0"
+        ],
+        "section": "sound",
+        "priority": "optional",
+        "files": {
+          "/usr/libexec/whispernow/whispernow-input-helper": "../../target/release/whispernow-input-helper",
+          "/usr/lib/udev/rules.d/60-whispernow-uinput.rules": "linux/60-whispernow-uinput.rules"
+        },
+        "postInstallScript": "linux/postinst.sh",
+        "postRemoveScript": "linux/postrm.sh"
+      },
+      "rpm": {
+        "release": "1",
+        "depends": ["libgomp"],
+        "files": {
+          "/usr/libexec/whispernow/whispernow-input-helper": "../../target/release/whispernow-input-helper",
+          "/usr/lib/udev/rules.d/60-whispernow-uinput.rules": "linux/60-whispernow-uinput.rules"
+        },
+        "postInstallScript": "linux/postinst.sh",
+        "postRemoveScript": "linux/postrm.sh"
+      },
+      "appimage": {
+        "bundleMediaFramework": false,
+        "files": {
+          "/usr/libexec/whispernow/whispernow-input-helper": "../../target/release/whispernow-input-helper",
+          "/usr/share/whispernow/install_input_helper.sh": "../../scripts/install_input_helper.sh"
+        }
+      }
+    }
+  }
+}
