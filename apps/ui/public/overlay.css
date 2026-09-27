@@ -1,0 +1,223 @@
+/*
+ * The recording bar window. It loads tokens.css, ui.css and this file. Inside the pill the
+ * surface, text and control tokens are remapped to the theme-independent inverse palette, so
+ * the shared primitives read the same over any desktop and in either app theme.
+ */
+
+.overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  height: 100%;
+  padding: var(--space-2);
+}
+
+/* The window sits at the top edge, so the pill hugs the top and grows downward. */
+.overlay-top {
+  justify-content: flex-start;
+}
+
+.overlay-pill {
+  --color-surface: var(--color-inverse-surface);
+  --color-surface-raised: var(--color-inverse-surface-raised);
+  --color-text-primary: var(--color-inverse-text);
+  --color-text-secondary: var(--color-inverse-text-secondary);
+  --color-accent-text: var(--color-inverse-accent);
+  --color-accent-soft: var(--color-inverse-surface-raised);
+  --color-border-control: var(--color-inverse-border);
+  --color-focus: var(--color-inverse-accent);
+  --color-danger: var(--color-inverse-danger);
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border: 1px solid var(--color-inverse-surface-raised);
+  border-radius: var(--radius-full);
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  /* The window edge is --space-2 away and clips anything larger into a visible square. */
+  box-shadow: var(--shadow-1);
+}
+
+/* Transparent rather than removed, so the status line stays in the accessibility tree. */
+.overlay-idle {
+  opacity: 0;
+}
+
+.overlay-expanded {
+  border-radius: var(--radius-md);
+}
+
+.overlay-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+}
+
+.overlay-indicator {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--color-inverse-accent);
+}
+
+.overlay-failed .overlay-indicator {
+  color: var(--color-danger);
+}
+
+.overlay-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--color-inverse-accent);
+}
+
+.overlay-starting .overlay-dot {
+  opacity: 0.4;
+}
+
+.overlay-listening .overlay-dot {
+  animation: overlay-pulse 1.2s ease-in-out infinite;
+}
+
+.overlay-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-border-control);
+  border-top-color: var(--color-inverse-accent);
+  border-radius: var(--radius-full);
+  animation: overlay-spin 0.8s linear infinite;
+}
+
+.overlay-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Outcome messages wrap so they are read in full. */
+.overlay-failed .overlay-status {
+  line-height: var(--line-height-tight);
+  white-space: normal;
+}
+
+.overlay-bars {
+  display: block;
+  flex: none;
+  width: 60px;
+  height: 20px;
+}
+
+.overlay-bar {
+  fill: var(--color-inverse-accent);
+  transition:
+    height 50ms ease-out,
+    y 50ms ease-out;
+}
+
+/* Until the first samples arrive a wave runs across the bars instead of a level. */
+.overlay-bars-arming .overlay-bar {
+  opacity: 0.45;
+  animation: overlay-arming 1s ease-in-out infinite;
+}
+
+.overlay-bars-arming .overlay-bar:nth-child(2) {
+  animation-delay: 0.08s;
+}
+
+.overlay-bars-arming .overlay-bar:nth-child(3) {
+  animation-delay: 0.16s;
+}
+
+.overlay-bars-arming .overlay-bar:nth-child(4) {
+  animation-delay: 0.24s;
+}
+
+.overlay-bars-arming .overlay-bar:nth-child(5) {
+  animation-delay: 0.32s;
+}
+
+.overlay-bars-arming .overlay-bar:nth-child(6) {
+  animation-delay: 0.40s;
+}
+
+.overlay-bars-arming .overlay-bar:nth-child(7) {
+  animation-delay: 0.48s;
+}
+
+.overlay-bars-arming .overlay-bar:nth-child(8) {
+  animation-delay: 0.56s;
+}
+
+.overlay-bars-arming .overlay-bar:nth-child(9) {
+  animation-delay: 0.64s;
+}
+
+.overlay-elapsed {
+  flex: none;
+  min-width: 4ch;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.overlay-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* The newest committed text stays at the bottom; older lines fade out at the top. */
+.overlay-live-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: calc(2 * var(--line-height-normal) * var(--font-size-sm));
+  overflow: hidden;
+  padding-right: var(--space-2);
+  font-size: var(--font-size-sm);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 45%);
+  mask-image: linear-gradient(to bottom, transparent, black 45%);
+}
+
+@keyframes overlay-pulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes overlay-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes overlay-arming {
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-listening .overlay-dot,
+  .overlay-spinner,
+  .overlay-bar,
+  .overlay-bars-arming .overlay-bar {
+    transition: none;
+    animation: none;
+  }
+}

@@ -1,0 +1,36 @@
+[package]
+name = "whispernow-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = []
+dev = ["dioxus/devtools"]
+
+[dependencies]
+dioxus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+whispernow-api = { path = "../../crates/whispernow-api" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys.workspace = true
+serde-wasm-bindgen.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+
+[dev-dependencies]
+dioxus-html = { version = "=0.7.10", features = ["serialize"] }
+dioxus-ssr.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.77"
+web-sys = { version = "=0.3.104", features = ["Document", "Element", "EventTarget", "MouseEvent", "Window"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,93 @@
+//! One dictation in the list: when it happened, its text, and Copy, Play and Delete.
+
+use dioxus::prelude::*;
+use whispernow_api::{EntryStatus, HistoryEntry};
+
+use super::audio::AudioPlayer;
+use super::format::{LocalClock, duration_label, machine_time};
+use crate::HistoryCopied;
+use crate::components::actions::use_actions;
+use crate::components::ui::{Button, ButtonSize, ButtonVariant, ConfirmButton, Icon, IconName};
+
+/// The marker a row shows; a dictation that was pasted needs none.
+pub(super) const fn status_badge(status: EntryStatus) -> Option<(&'static str, &'static str)> {
+    match status {
+        EntryStatus::Ok => None,
+        EntryStatus::Failed => Some(("Failed", "history-status-badge failed")),
+        EntryStatus::Cancelled => Some(("Cancelled", "history-status-badge cancelled")),
+        EntryStatus::NotDelivered => Some(("Not pasted", "history-status-badge not-pasted")),
+    }
+}
+
+#[component]
+pub(super) fn HistoryRow(
+    entry: HistoryEntry,
+    copied: Option<HistoryCopied>,
+    delete_blocked: Option<&'static str>,
+    clock: LocalClock,
+) -> Element {
+    let actions = use_actions();
+    let id = entry.id;
+    let rid = id.0;
+    let text = entry.text().map(str::to_owned);
+    let when = clock.relative_time(entry.created_at);
+    let target = format!("the transcript from {when}");
+    let duration = entry.duration_millis.map(duration_label);
+    let badge = status_badge(entry.status);
+    let copy_label = match copied {
+        Some(copied) if copied.succeeded => "Copied",
+        Some(_) => "Copy failed",
+        None => "Copy",
+    };
+    rsx! { li { class: "history-row", id: "history-entry-{rid}",
+        div { class: "history-row-main",
+            div { class: "history-row-summary",
+                span { class: "history-row-meta",
+                    time { datetime: machine_time(entry.created_at),
+                        title: clock.full_time(entry.created_at),
+                        "{when}"
+                    }
+                    if let Some(duration) = &duration {
+                        span { class: "history-row-duration", "{duration}" }
+                    }
+                    if let Some((label, class)) = badge {
+                        span { class, "{label}" }
+                    }
+                }
+                if let Some(text) = &text {
+                    p { class: "history-row-preview", "{text}" }
+                } else {
+                    p { class: "history-row-preview empty", "No transcript" }
+                }
+            }
+            div { class: "history-row-actions",
+                Button { id: "history-copy-{rid}", size: ButtonSize::Sm,
+                    variant: ButtonVariant::Secondary,
+                    aria_label: "{copy_label} {target}",
+                    disabled: text.is_none(),
+                    onclick: move |_| actions.copy_history_entry(id),
+                    Icon { name: if copy_label == "Copied" { IconName::CheckCircle } else { IconName::Copy } }
+                    "{copy_label}"
+                }
+                ConfirmButton { id: "history-delete-{rid}", size: ButtonSize::Sm,
+                    label: "Delete", confirm_label: "Delete this dictation",
+                    target: target.clone(),
+                    disabled: delete_blocked.is_some(),
+                    onconfirm: move |()| actions.delete_history_entry(id),
+                }
+            }
+        }
+        span { class: "visually-hidden", role: "status",
+            if copy_label != "Copy" { "{copy_label}" }
+        }
+        if let Some(error) = &entry.error {
+            div { class: "history-problem", id: "history-problem-{rid}",
+                Icon { name: IconName::AlertCircle }
+                p { "{error}" }
+            }
+        }
+        if entry.has_audio {
+            AudioPlayer { id }
+        }
+    } }
+}

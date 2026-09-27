@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npm run test:bridge",
+    "test:bridge": "node --test tests/tauri_bridge.test.js"
+  }
+}

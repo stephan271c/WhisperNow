@@ -1,0 +1,128 @@
+//! The history list: reading it, filtering, copying and changing entries.
+
+use std::future::Future;
+
+use dioxus::core::spawn_forever;
+use dioxus::prelude::*;
+use whispernow_api::{DeleteHistoryEntryRequest, EntryId, ErrorCategoryDto, HistoryFilter};
+
+use super::UiActions;
+use crate::client::{self, ClientError};
+use crate::{HistoryCopied, UiOperation};
+
+/// How long a history entry's Copy button shows the copy's outcome.
+const COPIED_MS: u32 = 2_000;
+
+impl UiActions {
+    /// Re-reads the loaded history window.
+    pub(crate) fn refresh_history(self) {
+        let (pages, filter) = self.management().peek().history_request();
+        self.read_history(pages, filter);
+    }
+
+    /// Reads one more page of older entries.
+    pub(crate) fn load_older_history(self) {
+        let (pages, filter) = self.management().write().older_history_request();
+        self.read_history(pages, filter);
+    }
+
+    fn read_history(self, pages: u32, filter: HistoryFilter) {
+        spawn_forever(async move {
+            let answer = client::history_window(pages, filter.clone()).await;
+            let mut management = self.management();
+            match answer {
+                Ok(page) => management
+                    .write()
+                    .finish_history_refresh(pages, &filter, page),
+                Err(error) => management
+                    .write()
+                    .fail_history_refresh(&filter, error.api_error()),
+            }
+        });
+    }
+
+    /// Searches for the typed search text, unless it is already the search shown.
+    pub(crate) fn search_history(self) {
+        if self.management().write().apply_history_search() {
+            self.refresh_history();
+        }
+    }
+
+    pub(crate) fn show_failed_history_only(self, failed_only: bool) {
+        if self
+            .management()
+            .write()
+            .show_failed_history_only(failed_only)
+        {
+            self.refresh_history();
+        }
+    }
+
+    pub(crate) fn clear_history_filter(self) {
+        if self.management().write().clear_history_filter() {
+            self.refresh_history();
+        }
+    }
+
+    /// Copies one entry's text and shows the outcome on its Copy button for a moment; a newer
+    /// copy replaces it.
+    pub(crate) fn copy_history_entry(self, entry: EntryId) {
+        let Some(text) = self.management().peek().history_copy(entry) else {
+            return;
+        };
+        let copy = spawn_forever(async move {
+            let succeeded = client::write_clipboard(&text).await.is_ok();
+            self.management().write().history_copied = Some(HistoryCopied { entry, succeeded });
+            client::delay(COPIED_MS).await;
+            let mut management = self.management();
+            let mut management = management.write();
+            management.history_copied = None;
+            management.history_copy = None;
+        });
+        let mut management = self.management();
+        let mut management = management.write();
+        management.history_copied = None;
+        if let Some(previous) = management.history_copy.replace(copy) {
+            previous.cancel();
+        }
+    }
+
+    pub(crate) fn delete_history_entry(self, id: EntryId) {
+        self.change_history(async move {
+            client::delete_history_entry(&DeleteHistoryEntryRequest { id }).await
+        });
+    }
+
+    pub(crate) fn clear_history(self) {
+        self.change_history(client::clear_history());
+    }
+
+    /// Changes history, then reads it again whatever the answer: last write wins, and a row
+    /// another surface already removed is the refresh's result rather than an error.
+    fn change_history(self, call: impl Future<Output = Result<(), ClientError>> + 'static) {
+        let operation = UiOperation::ChangeHistory;
+        self.run(operation, call, move |actions, answer| {
+            actions.refresh_history();
+            if let Err(error) = answer
+                && error
+                    .api_error()
+                    .is_none_or(|error| error.category != ErrorCategoryDto::NotFound)
+            {
+                actions.report(operation, &error);
+            }
+        });
+    }
+
+    pub(crate) fn open_recordings_folder(self) {
+        let operation = UiOperation::OpenRecordingsFolder;
+        self.run(
+            operation,
+            client::open_recordings_folder(),
+            move |actions, answer| {
+                if let Err(error) = answer {
+                    actions.report(operation, &error);
+                }
+            },
+        );
+    }
+}

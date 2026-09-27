@@ -1,0 +1,207 @@
+/*
+ * WhisperNow design tokens and base rules, loaded by every window.
+ *
+ * Components use these custom properties instead of literal values. Colour tokens are
+ * plain hex so `tests/design_tokens.rs` can check their contrast; the dark palette is
+ * declared twice (system preference and explicit `data-theme="dark"`) and the test keeps
+ * both copies identical.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Type: the platform UI font, so text matches the desktop and nothing is bundled. */
+  --font-family-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Ubuntu,
+    Cantarell, "Helvetica Neue", Arial, sans-serif;
+  --font-family-mono: ui-monospace, "SF Mono", "Cascadia Code", "Source Code Pro", Menlo,
+    Consolas, monospace;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 28px;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.65;
+
+  /* Spacing: a 4px scale. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Shape and depth. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-window: 12px;
+  --radius-full: 999px;
+  --shadow-1: 0 1px 2px rgb(31 28 23 / 6%);
+  --shadow-2: 0 4px 12px rgb(31 28 23 / 8%);
+  --shadow-3: 0 12px 32px rgb(31 28 23 / 16%);
+
+  /* Controls and motion. */
+  --control-height-sm: 28px;
+  --control-height-md: 36px;
+  --duration-fast: 140ms;
+
+  /* Colour. Text tokens need 4.5:1 and control/focus tokens 3:1 on every surface. */
+  --color-canvas: #faf8ec;
+  --color-surface: #fffef7;
+  --color-surface-raised: #f3f0e1;
+  --color-surface-sunken: #efebda;
+  --color-border-subtle: #e4dfcb;
+  --color-border-control: #8a8370;
+  --color-text-primary: #1f1c17;
+  --color-text-secondary: #5c5649;
+  --color-accent: #24211c;
+  --color-accent-hover: #3a362f;
+  --color-on-accent: #fffef7;
+  --color-accent-text: #9a3a1a;
+  --color-accent-soft: #ece6d2;
+  --color-focus: #b0441f;
+  --color-success: #2f6a2c;
+  --color-success-soft: #e5eed6;
+  --color-warning: #7a5208;
+  --color-warning-soft: #f5e7c4;
+  --color-danger: #a8321f;
+  --color-danger-soft: #f7e0d8;
+  --color-info: #4d4433;
+  --color-info-soft: #f0ebda;
+  --color-inverse-surface: #1f1c17;
+  --color-inverse-text: #fffef7;
+  --color-inverse-accent: #ffae8c;
+  --color-inverse-surface-raised: #302c25;
+  --color-inverse-text-secondary: #cbc4b2;
+  --color-inverse-border: #8f887a;
+  --color-inverse-danger: #ffb4ab;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 30%);
+    --shadow-2: 0 4px 12px rgb(0 0 0 / 36%);
+    --shadow-3: 0 12px 32px rgb(0 0 0 / 48%);
+    --color-canvas: #161513;
+    --color-surface: #1e1d1a;
+    --color-surface-raised: #272521;
+    --color-surface-sunken: #121110;
+    --color-border-subtle: #33302b;
+    --color-border-control: #7f796d;
+    --color-text-primary: #f1ecdf;
+    --color-text-secondary: #b3ac9c;
+    --color-accent: #efe9da;
+    --color-accent-hover: #dbd4c2;
+    --color-on-accent: #1e1d1a;
+    --color-accent-text: #ff9e78;
+    --color-accent-soft: #302c25;
+    --color-focus: #ff9e78;
+    --color-success: #9cd38b;
+    --color-success-soft: #1f2a1b;
+    --color-warning: #e9c06c;
+    --color-warning-soft: #342a15;
+    --color-danger: #f5a597;
+    --color-danger-soft: #3a201b;
+    --color-info: #d8cfbb;
+    --color-info-soft: #2b2823;
+    --color-inverse-surface: #1f1c17;
+    --color-inverse-text: #fffef7;
+    --color-inverse-accent: #ffae8c;
+    --color-inverse-surface-raised: #302c25;
+    --color-inverse-text-secondary: #cbc4b2;
+    --color-inverse-border: #8f887a;
+    --color-inverse-danger: #ffb4ab;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 30%);
+  --shadow-2: 0 4px 12px rgb(0 0 0 / 36%);
+  --shadow-3: 0 12px 32px rgb(0 0 0 / 48%);
+  --color-canvas: #161513;
+  --color-surface: #1e1d1a;
+  --color-surface-raised: #272521;
+  --color-surface-sunken: #121110;
+  --color-border-subtle: #33302b;
+  --color-border-control: #7f796d;
+  --color-text-primary: #f1ecdf;
+  --color-text-secondary: #b3ac9c;
+  --color-accent: #efe9da;
+  --color-accent-hover: #dbd4c2;
+  --color-on-accent: #1e1d1a;
+  --color-accent-text: #ff9e78;
+  --color-accent-soft: #302c25;
+  --color-focus: #ff9e78;
+  --color-success: #9cd38b;
+  --color-success-soft: #1f2a1b;
+  --color-warning: #e9c06c;
+  --color-warning-soft: #342a15;
+  --color-danger: #f5a597;
+  --color-danger-soft: #3a201b;
+  --color-info: #d8cfbb;
+  --color-info-soft: #2b2823;
+  --color-inverse-surface: #1f1c17;
+  --color-inverse-text: #fffef7;
+  --color-inverse-accent: #ffae8c;
+  --color-inverse-surface-raised: #302c25;
+  --color-inverse-text-secondary: #cbc4b2;
+  --color-inverse-border: #8f887a;
+  --color-inverse-danger: #ffb4ab;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#main {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+}
+
+/* Transparent so the recording bar window stays see-through; the settings shell paints the canvas. */
+body {
+  color: var(--color-text-primary);
+  background: transparent;
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

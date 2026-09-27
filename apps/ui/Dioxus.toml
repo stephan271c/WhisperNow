@@ -1,0 +1,11 @@
+[application]
+name = "whispernow-ui"
+public_dir = "public"
+
+[web.app]
+title = "WhisperNow"
+base_path = "/"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src", "public"]

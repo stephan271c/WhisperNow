@@ -1,0 +1,190 @@
+//! History: one entry per dictation, grouped by local day and searchable.
+
+mod audio;
+mod format;
+mod row;
+
+use dioxus::core::Task;
+use dioxus::prelude::*;
+use whispernow_api::HistoryFilter;
+
+pub(crate) use format::LocalClock;
+use format::{group_by_day, retention_summary};
+use row::HistoryRow;
+
+use super::actions::use_actions;
+use super::ui::{
+    Button, ButtonSize, ConfirmButton, EmptyState, Icon, IconName, ShortcutLabel, TextInput,
+};
+use super::use_navigator;
+use crate::{BlockedReason, Route, SettingsRoute, UiContext, UiOperation};
+
+// Page-level control ids; as expressions they render as attributes tests can locate.
+const SEARCH_ID: &str = "history-search";
+const SEARCH_ERROR_ID: &str = "history-search-error";
+const FAILED_FILTER_ID: &str = "history-failed-filter";
+const CLEAR_FILTER_ID: &str = "history-clear-filter";
+const RELOAD_ID: &str = "history-reload";
+const LOAD_MORE_ID: &str = "history-load-more";
+const CLEAR_ID: &str = "history-clear";
+const OPEN_FOLDER_ID: &str = "history-open-folder";
+const RETENTION_ID: &str = "history-retention-settings";
+
+/// How long typing must pause before the history is searched.
+const SEARCH_PAUSE_MS: u32 = 300;
+
+#[component]
+pub(super) fn HistoryScreen() -> Element {
+    let actions = use_actions();
+    let navigator = use_navigator();
+    let mut management = use_context::<UiContext>().management;
+    let clock = use_clock();
+    // The search waiting for typing to pause; a key press restarts it.
+    let mut search = use_signal(|| None::<Task>);
+    let copied = management.read().history_copied;
+    let blocked = |operation| actions.blocked(operation);
+    let settings = management.read().shown_settings().cloned();
+    let change_blocked = blocked(UiOperation::ChangeHistory);
+    let unavailable = management.read().history_unavailable.clone();
+    let loading = !management.read().history_loaded();
+    let entries = management.read().history.clone();
+    let has_more = management.read().history_next_cursor.is_some();
+    let filter = management.read().history_filter.clone();
+    let search_text = management.read().history_search.clone();
+    let search_failed = management.read().history_search_failed.clone();
+    let filtered = filter != HistoryFilter::default();
+    let groups = group_by_day(clock, &entries);
+    let folder_pending = blocked(UiOperation::OpenRecordingsFolder).is_some();
+    rsx! { div { class: "history-page",
+        header { class: "history-header",
+            p { class: "history-retention",
+                if let Some(settings) = &settings {
+                    span { "{retention_summary(settings.history_limit, settings.keep_audio)}. " }
+                }
+                button { r#type: "button", class: "link-button", id: RETENTION_ID,
+                    onclick: move |_| navigator.go(Route::Settings(SettingsRoute::PrivacyData)),
+                    "Change in Privacy & Data"
+                }
+            }
+            div { class: "history-header-actions",
+                Button { id: OPEN_FOLDER_ID, size: ButtonSize::Sm,
+                    disabled: folder_pending,
+                    onclick: move |_| actions.open_recordings_folder(),
+                    Icon { name: IconName::Folder }
+                    "Open recordings folder"
+                }
+                if unavailable.is_none() && !entries.is_empty() {
+                    ConfirmButton { id: CLEAR_ID, size: ButtonSize::Sm,
+                        label: "Clear history", confirm_label: "Delete every transcript",
+                        disabled: change_blocked.is_some(),
+                        onconfirm: move |()| actions.clear_history(),
+                    }
+                }
+            }
+        }
+        if let Some(reason) = change_blocked.filter(|_| !entries.is_empty()) {
+            p { class: "disabled-reason", id: "history-change-reason", "{reason.message()}" }
+        }
+        if let Some(summary) = &unavailable {
+            div { class: "history-unavailable", role: "alert",
+                p { "{summary}" }
+                Button { id: RELOAD_ID, onclick: move |_| actions.refresh_history(),
+                    "Try again"
+                }
+            }
+        } else {
+            div { class: "history-filters", role: "search",
+                label { class: "visually-hidden", r#for: SEARCH_ID, "Search transcripts" }
+                TextInput { id: SEARCH_ID, r#type: "search", value: "{search_text}",
+                    placeholder: "Search transcripts",
+                    maxlength: "{HistoryFilter::MAX_QUERY_BYTES}",
+                    aria_describedby: search_failed.as_ref().map(|_| SEARCH_ERROR_ID),
+                    aria_invalid: search_failed.as_ref().map(|_| "true"),
+                    oninput: move |event: FormEvent| {
+                        management.write().history_search = event.value();
+                        if let Some(waiting) = search.take() {
+                            waiting.cancel();
+                        }
+                        search.set(Some(spawn(async move {
+                            crate::client::delay(SEARCH_PAUSE_MS).await;
+                            search.set(None);
+                            actions.search_history();
+                        })));
+                    },
+                }
+                button { r#type: "button", id: FAILED_FILTER_ID,
+                    class: if filter.failed_only { "filter-chip selected" } else { "filter-chip" },
+                    aria_pressed: if filter.failed_only { "true" } else { "false" },
+                    onclick: move |_| actions.show_failed_history_only(!filter.failed_only),
+                    Icon { name: IconName::AlertCircle }
+                    "Failed only"
+                }
+            }
+            if loading {
+                p { class: "history-status", role: "status", "Loading transcripts…" }
+            } else if let Some(problem) = &search_failed {
+                p { class: "history-status", id: SEARCH_ERROR_ID, role: "alert", "{problem}" }
+            } else if entries.is_empty() && filtered {
+                EmptyState { icon: IconName::History, title: "No matching transcripts",
+                    p { "Try other words, or show every transcript." }
+                    Button { id: CLEAR_FILTER_ID, size: ButtonSize::Sm,
+                        onclick: move |_| actions.clear_history_filter(),
+                        "Show all transcripts"
+                    }
+                }
+            } else if entries.is_empty() {
+                EmptyState { icon: IconName::History, title: "No transcripts yet",
+                    if let Some(settings) = settings.as_ref().filter(|settings| settings.hold_shortcut_enabled) {
+                        p { "Hold " ShortcutLabel { shortcut: settings.hold_shortcut.clone() } " to dictate. Your words will be waiting here." }
+                    } else {
+                        p { "Dictate from the recording bar. Your words will be waiting here." }
+                    }
+                }
+            }
+            for (day, members) in groups {
+                section { class: "history-day", key: "{day}", aria_labelledby: "history-day-{day}",
+                    h2 { class: "history-day-title", id: "history-day-{day}", "{clock.day_label(day)}" }
+                    ul { class: "history-list",
+                        for entry in members {
+                            HistoryRow { key: "{entry.id.0}",
+                                copied: copied.filter(|copied| copied.entry == entry.id),
+                                delete_blocked: change_blocked.map(BlockedReason::message),
+                                entry,
+                                clock,
+                            }
+                        }
+                    }
+                }
+            }
+            if has_more && !loading {
+                div { class: "history-more",
+                    Button { id: LOAD_MORE_ID, onclick: move |_| actions.load_older_history(),
+                        "Load more"
+                    }
+                }
+            }
+        }
+    } }
+}
+
+/// The page's clock: a provided one in tests, otherwise the system's, read again each minute
+/// so relative times stay current.
+fn use_clock() -> LocalClock {
+    let provided = try_use_context::<LocalClock>();
+    use_minute_tick();
+    provided.unwrap_or_else(LocalClock::system)
+}
+
+fn use_minute_tick() {
+    let mut minute = use_signal(|| 0_u64);
+    use_future(move || async move {
+        loop {
+            crate::client::delay(60_000).await;
+            minute += 1;
+        }
+    });
+    let _ = minute();
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests;

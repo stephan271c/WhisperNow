@@ -1,0 +1,477 @@
+/*
+ * Design-system primitives (src/components/ui). One section per primitive, in the order
+ * of the module. Every value comes from tokens.css; primitives are styled by class only.
+ */
+
+/* Icon ------------------------------------------------------------------ */
+
+.icon {
+  flex: none;
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  vertical-align: middle;
+}
+
+/* Button, IconButton, ConfirmButton -------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  gap: var(--space-2);
+  min-height: var(--control-height-md);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-tight);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.btn .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.btn-sm {
+  min-height: var(--control-height-sm);
+  padding: 2px var(--space-2);
+  font-size: var(--font-size-xs);
+}
+
+.btn-primary {
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.btn-secondary {
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  border-color: var(--color-border-control);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--color-surface-raised);
+}
+
+.btn-ghost {
+  color: var(--color-accent-text);
+  background: transparent;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--color-accent-soft);
+}
+
+.btn-danger {
+  color: var(--color-danger);
+  background: var(--color-surface);
+  border-color: var(--color-danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+}
+
+.btn-icon {
+  width: var(--control-height-md);
+  padding: 0;
+}
+
+.btn-icon.btn-sm {
+  width: var(--control-height-sm);
+}
+
+.confirm-button {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-self: start;
+  gap: var(--space-2);
+}
+
+/* Field, TextInput, Select ------------------------------------------------ */
+
+.field {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.field-label,
+.setting-row-title {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.field-description,
+.setting-row-description {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+}
+
+.field-error-message {
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.text-input,
+.select {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-height-md);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  transition: border-color var(--duration-fast) ease;
+}
+
+.text-input::placeholder {
+  color: var(--color-text-secondary);
+  opacity: 1;
+}
+
+.text-input:hover:not(:disabled),
+.select:hover:not(:disabled) {
+  border-color: var(--color-text-secondary);
+}
+
+.text-input[aria-invalid="true"],
+.select[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.text-input:disabled,
+.select:disabled {
+  color: var(--color-text-secondary);
+  background: var(--color-surface-sunken);
+  cursor: not-allowed;
+}
+
+/* Toggle ------------------------------------------------------------------ */
+
+.toggle {
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-sunken);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--color-border-control);
+  transition:
+    transform var(--duration-fast) ease,
+    background-color var(--duration-fast) ease;
+}
+
+.toggle[aria-checked="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+.toggle[aria-checked="true"] .toggle-thumb {
+  background: var(--color-on-accent);
+  transform: translateX(16px);
+}
+
+.toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* SettingRow -------------------------------------------------------------- */
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.setting-row:last-child {
+  border-bottom: 0;
+}
+
+.setting-row-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.setting-row-control {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.setting-row-control .select,
+.setting-row-control .text-input {
+  width: auto;
+  min-width: 12rem;
+}
+
+@media (max-width: 560px) {
+  .setting-row {
+    flex-wrap: wrap;
+  }
+}
+
+/* SegmentedTabs ----------------------------------------------------------- */
+
+/* Card, Section ----------------------------------------------------------- */
+
+.card {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-6);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-1);
+}
+
+.section {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.section-header {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.section-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+}
+
+.section-description {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.section-card {
+  gap: 0;
+  padding-block: 0;
+}
+
+/* Banner, Toast ----------------------------------------------------------- */
+
+.tone-info {
+  --tone: var(--color-info);
+  --tone-soft: var(--color-info-soft);
+}
+
+.tone-success {
+  --tone: var(--color-success);
+  --tone-soft: var(--color-success-soft);
+}
+
+.tone-warning {
+  --tone: var(--color-warning);
+  --tone-soft: var(--color-warning-soft);
+}
+
+.tone-error {
+  --tone: var(--color-danger);
+  --tone-soft: var(--color-danger-soft);
+}
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--tone);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  background: var(--tone-soft);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.banner-icon,
+.toast-icon {
+  display: flex;
+  color: var(--tone);
+}
+
+.banner-icon .icon,
+.toast-icon .icon {
+  width: 18px;
+  height: 18px;
+}
+
+.banner-body,
+.banner-message {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.banner-title {
+  font-weight: var(--font-weight-semibold);
+}
+
+.banner-message > :where(:not(.btn)) {
+  color: inherit;
+}
+
+.toast-region {
+  position: fixed;
+  top: var(--space-6);
+  right: var(--space-6);
+  z-index: 20;
+  display: grid;
+  gap: var(--space-2);
+  width: min(360px, calc(100vw - 2 * var(--space-6)));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border: 1px solid var(--color-border-subtle);
+  border-left: 3px solid var(--tone);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-3);
+  font-size: var(--font-size-sm);
+  pointer-events: auto;
+}
+
+.toast-message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* EmptyState -------------------------------------------------------------- */
+
+.empty-state {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  padding: var(--space-10) var(--space-6);
+  text-align: center;
+}
+
+.empty-state-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  color: var(--color-accent-text);
+  background: var(--color-accent-soft);
+}
+
+.empty-state-title {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.empty-state-body {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  max-width: 360px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+/* Kbd, HotkeyLabel -------------------------------------------------------- */
+
+.shortcut-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.kbd {
+  display: inline-block;
+  min-width: 1.75em;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--color-border-control);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  background: var(--color-surface-raised);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-normal);
+  text-align: center;
+}
+
+/* ProgressBar ------------------------------------------------------------- */
+
+.progress {
+  width: 100%;
+  min-width: 8rem;
+}
+
+.progress-track {
+  display: block;
+  width: 100%;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-border-subtle);
+}
+
+.progress-fill {
+  fill: var(--color-accent);
+  transition: width var(--duration-fast) ease;
+}

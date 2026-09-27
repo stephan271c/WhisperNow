@@ -1,0 +1,49 @@
+//! The update banner's commands.
+
+use std::future::Future;
+
+use whispernow_api::UpdateStateDto;
+
+use super::UiActions;
+use crate::UiOperation;
+use crate::client::{self, ClientError};
+use dioxus::prelude::*;
+
+impl UiActions {
+    /// Runs an update command; its answer is the new update state.
+    fn update_command(
+        self,
+        operation: UiOperation,
+        call: impl Future<Output = Result<UpdateStateDto, ClientError>> + 'static,
+    ) {
+        self.run(operation, call, |actions, answer| match answer {
+            Ok(update) => actions.state().write().hydrate_update(update),
+            Err(error) => actions
+                .state()
+                .write()
+                .report_update_command_failure(Some(error.summary())),
+        });
+    }
+
+    pub(crate) fn check_for_updates(self) {
+        self.update_command(UiOperation::CheckForUpdates, client::check_for_updates());
+    }
+
+    pub(crate) fn dismiss_update(self) {
+        self.update_command(UiOperation::DismissUpdate, client::dismiss_update());
+    }
+
+    pub(crate) fn open_update_release_page(self) {
+        self.update_command(
+            UiOperation::OpenUpdateReleasePage,
+            client::open_update_release_page(),
+        );
+    }
+
+    pub(crate) fn restart_to_update(self) {
+        self.update_command(
+            UiOperation::UpdateInstallRestart,
+            client::restart_to_update(),
+        );
+    }
+}
