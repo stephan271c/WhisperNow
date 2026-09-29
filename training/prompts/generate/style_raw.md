@@ -1,0 +1,1 @@
+Raw style: like an older Whisper model. Mostly lowercase with inconsistent capitals, little punctuation (a stray period or comma here and there, often none), numbers almost always as spoken words ("three thirty", "forty dollars", "twenty twenty six"), and everything run together.

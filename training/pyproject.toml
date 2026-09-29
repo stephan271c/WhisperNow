@@ -1,0 +1,36 @@
+[project]
+name = "whispernow-training"
+version = "0.1.0"
+description = "Dataset and training tools for the WhisperNow cleanup model"
+readme = "README.md"
+authors = [
+    { name = "stephan271c", email = "195329689+stephan271c@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "datasets>=5.0.1",
+    "httpx>=0.28.1",
+    "huggingface-hub>=1.33.0",
+    "numpy>=2.5.3",
+    "openai>=3.20.0",
+    "pyarrow>=25.0.1",
+    "python-dotenv>=1.2.3",
+]
+
+[project.scripts]
+datagen = "whispernow_training.datagen.cli:main"
+
+[project.optional-dependencies]
+audio = [
+    "sherpa-onnx==1.13.6",
+    "sherpa-onnx-core==1.13.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.28,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

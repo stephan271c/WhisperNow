@@ -1,0 +1,487 @@
+"""Steps 8 and 10: gather every stage's rows, filter, split by seed group, and report.
+
+Writes `data/build/{train,val,test}.jsonl`, `dropped.jsonl` with a reason per
+row, `stats.json` and `stats.md`.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import statistics
+import unicodedata
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Sequence
+from dataclasses import asdict, replace
+from pathlib import Path
+
+import numpy as np
+
+from . import aawaaz, generate, inject, paths, restyle, sources, stage1, stage2
+from .schema import EMPTY, LIST_ITEM, Example, read_examples, write_examples
+
+SEED = 108
+INJECTED = 2000
+EMPTY_ROWS = 150
+VAL_PERCENT = 5
+TEST_PERCENT = 5
+NEAR_DUPLICATE_JACCARD = 0.85
+MAX_SAME_OUTPUT = 3
+
+# Earlier sources win when two rows are duplicates.
+SOURCE_ORDER = (aawaaz.REPO, sources.HANDY, sources.DISFL_QA, sources.SOTTO, generate.SOURCE, inject.SOURCE)
+# Sources with their own held-out test rows; other groups get a hashed test share.
+PRESET_TEST_SOURCES = {aawaaz.REPO, sources.HANDY, sources.DISFL_QA, sources.SOTTO}
+
+
+def _source_rank(example: Example) -> tuple[int, int]:
+    rank = SOURCE_ORDER.index(example.source) if example.source in SOURCE_ORDER else len(SOURCE_ORDER)
+    return (0 if example.split == "test" else 1, rank)
+
+
+def gather(with_sotto: bool = False) -> list[Example]:
+    """Every stage's rows, plus the programmatic rows made here from the cleaned aawaaz rows."""
+    rows = read_examples(stage1.CLEAN)
+    for source, path in stage2.OUT_FILES.items():
+        if path.exists() and (with_sotto or source != sources.SOTTO):
+            rows += read_examples(path)
+    for category in generate.TARGETS:
+        if generate.output_file(category).exists():
+            rows += read_examples(generate.output_file(category))
+    rows += inject.injected_rows(read_examples(stage1.CLEAN), INJECTED, SEED)
+    rows += inject.empty_rows(EMPTY_ROWS, SEED)
+    return [_empty_sentinel(_bare_fillers(_modal_may(e))) for e in rows]
+
+
+def restyled(rows: list[Example]) -> list[Example]:
+    """aawaaz rows with their recognizer-style rewrite from `restyle`, where one passed.
+
+    `build` swaps the rewrites in after filtering and deduplication, which judge a row by the
+    spoken input its reference was written and checked against: a rewrite's "401k" or "PhD"
+    against the reference's "401(k)" or "Ph.D." is the cleanup, not a changed code token.
+    """
+    rewrites = restyle.load()
+    out = []
+    for e in rows:
+        if e.id in rewrites:
+            style = restyle.asr_style(e.id)
+            text = restyle.recognizer_quirks(rewrites[e.id], e.id, style, spoken=e.input)
+            e = replace(e, input=text, tags=[*e.tags, "style_recognizer", "restyled", f"asr_{style}"])
+        out.append(e)
+    return out
+
+
+def _bare_fillers(example: Example) -> Example:
+    """The `parakeet` share of the stage 3 and injected recognizer-style inputs, which put commas
+    around nearly every filler, with the fillers mostly bare as Parakeet writes them."""
+    if "style_recognizer" not in example.tags or "restyled" in example.tags:
+        return example
+    if restyle.asr_style(example.id) != "parakeet":
+        return example
+    text = restyle.filler_commas(example.input, example.id)
+    return replace(example, input=text, tags=[*example.tags, "asr_parakeet"])
+
+
+def _modal_may(example: Example) -> Example:
+    if example.source != sources.HANDY:
+        return example
+    output = sources.modal_may(example.output)
+    if output == example.output:
+        return example
+    return replace(example, output=output, tags=[*example.tags, "normalized"])
+
+
+def _empty_sentinel(example: Example) -> Example:
+    """aawaaz writes an empty output for filler-only input, where the app expects EMPTY."""
+    spoken = [w for w in sources.words(example.input) if w not in sources.FILLERS]
+    if not example.output.strip() and not spoken:
+        return replace(example, output=EMPTY)
+    return example
+
+
+# --- Filters -------------------------------------------------------------------------
+
+_MARKDOWN = re.compile(r"(?<![\w*])\*\*(?=\S).+?(?<=\S)\*\*(?![\w*])|`|^\s*#{1,6}\s|\[[^\]]+\]\([^)]+\)|^\s*\|.*\|\s*$", re.MULTILINE)
+_OTHER_BULLET = re.compile(r"^\s*[*•+]\s", re.MULTILINE)
+_NUMBERED = re.compile(r"^\s*(\d+)\.\s")
+_ANSWER_OPENING = re.compile(
+    r"^(sure|certainly|of course|here is|here's|here are|i can|i'd be happy|as an ai|i'm sorry|i cannot|"
+    r"i can't help|great question)\b",
+    re.IGNORECASE,
+)
+# Fillers and openers the cleanup removes before a speaker's own "here's" or "I can".
+_SPOKEN_OPENERS = re.compile(r"^(?:(?:um+|uh+|so|yeah|oh|okay|ok|alright|well|hey|like|and)\b[\s,.]*)+", re.IGNORECASE)
+_PROTECTED = re.compile(r"\S*(?:[/@_\\]|[a-z][A-Z]|[A-Za-z]\d|\d[A-Za-z]|\.[A-Za-z]{2,}|--)\S*")
+_CORRECTION = re.compile(
+    r"\b(?:no wait|wait no|scratch|actually|sorry|i mean|make (?:it|that)|never ?mind|or rather|no no)\b|\bno\b[,.—-]",
+    re.IGNORECASE,
+)
+_CASE_SENSITIVE = re.compile(r"[/@_\\]|\.[A-Za-z]{2,}|--")
+_EDGES = ".,!?;:'\"()[]{}—–"
+
+
+def has_markdown(output: str) -> bool:
+    return bool(_MARKDOWN.search(output))
+
+
+def malformed_list(output: str) -> str | None:
+    """Why a list is malformed: another bullet character, an empty item, or numbering that skips."""
+    if _OTHER_BULLET.search(output):
+        return "bullet other than '- '"
+    expected = None
+    for line in output.split("\n"):
+        if LIST_ITEM.match(line) is None and re.match(r"^\s*(?:-|\d+\.)\s*$", line):
+            return "empty list item"
+        number = _NUMBERED.match(line)
+        if number:
+            value = int(number.group(1))
+            if expected is not None and value != expected and value != 1:
+                return "numbering skips"
+            expected = value + 1
+        elif line.strip() and not LIST_ITEM.match(line):
+            expected = None
+    return None
+
+
+def answered(example: Example) -> bool:
+    """An output that opens like a reply the speaker never said."""
+    opening = _ANSWER_OPENING.match(example.output.strip())
+    spoken = _SPOKEN_OPENERS.sub("", example.input.strip().lstrip(",. ")).lower()
+    return bool(opening) and not re.match(_ANSWER_OPENING, spoken)
+
+
+def _alnum(token: str) -> str:
+    return re.sub(r"[^0-9a-z]", "", token.casefold())
+
+
+def changed_protected_token(example: Example) -> str | None:
+    """A code-like token (path, URL, email, identifier, flag) that the output rewrote.
+
+    A token the output drops is not flagged, since a self-correction may remove it;
+    one that reappears in another form ("x25" as "X.25") is.
+    """
+    output_tokens = {token.strip(_EDGES) for token in example.output.split()}
+    output_forms = {_alnum(token) for token in output_tokens}
+    # Recasing a dictated word-like token ("co2" as "CO2", "typeScript" as "TypeScript") is a fix;
+    # paths, files, emails, URLs and flags stay case-sensitive.
+    output_folded = example.output.casefold()
+    for match in _PROTECTED.finditer(example.input):
+        token = match.group(0).strip(_EDGES)
+        if not token or token in example.output:
+            continue
+        if not _CASE_SENSITIVE.search(token) and token.casefold() in output_folded:
+            continue
+        if _alnum(token) and _alnum(token) in output_forms:
+            return token
+    return None
+
+
+_SUBJECT_LINE = re.compile(r"(?m)^Subject:")
+
+
+def invented_subject(example: Example) -> bool:
+    """An email subject line the speaker never dictated; aawaaz writes one for some emails."""
+    return bool(_SUBJECT_LINE.search(example.output)) and "subject" not in example.input.casefold()
+
+
+_LEGALESE = re.compile(r"\b(?:shall|hereby|herein|hereinafter|thereof|pursuant|whereas)\b", re.IGNORECASE)
+
+
+def added_legalese(example: Example) -> bool:
+    """Contract wording the speaker never used, such as "shall pay" for "is going to pay"."""
+    spoken = {word.casefold() for word in _LEGALESE.findall(example.input)}
+    return any(word.casefold() not in spoken for word in _LEGALESE.findall(example.output))
+
+
+_SIGN_OFF = re.compile(
+    r"(?im)^(thanks|thank you|many thanks|thanks so much|thanks again|best|best regards|kind regards|"
+    r"warm regards|regards|cheers|sincerely|warmly|talk soon|all the best|bisous)[,!.]?[ \t]*$"
+)
+
+
+def _fold(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text.casefold())
+    return "".join(c for c in text if not unicodedata.combining(c))
+
+
+def invented_signature(example: Example) -> bool:
+    """A name or title under the sign-off that the speaker never dictated; aawaaz fills one in from the body.
+
+    Each word under the last sign-off line must be spoken after the same sign-off in the input.
+    """
+    output = _fold(example.output)
+    sign_offs = list(_SIGN_OFF.finditer(output))
+    if not sign_offs:
+        return False
+    sign_off = sign_offs[-1]
+    spoken = _fold(example.input)
+    start = spoken.rfind(sign_off.group(1))
+    tail = spoken[start + len(sign_off.group(1)) :] if start >= 0 else spoken
+    tail = re.sub(r"[^a-z]", "", re.sub(r"\bdoctor\b", "dr", tail))
+    return any(word not in tail for word in re.findall(r"[a-z]+", output[sign_off.end() :]))
+
+
+def implausible_length(example: Example) -> bool:
+    if example.output == EMPTY:
+        return len(sources.words(example.input)) > 6
+    source_words = len([w for w in sources.words(example.input) if w not in sources.FILLERS])
+    output_words = len(sources.words(example.output))
+    # A list sheds the talk around its items, and a self-correction sheds the discarded versions,
+    # so only prose without corrections must keep 30% of the words.
+    shrinks = example.layout in ("list", "mixed") or _CORRECTION.search(example.input)
+    if source_words >= 20 and output_words < 0.3 * source_words and not shrinks:
+        return True
+    return output_words > 1.3 * source_words + 8
+
+
+def filter_reason(example: Example) -> str | None:
+    if not example.output.strip():
+        return "empty output"
+    if has_markdown(example.output):
+        return "markdown"
+    reason = malformed_list(example.output)
+    if reason:
+        return f"malformed list: {reason}"
+    if answered(example):
+        return "answered"
+    token = changed_protected_token(example)
+    if token:
+        return "changed protected token"
+    if invented_subject(example):
+        return "invented subject line"
+    if added_legalese(example):
+        return "added legal formality"
+    if invented_signature(example):
+        return "invented signature"
+    if implausible_length(example):
+        return "implausible length ratio"
+    return None
+
+
+# --- Duplicates ------------------------------------------------------------------------
+
+_PRIME = (1 << 61) - 1
+_PERMUTATIONS = 128
+_BANDS = 16
+
+
+def _shingles(text: str) -> set[str]:
+    tokens = [w for w in sources.words(text) if w not in sources.FILLERS]
+    if len(tokens) < 3:
+        return {" ".join(tokens)}
+    return {" ".join(tokens[i : i + 3]) for i in range(len(tokens) - 2)}
+
+
+def _minhash(shingles: set[str], a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    hashes = np.array(
+        [int.from_bytes(hashlib.blake2b(s.encode(), digest_size=7).digest()) for s in shingles], dtype=np.uint64
+    )
+    # Shifting the 56-bit hashes to 28 bits keeps a * x + b below 2**61, so uint64 arithmetic stays exact.
+    return ((a[:, None] * (hashes[None, :] >> np.uint64(28)) + b[:, None]) % np.uint64(_PRIME)).min(axis=1)
+
+
+def near_duplicates(examples: Sequence[Example]) -> dict[int, int]:
+    """Maps the index of each near-duplicate input to the index of the row it duplicates."""
+    rng = np.random.default_rng(SEED)
+    a = rng.integers(1, 1 << 32, _PERMUTATIONS, dtype=np.uint64)
+    b = rng.integers(0, 1 << 32, _PERMUTATIONS, dtype=np.uint64)
+    shingles = [_shingles(e.input) for e in examples]
+    rows = _PERMUTATIONS // _BANDS
+    buckets: dict[tuple[int, bytes], int] = {}
+    duplicate_of: dict[int, int] = {}
+    for index, shingle_set in enumerate(shingles):
+        signature = _minhash(shingle_set, a, b)
+        candidates = set()
+        keys = [(band, signature[band * rows : (band + 1) * rows].tobytes()) for band in range(_BANDS)]
+        for key in keys:
+            if key in buckets:
+                candidates.add(buckets[key])
+        match = next(
+            (
+                other
+                for other in sorted(candidates)
+                if len(shingle_set & shingles[other]) / len(shingle_set | shingles[other]) >= NEAR_DUPLICATE_JACCARD
+            ),
+            None,
+        )
+        if match is not None:
+            duplicate_of[index] = match
+            continue
+        for key in keys:
+            buckets.setdefault(key, index)
+    return duplicate_of
+
+
+def deduplicate(examples: Iterable[Example]) -> tuple[list[Example], list[tuple[Example, str]]]:
+    """Drops exact and near-duplicate inputs, and outputs repeated more than `MAX_SAME_OUTPUT` times."""
+    ordered = sorted(examples, key=_source_rank)
+    kept, dropped, seen_inputs = [], [], set()
+    for example in ordered:
+        key = " ".join(example.input.split()).casefold()
+        if key in seen_inputs:
+            dropped.append((example, "exact duplicate input"))
+        else:
+            seen_inputs.add(key)
+            kept.append(example)
+    # Filler-only EMPTY inputs share almost no words once fillers are removed, so they would all
+    # match each other; only exact duplicates of them are dropped.
+    candidates = [e for e in kept if e.output != EMPTY]
+    near = {id(candidates[index]) for index in near_duplicates(candidates)}
+    survivors = []
+    for example in kept:
+        if id(example) in near:
+            dropped.append((example, "near-duplicate input"))
+        else:
+            survivors.append(example)
+    same_output: Counter = Counter()
+    final = []
+    for example in survivors:
+        key = sources.skeleton(example.output)
+        same_output[key] += 1
+        if same_output[key] > MAX_SAME_OUTPUT and example.output != EMPTY:
+            dropped.append((example, "output repeated too often"))
+        else:
+            final.append(example)
+    return final, dropped
+
+
+# --- Split ------------------------------------------------------------------------------
+
+
+def _bucket(seed_group: str) -> int:
+    return int(hashlib.sha256(f"split\0{seed_group}".encode()).hexdigest(), 16) % 100
+
+
+def assign_splits(examples: Iterable[Example]) -> list[Example]:
+    """Splits by seed group: a group with a preset test row is test, and others are hashed into val and test."""
+    groups: dict[str, list[Example]] = defaultdict(list)
+    for example in examples:
+        groups[example.seed_group].append(example)
+    result = []
+    for seed_group, members in groups.items():
+        bucket = _bucket(seed_group)
+        if any(e.split == "test" for e in members):
+            split = "test"
+        elif bucket < VAL_PERCENT:
+            split = "val"
+        elif bucket < VAL_PERCENT + TEST_PERCENT and not any(
+            e.source in PRESET_TEST_SOURCES for e in members
+        ):
+            split = "test"
+        else:
+            split = "train"
+        result += [replace(e, split=split) for e in members]
+    return result
+
+
+# --- Stats ------------------------------------------------------------------------------
+
+
+def _percentiles(values: list[int]) -> dict[str, float]:
+    if not values:
+        return {}
+    ordered = sorted(values)
+
+    def at(q: float) -> int:
+        return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
+
+    return {"p5": at(0.05), "p50": at(0.5), "p95": at(0.95), "max": ordered[-1], "mean": round(statistics.mean(values), 1)}
+
+
+def stats(examples: Sequence[Example], dropped: Sequence[tuple[Example, str]]) -> dict:
+    def count(key) -> dict:
+        return dict(Counter(key(e) for e in examples).most_common())
+
+    total = len(examples)
+    laid_out = sum(e.layout != "plain" for e in examples)
+    return {
+        "rows": total,
+        "per_split": count(lambda e: e.split),
+        "per_source": count(lambda e: e.source),
+        "per_category": count(lambda e: e.category),
+        "per_layout": count(lambda e: e.layout),
+        "per_license": count(lambda e: e.license),
+        "per_tag": dict(Counter(t for e in examples for t in e.tags if not t.startswith("from:")).most_common()),
+        "per_split_source": {
+            split: dict(Counter(e.source for e in examples if e.split == split).most_common())
+            for split in ("train", "val", "test")
+        },
+        "aawaaz_share": round(sum(e.source == aawaaz.REPO for e in examples) / max(1, total), 3),
+        "layout_share": round(laid_out / max(1, total), 3),
+        "list_share": round(sum(e.layout in ("list", "mixed") for e in examples) / max(1, total), 3),
+        "input_words": _percentiles([len(e.input.split()) for e in examples]),
+        "output_words": _percentiles([len(e.output.split()) for e in examples]),
+        "dropped": dict(Counter(reason for _, reason in dropped).most_common()),
+    }
+
+
+def stats_markdown(report: dict) -> str:
+    lines = [f"# Build stats\n\n{report['rows']} rows. aawaaz share {report['aawaaz_share']:.0%}, "
+             f"layout share {report['layout_share']:.0%} (lists {report['list_share']:.0%}).\n"]
+    for title, key in (
+        ("Split", "per_split"),
+        ("Source", "per_source"),
+        ("Category", "per_category"),
+        ("Layout", "per_layout"),
+        ("License", "per_license"),
+        ("Tag", "per_tag"),
+        ("Dropped", "dropped"),
+    ):
+        lines.append(f"## {title}\n\n| {title} | Rows |\n|---|---|")
+        lines += [f"| {name} | {value} |" for name, value in report[key].items()]
+        lines.append("")
+    lines.append("## Length (words)\n\n| | p5 | p50 | p95 | max | mean |\n|---|---|---|---|---|---|")
+    for key in ("input_words", "output_words"):
+        p = report[key]
+        lines.append(f"| {key.split('_')[0]} | {p['p5']} | {p['p50']} | {p['p95']} | {p['max']} | {p['mean']} |")
+    return "\n".join(lines) + "\n"
+
+
+def build(with_sotto: bool = False, out_dir: Path = paths.BUILD) -> dict:
+    rows = gather(with_sotto)
+    dropped: list[tuple[Example, str]] = []
+    kept = []
+    for example in rows:
+        reason = filter_reason(example)
+        if reason:
+            dropped.append((example, reason))
+        else:
+            kept.append(example)
+    kept, duplicates = deduplicate(kept)
+    dropped += duplicates
+    final = assign_splits(restyled(kept))
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for split in ("train", "val", "test"):
+        write_examples(out_dir / f"{split}.jsonl", sorted((e for e in final if e.split == split), key=lambda e: e.id))
+    with (out_dir / "dropped.jsonl").open("w", encoding="utf-8") as sink:
+        for example, reason in dropped:
+            sink.write(json.dumps({**asdict(example), "dropped": reason}, ensure_ascii=False) + "\n")
+    report = stats(final, dropped)
+    (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    (out_dir / "stats.md").write_text(stats_markdown(report), encoding="utf-8")
+    return report
+
+
+def review_sample(layout: str, n: int, seed: int, out_dir: Path = paths.BUILD) -> str:
+    """`n` random built rows of one layout as text for a hand review, with each row's source and tags."""
+    rows = [e for split in ("train", "val", "test") for e in read_examples(out_dir / f"{split}.jsonl")]
+    rows = sorted((e for e in rows if e.layout == layout), key=lambda e: e.id)
+    picked = np.random.default_rng(seed).choice(len(rows), size=min(n, len(rows)), replace=False)
+    blocks = []
+    for index, row_index in enumerate(picked):
+        e = rows[row_index]
+        header = f"### {index} {e.id} [{e.source}/{e.category}] {','.join(e.tags)}"
+        blocks.append(f"{header}\nIN: {e.input}\nOUT: {e.output}\n")
+    return "\n".join(blocks)
+
+
+def publish(repo_id: str, out_dir: Path = paths.BUILD) -> None:
+    """Pushes the built splits to a private Hugging Face dataset repo."""
+    from datasets import DatasetDict, load_dataset
+
+    files = {split: str(out_dir / f"{split}.jsonl") for split in ("train", "val", "test")}
+    dataset: DatasetDict = load_dataset("json", data_files=files)
+    dataset.save_to_disk(str(out_dir / "hf"))
+    dataset.push_to_hub(repo_id, private=True)
