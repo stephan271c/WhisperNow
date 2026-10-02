@@ -90,8 +90,91 @@ async def _generate(args: argparse.Namespace) -> None:
     if unknown:
         raise SystemExit(f"unknown categories {unknown}; choose from {sorted(generate.TARGETS)}")
     async with LlmClient(LlmSettings.from_env()) as llm:
-        counts = await generate.generate(llm, categories, args.scale, args.batch_size)
+        counts = await generate.generate(llm, categories, args.scale, args.batch_size, args.test)
     _print_counts("rows per category:", Counter(counts))
+
+
+async def _audit(args: argparse.Namespace) -> None:
+    from . import audit
+
+    if not args.report:
+        async with LlmClient(LlmSettings.from_env()) as llm:
+            if args.fix:
+                await audit.fix(llm)
+            else:
+                await audit.run(llm)
+    report = audit.report()
+    (audit.OUT_DIR / "report.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
+    print(json.dumps(report, indent=1))
+
+
+async def _compose(args: argparse.Namespace) -> None:
+    from . import compose
+
+    run = compose.RUNS[args.run_name]
+    categories = args.category or list(compose.CATEGORIES)
+    unknown = sorted(set(categories) - set(compose.CATEGORIES))
+    if unknown:
+        raise SystemExit(f"unknown categories {unknown}; choose from {list(compose.CATEGORIES)}")
+    async with LlmClient(LlmSettings.from_env()) as llm:
+        counts = await compose.generate_all(llm, run, args.total, categories)
+    _print_counts(f"{run.name} rows per category and bucket:", Counter(counts))
+    print(json.dumps({"rejected": compose.rejections(run)}, indent=1))
+
+
+async def _rejudge(args: argparse.Namespace) -> None:
+    from . import rejudge
+
+    async with LlmClient(LlmSettings.from_env()) as llm:
+        print(json.dumps(await rejudge.run(llm, args.target), indent=1))
+
+
+async def _bench(args: argparse.Namespace) -> None:
+    from . import bench, noise
+
+    if args.step == "probe":
+        print(f"{noise.probe_audio()} rows spoken and transcribed into {noise.PROBED}")
+        return
+    if args.step == "assemble":
+        print(json.dumps(bench.assemble(), indent=1))
+        return
+    async with LlmClient(LlmSettings.from_env()) as llm:
+        if args.step == "ami":
+            report = await bench.label_ami(llm)
+        elif args.step == "noise":
+            report = await noise.generate_all(llm, args.kind or noise.KINDS)
+        else:
+            report = await noise.gate_probed(llm)
+    print(json.dumps(report, indent=1))
+
+
+def cmd_profile(args: argparse.Namespace) -> None:
+    from . import inject, profile
+    from .schema import read_jsonl
+
+    groups: dict[str, list[str]] = {}
+    if real.OUT.exists():
+        # Only the real dictations' rates are printed, never their text.
+        groups["real, parakeet, over 30 words"] = [
+            row["input"] for row in read_jsonl(real.OUT)
+            if "parakeet" in row.get("asr_model_id", "") and len(row["input"].split()) > 30
+        ]
+    train = read_examples(paths.BUILD / "train.jsonl") if (paths.BUILD / "train.jsonl").exists() else []
+    for label, keep in (
+        ("aawaaz", lambda e: e.source == aawaaz.REPO),
+        ("teacher-generated", lambda e: e.source == generate.SOURCE),
+        ("teacher-generated, recognizer", lambda e: e.source == generate.SOURCE and "style_recognizer" in e.tags),
+        ("injected, recognizer", lambda e: e.source == inject.SOURCE and "style_recognizer" in e.tags),
+        ("injected, raw", lambda e: e.source == inject.SOURCE and "style_raw" in e.tags),
+    ):
+        groups[f"train: {label}"] = [e.input for e in train if keep(e)]
+    if args.injection:
+        rows = inject.injected_rows(read_examples(stage1.CLEAN), build.INJECTED, build.SEED)
+        for style in inject.STYLES:
+            groups[f"injection now, {style}"] = [e.input for e in rows if f"style_{style}" in e.tags]
+    for path in args.file or []:
+        groups[str(path)] = [row["input"] for row in read_jsonl(path)]
+    print(profile.table({label: profile.profile(texts) for label, texts in groups.items() if texts}))
 
 
 def cmd_build(args: argparse.Namespace) -> None:
@@ -170,6 +253,7 @@ def main() -> None:
     gen.add_argument("--category", action="append", help="only this category (repeatable)")
     gen.add_argument("--scale", type=float, default=1.0, help="multiply every category's target, e.g. 0.05 for a pilot")
     gen.add_argument("--batch-size", type=int, help="transcripts per request (default: 50, 25 for long_ramble)")
+    gen.add_argument("--test", action="store_true", help="generate the extra rows pinned to the test split")
     gen.set_defaults(run=lambda args: asyncio.run(_generate(args)))
 
     restyle_parser = commands.add_parser(
@@ -178,6 +262,46 @@ def main() -> None:
     restyle_parser.add_argument("--limit", type=int, default=0, help="restyle only the first N chosen rows")
     restyle_parser.add_argument("--recheck", action="store_true", help="check the rejected rewrites again; no LLM calls")
     restyle_parser.set_defaults(run=lambda args: asyncio.run(_restyle(args)))
+
+    audit_parser = commands.add_parser(
+        "audit", help="judge every long reference, and 500 short ones, for completeness against its transcript"
+    )
+    audit_parser.add_argument("--fix", action="store_true", help="relabel the failing rows through the gates")
+    audit_parser.add_argument("--report", action="store_true", help="only rewrite data/audit/report.json")
+    audit_parser.set_defaults(run=lambda args: asyncio.run(_audit(args)))
+
+    compose_parser = commands.add_parser(
+        "compose", help="long composed-task rows (train) or the long benchmark's generated rows (bench); resumes"
+    )
+    compose_parser.add_argument("--run", dest="run_name", choices=["train", "bench"], default="train")
+    compose_parser.add_argument("--total", type=int, required=True, help="rows over all categories, split 40/35/25 by bucket")
+    compose_parser.add_argument("--category", action="append", help="only this category (repeatable)")
+    compose_parser.set_defaults(run=lambda args: asyncio.run(_compose(args)))
+
+    bench_parser = commands.add_parser(
+        "bench",
+        help="the held-out benchmarks: ami (label AMI turns), noise (generate), probe (Kokoro and Parakeet, "
+        "needs --extra audio), gate-probed, assemble (write data/bench/*.jsonl); the long run's generated rows "
+        "come from `compose --run bench`",
+    )
+    bench_parser.add_argument("step", choices=["ami", "noise", "probe", "gate-probed", "assemble"])
+    bench_parser.add_argument("--kind", action="append", help="noise: only this pattern (repeatable)")
+    bench_parser.set_defaults(run=lambda args: asyncio.run(_bench(args)))
+
+    rejudge_parser = commands.add_parser(
+        "rejudge",
+        help="gate rows judged before the header rules again (train: data/stage4, bench-long, noise), or check "
+        "every benchmark reference once more, one row per request (bench-long-strict, noise-strict, train-strict for the rows made before the cascade, and train-codex for the rows glm-5.3 labelled); resumes",
+    )
+    rejudge_parser.add_argument("target", choices=["train", "train-strict", "train-codex", "bench-long", "bench-long-strict", "noise", "noise-strict"])
+    rejudge_parser.set_defaults(run=lambda args: asyncio.run(_rejudge(args)))
+
+    profile_parser = commands.add_parser(
+        "profile", help="filler formatting and correction cues of the real dictations, the build and given files"
+    )
+    profile_parser.add_argument("file", nargs="*", type=Path, help="more JSONL files with an input field")
+    profile_parser.add_argument("--injection", action="store_true", help="also profile the current injection code")
+    profile_parser.set_defaults(run=cmd_profile)
 
     build_parser = commands.add_parser("build", help="filter, deduplicate, split by seed group, and report stats")
     build_parser.add_argument("--with-sotto", action="store_true", help="include sotto rows if stage 2 added them")

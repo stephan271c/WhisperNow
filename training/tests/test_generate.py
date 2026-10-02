@@ -55,6 +55,24 @@ def test_generation_writes_passing_rows_logs_batches_and_resumes(fake_llm, tmp_p
     assert len(read_examples(tmp_path / "mixed_message.jsonl")) == 8
 
 
+def test_held_out_rows_are_pinned_to_test_and_new(fake_llm, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "STAGE3", tmp_path)
+    llm = fake_llm(reply)
+    asyncio.run(generate.generate_category(llm, "mixed_message", 4, batch_size=5, progress=lambda _: None))
+    trained = read_examples(tmp_path / "mixed_message.jsonl")
+    kept = asyncio.run(
+        generate.generate_category(llm, "mixed_message", 4, batch_size=5, held_out=True, progress=lambda _: None)
+    )
+    assert kept == 4
+    held_out = read_examples(tmp_path / "mixed_message.test.jsonl")
+    assert all(r.split == "test" for r in held_out)
+    assert not {r.input for r in held_out} & {r.input for r in trained}
+    # Held-out batches are numbered after the training batches.
+    first = len(list(read_jsonl(tmp_path / "mixed_message.batches.jsonl")))
+    assert all(int(r.input.split()[1]) >= first for r in held_out)
+    assert (tmp_path / "mixed_message.test.batches.jsonl").exists()
+
+
 def test_generator_requests_are_stable_per_batch():
     first = generate.generator_messages("list_edits", "raw", 50, 3, [])
     assert first == generate.generator_messages("list_edits", "raw", 50, 3, [])

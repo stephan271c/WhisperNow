@@ -1,0 +1,20 @@
+# LFM2.5-350M, full fine-tune from the instruct checkpoint.
+# The sweep (`configs/sweep-lfm25-350m.toml`) varies these with `--set key=value`.
+base_model = "LiquidAI/LFM2.5-350M"
+method = "full"
+learning_rate = 3e-5
+epochs = 2
+batch_size = 16
+grad_accum = 2
+warmup = 0.03
+weight_decay = 0.0
+lr_scheduler = "cosine"
+# The longest rendered training row is 1,231 tokens.
+max_length = 1280
+seed = 109
+
+[lora]
+r = 64
+alpha = 64
+dropout = 0.0
+target_modules = "all-linear"

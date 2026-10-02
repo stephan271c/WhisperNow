@@ -1,0 +1,140 @@
+import asyncio
+import dataclasses
+import json
+import re
+
+import pytest
+
+from conftest import judge_items
+
+from whispernow_training.datagen import compose, gates
+from whispernow_training.datagen.schema import Example
+
+
+def _words(n, tag):
+    return " ".join(f"{tag}{i}" for i in range(n))
+
+
+def reply(messages, role):
+    if role == "judge":
+        results = [{"i": item["i"], **{c: True for c in gates.COMPOSE_CRITERIA}, "note": ""} for item in judge_items(messages)]
+        return json.dumps({"results": results})
+    user = messages[-1]["content"]
+    if "<transcript>" in user:
+        transcript = re.search(r"<transcript>\n(.*)\n</transcript>", user, re.S).group(1)
+        return transcript.capitalize() + "."
+    batch = int(re.search(r"Batch (\d+)\.", user).group(1))
+    count = int(re.search(r"Write (\d+) transcripts", user).group(1))
+    low, high = map(int, re.search(r"each (\d+) to (\d+) words", user).groups())
+    size = (low + high) // 2
+    items = [{"input": _words(size, f"b{batch}i{i}w"), "layout": "prose", "tags": ["late_correction"]} for i in range(count - 1)]
+    items.insert(0, {"input": _words(40, f"short{batch}"), "layout": "prose"})  # under 150 words
+    items.insert(1, {"input": _words(200, f"off{batch}"), "layout": "prose"})  # in another bucket
+    return json.dumps({"items": items})
+
+
+def test_targets_split_by_bucket_shares():
+    goals = compose.targets(800)
+    per_bucket = {b: sum(n for (_, bucket), n in goals.items() if bucket == b) for b in compose.BUCKETS}
+    assert per_bucket == {"150-300": 320, "300-600": 280, "600-1000": 200}
+    bench = compose.targets(360, compose.BENCH_SHARES)
+    assert {sum(n for (_, bucket), n in bench.items() if bucket == b) for b in compose.BUCKETS} == {120}
+
+
+def test_file_bucket_follows_the_length_and_stays_in_150_to_1000():
+    assert compose.file_bucket(150) is None and compose.file_bucket(151) == "150-300"
+    assert compose.file_bucket(320) == "300-600" and compose.file_bucket(1000) == "600-1000"
+    assert compose.file_bucket(1001) is None
+
+
+def test_bench_and_train_requests_share_no_prompt_names_or_settings():
+    train = compose.generator_messages(compose.TRAIN, "revised_choice", "150-300", "recognizer", 6, 0, [])
+    bench = compose.generator_messages(compose.BENCH, "revised_choice", "150-300", "recognizer", 6, 0, [])
+    assert train[0]["content"] != bench[0]["content"]
+    assert not set(compose.TRAIN.names) & set(compose.BENCH.names)
+    assert not set(compose.TRAIN.settings) & set(compose.BENCH.settings)
+    assert "150 to 300 words" in train[1]["content"]
+    assert compose.style_for(compose.BENCH, "revised_choice", "150-300", 3) == compose.style_for(compose.BENCH, "revised_choice", "150-300", 3)
+
+
+@pytest.fixture(autouse=True)
+def one_lane(monkeypatch):
+    """One batch at a time per cell, so a test's batches run in order."""
+    monkeypatch.setattr(compose, "LANES", dict.fromkeys(compose.BUCKETS, 1))
+
+
+def test_a_cell_runs_its_lanes_at_once_with_distinct_batches_and_resumes_after_the_last(fake_llm, tmp_path, monkeypatch):
+    monkeypatch.setattr(compose, "LANES", {**compose.LANES, "300-600": 3})
+    run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
+    llm = fake_llm(reply)
+    # Each lane checks the count before starting, so the cell stops within its lanes' batches.
+    assert 4 <= asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 4, set(), progress=lambda _: None)) < 4 + 3
+    batches = [json.loads(line)["batch"] for line in (tmp_path / "revised_choice.300-600.batches.jsonl").open()]
+    assert len(set(batches)) == len(batches)
+    # A batch lost to a stop leaves a gap; the run continues after the highest logged batch.
+    log = tmp_path / "revised_choice.300-600.batches.jsonl"
+    log.write_text("".join(line for line in log.open() if json.loads(line)["batch"] != min(batches)))
+    asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 100, set(), progress=lambda _: None))
+    later = [json.loads(line)["batch"] for line in log.open()]
+    assert min(batches) not in later and len(set(later)) == len(later)
+
+
+def test_generate_cell_files_rows_by_length_rejects_short_ones_and_resumes(fake_llm, tmp_path):
+    run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
+    llm = fake_llm(reply)
+    assert asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 4, set(), progress=lambda _: None)) == 4
+    rows = compose.load(run)
+    in_bucket = [r for r in rows if len(r.input.split()) == 450]
+    elsewhere = [r for r in rows if len(r.input.split()) == 200]
+    assert len(in_bucket) == 4 and len(elsewhere) == len(rows) - 4 >= 1
+    assert all({"composed", "length:300-600"} <= set(r.tags) and r.category == "revised_choice" for r in in_bucket)
+    assert all("length:150-300" in r.tags for r in elsewhere)
+    assert (tmp_path / "revised_choice.150-300.jsonl").exists()
+    rejected = [json.loads(line) for line in (tmp_path / "revised_choice.300-600.rejected.jsonl").open()]
+    assert rejected and all(r["failed"] == ["length"] for r in rejected)
+    log = [json.loads(line) for line in (tmp_path / "revised_choice.300-600.batches.jsonl").open()]
+    assert log[0]["notes"] and "length" in log[0]["notes"][0]
+    calls = llm.calls
+    assert asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 4, set(), progress=lambda _: None)) == 4
+    assert llm.calls == calls
+
+
+def test_rows_over_600_words_get_their_own_judge_and_teacher_reasoning(fake_llm, tmp_path):
+    def long_and_short(messages, role):
+        if role == "generator":
+            items = [{"input": _words(800, "long"), "layout": "prose"}, {"input": _words(200, "off"), "layout": "prose"}]
+            return json.dumps({"items": items})
+        return reply(messages, role)
+
+    run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
+    llm = fake_llm(long_and_short)
+    asyncio.run(compose.generate_cell(llm, run, "revised_choice", "600-1000", 1, set(), progress=lambda _: None))
+    # The 800-word row keeps the judge's setting (None); the 200-word row is checked at low.
+    assert sorted(map(str, (r for role, r in llm.reasonings if role == "judge"))) == ["None", "low"]
+    # The teacher writes the 800-word row's reference at xhigh and the 200-word row's at its setting.
+    assert sorted(map(str, (r for role, r in llm.reasonings if role == "teacher"))) == ["None", "xhigh"]
+
+
+def test_a_reference_against_the_intended_layout_is_dropped_before_the_judge_sees_it(fake_llm, tmp_path):
+    def list_meant(messages, role):
+        if role == "generator":
+            return json.dumps({"items": [{"input": _words(450, "steps"), "layout": "list"}]})
+        return reply(messages, role)
+
+    run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
+    llm = fake_llm(list_meant)
+    asyncio.run(compose.generate_cell(llm, run, "technical_steps", "300-600", 1, set(), progress=lambda _: None))
+    rejected = [json.loads(line) for line in (tmp_path / "technical_steps.300-600.rejected.jsonl").open()]
+    assert rejected and all(r["failed"] == ["layout_intent"] for r in rejected)
+    assert not [role for role, _ in llm.reasonings if role == "judge"]
+
+
+def test_a_composed_row_is_licensed_by_the_models_that_wrote_its_transcript_and_reference():
+    def row(id_, teacher):
+        return Example(id=id_, input="x", output="y", source="teacher", category="c", license="zai-output",
+                       teacher_model=teacher)
+
+    glm = {"old-kept", "old-relabeled"}
+    assert compose.output_license(row("old-kept", "glm-5.3"), glm) == "zai-output"
+    assert compose.output_license(row("old-relabeled", "gpt-6.1-sol"), glm) == "openai-output+zai-output"
+    assert compose.output_license(row("new", "gpt-6.1-sol"), glm) == "openai-output"

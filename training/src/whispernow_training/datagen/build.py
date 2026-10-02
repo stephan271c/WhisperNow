@@ -18,16 +18,35 @@ from pathlib import Path
 
 import numpy as np
 
-from . import aawaaz, generate, inject, paths, restyle, sources, stage1, stage2
+from . import aawaaz, audit, compose, generate, inject, paths, restyle, sources, stage1, stage2
 from .schema import EMPTY, LIST_ITEM, Example, read_examples, write_examples
 
 SEED = 108
 INJECTED = 2000
+# Every long one- or multi-paragraph clean text not already injected gets one injected spoken
+# version too (todo 110): aawaaz references and the composed rows' references.
+LONG_INJECTION_WORDS = 150
+LONG_INJECTION_SEED = 110
+# Shares of rows whose spoken input gets more hesitation (`inject.densify`), by kind of row. The
+# generator writes about 0.8 fillers per 100 words in long rows and the short sources 1.6 to 1.7;
+# real dictation measured 3.6 (todo 110). The rest keep their rate, as fluent dictation does.
+DENSIFY_PERCENT = {"composed": 50, "short": 30}
+# Short sources whose train and val inputs are densified. Their test rows are todo 109's and stay
+# as built; aawaaz (4.2 per 100 words) and the injected rows already hesitate enough.
+SHORT_DENSIFY_SOURCES = {generate.SOURCE, sources.HANDY, sources.DISFL_QA}
 EMPTY_ROWS = 150
+# More EMPTY rows pinned to test, from a second seed; a repeat of a training input stays in test.
+EMPTY_TEST_ROWS = 90
 VAL_PERCENT = 5
 TEST_PERCENT = 5
 NEAR_DUPLICATE_JACCARD = 0.85
 MAX_SAME_OUTPUT = 3
+# Share of the teacher-generated recognizer-style train and val rows whose filler commas are
+# stripped, towards Parakeet's bare fillers; the rest keep the comma-wrapped form other recognizers
+# and pasted text produce.
+BARE_FILLER_PERCENT = 67
+# Word counts the stats report the share of rows over.
+LENGTH_MARKS = (150, 300, 600)
 
 # Earlier sources win when two rows are duplicates.
 SOURCE_ORDER = (aawaaz.REPO, sources.HANDY, sources.DISFL_QA, sources.SOTTO, generate.SOURCE, inject.SOURCE)
@@ -41,17 +60,77 @@ def _source_rank(example: Example) -> tuple[int, int]:
 
 
 def gather(with_sotto: bool = False) -> list[Example]:
-    """Every stage's rows, plus the programmatic rows made here from the cleaned aawaaz rows."""
+    """Every stage's rows, plus the programmatic rows made here from the cleaned aawaaz rows and the
+    composed rows. The benchmarks in `data/bench/` are never read."""
     rows = read_examples(stage1.CLEAN)
     for source, path in stage2.OUT_FILES.items():
         if path.exists() and (with_sotto or source != sources.SOTTO):
             rows += read_examples(path)
     for category in generate.TARGETS:
-        if generate.output_file(category).exists():
-            rows += read_examples(generate.output_file(category))
-    rows += inject.injected_rows(read_examples(stage1.CLEAN), INJECTED, SEED)
+        for held_out in (False, True):
+            if generate.output_file(category, held_out).exists():
+                rows += read_examples(generate.output_file(category, held_out))
+    composed = compose.load(compose.TRAIN)
+    rows += composed
+    clean = read_examples(stage1.CLEAN)
+    injected = inject.injected_rows(clean, INJECTED, SEED)
+    used = {e.output for e in injected}
+    long_origins = [
+        e for e in [*clean, *composed] if len(e.output.split()) >= LONG_INJECTION_WORDS and e.output not in used
+    ]
+    long_injected = inject.injected_rows(
+        long_origins, len(long_origins), LONG_INJECTION_SEED, layouts=("plain", "paragraphs")
+    )
+    rows += injected + [replace(e, tags=[*e.tags, "long_origin"]) for e in long_injected]
     rows += inject.empty_rows(EMPTY_ROWS, SEED)
+    rows += [replace(e, split="test") for e in inject.empty_rows(EMPTY_TEST_ROWS, SEED + 1)]
     return [_empty_sentinel(_bare_fillers(_modal_may(e))) for e in rows]
+
+
+def _share(key: str, percent: int) -> bool:
+    return int(hashlib.sha256(key.encode()).hexdigest(), 16) % 100 < percent
+
+
+def spoken_variant(example: Example, salt: str = "") -> Example:
+    """`example` with its input as a given recognizer and a given speaker might produce it.
+
+    - A composed recognizer-style row gets a recognizer's punctuation (`restyle.ASR_STYLES`), so
+      long rows cover Whisper and Qwen3 as well as the Parakeet-like style the generator writes;
+      `plain` keeps the generator's text.
+    - A share of rows gets denser hesitation (`DENSIFY_PERCENT`), with Parakeet's pause
+      punctuation only where the row is Parakeet's.
+
+    Only fillers, repeats, punctuation and casing change, all of which the reference drops or
+    rewrites anyway, so the reference stays right. A pure function of the row and `salt`: the
+    build uses no salt, and training can pass one per epoch to draw fresh variants of train rows.
+    Applied after deduplication (the near-duplicate check ignores fillers, so a copy that only adds
+    them would be dropped as a duplicate), so a row is changed in place rather than copied.
+    """
+    composed = "composed" in example.tags
+    if not composed and not (example.source in SHORT_DENSIFY_SOURCES and example.split in ("train", "val")):
+        return example
+    key = f"{example.id}{salt}"
+    text, tags = example.input, list(example.tags)
+    if "style_raw" in tags or not text[:1].isupper():
+        style, asr = "raw", None
+    else:
+        style = "recognizer"
+        asr = restyle.asr_style(key) if composed else None
+    if _share(f"densify-{key}", DENSIFY_PERCENT["composed" if composed else "short"]):
+        dense = inject.densify(text, key, style, pauses=asr in (None, "parakeet")).text
+        if dense != text:
+            text, tags = dense, [*tags, "densified"]
+    if asr:
+        if asr != "plain":
+            text = restyle.recognizer_quirks(text, key, asr)
+        tags.append(f"asr_{asr}")
+    if text == example.input and tags == example.tags:
+        return example
+    return replace(example, input=text, tags=tags)
+
+
+def spoken_variants(examples: Iterable[Example], salt: str = "") -> list[Example]:
+    return [spoken_variant(e, salt) for e in examples]
 
 
 def restyled(rows: list[Example]) -> list[Example]:
@@ -73,14 +152,52 @@ def restyled(rows: list[Example]) -> list[Example]:
 
 
 def _bare_fillers(example: Example) -> Example:
-    """The `parakeet` share of the stage 3 and injected recognizer-style inputs, which put commas
-    around nearly every filler, with the fillers mostly bare as Parakeet writes them."""
-    if "style_recognizer" not in example.tags or "restyled" in example.tags:
+    """The `parakeet` share of the stage 3 recognizer-style inputs, which put commas around nearly
+    every filler, with the fillers mostly bare as Parakeet writes them. Todo 109's test rows were
+    built this way and stay so; `strip_filler_commas` goes further for train and val."""
+    if "style_recognizer" not in example.tags or "restyled" in example.tags or example.source == inject.SOURCE:
         return example
     if restyle.asr_style(example.id) != "parakeet":
         return example
     text = restyle.filler_commas(example.input, example.id)
     return replace(example, input=text, tags=[*example.tags, "asr_parakeet"])
+
+
+_FILLER_TOKEN = re.compile(r"^(um+|uh+|uhm|erm?|hmm+)([,.?!;:]?)$", re.IGNORECASE)
+# A comma before a filler stays after a discourse word, as in Parakeet's "So, um let's".
+_DISCOURSE = {"so", "and", "but", "okay", "ok", "well", "yeah", "oh", "alright", "right", "now", "then", "also"}
+
+
+def strip_filler_commas(text: str) -> str:
+    """`text` with no comma after a filler, and none before one except after a discourse word."""
+    tokens = text.split(" ")
+    for i, token in enumerate(tokens):
+        match = _FILLER_TOKEN.match(token)
+        if not match:
+            continue
+        if match.group(2) == ",":
+            tokens[i] = match.group(1)
+        previous = tokens[i - 1] if i else ""
+        if previous.endswith(",") and previous[:-1].lower() not in _DISCOURSE and not _FILLER_TOKEN.match(previous):
+            tokens[i - 1] = previous[:-1]
+    return " ".join(tokens)
+
+
+def bare_filler_share(examples: Iterable[Example]) -> list[Example]:
+    """Strips filler commas from `BARE_FILLER_PERCENT` of the teacher-generated recognizer-style
+    train and val inputs, chosen by id, and tags them `fillers_stripped`. Test rows stay as built."""
+    out = []
+    for e in examples:
+        if (
+            e.source == generate.SOURCE and e.split in ("train", "val") and "style_recognizer" in e.tags
+            and "composed" not in e.tags
+            and int(hashlib.sha256(f"bare-{e.id}".encode()).hexdigest(), 16) % 100 < BARE_FILLER_PERCENT
+        ):
+            text = strip_filler_commas(e.input)
+            if text != e.input:
+                e = replace(e, input=text, tags=[*e.tags, "fillers_stripped"])
+        out.append(e)
+    return out
 
 
 def _modal_may(example: Example) -> Example:
@@ -413,6 +530,17 @@ def stats(examples: Sequence[Example], dropped: Sequence[tuple[Example, str]]) -
         "input_words": _percentiles([len(e.input.split()) for e in examples]),
         "output_words": _percentiles([len(e.output.split()) for e in examples]),
         "dropped": dict(Counter(reason for _, reason in dropped).most_common()),
+        "length": {split: length_histogram([e for e in examples if e.split == split]) for split in ("train", "val", "test")},
+    }
+
+
+def length_histogram(examples: Sequence[Example]) -> dict:
+    """Rows per input length bucket, and the share over each of `LENGTH_MARKS` words."""
+    counts = [len(e.input.split()) for e in examples]
+    buckets = Counter(audit.length_bucket(n) for n in counts)
+    return {
+        "buckets": {name: buckets[name] for _, name in (*audit.BUCKETS, (None, "over 1000")) if buckets[name]},
+        "over": {str(mark): round(sum(n > mark for n in counts) / max(1, len(counts)), 3) for mark in LENGTH_MARKS},
     }
 
 
@@ -435,6 +563,14 @@ def stats_markdown(report: dict) -> str:
     for key in ("input_words", "output_words"):
         p = report[key]
         lines.append(f"| {key.split('_')[0]} | {p['p5']} | {p['p50']} | {p['p95']} | {p['max']} | {p['mean']} |")
+    names = [name for _, name in (*audit.BUCKETS, (None, "over 1000"))]
+    marks = [f"> {mark}" for mark in LENGTH_MARKS]
+    lines.append("\n## Input length by split\n")
+    lines.append("| split | " + " | ".join(names + marks) + " |\n|" + "---|" * (len(names) + len(marks) + 1))
+    for split, hist in report.get("length", {}).items():
+        cells = [str(hist["buckets"].get(name, 0)) for name in names]
+        cells += [f"{hist['over'][str(mark)]:.1%}" for mark in LENGTH_MARKS]
+        lines.append(f"| {split} | " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
 
 
@@ -448,9 +584,11 @@ def build(with_sotto: bool = False, out_dir: Path = paths.BUILD) -> dict:
             dropped.append((example, reason))
         else:
             kept.append(example)
+    kept, audited = audit.apply(kept)
+    dropped += audited
     kept, duplicates = deduplicate(kept)
     dropped += duplicates
-    final = assign_splits(restyled(kept))
+    final = spoken_variants(bare_filler_share(assign_splits(restyled(kept))))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for split in ("train", "val", "test"):

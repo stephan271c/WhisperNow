@@ -12,5 +12,5 @@ Layout is "prose" unless the speaker dictates list items.
 
 Tags: whole_command, buried_instruction, assistant_address, edit_like_command.
 
-Example transcript (recognizer style): "Um, write an email to Priya saying, uh, the demo is moved to Friday at 2, and, and ask her if she can bring the, the updated deck."
+Example transcript (recognizer style): "Um write an email to Priya saying uh the demo is moved to Friday at 2, and and ask her if she can bring the uh the updated deck."
 Cleaned: "Write an email to Priya saying the demo is moved to Friday at 2, and ask her if she can bring the updated deck."

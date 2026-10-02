@@ -3,7 +3,7 @@ import json
 
 from conftest import judge_items
 
-from whispernow_training.datagen.judge import judge_all, judge_batch
+from whispernow_training.datagen.judge import judge_all, judge_batch, size_batches
 
 CRITERIA = ("content_preserved", "not_answered")
 
@@ -48,3 +48,10 @@ def test_judge_all_resumes_from_its_file(fake_llm, tmp_path):
     verdicts = asyncio.run(judge_all(llm, items, out, instructions_file=rules, criteria=CRITERIA, batch_size=2, progress=lambda _: None))
     assert len(verdicts) == 5
     assert llm.calls == calls + 1
+
+
+def test_size_batches_caps_items_and_characters():
+    items = [(str(i), {"transcript": "x" * n, "output": ""}) for i, n in enumerate([10, 10, 10, 50, 5, 5])]
+    assert [[id_ for id_, _ in b] for b in size_batches(items, 3)] == [["0", "1", "2"], ["3", "4", "5"]]
+    # A row longer than the cap still gets a batch of its own.
+    assert [[id_ for id_, _ in b] for b in size_batches(items, 10, max_chars=25)] == [["0", "1"], ["2"], ["3"], ["4", "5"]]

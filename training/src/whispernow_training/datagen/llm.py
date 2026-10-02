@@ -1,12 +1,17 @@
 """Rate-limited, cached LLM calls configured from the repo-root `.env`.
 
-Two backends share the concurrency cap, the retry policy and the response cache:
+Three backends share the retry policy and the response cache, and each has its own concurrency cap.
+Each role (generator, teacher, judge) can use a different backend and model:
 
 - `opencode` (default) sends each request through a private `opencode serve`
   process. The server runs with its own empty config directory, so the user's
   global opencode instructions and plugins never reach the prompt. opencode
   still adds a short environment note before our system message.
 - `openai` sends requests to any OpenAI-compatible endpoint with `AsyncOpenAI`.
+- `codex` runs one `codex exec` per request. Our system message replaces
+  codex's own instructions, and the user's codex config, rules and any AGENTS.md
+  are ignored. codex still declares its tools and adds its environment note; the
+  README records this.
 
 Only the final message text is returned and cached; reasoning is dropped.
 """
@@ -24,6 +29,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,61 +40,101 @@ from dotenv import load_dotenv
 
 from .paths import CACHE, REPO_ROOT
 
-Backend = Literal["opencode", "openai"]
-Role = Literal["teacher", "judge"]
+Backend = Literal["opencode", "openai", "codex"]
+Role = Literal["generator", "teacher", "judge"]
 Message = dict[str, str]
 
 _MAX_ATTEMPTS = 7
 _BACKOFF_BASE_SECONDS = 4.0
 _BACKOFF_CAP_SECONDS = 180.0
 _REQUEST_TIMEOUT_SECONDS = 900.0
+# How long a subprocess's pipes may stay open after it exits, and how long to wait for them to
+# close once its process group is killed.
+_ORPHAN_GRACE_SECONDS = 10.0
+_KILL_WAIT_SECONDS = 30.0
+# A request refused for the account's usage limit waits and retries without end, so the run resumes
+# once the limit resets or another account signs in; the log says so at most this often.
+_LIMIT_WAIT_SECONDS = 60.0
+_LIMIT_REPORT_SECONDS = 600.0
 
 
 class LlmError(RuntimeError):
-    """A request failed. `retryable` marks rate limits, overloads and timeouts."""
+    """A request failed. `retryable` marks rate limits, overloads and timeouts; `limited` an account that
+    cannot take requests until its usage limit resets or the user signs in again."""
 
-    def __init__(self, message: str, *, retryable: bool) -> None:
+    def __init__(self, message: str, *, retryable: bool, limited: bool = False) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.limited = limited
+
+
+def _backend(name: str, default: str) -> Backend:
+    backend = os.environ.get(name) or default
+    if backend not in ("opencode", "openai", "codex"):
+        raise SystemExit(f"{name} must be opencode, openai or codex, not {backend!r}")
+    return backend
 
 
 @dataclass(frozen=True)
 class LlmSettings:
+    """`LLM_*` for the teacher; `LLM_JUDGE_*` and `LLM_GENERATOR_*` default to the teacher's settings."""
+
     backend: Backend
     model: str
     judge_model: str
     concurrency: int
-    # opencode `variant` or OpenAI `reasoning_effort`; empty leaves the provider default.
+    # opencode `variant`, OpenAI `reasoning_effort` or codex `model_reasoning_effort`; empty leaves the
+    # provider default.
     reasoning: str
     judge_reasoning: str
     opencode_provider: str
     base_url: str | None
+    judge_backend: Backend | None = None
+    generator_backend: Backend | None = None
+    generator_model: str | None = None
+    generator_reasoning: str | None = None
+    # Requests in flight on the codex backend, which allows many more than the others.
+    codex_concurrency: int = 16
 
     @classmethod
     def from_env(cls) -> LlmSettings:
         load_dotenv(REPO_ROOT / ".env")
-        backend = os.environ.get("LLM_BACKEND", "opencode")
-        if backend not in ("opencode", "openai"):
-            raise SystemExit(f"LLM_BACKEND must be opencode or openai, not {backend!r}")
+        backend = _backend("LLM_BACKEND", "opencode")
         model = os.environ.get("LLM_MODEL", "glm-5.3-flash")
+        reasoning = os.environ.get("LLM_REASONING", "low")
         return cls(
             backend=backend,
             model=model,
             judge_model=os.environ.get("LLM_JUDGE_MODEL") or model,
             concurrency=int(os.environ.get("LLM_CONCURRENCY", "3")),
-            reasoning=os.environ.get("LLM_REASONING", "low"),
-            judge_reasoning=os.environ.get("LLM_JUDGE_REASONING") or os.environ.get("LLM_REASONING", "low"),
+            reasoning=reasoning,
+            judge_reasoning=os.environ.get("LLM_JUDGE_REASONING") or reasoning,
             opencode_provider=os.environ.get("LLM_OPENCODE_PROVIDER", "zai-coding-plan"),
             base_url=os.environ.get("LLM_BASE_URL"),
+            judge_backend=_backend("LLM_JUDGE_BACKEND", backend),
+            generator_backend=_backend("LLM_GENERATOR_BACKEND", backend),
+            generator_model=os.environ.get("LLM_GENERATOR_MODEL") or model,
+            generator_reasoning=os.environ.get("LLM_GENERATOR_REASONING") or reasoning,
+            codex_concurrency=int(os.environ.get("LLM_CODEX_CONCURRENCY", "16")),
         )
 
+    def target(self, role: Role) -> tuple[Backend, str, str]:
+        """The backend, model and default reasoning a role's requests use."""
+        if role == "judge":
+            return self.judge_backend or self.backend, self.judge_model, self.judge_reasoning
+        if role == "generator":
+            return (
+                self.generator_backend or self.backend,
+                self.generator_model or self.model,
+                self.reasoning if self.generator_reasoning is None else self.generator_reasoning,
+            )
+        return self.backend, self.model, self.reasoning
 
-def cache_key(model: str, reasoning: str, messages: list[Message]) -> str:
-    request = json.dumps(
-        {"model": model, "reasoning": reasoning, "messages": messages},
-        sort_keys=True,
-        ensure_ascii=False,
-    )
+
+def cache_key(model: str, reasoning: str, messages: list[Message], attempt: int = 0) -> str:
+    """The request's hash. A nonzero `attempt` names a fresh sample of the same request, such as a relabel."""
+    fields = {"model": model, "reasoning": reasoning, "messages": messages} | ({"attempt": attempt} if attempt else {})
+    request = json.dumps(fields, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(request.encode()).hexdigest()
 
 
@@ -122,6 +168,51 @@ def _exit_with_parent() -> None:
 
         pr_set_pdeathsig = 1
         ctypes.CDLL("libc.so.6", use_errno=True).prctl(pr_set_pdeathsig, signal.SIGTERM)
+
+
+def _kill_group(pid: int) -> None:
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+async def run_process_group(command: list[str], data: bytes, cwd: Path, timeout: float) -> tuple[int, bytes]:
+    """Runs `command` in its own process group with `data` on stdin; returns its exit code and stderr.
+
+    `codex` is a node wrapper around a native binary. Killing only the wrapper leaves the binary
+    holding stderr, and asyncio's `wait()` and `communicate()` return only once every pipe closes,
+    so a stray binary would hang the caller for good. So the whole group is killed: on timeout, on
+    cancellation, `_ORPHAN_GRACE_SECONDS` after the wrapper exits if the pipes are still open,
+    and at the end, so nothing outlives the call. Raises `TimeoutError` after `timeout` seconds.
+    """
+    process = await asyncio.create_subprocess_exec(
+        *command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        start_new_session=True, preexec_fn=_exit_with_parent,
+    )
+    reader = asyncio.ensure_future(process.communicate(data))
+    deadline = time.monotonic() + timeout
+    exited_at = None
+    try:
+        while not reader.done():
+            now = time.monotonic()
+            if process.returncode is not None and exited_at is None:
+                exited_at = now
+            if now >= deadline or (exited_at is not None and now - exited_at >= _ORPHAN_GRACE_SECONDS):
+                break
+            await asyncio.wait({reader}, timeout=min(1.0, max(0.01, deadline - now)))
+        timed_out = not reader.done() and process.returncode is None
+    finally:
+        _kill_group(process.pid)
+        if not reader.done():
+            try:
+                await asyncio.wait_for(reader, _KILL_WAIT_SECONDS)
+            except TimeoutError:
+                pass
+    if timed_out:
+        raise TimeoutError(f"{command[0]} ran over {timeout:.0f}s")
+    stderr = reader.result()[1] if reader.done() and not reader.cancelled() and not reader.exception() else b""
+    return process.returncode if process.returncode is not None else -signal.SIGKILL, stderr
 
 
 class _OpencodeServer:
@@ -237,34 +328,121 @@ class _OpencodeServer:
         return "".join(part["text"] for part in reply["parts"] if part["type"] == "text")
 
 
+_CODEX_LIMITED = re.compile(r"usage.?limit|insufficient_quota|budget_limited", re.I)
+# Signed out, as while the user switches accounts with `codex login`.
+_CODEX_SIGNED_OUT = re.compile(r"\b401\b|unauthori[sz]ed|not logged in|log ?in again|codex login|refresh token|token.{0,20}expired", re.I)
+_CODEX_RETRYABLE = re.compile(r"429|rate.?limit|usage limit|overloaded|timed? ?out|5\d\d|stream disconnected|try again", re.I)
+
+
+def codex_command(codex: str, model: str, reasoning: str, instructions: Path, reply: Path) -> list[str]:
+    """The `codex exec` call for one request; the user message goes on stdin."""
+    command = [
+        codex, "exec", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
+        "--sandbox", "read-only", "--color", "never", "--model", model,
+        "-c", f"model_instructions_file={json.dumps(str(instructions))}",
+        "-c", "project_doc_max_bytes=0",
+        "-c", 'web_search="disabled"',
+        # Read the login from ~/.codex/auth.json, never the desktop keyring: Secret Service
+        # requests from codex were crashing gnome-keyring-daemon.
+        "-c", 'cli_auth_credentials_store="file"',
+        "--output-last-message", str(reply),
+    ]
+    if reasoning:
+        command += ["-c", f"model_reasoning_effort={json.dumps(reasoning)}"]
+    return [*command, "-"]
+
+
+class _CodexRunner:
+    """Runs `codex exec` from an empty directory outside the repo, with our system message as its instructions."""
+
+    def __init__(self) -> None:
+        codex = shutil.which("codex")
+        if codex is None:
+            raise SystemExit("LLM_BACKEND=codex needs the codex CLI on PATH")
+        self.codex = codex
+        self.instructions = CACHE / "codex" / "instructions"
+        self.instructions.mkdir(parents=True, exist_ok=True)
+        self.work = Path(tempfile.mkdtemp(prefix="datagen-codex-"))
+
+    def _instructions_file(self, system: str) -> Path:
+        path = self.instructions / f"{hashlib.sha256(system.encode()).hexdigest()[:16]}.md"
+        if not path.exists():
+            partial = path.with_suffix(f".{os.getpid()}.tmp")
+            partial.write_text(system, encoding="utf-8")
+            partial.replace(path)
+        return path
+
+    async def complete(self, model: str, reasoning: str, messages: list[Message]) -> str:
+        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        users = [m["content"] for m in messages if m["role"] == "user"]
+        if len(users) != 1 or len(messages) != len(users) + (1 if system else 0):
+            raise ValueError("the codex backend sends one optional system message and one user message")
+        instructions = self._instructions_file(system or "Follow the user's instructions.")
+        with tempfile.NamedTemporaryFile(dir=self.work, suffix=".txt", delete=False) as handle:
+            reply = Path(handle.name)
+        try:
+            try:
+                returncode, stderr = await run_process_group(
+                    codex_command(self.codex, model, reasoning, instructions, reply), users[0].encode(), self.work,
+                    _REQUEST_TIMEOUT_SECONDS,
+                )
+            except TimeoutError as error:
+                raise LlmError("codex exec timed out", retryable=True) from error
+            if returncode != 0:
+                tail = stderr.decode(errors="replace").strip()[-600:]
+                raise LlmError(
+                    f"codex exit {returncode}: {tail}",
+                    retryable=bool(_CODEX_RETRYABLE.search(tail)),
+                    limited=bool(_CODEX_LIMITED.search(tail) or _CODEX_SIGNED_OUT.search(tail)),
+                )
+            content = reply.read_text(encoding="utf-8")
+        finally:
+            reply.unlink(missing_ok=True)
+        if not content.strip():
+            raise LlmError("codex returned an empty reply", retryable=True)
+        return content
+
+    def stop(self) -> None:
+        shutil.rmtree(self.work, ignore_errors=True)
+
+
 class LlmClient:
     """Use as `async with LlmClient(settings) as llm:`."""
 
     def __init__(self, settings: LlmSettings) -> None:
         self.settings = settings
         self.cache = ResponseCache(CACHE / "llm")
-        self._semaphore = asyncio.Semaphore(settings.concurrency)
+        self._semaphores = {
+            backend: asyncio.Semaphore(settings.codex_concurrency if backend == "codex" else settings.concurrency)
+            for backend in ("opencode", "openai", "codex")
+        }
         self._opencode: _OpencodeServer | None = None
         self._http: httpx.AsyncClient | None = None
         self._openai = None
+        self._codex: _CodexRunner | None = None
         self._connect_lock = asyncio.Lock()
         self.calls = 0
         self.cache_hits = 0
+        self._limit_reported = 0.0
+        self._limited = False
 
     async def __aenter__(self) -> LlmClient:
         return self
 
-    async def _connect(self) -> None:
+    async def _connect(self, backend: Backend) -> None:
         async with self._connect_lock:
-            await self._connect_once()
+            await self._connect_once(backend)
 
-    async def _connect_once(self) -> None:
-        if self.settings.backend == "opencode":
+    async def _connect_once(self, backend: Backend) -> None:
+        if backend == "opencode":
             if self._opencode is None:
                 server = _OpencodeServer(self.settings)
                 await server.start()
                 self._http = httpx.AsyncClient(timeout=60)
                 self._opencode = server
+        elif backend == "codex":
+            if self._codex is None:
+                self._codex = _CodexRunner()
         elif self._openai is None:
             from openai import AsyncOpenAI
 
@@ -278,9 +456,11 @@ class LlmClient:
             await self._http.aclose()
         if self._opencode is not None:
             self._opencode.stop()
+        if self._codex is not None:
+            self._codex.stop()
 
-    async def _request(self, model: str, reasoning: str, messages: list[Message]) -> str:
-        if self.settings.backend == "opencode":
+    async def _request(self, backend: Backend, model: str, reasoning: str, messages: list[Message]) -> str:
+        if backend == "opencode":
             assert self._opencode is not None and self._http is not None
             try:
                 return await self._opencode.complete(self._http, model, reasoning, messages)
@@ -288,6 +468,9 @@ class LlmClient:
                 raise LlmError(f"timeout: {error}", retryable=True) from error
             except httpx.TransportError as error:
                 raise LlmError(f"transport: {error}", retryable=True) from error
+        if backend == "codex":
+            assert self._codex is not None
+            return await self._codex.complete(model, reasoning, messages)
         import openai
 
         extra = {"reasoning_effort": reasoning} if reasoning else {}
@@ -301,36 +484,71 @@ class LlmClient:
             raise LlmError(str(error)[:300], retryable=False) from error
         return response.choices[0].message.content or ""
 
-    async def complete(self, messages: list[Message], *, role: Role = "teacher") -> str:
+    async def complete(
+        self,
+        messages: list[Message],
+        *,
+        role: Role = "teacher",
+        cached: bool = True,
+        attempt: int = 0,
+        reasoning: str | None = None,
+    ) -> str:
         """Returns the final message text, from the cache when this exact request was made before.
 
-        The teacher role uses `LLM_MODEL`, the judge role `LLM_JUDGE_MODEL`, each with its reasoning setting.
+        The teacher role uses `LLM_MODEL`, the judge role `LLM_JUDGE_MODEL` and the generator role
+        `LLM_GENERATOR_MODEL`, each with its backend and reasoning setting.
+        `cached=False` always sends the request, for timing it. `attempt` N > 0 caches the reply apart from
+        the plain request's, so a second attempt at the same request gets a new sample that a rerun reuses.
+        `reasoning` overrides the role's reasoning setting for this request.
         """
-        if role == "teacher":
-            model, reasoning = self.settings.model, self.settings.reasoning
-        else:
-            model, reasoning = self.settings.judge_model, self.settings.judge_reasoning
-        key = cache_key(model, reasoning, messages)
-        cached = self.cache.get(key)
-        if cached is not None:
+        backend, model, default = self.settings.target(role)
+        reasoning = default if reasoning is None else reasoning
+        key = cache_key(model, reasoning, messages, attempt)
+        hit = self.cache.get(key) if cached else None
+        if hit is not None:
             self.cache_hits += 1
-            return cached
-        async with self._semaphore:
-            await self._connect()
-            for attempt in range(1, _MAX_ATTEMPTS + 1):
+            return hit
+        async with self._semaphores[backend]:
+            await self._connect(backend)
+            attempt = 0
+            refused = False
+            while True:
                 started = time.monotonic()
                 try:
-                    content = await self._request(model, reasoning, messages)
+                    content = await self._request(backend, model, reasoning, messages)
                     break
                 except LlmError as error:
+                    if error.limited:
+                        refused = True
+                        self._report_limit(backend, error)
+                        await asyncio.sleep(_LIMIT_WAIT_SECONDS * random.uniform(0.75, 1.0))
+                        continue
+                    attempt += 1
                     if not error.retryable or attempt == _MAX_ATTEMPTS:
                         raise
                     delay = min(_BACKOFF_CAP_SECONDS, _BACKOFF_BASE_SECONDS * 2 ** (attempt - 1))
                     await asyncio.sleep(delay * random.uniform(0.5, 1.0))
+            # Only a request that was refused itself shows the account is back; one sent before the
+            # limit can still finish after it.
+            if refused and self._limited:
+                self._limited = False
+                print(f"{time.strftime('%H:%M')} ACCOUNT OK again on {backend}; requests go through", file=sys.stderr, flush=True)
             self.calls += 1
         content = strip_think(content)
         self.cache.put(key, content, {"model": model, "seconds": round(time.monotonic() - started, 2)})
         return content
+
+
+    def _report_limit(self, backend: Backend, error: LlmError) -> None:
+        """Logs a usage-limit or signed-out refusal, once per `_LIMIT_REPORT_SECONDS` while it lasts."""
+        self._limited = True
+        if time.monotonic() - self._limit_reported >= _LIMIT_REPORT_SECONDS or not self._limit_reported:
+            self._limit_reported = time.monotonic()
+            what = "USAGE LIMIT" if _CODEX_LIMITED.search(str(error)) else "SIGNED OUT"
+            print(
+                f"{time.strftime('%H:%M')} {what} on {backend}, waiting and retrying every minute: {str(error)[-300:]}",
+                file=sys.stderr, flush=True,
+            )
 
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)

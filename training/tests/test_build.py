@@ -1,3 +1,6 @@
+import re
+from collections import Counter
+
 from whispernow_training.datagen import build
 from whispernow_training.datagen.schema import EMPTY, Example, write_examples
 
@@ -154,3 +157,75 @@ def test_review_sample_is_fixed_by_seed_and_keeps_to_one_layout(tmp_path):
     assert first == build.review_sample("list", 3, seed=7, out_dir=tmp_path)
     assert first.count("### ") == 3
     assert "OUT: - item" in first and "Plain" not in first
+
+
+def test_strip_filler_commas_leaves_fillers_bare():
+    assert build.strip_filler_commas("We need, um, the blue one, uh, maybe.") == "We need um the blue one uh maybe."
+    assert build.strip_filler_commas("Um, we should go. So, um, let's leave.") == "Um we should go. So, um let's leave."
+    assert build.strip_filler_commas("I like, you know, the red one.") == "I like, you know, the red one."
+
+
+def test_bare_filler_share_changes_only_teacher_train_and_val_rows():
+    rows = [
+        row(f"{split}{i}", "We need, um, the blue one.", "We need the blue one.", source="teacher", split=split, tags=["style_recognizer"])
+        for split in ("train", "test") for i in range(300)
+    ]
+    out = build.bare_filler_share(rows)
+    stripped = [e for e in out if "fillers_stripped" in e.tags]
+    assert all(e.split == "train" and e.input == "We need um the blue one." for e in stripped)
+    assert 0.55 < len(stripped) / 300 < 0.8
+    assert build.bare_filler_share(rows) == out
+
+
+def test_length_histogram_reports_buckets_and_shares():
+    rows = [row(str(n), " ".join(["w"] * n), "x") for n in (10, 100, 200, 400, 800)]
+    hist = build.length_histogram(rows)
+    assert hist["buckets"] == {"<50": 1, "50-150": 1, "150-300": 1, "300-600": 1, "600-1000": 1}
+    assert hist["over"] == {"150": 0.6, "300": 0.4, "600": 0.2}
+
+
+def _composed(n: int, spoken: str, tags=("style_recognizer", "composed"), source="teacher", split="") -> list[Example]:
+    return [
+        Example(id=f"teacher-{n}-{i}", input=spoken, output="Trip list", source=source, category="list_corrections",
+                license="x", tags=list(tags), seed_group=f"g{i}", split=split)
+        for i in range(n)
+    ]
+
+
+SPOKEN = (
+    "Okay so for the trip we need the tent, the green one, and two sleeping bags. Then snacks for the drive and "
+    "a cooler, and Rosa said she'd bring the stove, so we can skip it."
+)
+
+
+def test_composed_rows_get_recognizer_styles_and_half_a_denser_input_with_the_same_target():
+    variants = build.spoken_variants(_composed(400, SPOKEN))
+    densified = [e for e in variants if "densified" in e.tags]
+    assert 150 < len(densified) < 250
+    styles = Counter(t for e in variants for t in e.tags if t.startswith("asr_"))
+    assert set(styles) == {"asr_parakeet", "asr_whisper", "asr_qwen3", "asr_plain"}
+    assert all(e.output == "Trip list" and e.id.startswith("teacher-") for e in variants)
+    plain = [e for e in variants if "asr_plain" in e.tags and "densified" not in e.tags]
+    assert plain and all(e.input == SPOKEN for e in plain)
+    for e in variants:
+        spoken = iter(re.findall(r"[a-z']+", e.input.lower()))
+        assert all(word in spoken for word in re.findall(r"[a-z']+", SPOKEN.lower())), e.input
+        assert set(re.findall(r"[a-z']+", e.input.lower())) <= set(re.findall(r"[a-z']+", SPOKEN.lower())) | {
+            "um", "uh", "er", "hmm"
+        }, e.input
+    assert build.spoken_variants(_composed(400, SPOKEN)) == variants
+    assert build.spoken_variants(_composed(400, SPOKEN), salt="epoch1") != variants
+
+
+def test_raw_composed_rows_stay_raw_and_short_sources_densify_only_some_train_and_val_rows():
+    raw = build.spoken_variants(_composed(200, SPOKEN.lower().replace(",", ""), tags=("style_raw", "composed")))
+    assert all(not any(t.startswith("asr_") for t in e.tags) for e in raw)
+    assert all(e.input == e.input.lower() for e in raw)
+    short = build.spoken_variants(_composed(400, SPOKEN, tags=("style_recognizer",), split="train"))
+    assert 80 < sum("densified" in e.tags for e in short) < 160
+    for split in ("test", ""):
+        assert build.spoken_variants(_composed(50, SPOKEN, tags=("style_recognizer",), split=split)) == _composed(
+            50, SPOKEN, tags=("style_recognizer",), split=split
+        )
+    aawaaz = _composed(50, SPOKEN, tags=(), source=build.aawaaz.REPO, split="train")
+    assert build.spoken_variants(aawaaz) == aawaaz

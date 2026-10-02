@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .llm import LlmClient
+from .llm import LlmClient, Role
 from .paths import PROMPTS, REPO_ROOT
 from .schema import EMPTY
 
@@ -41,6 +41,7 @@ def rust_system_contract() -> str:
 
 def rust_fix_grammar_prompt() -> str:
     source = PROMPTS_RS.read_text(encoding="utf-8")
+    # The id is written as the literal or as the `CLEAN_UP_PROMPT_ID` constant that holds it.
     match = re.search(r'id: (?:"fix_grammar"|CLEAN_UP_PROMPT_ID),.*?prompt: "(.*?)(?<!\\)",\n', source, re.DOTALL)
     assert match, "fix_grammar prompt not found in prompts.rs"
     return _unescape_rust(match.group(1))
@@ -97,5 +98,14 @@ def clean_teacher_output(text: str) -> str:
     return text.strip()
 
 
-async def relabel(llm: LlmClient, transcript: str) -> str:
-    return clean_teacher_output(await llm.complete(teacher_messages(transcript)))
+async def relabel(
+    llm: LlmClient, transcript: str, attempt: int = 0, role: Role = "teacher", reasoning: str | None = None
+) -> str:
+    """The teacher's cleanup of `transcript`; `attempt` N > 0 asks again for a new sample.
+
+    `role="judge"` has the judge's model write it, with the same hosted prompt; `reasoning` overrides
+    the role's reasoning setting.
+    """
+    return clean_teacher_output(
+        await llm.complete(teacher_messages(transcript), role=role, attempt=attempt, reasoning=reasoning)
+    )

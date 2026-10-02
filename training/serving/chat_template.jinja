@@ -1,0 +1,12 @@
+{#- WhisperNow local cleanup model: one user turn holding the transcript, then the reply. -#}
+{#- Training renders prompts with this file and llama-server serves with it, so the two cannot drift. -#}
+{{- bos_token -}}
+{%- for message in messages -%}
+    {%- if message.role not in ["user", "assistant"] -%}
+        {{- raise_exception("The cleanup model takes one user turn, not a " + message.role + " turn") -}}
+    {%- endif -%}
+    {{- "<|im_start|>" + message.role + "\n" + message.content + "<|im_end|>\n" -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    {{- "<|im_start|>assistant\n" -}}
+{%- endif -%}

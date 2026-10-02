@@ -19,7 +19,7 @@ import re
 import sys
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 from . import paths
 from .judge import judge_batch
@@ -48,6 +48,19 @@ TARGETS = {
     "command_question_list": 300,
     "technical_list": 300,
     "ambiguous_intent": 300,
+}
+# Extra rows pinned to the test split, bringing each category to about 100 test rows (long
+# rambles to about 50) so its rates in todo 109 are not decided by one row.
+TEST_TARGETS = {
+    "dictated_command": 70,
+    "prose_mentions": 70,
+    "spoken_symbols": 75,
+    "mixed_message": 85,
+    "list_edits": 85,
+    "long_ramble": 40,
+    "command_question_list": 85,
+    "technical_list": 85,
+    "ambiguous_intent": 85,
 }
 # Categories where the validator, not the generator's guess, decides whether a list fits.
 LAYOUT_OPEN = {"ambiguous_intent"}
@@ -80,16 +93,25 @@ class BatchRecord:
     error: str = ""
 
 
-def output_file(category: str):
-    return paths.STAGE3 / f"{category}.jsonl"
+def _stem(category: str, held_out: bool) -> str:
+    return f"{category}.test" if held_out else category
 
 
-def batch_log(category: str):
-    return paths.STAGE3 / f"{category}.batches.jsonl"
+def output_file(category: str, held_out: bool = False):
+    return paths.STAGE3 / f"{_stem(category, held_out)}.jsonl"
 
 
-def rejected_file(category: str):
-    return paths.STAGE3 / f"{category}.rejected.jsonl"
+def batch_log(category: str, held_out: bool = False):
+    return paths.STAGE3 / f"{_stem(category, held_out)}.batches.jsonl"
+
+
+def rejected_file(category: str, held_out: bool = False):
+    return paths.STAGE3 / f"{_stem(category, held_out)}.rejected.jsonl"
+
+
+def _read_log(category: str, held_out: bool) -> list[dict]:
+    path = batch_log(category, held_out)
+    return list(read_jsonl(path)) if path.exists() else []
 
 
 def generator_messages(category: str, style: str, count: int, batch: int, notes: Sequence[str]) -> list[dict]:
@@ -137,9 +159,9 @@ def _items(reply: str, count: int) -> list[dict]:
     return kept[:count]
 
 
-def layout_mismatch(expected: str, example: Example) -> str | None:
+def layout_mismatch(expected: str, layout: str) -> str | None:
     """The teacher's layout against the generator's intent: a list where prose was meant, or the reverse."""
-    has_list = example.layout in ("list", "mixed")
+    has_list = layout in ("list", "mixed")
     if expected == "prose" and has_list:
         return "the teacher made a list where the speaker was not making one"
     if expected in ("list", "mixed") and not has_list:
@@ -154,7 +176,7 @@ async def run_batch(
     record = BatchRecord(batch=batch, style=style, requested=count)
     started = time.monotonic()
     try:
-        reply = await llm.complete(generator_messages(category, style, count, batch, notes))
+        reply = await llm.complete(generator_messages(category, style, count, batch, notes), role="generator")
         items = [item for item in _items(reply, count) if item["input"] not in known_inputs]
     except (ValueError, KeyError, TypeError) as error:
         record.error = f"unreadable generator reply: {error}"[:300]
@@ -180,7 +202,7 @@ async def run_batch(
     rejected: list[dict] = []
     candidates = []
     for item, example in zip(items, examples, strict=True):
-        reason = None if category in LAYOUT_OPEN else layout_mismatch(item["layout"], example)
+        reason = None if category in LAYOUT_OPEN else layout_mismatch(item["layout"], example.layout)
         if example.output.strip() == EMPTY:
             reason = "the teacher returned EMPTY for a transcript with dictated words"
         if reason:
@@ -231,20 +253,28 @@ async def generate_category(
     target: int,
     *,
     batch_size: int | None = None,
+    held_out: bool = False,
     progress: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
 ) -> int:
-    """Generates batches until `target` rows pass, resuming from the category's files."""
+    """Generates batches until `target` rows pass, resuming from the category's files.
+
+    `held_out` rows go to `<category>.test.jsonl`, pinned to the test split. Their batches are
+    numbered after the training batches, so each request draws new names and settings.
+    """
     batch_size = batch_size or BATCH_SIZES.get(category, BATCH_SIZE)
-    out = output_file(category)
+    out = output_file(category, held_out)
     kept = read_examples(out) if out.exists() else []
-    log = list(read_jsonl(batch_log(category))) if batch_log(category).exists() else []
+    log = _read_log(category, held_out)
+    first_batch = len(_read_log(category, False)) if held_out else 0
     known = {e.input for e in kept}
+    if held_out and output_file(category).exists():
+        known |= {e.input for e in read_examples(output_file(category))}
     max_batches = 3 * -(-target // batch_size) + 2
     while len(kept) < target:
-        batch = len(log)
-        if batch >= max_batches:
-            progress(f"{category}: stopped after {batch} batches with {len(kept)}/{target} rows")
+        if len(log) >= max_batches:
+            progress(f"{category}: stopped after {len(log)} batches with {len(kept)}/{target} rows")
             break
+        batch = first_batch + len(log)
         notes = log[-1]["notes"] if log else []
         count = min(batch_size, target - len(kept) + batch_size // 5)
         try:
@@ -253,25 +283,35 @@ async def generate_category(
             progress(f"{category}: batch {batch} failed: {error}")
             raise
         passed = [e for e in passed if e.input not in known][: target - len(kept)]
+        if held_out:
+            passed = [replace(e, split="test") for e in passed]
         known |= {e.input for e in passed}
         kept += passed
         _append(out, [e.to_json() for e in passed])
-        _append(rejected_file(category), [json.dumps(row, ensure_ascii=False) for row in rejected])
-        _append(batch_log(category), [json.dumps(asdict(record), ensure_ascii=False)])
+        _append(rejected_file(category, held_out), [json.dumps(row, ensure_ascii=False) for row in rejected])
+        _append(batch_log(category, held_out), [json.dumps(asdict(record), ensure_ascii=False)])
         log.append(asdict(record))
         progress(
-            f"{category}: batch {batch} ({record.style}) {record.passed}/{record.returned} passed"
+            f"{_stem(category, held_out)}: batch {batch} ({record.style}) {record.passed}/{record.returned} passed"
             f"{' ' + record.error if record.error else ''}, {len(kept)}/{target} rows, {record.seconds}s"
         )
     return len(kept)
 
 
 async def generate(
-    llm: LlmClient, categories: Sequence[str], scale: float = 1.0, batch_size: int | None = None
+    llm: LlmClient,
+    categories: Sequence[str],
+    scale: float = 1.0,
+    batch_size: int | None = None,
+    held_out: bool = False,
 ) -> dict[str, int]:
     """Runs every category's loop at once; the client's semaphore caps the requests in flight."""
-    targets = {category: max(1, round(TARGETS[category] * scale)) for category in categories}
+    goals = TEST_TARGETS if held_out else TARGETS
+    targets = {category: max(1, round(goals[category] * scale)) for category in categories}
     counts = await asyncio.gather(
-        *(generate_category(llm, category, target, batch_size=batch_size) for category, target in targets.items())
+        *(
+            generate_category(llm, category, target, batch_size=batch_size, held_out=held_out)
+            for category, target in targets.items()
+        )
     )
     return dict(zip(targets, counts, strict=True))

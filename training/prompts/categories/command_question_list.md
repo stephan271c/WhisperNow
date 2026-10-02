@@ -8,7 +8,7 @@ Layout is "list" when the speaker is collecting them to use later, "prose" when 
 
 Tags: questions_list, instructions_list, questions_in_message.
 
-Example transcript (recognizer style): "Things to ask the landlord. Um, can we paint the bedroom? Is, is parking included? And, uh, when is rent due each month?"
+Example transcript (recognizer style): "Things to ask the landlord. Um can we paint the bedroom? Is is parking included? And uh when is rent due each month?"
 Cleaned: "Things to ask the landlord:
 - Can we paint the bedroom?
 - Is parking included?

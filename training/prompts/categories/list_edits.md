@@ -8,7 +8,7 @@ Layout is "list".
 
 Tags: removal, quantity_change, replacement, reorder, readded.
 
-Example transcript (recognizer style): "Grocery list. Eggs, a gallon of milk, uh, two bags of chips. Actually, scratch the eggs, we have some. And make that one bag of chips. Oh, and bananas."
+Example transcript (recognizer style): "Grocery list. Eggs, a gallon of milk, uh two bags of chips. Actually scratch the eggs, we have some. And make that one bag of chips. Oh and bananas."
 Cleaned: "Grocery list:
 - 1 gallon milk
 - 1 bag chips

@@ -399,6 +399,31 @@ def run(n: int, seed: int, keep_audio: bool = True, shard: int = 0, shards: int 
     return written
 
 
+def probe_texts(items: list[tuple[str, str]], out: Path, seed: int) -> int:
+    """Speaks and transcribes (id, text) pairs into `out`, one JSON line each; resumes past ids already there."""
+    done = {json.loads(line)["id"] for line in out.open(encoding="utf-8")} if out.exists() else set()
+    todo = [(id_, text) for id_, text in items if id_ not in done]
+    if not todo:
+        return 0
+    out.parent.mkdir(parents=True, exist_ok=True)
+    speaker, recognizer = Speaker(), Recognizer()
+    written = 0
+    with out.open("a", encoding="utf-8") as sink:
+        for id_, text in todo:
+            spoken = speaker.speak(text, random.Random(f"{seed}-{id_}"))
+            heard, segments = recognizer.transcribe(spoken.samples)
+            record = {
+                "id": id_, "spoken": text, "model": "parakeet", "heard": heard, "segments": segments,
+                "pauses": spoken.pauses, "voice": spoken.voice, "speed": spoken.speed,
+                "seconds": round(len(spoken.samples) / SAMPLE_RATE, 1),
+            }
+            sink.write(json.dumps(record, ensure_ascii=False) + "\n")
+            sink.flush()
+            written += 1
+            print(f"{written}/{len(todo)} {id_} {record['seconds']}s", flush=True)
+    return written
+
+
 def redecode(model: str, shard: int = 0, shards: int = 1) -> int:
     """Transcribes the audio `run` kept with another recognizer, through the same segmenter and join."""
     OUT_DIR.mkdir(parents=True, exist_ok=True)

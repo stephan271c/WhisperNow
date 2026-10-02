@@ -13,7 +13,7 @@ Keep code, paths, flags and names exactly as dictated once the symbols are writt
 
 Tags: cli_flags, code_symbols, spoken_punctuation, layout_command, spoken_email_or_url.
 
-Example transcript (recognizer style): "Okay, so run, um, pip install dash dash upgrade pip, then cd into the tilde slash projects slash API folder. New paragraph. If that fails, uh, send me the log."
+Example transcript (recognizer style): "Okay so run um pip install dash dash upgrade pip, then cd into the tilde slash projects slash API folder. New paragraph. If that fails uh send me the log."
 Cleaned: "Run pip install --upgrade pip, then cd into the ~/projects/API folder.
 
 If that fails, send me the log."

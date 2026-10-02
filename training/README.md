@@ -1,6 +1,6 @@
 # WhisperNow training data
 
-Builds the dataset for a local Clean Up & Format model (todo 108). Training and evaluation come later (todo 109).
+Builds the dataset for a local Clean Up & Format model (todo 108), then trains, evaluates, exports and serves that model (todo 109; see [The cleanup model](#the-cleanup-model-todo-109)).
 
 Every row has one schema (`datagen/schema.py`): `id`, `input`, `output`, `source`, `category`, `tags`, `layout` (`plain`, `list`, `paragraphs` or `mixed`, computed from the output), `seed_group`, `split`, `license`, `teacher_model`.
 
@@ -24,8 +24,23 @@ Every row has one schema (`datagen/schema.py`): `id`, `input`, `output`, `source
 | Relabel or drop flagged rows | `uv run datagen fix-aawaaz` | `data/stage1/aawaaz.clean.jsonl`, `report.json` |
 | 2. Add handy and disfl_qa | `uv run datagen add` | `data/stage2/*.jsonl`, `report.json` |
 | 3. Generate gaps and hard cases | `uv run datagen generate` | `data/stage3/<category>.jsonl` |
+| 3b. Extra test rows for the small categories | `uv run datagen generate --test` | `data/stage3/<category>.test.jsonl` |
 | Hear what the recognizers write (speaks with Kokoro, then transcribes as the app does; `--model whisper` or `qwen3` re-transcribes the kept audio; `--report` only rewrites the report) | `uv run --extra audio datagen asr-probe --n 300` | `data/probe/<model>*.jsonl`, `report.<model>.json` |
 | 7. Restyle half the aawaaz inputs (`--recheck` re-checks rejects, no calls) | `uv run datagen restyle` | `data/restyle/aawaaz.jsonl`, `rejected.jsonl` |
+| 110.1 Completeness audit of every long reference and 500 short ones (`--fix` relabels the failures through the gates; `--report` only rewrites the report) | `uv run datagen audit` | `data/audit/{rows,verdicts}.jsonl`, `report.json` |
+| 110.3 Filler formatting and correction cues: real dictations, the build, the injection, any files | `uv run datagen profile [--injection] [FILE …]` | stdout |
+| 110.4 Long benchmark, generated rows (equal thirds of 150–300, 300–600 and 600–1,000 words) | `uv run datagen compose --run bench --total 360` | `data/bench/long/<category>.<bucket>.jsonl` |
+| 110.4 Long benchmark, real AMI meeting turns (text only, CC BY 4.0) | `uv run datagen bench ami` | `data/bench/long/ami.jsonl` |
+| 110.4 Noise benchmark, nine patterns and a control set | `uv run datagen bench noise` | `data/bench/noise/<pattern>.jsonl` |
+| 110.4 Speak a third of the noise rows with Kokoro and transcribe them with Parakeet | `nice ionice -c3 uv run --extra audio datagen bench probe` | `data/bench/noise/probed.jsonl` |
+| 110.4 Re-gate rows judged before the header rules (noise, then the long benchmark) | `uv run datagen rejudge noise`, `uv run datagen rejudge bench-long` | `data/bench/{noise,long}/rejudged.jsonl` |
+| 110.4 New references for the probed rows, through the gates | `uv run datagen bench gate-probed` | `data/bench/noise/probed.gated.jsonl` |
+| 110.4 Write both benchmark files, and check them against the build | `uv run datagen bench assemble` | `data/bench/{long,noise}.jsonl`, `report.json` |
+| 110.4 Check every benchmark reference again, one row per request with the judge at high reasoning (a row the teacher fails twice gets the judge model's reference, through the same gates), then assemble again | `LLM_JUDGE_REASONING=high uv run datagen rejudge bench-long-strict`, `LLM_JUDGE_REASONING=high uv run datagen rejudge noise-strict`, `uv run datagen bench assemble` | `data/bench/{long,noise}/strict.jsonl` |
+| 110.5 Long composed training rows (40/35/25% by bucket). `gpt-6.1-sol` through codex writes the transcripts (low) and references (high; xhigh over 600 words). The judge checks one row per request (low up to 600 words, high above), and a failure is relabelled once by the teacher. Each cell runs `compose.LANES` batches at once (2, 6 and 12 by bucket), so the slow long cells keep the codex slots busy. The first 2,558 rows had `glm-5.3` as generator, teacher and judge | `LLM_BACKEND=codex LLM_MODEL=gpt-6.1-sol LLM_REASONING=high LLM_GENERATOR_MODEL=gpt-6.1-sol LLM_GENERATOR_REASONING=low LLM_JUDGE_MODEL=gpt-6.1-sol LLM_JUDGE_REASONING=high LLM_CODEX_CONCURRENCY=64 uv run datagen compose --total 8300` | `data/stage4/<category>.<bucket>.jsonl` |
+| 110.5 Re-gate the training rows judged before the header rules | `uv run datagen rejudge train` | `data/stage4/rejudged.jsonl` |
+| 110.5 Gate the rows made before the `glm-5.3` cascade again, as that cascade gated a new row | `LLM_MODEL=glm-5.3 LLM_JUDGE_REASONING=max uv run datagen rejudge train-strict` | `data/stage4/strict.jsonl` |
+| 110.5 Gate the rows `glm-5.3` labelled the way `compose` now gates a new row (a failure gets one `gpt-6.1-sol` reference) | the same `LLM_*` settings, `uv run datagen rejudge train-codex` | `data/stage4/codex.jsonl` |
 | 4. Filter, deduplicate, split, report | `uv run datagen build` | `data/build/{train,val,test}.jsonl`, `stats.md` |
 | Draw rows for a hand review | `uv run datagen sample list --n 50 --seed 110` | stdout |
 | Publish (private) | `uv run datagen publish <user>/<repo>` | Hugging Face dataset |
@@ -33,19 +48,35 @@ Every row has one schema (`datagen/schema.py`): `id`, `input`, `output`, `source
 
 **Every LLM step resumes.** The judge commands append verdicts as batches finish and skip rows already judged. `generate` logs each batch in `<category>.batches.jsonl` and continues from there. Each response is cached by its exact request in `.cache/llm/`, so a rerun repeats no finished call. `generate --scale 0.05` runs a pilot at 5% of each target. `generate --category list_edits` runs one category.
 
-`build` also makes the programmatic rows: filler injection and `EMPTY`.
+`build` also makes the programmatic rows: filler injection and `EMPTY`. Last, after the splits, `spoken_variant` varies the spoken inputs in place, with no LLM:
+
+- **Recognizer styles:** each composed recognizer-style row gets Parakeet's, Whisper's or Qwen3's punctuation, or keeps the generator's text (`plain`). The shares are the restyled aawaaz rows' (`restyle.ASR_STYLES`).
+- **Densify (`inject.densify`):** 50% of composed rows, and 30% of the train and val rows of the stage 3, handy and disfl_qa sources, get more fillers, clusters, "the uh the" repeats and repeated words, up to 3–6 fillers per 100 words. Only the Parakeet rows also get pause punctuation. These rows are tagged `densified`.
+- **References:** every change is one the reference drops or rewrites anyway, so references stay right without a judge.
+- **Left as built:** todo 109's test rows, aawaaz and the injected rows.
+- **Per epoch:** the step is a pure function of the row and a salt, so training can pass `salt=f"epoch{n}"` to draw fresh variants of the train rows each epoch.
 
 ## The LLM client
 
 `datagen/llm.py` reads `LLM_*` from `.env`:
 
-- **Concurrency.** A semaphore caps requests in flight (`LLM_CONCURRENCY=3`).
+- **Concurrency.** A semaphore per backend caps requests in flight (`LLM_CONCURRENCY=3`, and `LLM_CODEX_CONCURRENCY=16` for codex).
 - **Retries.** Rate limits, 5xx and timeouts retry up to 7 times, with exponential backoff (4 s doubling, capped at 180 s) and jitter.
 - **Batched judging.** Judges see 10–30 rows per request.
 - **Reasoning.** Only the final message text is kept. `<think>` blocks and reasoning parts are dropped.
-- **Models.** `LLM_MODEL` (`glm-5.3-flash`) is the teacher and generator. `LLM_JUDGE_MODEL` (`glm-5.3`) is the judge and validator.
+- **Models.** `LLM_MODEL` (`glm-5.3-flash`) is the teacher. `LLM_JUDGE_MODEL` (`glm-5.3`) is the judge and validator. `LLM_GENERATOR_MODEL` writes transcripts and defaults to `LLM_MODEL`.
+- **Backend per role.** `LLM_BACKEND` serves the teacher. `LLM_JUDGE_BACKEND` and `LLM_GENERATOR_BACKEND` default to it. `LLM_GENERATOR_REASONING` defaults to `LLM_REASONING`.
 
 **Backend.** `LLM_BACKEND=openai` calls any OpenAI-compatible endpoint directly with `LLM_BASE_URL` and `LLM_API_KEY`.
+
+`LLM_BACKEND=codex` runs one `codex exec` per request.
+
+- Each request runs from an empty temporary directory, with a read-only sandbox, no web search and no session saved.
+- The user's codex config, rules and any `AGENTS.md` are ignored.
+- Our system message replaces codex's own instructions (`model_instructions_file`). The user message goes on stdin, and only the last message is kept.
+- **Caveat:** codex still declares its tools and adds its environment note, about 4,000 tokens per request.
+- Each call runs in its own process group (`llm.run_process_group`). `codex` is a node wrapper around a native binary, and a binary left behind holds the pipes open, which once hung a run for 70 minutes. On a timeout or cancellation, or 10 s after the wrapper exits with its pipes still open, the whole group is killed.
+- The reasoning setting is codex's `model_reasoning_effort`: low, medium, high, xhigh or max.
 
 **Thinking.** GLM 5.3 models always reason. `LLM_REASONING` and `LLM_JUDGE_REASONING` set the effort. We run both at `low`; see the teacher agreement section.
 
@@ -80,6 +111,9 @@ This is a reading of the published terms, not a legal review.
 - **Z.ai (teacher, judge and generator outputs).**
   - Z.ai's terms of use forbid using outputs "to develop, train, or enhance algorithms or models that compete with us", and forbid automated access by bots or spiders.
   - Whether a local dictation-cleanup model competes with Z.ai is a judgment call for the project owner. Rows whose output the teacher wrote carry `teacher_model`; stage 3 rows carry the license `zai-output`.
+- **OpenAI (`gpt-6.1-sol` through the Codex CLI, todo 110's composed rows).**
+  - OpenAI's terms of use also forbid using output to develop models that compete with OpenAI. Whether this model competes is the same judgment call as for Z.ai.
+  - Each composed row's license names the models that wrote its transcript and its reference (`compose.output_license`): `openai-output` 6,961 rows, `openai-output+zai-output` 898 (a `glm-5.3` transcript with a `gpt-6.1-sol` reference) and `zai-output` 194.
 - **aawaaz** (`shantanugoel/aawaaz-transcript-cleanup-dataset`): MIT. Its outputs came from Gemini 2.5 Flash and coding agents, so check Google's output terms before any commercial release.
   - Its generator repo has no license file, so our generator, validator and category prompts are written from scratch. They follow its loop but copy none of its text.
 - **handy** (`MagicNoThief/handy-dictation-editing`): CC-BY-4.0.
@@ -102,7 +136,19 @@ The local history (`~/.local/share/WhisperNow/history.sqlite3`, still on the old
 - Numbers come out as words ("three") in 6 of 20, and none contain digits.
 - Only one has a filler, without a comma.
 
-That is too few to measure filler style per model. The inputs we generate cover both styles: `recognizer` (punctuated, cased, mostly digits, fillers set off with commas) and `raw` (aawaaz-like: lowercase, little punctuation, numbers as words).
+That is too few to measure filler style per model. The inputs we generate cover both styles: `recognizer` (punctuated, cased, mostly digits, bare fillers) and `raw` (aawaaz-like: lowercase, little punctuation, numbers as words).
+
+**Second look (todo 110).** The current history (`entries` schema) held 19 real Parakeet dictations of 9 or more words, about 540 words, all from one speaker. Only aggregate counts were taken; no text left the machine. Compared with the composed long rows:
+
+| per 100 words | real | composed, as generated | composed, densified |
+|---|---|---|---|
+| um/uh | 3.6 | 0.8 | 4.3 |
+| "the uh the" | 0.36 | 0.05 | 0.50 |
+| repeated words | 0.71 | 0.71 | 1.07 |
+| fillers with a comma after | 5% | 14% | 1% |
+| words per sentence | 11.4 | 16.5 | 15.8 |
+
+The generator writes bare fillers in the right places but about a fifth as many as real speech, so `build` densifies a share of the inputs (`spoken_variant`, above). Real fillers sit where the speaker plans what comes next: at a sentence start, after a conjunction, discourse word or comma, and after a preposition, verb or determiner before the phrase it introduces. The injector weights its slots that way and never puts a filler inside a name, a number or a spoken symbol.
 
 ## Stage 1: aawaaz
 
@@ -277,6 +323,22 @@ Fixes made during the run:
 - **Reply parsing.** `parse_json_reply` falls back to the outermost object or array when the reply has prose around it or a missing closing brace. `_items` salvages the well-formed `{"input", "layout"}` pairs when the generator writes something that is not JSON, such as a Python expression, inside the list.
 - **Stall.** Once, every request hung for about 15 minutes at the provider. The 900 s request timeout and retry recovered it without losing a batch.
 
+**Extra test rows.** The hashed 5% left the small categories with 8–31 test rows, so one row moved a rate by up to 12 points. `generate --test` wrote 680 more rows pinned to test (`TEST_TARGETS`), bringing each category to about 100 test rows and `long_ramble` to 48. Their batches are numbered after the training batches, so they draw new names and settings, and their inputs are checked against the training rows. `build` adds 90 `EMPTY` rows pinned to test from a second seed; 15 training `EMPTY` rows that repeated one of them were dropped. The run took about 40 minutes at 3 in flight:
+
+| Category | Batches | Returned | Passed | Pass rate |
+|---|---|---|---|---|
+| `ambiguous_intent` | 2 | 97 | 90 | 93% |
+| `command_question_list` | 3 | 116 | 91 | 78% |
+| `dictated_command` | 2 | 85 | 75 | 88% |
+| `list_edits` | 3 | 112 | 93 | 83% |
+| `long_ramble` | 2 | 48 | 44 | 92% |
+| `mixed_message` | 3 | 127 | 85 | 67% |
+| `prose_mentions` | 2 | 81 | 80 | 99% |
+| `spoken_symbols` | 3 | 114 | 81 | 71% |
+| `technical_list` | 3 | 116 | 91 | 78% |
+
+The test rows come from the same prompts as the training rows, so they measure the same distribution more precisely; they carry the same teacher habits, such as condensed list items and dropped hedge words.
+
 
 ## Input style (step 7)
 
@@ -347,7 +409,7 @@ Test rows and earlier sources win a duplicate.
 
 **Splits** go by `seed_group`, so an injected row always shares its origin's split:
 
-- A group with a preset test row (aawaaz's 3% held out by category, and handy's and disfl_qa's own test splits) is test.
+- A group with a preset test row (aawaaz's 3% held out by category, handy's and disfl_qa's own test splits, the `generate --test` rows and the second-seed `EMPTY` rows) is test.
 - Other groups hash 5% into val.
 - Groups made only of generated rows also hash 5% into test.
 
@@ -355,32 +417,34 @@ Test rows and earlier sources win a duplicate.
 
 ### The current build
 
-41,793 rows: train 37,773, val 1,958, test 2,062.
+52,520 rows: train 46,745, val 2,457, test 3,318. Of the train rows, 25.4% are over 150 words, 11.0% over 300 and 4.4% over 600 (`stats.md`, "Input length by split").
 
 | Source | Rows | License |
 |---|---|---|
-| aawaaz | 22,600 (54%) | MIT |
+| aawaaz | 22,594 (43%) | MIT |
+| teacher (stage 3 and composed) | 12,694 | openai-output 7,378, zai-output 4,419, both 897 |
 | handy | 10,303 | CC-BY-4.0 |
-| teacher (stage 3) | 3,546 | zai-output |
+| injected | 3,717 | MIT (2,848), or its composed origin's (869) |
 | disfl_qa | 3,212 | CC-BY-4.0 |
-| injected (from aawaaz) | 2,132 | MIT |
 
-- **Layouts:** plain 31,882, mixed 3,317, paragraphs 3,312, list 3,282. That is 24% with layout, and 16% with a list.
+- **Test groups:** todo 109's 2,828 test rows (`configs/test-ids-109.txt`) keep their ids and inputs. The 490 new test rows are composed rows of 150–1,000 words and their injected copies.
+- **Layouts:** plain 32,743, mixed 10,824, paragraphs 5,181, list 3,772. That is 38% with layout, and 28% with a list.
 - **Every row** has a source and a license. None is non-commercial or LDC.
-- **Lengths:** the median input is 58 words and the median output 43; the 95th percentiles are 170 and 143.
+- **Lengths:** the median input is 72 words and the median output 57; the 95th percentiles are 511 and 445; the longest input is 1,130.
 
 | Dropped | Rows |
 |---|---|
 | output repeated too often | 1,218 |
-| near-duplicate input | 188 |
+| near-duplicate input | 219 |
 | invented subject line | 49 |
-| changed protected token | 28 |
+| changed protected token | 30 |
+| exact duplicate input | 28 |
 | added legal formality | 19 |
-| exact duplicate input | 10 |
-| invented signature | 8 |
+| invented signature | 10 |
 | implausible length ratio | 8 |
+| answered | 7 |
+| failed the completeness audit | 6 |
 | markdown | 2 |
-| answered | 1 |
 | malformed list: numbering skips | 1 |
 
 ### Hand review of the build
@@ -440,3 +504,67 @@ A rerun keeps written references and adds new transcripts up to `--limit`. `--no
 This is personal data. `build` and `publish` never read `data/real/`; never train on it.
 
 **First export (12 rows).** The 20 transcripts hold 12 distinct texts, 7 of them mic tests. References are filled in by the agent that built this dataset: 11 match the teacher draft, and one keeps a grammar fix the draft made.
+
+## The cleanup model (todo 109)
+
+A small model fine-tuned on `data/build/` to do Clean Up & Format alone. It takes one user message holding only the transcript, with no system message and no instructions, and replies with the edited text or `EMPTY`.
+
+### The prompt contract
+
+- `serving/chat_template.jinja` is the one chat template. Training renders every row with it, and `llama-server --chat-template-file` serves with it, so the two cannot drift. It refuses a system turn.
+- `serving/prompt_golden.json` holds the messages, the rendered prompt and the output budget for a few transcripts. `tests/test_model_prompt.py` and the Rust test `local_cleanup_prompt_matches_the_training_golden_fixture` (whispernow-core) both check against it. Change the fixture, the template, `model/prompt.py` and `build_local_cleanup_prompt` together.
+- Decoding is greedy, with `repeat_penalty` 1.05 over `repeat_last_n` 4096 tokens (the whole prompt and reply, as transformers' `repetition_penalty` works; llama.cpp's default window of 64 keeps fewer protected tokens), and `max_tokens` = max(64, ⌈2.5 × input words⌉). No build row needs more. A reply that hits the limit is treated as a loop: the app keeps the deterministic text. The fixture's `decoding` pins these fields for both sides.
+
+### Setup
+
+- `uv sync --extra train` adds torch (CUDA 13.0 wheels), transformers, TRL, PEFT and accelerate. `uv sync` with one extra removes the others; use `uv sync --all-extras` to keep `audio` too. Every command below runs as `uv run --extra train cleanup …`.
+- Export and serving use llama.cpp release **b11259**, unpacked under `.cache/llama.cpp/` (gitignored):
+  - `src/`: the release source (`https://github.com/ggml-org/llama.cpp/archive/refs/tags/b11259.tar.gz`), for `convert_hf_to_gguf.py` and `gguf-py`;
+  - `cuda/llama-b11259/`: `llama-b11259-bin-ubuntu-cuda-13.4-x64.tar.gz`, which loads the CUDA 13 runtime from `/usr/local/cuda`;
+  - `cpu/llama-b11259/`: `llama-b11259-bin-ubuntu-x64.tar.gz`.
+- Runs land in `runs/<name>/` (gitignored): `config.json`, `train.json` (steps, time, peak GPU memory, loss history), `model/` (the merged bf16 checkpoint), `eval*/` and `gguf/`.
+- Before training, check `nvidia-smi` and `df -h .`. Run under `nice -n 10 ionice -c2 -n7`, and never while Cargo builds (AGENTS.md).
+
+### Commands
+
+| Step | Command | Writes |
+|---|---|---|
+| Train one config | `cleanup train configs/lfm25-350m.toml --name NAME [--set learning_rate=1e-4 --set lora.r=16 …]` | `runs/NAME/` |
+| Train and score every run of a sweep that is not done yet | `cleanup sweep configs/sweep-lfm25-350m.toml [--only NAME]` | `runs/<run>/`, `runs/<run>/eval/val500.*` |
+| A sweep's val scores as a table | `cleanup sweep-table configs/sweep-lfm25-350m.toml` | stdout |
+| Evaluate a checkpoint (HF, batched greedy) | `cleanup eval NAME --split test --judge` | `runs/NAME/eval/test.{outputs,judge}.jsonl`, `test.scores.json` |
+| Evaluate the teacher (`LLM_MODEL` with the app's hosted prompt) | `cleanup eval --teacher --split test --judge` | `runs/teacher/eval/` |
+| Export to GGUF | `cleanup export NAME [--quant Q8_0 Q4_K_M]` | `runs/NAME/gguf/model-{BF16,Q8_0,Q4_K_M}.gguf` |
+| Serve a GGUF with the committed template | `cleanup serve NAME [--quant Q8_0] [--cpu] [--parallel 4] [--port 8080]` | llama-server on `127.0.0.1:8080` |
+| Evaluate what llama-server returns | `cleanup eval NAME --server http://127.0.0.1:8080/v1 --label q4 --split test --judge` | `runs/NAME/eval-q4/` |
+| Latency for a short and a long dictation | `cleanup bench http://127.0.0.1:8080/v1 --save runs/NAME/bench-gpu-q4.json` | the JSON |
+| The teacher's latency on the same two dictations | `cleanup bench --teacher --save runs/teacher/bench.json` | the JSON |
+| Evaluate an epoch checkpoint | `cleanup eval NAME --checkpoint epoch-1 --split val --limit 500` | `runs/NAME/eval-epoch-1/` |
+| Score the split's own references, as a baseline for the judge | `cleanup eval --reference --split val --limit 500 --judge` | `runs/reference/eval/` |
+| Decode with another repeat penalty, or penalty window (server only) | `cleanup eval NAME … --repeat-penalty 1.0` / `--repeat-last-n 64` | `runs/NAME/eval…-rp1/`, `…-last64/` |
+| Score a benchmark (`bench-long` or `bench-noise`, from `data/bench/`) | `cleanup eval NAME --server http://127.0.0.1:8080/v1 --label gpu-q8 --split bench-long --judge` | `runs/NAME/eval-gpu-q8/bench-long.*` |
+| Compare evaluations side by side | `cleanup compare teacher=teacher/eval q4=NAME/eval-q4 [--stem test] [--group test_group --group length …]` | stdout |
+
+`--limit N` scores a fixed random sample (seed 109) of a split; the sweep scores 500 val rows, for the final model and for each `epoch-N` checkpoint that training saves before the last epoch. Evaluation reuses the outputs it already wrote, so adding `--judge` later only runs the judge.
+
+### Configs
+
+`configs/lfm25-350m.toml` holds every setting, and `--set` overrides any of them as TOML (`--set base_model='LiquidAI/LFM2.5-350M-Base'`, `--set method='lora'`). A sweep file names that config and lists runs, each with its overrides. Training is SFT with TRL: a conversational prompt-completion dataset rendered by the committed template, loss on the completion only, length-grouped batches of 16 with 2 accumulation steps, cosine schedule with 3% warmup. A full fine-tune keeps fp32 master weights under bf16 autocast; LoRA (all linear layers) trains on bf16 weights and is merged before saving, so every run exports the same way.
+
+`configs/minicpm5-1b.toml` fits MiniCPM5-1B's full fine-tune in 12 GB of GPU memory: bitsandbytes' 8-bit AdamW (`optim`), frozen bf16 input embeddings (`freeze_embeddings`), Liger's fused cross-entropy (`liger`), and batches of 8 with 4 accumulation steps. Its sweeps are `configs/sweep-minicpm5-1b.toml` and `configs/sweep-minicpm5-1b-stage2.toml`.
+
+### What evaluation reports
+
+`<split>.scores.json` holds each rate overall, for the command categories together, and per category, input style (punctuated or not), source, tag, input length bucket and noise pattern (`pattern:<name>` tags). For the test split, `test_group` separates todo 109's test rows (`configs/test-ids-109.txt`) from rows added since. The judge takes up to 15 rows per request, fewer when long rows would pass 16,000 characters. `cleanup serve` gives each request slot 8,192 tokens of context, enough for a 1,000-word dictation and its 2,500-token reply limit. Every rate is a percentage of the rows it applies to:
+
+- **Mechanical checks** (`model/metrics.py`): chrF and exact match against the reference; layout matches; formatting added where the reference has none, and missed where it has some; bad list markers and markdown; protected tokens (URLs, emails, paths, flags, identifiers, numbers) kept; fillers left beyond the reference's count; passthrough rows kept unchanged; `EMPTY` answered right and given wrongly; loops (a repeated 5-gram, or hitting the output limit); assistant openers; more than 30% of the words deleted.
+- **Judge** (`--judge`, `prompts/judge/eval.md`, `LLM_JUDGE_MODEL`): answered or executed the transcript instead of editing it, dropped a fact, invented one.
+
+The references for teacher-sourced rows are the teacher's own outputs, so the teacher scores high on reference metrics such as chrF by construction. Compare with it on the judge rates and the checks that do not need a reference.
+
+### Using it in the app
+
+1. `cleanup serve full-inst-1e-5-e3`, the chosen model at Q8_0 (on a machine without a GPU, `--cpu --quant Q4_K_M` is faster for long dictations). The app never starts the server or ships the model.
+2. In WhisperNow, choose the provider **Local cleanup model**. It defaults to `http://127.0.0.1:8080/v1` and needs no API key. The model name is required but llama-server ignores it; any name works.
+3. Choose **Clean Up & Format** and turn visual context off. Settings refuse any other prompt, and visual context, with this provider.
+

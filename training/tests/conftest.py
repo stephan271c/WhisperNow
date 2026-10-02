@@ -12,6 +12,9 @@ class FakeLlm:
         self.reply = reply
         self.calls = 0
         self.cache_hits = 0
+        self.attempts = []
+        # (role, reasoning override) per request.
+        self.reasonings = []
         self.settings = LlmSettings(
             backend="openai",
             model="teacher-model",
@@ -23,8 +26,10 @@ class FakeLlm:
             base_url=None,
         )
 
-    async def complete(self, messages, *, role="teacher"):
+    async def complete(self, messages, *, role="teacher", attempt=0, reasoning=None):
         self.calls += 1
+        self.attempts.append(attempt)
+        self.reasonings.append((role, reasoning))
         return self.reply(messages, role)
 
 
