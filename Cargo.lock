@@ -7455,6 +7455,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "whispernow-input-helper"
+version = "0.2.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "whispernow-platform"
 version = "0.2.0"
 dependencies = [

@@ -7,6 +7,7 @@ members = [
     "crates/whispernow-api",
     "apps/ui",
     "apps/desktop",
+    "apps/input-helper",
     "tools/update-signature",
 ]
 
