@@ -3,11 +3,15 @@
 1. The teacher writes the reference, exactly as the app would.
 2. The completeness judge (`prompts/judge/completeness.md`) checks it against its own transcript:
    every fact the speaker kept, the right side of each self-correction, nothing invented.
-3. A code check confirms that every protected token the transcript wrote verbatim (a URL, email,
-   path, identifier or number already in digits) is in the reference.
+3. Code checks run first: every protected token the transcript wrote verbatim (a URL, email, path,
+   identifier or number already in digits) is in the reference, and the reference has no em dash
+   and no correction cue kept from the transcript (todo 112). What code cannot settle, a spelled-out
+   number next to a word or a hedge or reason the reference says less often than the transcript, goes
+   to the judge as the item's FLAGS.
 
-A reference that fails is relabelled once, as a new sample of the same teacher request, and checked
-again; one that fails twice is dropped. The label audit (`audit.py`) uses the same check.
+A reference that fails is relabelled once, as a new sample of the same teacher request (or, with
+`relabel_note`, with the judge's note added), and checked again; one that fails twice is dropped.
+The label audit (`audit.py`) uses the same check.
 """
 
 from __future__ import annotations
@@ -18,17 +22,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..model.metrics import protected_tokens
+from ..model.metrics import EM_DASH, casual_contractions, correction_cues, dropped_kept_words, protected_tokens, spelled_counts
 from .judge import Verdict, judge_batch, size_batches
 from .llm import LlmClient, Role
 from .paths import PROMPTS
+from .schema import EMPTY
 from .teacher import relabel
 
 COMPLETENESS = PROMPTS / "judge" / "completeness.md"
-COMPLETENESS_CRITERIA = ("facts_complete", "corrections_right", "nothing_invented")
-# New generated rows: the completeness criteria, plus the realism and format checks stage 3's judge made.
+FACT_CRITERIA = ("facts_complete", "corrections_right", "nothing_invented")
+COMPLETENESS_CRITERIA = (*FACT_CRITERIA, "clean")
+# New generated rows: the fact criteria, plus the realism and format checks stage 3's judge made.
 COMPOSE = PROMPTS / "judge" / "compose.md"
-COMPOSE_CRITERIA = (*COMPLETENESS_CRITERIA, "input_realistic", "not_answered", "layout_ok", "clean")
+COMPOSE_CRITERIA = (*FACT_CRITERIA, "input_realistic", "not_answered", "layout_ok", "clean")
 # A failure a new reference cannot fix: the row is dropped without a relabel.
 INPUT_CRITERIA = ("input_realistic",)
 # A request holds up to 10 rows, or about 14,000 characters: three 300-word rows with their
@@ -94,6 +100,46 @@ def missing_protected(transcript: str, reference: str) -> list[str]:
     return missing
 
 
+def corrected_later(token: str, transcript: str) -> bool:
+    """Whether a correction cue follows the token's last mention, however far on: a late correction
+    ("... actually, forget the cork, go with bamboo") can take back a value said long before."""
+    transcript = _normalize(transcript)
+    mentions = [m.end() for m in re.finditer(re.escape(token), transcript)]
+    return bool(mentions) and _CORRECTION_CUE.search(transcript, mentions[-1]) is not None
+
+
+# A restart right after a value ("55... 58 degrees", "precinct 30— 31") may replace it.
+_RESTART = re.compile(r"\s*(?:\.{2,}|…|—|--)")
+# A value followed by a spoken number ("27 six", "42 million 300 thousand") may be written as part
+# of a larger one ("$27,600", "42,300,000").
+_SPOKEN_NUMBER = re.compile(
+    r"\s+(?:hundred|thousand|million|billion|trillion|point|oh|one|two|three|four|five|six|seven|eight|nine|"
+    r"ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|"
+    r"fifty|sixty|seventy|eighty|ninety|\d)\b",
+    re.IGNORECASE,
+)
+# ... or preceded by one: "point 1.8" is 0.18, "oh 600" is 0600, "17/2 61" is 17/261.
+_SPOKEN_BEFORE = re.compile(r"(?:\b(?:point|oh)\s*|\d\s+)$", re.IGNORECASE)
+# A value the speaker says they misspoke ("I said $18, it was $28", "I wrote 2.3 ... it's 3.2").
+_MISSPOKE = re.compile(r"\bi (?:said|wrote|put|typed)\s+\$?$", re.IGNORECASE)
+
+
+def why_dropped(token: str, transcript: str) -> str:
+    """Why the reference may rightly lack a protected token, for the judge to settle, or "" when code
+    can fail the reference for it."""
+    if corrected_later(token, transcript):
+        return "which is right only if a later correction took it back"
+    text = _normalize(transcript)
+    spans = [m.span() for m in re.finditer(rf"(?<![\w.]){re.escape(token)}(?![\w])", text)]
+    if any(_RESTART.match(text, end) for _, end in spans):
+        return "which is right only if the speaker restarted and replaced it"
+    if any(_MISSPOKE.search(text[:start]) for start, _ in spans):
+        return "which is right only if the speaker said they misspoke it"
+    if any(_SPOKEN_NUMBER.match(text, end) or _SPOKEN_BEFORE.search(text[:start]) for start, end in spans):
+        return "which is right only if it is written as part of a larger number"
+    return ""
+
+
 @dataclass(frozen=True)
 class Judge:
     """The judge prompt and criteria a gate uses, and the style each row's transcript is in."""
@@ -108,9 +154,64 @@ class Judge:
     # The judge model's reasoning for this judge's checks, and for references the gate has the judge's
     # model write; None keeps `LLM_JUDGE_REASONING`.
     reasoning: str | None = None
+    # Rows whose transcript is longer than this many words get a request each, the rest share requests.
+    solo_over_words: int | None = None
 
 
 COMPLETENESS_JUDGE = Judge()
+
+
+def code_check(transcript: str, reference: str) -> tuple[list[str], str]:
+    """The failed code checks of a reference, and a note naming what failed."""
+    failed, notes = [], []
+    # A value a correction may have taken back, or a larger number may hold, goes to the judge as a
+    # flag (`code_flags`).
+    missing = [token for token in missing_protected(transcript, reference) if not why_dropped(token, transcript)]
+    if missing:
+        failed.append("protected_tokens")
+        notes.append("missing protected tokens: " + ", ".join(repr(token) for token in missing[:5]))
+    if EM_DASH in reference:
+        failed.append("em_dash")
+        notes.append("an em dash, where a comma, period, colon or parentheses belong")
+    cues = correction_cues(reference, transcript)
+    if cues:
+        failed.append("correction_cue")
+        notes.append("kept the correction cue " + ", ".join(repr(cue) for cue in cues[:3]))
+    contractions = casual_contractions(reference)
+    if contractions:
+        failed.append("contraction")
+        notes.append("kept " + ", ".join(repr(word) for word in contractions[:3]) + " instead of writing it out ('want to', 'going to')")
+    return failed, "; ".join(notes)
+
+
+_FILLER_WORD = re.compile(r"um+|uh+m?|erm?|hmm+|mm+|mhm|ah+", re.IGNORECASE)
+
+
+def filler_only(transcript: str) -> bool:
+    """Whether a transcript holds no dictated words, only fillers and punctuation, so its edit is EMPTY."""
+    return all(_FILLER_WORD.fullmatch(word) for word in re.findall(r"[\w']+", transcript))
+
+
+def empty_check(transcript: str, reference: str) -> tuple[list[str], str]:
+    """Code settles EMPTY: it is right exactly when the transcript holds only fillers."""
+    if filler_only(transcript) == (reference.strip() == EMPTY):
+        return [], ""
+    if reference.strip() == EMPTY:
+        return ["empty"], "returned EMPTY for a transcript with dictated words"
+    return ["empty"], f"the transcript holds only fillers, so the edit is exactly {EMPTY}"
+
+
+def code_flags(transcript: str, reference: str) -> str:
+    """What code found and the judge settles: spelled-out numbers next to a word, hedges or reasons
+    the reference says less often than the transcript, and dropped values a correction may have
+    taken back or a larger number may hold."""
+    flags = [f"spelled-out number {phrase!r}" for phrase in spelled_counts(reference)[:5]]
+    flags += [f"the transcript says {word!r} more often than the reference" for word in dropped_kept_words(transcript, reference)]
+    flags += [
+        f"the reference drops {token!r}, {why}"
+        for token in missing_protected(transcript, reference)[:5] if (why := why_dropped(token, transcript))
+    ]
+    return "; ".join(flags)
 
 
 async def check_references(
@@ -120,16 +221,22 @@ async def check_references(
     verdicts: dict[str, Verdict] = {}
     judged = []
     for id_, transcript, reference in rows:
-        missing = missing_protected(transcript, reference)
-        if missing:
-            note = "missing protected tokens: " + ", ".join(repr(token) for token in missing[:5])
-            verdicts[id_] = Verdict(id_, False, ["protected_tokens"], note, "code")
+        if reference.strip() == EMPTY or filler_only(transcript):
+            failed, note = empty_check(transcript, reference)
+            verdicts[id_] = Verdict(id_, not failed, failed, note, "code")
+            continue
+        failed, note = code_check(transcript, reference)
+        if failed:
+            verdicts[id_] = Verdict(id_, False, failed, note, "code")
         else:
             style = {"style": judge.styles[id_]} if judge.styles else {}
-            judged.append((id_, {**style, "transcript": transcript, "reference": reference}))
+            flags = code_flags(transcript, reference)
+            judged.append((id_, {**style, "transcript": transcript, "reference": reference, **({"flags": flags} if flags else {})}))
     instructions = judge.instructions.read_text(encoding="utf-8") + (f"\n{judge.addendum}\n" if judge.addendum else "")
     judged.sort(key=lambda item: len(item[1]["transcript"]))
-    batches = size_batches(judged, judge.max_items, JUDGE_MAX_CHARS)
+    solo = [item for item in judged if judge.solo_over_words is not None and len(item[1]["transcript"].split()) > judge.solo_over_words]
+    shared = [item for item in judged if item not in solo]
+    batches = size_batches(shared, judge.max_items, JUDGE_MAX_CHARS) + [[item] for item in solo]
     for batch_verdicts in await asyncio.gather(
         *(judge_batch(llm, instructions, judge.criteria, batch, judge.reasoning) for batch in batches)
     ):
@@ -160,6 +267,7 @@ async def gate(
     teacher_role: Role = "teacher",
     relabel_role: Role | None = None,
     teacher_reasoning: str | None = None,
+    relabel_note: bool = False,
 ) -> dict[str, Gated]:
     """Labels (id, transcript) rows with the teacher, checks them, and relabels each failure once.
 
@@ -168,6 +276,8 @@ async def gate(
     `teacher_role="judge"` has the judge's model write the references; `relabel_role="judge"` only
     the relabel, so a failure gets its second reference from the stronger model, at `judge.reasoning`.
     `teacher_reasoning` overrides `LLM_REASONING` for the references the teacher role writes.
+    `relabel_note` adds the first check's note to the relabel request, so the second reference fixes
+    what the first got wrong.
     """
     first_reasoning = judge.reasoning if teacher_role == "judge" else teacher_reasoning
     relabel_role = relabel_role or teacher_role
@@ -198,7 +308,10 @@ async def gate(
             retry,
             await asyncio.gather(
                 *(
-                    relabel(llm, transcripts[id_], first_attempt + 1, relabel_role, relabel_reasoning)
+                    relabel(
+                        llm, transcripts[id_], first_attempt + 1, relabel_role, relabel_reasoning,
+                        note=verdicts[id_].note if relabel_note else None,
+                    )
                     for id_ in retry
                 )
             ),

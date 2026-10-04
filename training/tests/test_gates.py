@@ -22,6 +22,39 @@ def test_missing_protected_finds_dropped_tokens_but_not_corrected_ones():
     assert gates.missing_protected("about 20 people", "About 2026 people.") == ["20"]
 
 
+def test_a_value_a_late_correction_may_take_back_goes_to_the_judge_not_the_code_check():
+    padding = " and it looks great in the light" * 6
+    transcript = f"I like the cork at $14 a square foot{padding} actually forget the cork go with bamboo"
+    assert gates.code_check(transcript, "Go with bamboo.") == ([], "")
+    assert "drops '14'" in gates.code_flags(transcript, "Go with bamboo.")
+    # With no correction after it, a dropped value still fails in code.
+    assert gates.code_check(f"go with bamboo{padding} at $14 a square foot", "Go with bamboo.")[0] == ["protected_tokens"]
+
+
+def test_a_restarted_or_merged_value_goes_to_the_judge_not_the_code_check():
+    # Restarted: the speaker replaces "55" and "30" with the value after the pause.
+    transcript = "keep them at 55... 58 degrees in precinct 30— 31"
+    assert gates.code_check(transcript, "Keep them at 58 degrees in precinct 31.") == ([], "")
+    assert "drops '55', which is right only if the speaker restarted" in gates.code_flags(transcript, "Keep them at 58 degrees in precinct 31.")
+    # Merged: "27 six" is written as one number.
+    transcript = "at 27 six per placement, about one sixty six thousand at risk"
+    assert gates.code_check(transcript, "At $27,600 per placement, about $166,000 at risk.") == ([], "")
+    assert "part of a larger number" in gates.code_flags(transcript, "At $27,600 per placement, about $166,000 at risk.")
+    # ... or spoken around it: "point 1.8" is 0.18, "oh 600" is 0600, "17/2 61, 4 08" is 17/261,408.
+    for transcript, reference in [
+        ("an indirect effect of point 1.8", "An indirect effect of 0.18."),
+        ("we leave at oh 600 tomorrow", "We leave at 0600 tomorrow."),
+        ("application 17/2 61, 4 08", "Application 17/261,408."),
+    ]:
+        assert gates.code_check(transcript, reference) == ([], ""), transcript
+    # Misspoke: the speaker says which value was wrong.
+    transcript = "I paid her $18. Oh and the payment, I said $18, it was $28 because of the longer walk"
+    assert gates.code_check(transcript, "I paid her $28 because of the longer walk.") == ([], "")
+    assert "said they misspoke" in gates.code_flags(transcript, "I paid her $28 because of the longer walk.")
+    # A value followed by an ordinary word still fails in code.
+    assert gates.code_check("keep them at 55 degrees", "Keep them cold.")[0] == ["protected_tokens"]
+
+
 def _gate_llm(fake_llm, *, bad_first=(), bad_always=(), unrealistic=()):
     def reply(messages, role):
         if role == "judge":

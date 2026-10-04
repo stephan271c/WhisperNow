@@ -12,6 +12,9 @@ class FakeLlm:
         self.reply = reply
         self.calls = 0
         self.cache_hits = 0
+        self.tokens = 0
+        self.request_seconds = 0.0
+        self.limit_waits = 0
         self.attempts = []
         # (role, reasoning override) per request.
         self.reasonings = []
@@ -37,6 +40,16 @@ def judge_items(messages):
     """The item dicts a judge request carries."""
     lines = messages[-1]["content"].split("\n")[1:]
     return [json.loads(line) for line in lines]
+
+
+@pytest.fixture(autouse=True)
+def _relabel_records(tmp_path, monkeypatch):
+    """No test reads the real relabel records, which a running relabel may leave partial."""
+    from whispernow_training.datagen import relabel
+
+    monkeypatch.setattr(relabel, "DIR", tmp_path / "relabel")
+    monkeypatch.setattr(relabel, "INPUTS", tmp_path / "relabel" / "inputs")
+    monkeypatch.setattr(relabel, "PILOT", tmp_path / "relabel" / "pilot")
 
 
 @pytest.fixture

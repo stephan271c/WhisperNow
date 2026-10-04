@@ -8,7 +8,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from . import aawaaz, build, generate, paths, real, stage1, stage2, teacher
+from . import aawaaz, build, epochs, generate, paths, real, stage1, stage2, teacher
 from .judge import judge_all, pair_item
 from .llm import LlmClient, LlmSettings
 from .schema import read_examples, write_examples
@@ -148,6 +148,40 @@ async def _bench(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=1))
 
 
+async def _relabel(args: argparse.Namespace) -> None:
+    from . import relabel
+
+    if args.step in ("pilot", "review"):
+        if args.step == "pilot":
+            settings = LlmSettings.from_env()
+            relabel.check_settings(settings)
+            async with LlmClient(settings) as llm:
+                report = await relabel.pilot(llm)
+        else:
+            report = relabel.pilot_report()
+        page = relabel.review_page(relabel.review_rows(), report)
+        for scope, info in report["scopes"].items():
+            print(relabel.compare_markdown(info["compare"], f"Pilot, {scope}: {info['passed']}/{info['rows']} passed"))
+        print(json.dumps({"estimate": report["estimate"], "cost": report["cost"]}, indent=1))
+        print(f"wrote {relabel.PILOT / 'report.json'} and the review page {page}")
+        return
+    scopes = relabel.SCOPES if args.step == "all" else (args.step,)
+    if not args.report:
+        settings = LlmSettings.from_env()
+        relabel.check_settings(settings)
+        async with LlmClient(settings) as llm:
+            for scope in scopes:
+                if args.retry:
+                    print(json.dumps(await relabel.retry(llm, scope, relabel.inputs(scope), round_=args.retry), indent=1))
+                else:
+                    print(json.dumps(await relabel.run(llm, scope, relabel.inputs(scope)), indent=1))
+    for scope in scopes:
+        if relabel.active(scope):
+            report = relabel.scope_report(scope)
+            (relabel.DIR / f"{scope}.report.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
+            print(relabel.compare_markdown(report, f"{scope}, old against new"))
+
+
 def cmd_profile(args: argparse.Namespace) -> None:
     from . import inject, profile
     from .schema import read_jsonl
@@ -181,6 +215,12 @@ def cmd_build(args: argparse.Namespace) -> None:
     report = build.build(with_sotto=args.with_sotto)
     print(build.stats_markdown(report))
     print(f"wrote splits and stats to {paths.BUILD}")
+
+
+def cmd_epochs(args: argparse.Namespace) -> None:
+    for path in epochs.materialize(args.epochs):
+        print(path)
+    print((epochs.EPOCHS / "stats.json").read_text(encoding="utf-8"))
 
 
 def cmd_sample(args: argparse.Namespace) -> None:
@@ -296,6 +336,21 @@ def main() -> None:
     rejudge_parser.add_argument("target", choices=["train", "train-strict", "train-codex", "bench-long", "bench-long-strict", "noise", "noise-strict"])
     rejudge_parser.set_defaults(run=lambda args: asyncio.run(_rejudge(args)))
 
+    relabel_parser = commands.add_parser(
+        "relabel",
+        help="todo 112: rewrite every reference with gpt-6.1-sol at high reasoning (every role; the command refuses "
+        "any other setting). pilot: about 200 stratified rows and the review page; review: rewrite the pilot report "
+        "and page; build, bench-long, bench-noise or all: the full run, resumable",
+    )
+    relabel_parser.add_argument("step", choices=["pilot", "review", "build", "bench-long", "bench-noise", "all"])
+    relabel_parser.add_argument("--report", action="store_true", help="only report old against new from the records")
+    relabel_parser.add_argument(
+        "--retry", nargs="?", const=1, type=int, metavar="ROUND",
+        help="retry round ROUND (default 1): check the dropped rows again and give each that still fails one "
+        "more rewrite with the judge's note",
+    )
+    relabel_parser.set_defaults(run=lambda args: asyncio.run(_relabel(args)))
+
     profile_parser = commands.add_parser(
         "profile", help="filler formatting and correction cues of the real dictations, the build and given files"
     )
@@ -306,6 +361,12 @@ def main() -> None:
     build_parser = commands.add_parser("build", help="filter, deduplicate, split by seed group, and report stats")
     build_parser.add_argument("--with-sotto", action="store_true", help="include sotto rows if stage 2 added them")
     build_parser.set_defaults(run=cmd_build)
+
+    epochs_parser = commands.add_parser(
+        "epochs", help="todo 111: one freshly noised variant of the train split per epoch, for noise_per_epoch training"
+    )
+    epochs_parser.add_argument("--epochs", type=int, default=5)
+    epochs_parser.set_defaults(run=cmd_epochs)
 
     sample = commands.add_parser("sample", help="print random built rows of one layout for a hand review")
     sample.add_argument("layout", choices=["plain", "paragraphs", "list", "mixed"])

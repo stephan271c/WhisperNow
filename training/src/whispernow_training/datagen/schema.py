@@ -32,6 +32,8 @@ class Example:
     seed_group: str = ""
     split: Split = ""
     teacher_model: str | None = None
+    # The teacher's reasoning effort for the reference, recorded from the todo 112 relabel on.
+    teacher_reasoning: str | None = None
 
     def __post_init__(self) -> None:
         self.layout = layout_of(self.output)

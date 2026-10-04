@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import aawaaz, audit, compose, generate, inject, paths, restyle, sources, stage1, stage2
+from . import aawaaz, audit, compose, generate, inject, paths, relabel, restyle, sources, stage1, stage2
 from .schema import EMPTY, LIST_ITEM, Example, read_examples, write_examples
 
 SEED = 108
@@ -60,19 +60,40 @@ def _source_rank(example: Example) -> tuple[int, int]:
 
 
 def gather(with_sotto: bool = False) -> list[Example]:
+    return gather_with_drops(with_sotto)[0]
+
+
+def gather_with_drops(with_sotto: bool = False) -> tuple[list[Example], list[tuple[Example, str]]]:
     """Every stage's rows, plus the programmatic rows made here from the cleaned aawaaz rows and the
-    composed rows. The benchmarks in `data/bench/` are never read."""
-    rows = read_examples(stage1.CLEAN)
+    composed rows. The benchmarks in `data/bench/` are never read.
+
+    Once `datagen relabel build` has run, every row but the injected ones takes its reference from
+    the relabel (`relabel.apply`), and rows it dropped or never saw are dropped here; the injected
+    rows are then made from the relabelled parents.
+    """
+    relabelled = relabel.active("build")
+    if relabelled:
+        relabel.require_complete("build")
+    dropped: list[tuple[Example, str]] = []
+
+    def labelled(examples: list[Example]) -> list[Example]:
+        if not relabelled:
+            return examples
+        kept, lost = relabel.apply(examples, "build")
+        dropped.extend(lost)
+        return kept
+
+    clean = labelled(read_examples(stage1.CLEAN))
+    rows = list(clean)
     for source, path in stage2.OUT_FILES.items():
         if path.exists() and (with_sotto or source != sources.SOTTO):
-            rows += read_examples(path)
+            rows += labelled(read_examples(path))
     for category in generate.TARGETS:
         for held_out in (False, True):
             if generate.output_file(category, held_out).exists():
-                rows += read_examples(generate.output_file(category, held_out))
-    composed = compose.load(compose.TRAIN)
+                rows += labelled(read_examples(generate.output_file(category, held_out)))
+    composed = labelled(compose.load(compose.TRAIN))
     rows += composed
-    clean = read_examples(stage1.CLEAN)
     injected = inject.injected_rows(clean, INJECTED, SEED)
     used = {e.output for e in injected}
     long_origins = [
@@ -82,9 +103,9 @@ def gather(with_sotto: bool = False) -> list[Example]:
         long_origins, len(long_origins), LONG_INJECTION_SEED, layouts=("plain", "paragraphs")
     )
     rows += injected + [replace(e, tags=[*e.tags, "long_origin"]) for e in long_injected]
-    rows += inject.empty_rows(EMPTY_ROWS, SEED)
-    rows += [replace(e, split="test") for e in inject.empty_rows(EMPTY_TEST_ROWS, SEED + 1)]
-    return [_empty_sentinel(_bare_fillers(_modal_may(e))) for e in rows]
+    rows += labelled(inject.empty_rows(EMPTY_ROWS, SEED))
+    rows += labelled([replace(e, split="test") for e in inject.empty_rows(EMPTY_TEST_ROWS, SEED + 1)])
+    return [_empty_sentinel(_bare_fillers(_modal_may(e))) for e in rows], dropped
 
 
 def _share(key: str, percent: int) -> bool:
@@ -201,7 +222,8 @@ def bare_filler_share(examples: Iterable[Example]) -> list[Example]:
 
 
 def _modal_may(example: Example) -> Example:
-    if example.source != sources.HANDY:
+    # A relabelled reference is the teacher's own, with no dataset quirk to fix.
+    if example.source != sources.HANDY or example.teacher_reasoning:
         return example
     output = sources.modal_may(example.output)
     if output == example.output:
@@ -575,8 +597,7 @@ def stats_markdown(report: dict) -> str:
 
 
 def build(with_sotto: bool = False, out_dir: Path = paths.BUILD) -> dict:
-    rows = gather(with_sotto)
-    dropped: list[tuple[Example, str]] = []
+    rows, dropped = gather_with_drops(with_sotto)
     kept = []
     for example in rows:
         reason = filter_reason(example)
@@ -584,8 +605,10 @@ def build(with_sotto: bool = False, out_dir: Path = paths.BUILD) -> dict:
             dropped.append((example, reason))
         else:
             kept.append(example)
-    kept, audited = audit.apply(kept)
-    dropped += audited
+    if not relabel.active("build"):
+        # The audit's relabels and test corrections predate the relabel, which replaces them all.
+        kept, audited = audit.apply(kept)
+        dropped += audited
     kept, duplicates = deduplicate(kept)
     dropped += duplicates
     final = spoken_variants(bare_filler_share(assign_splits(restyled(kept))))
@@ -598,7 +621,14 @@ def build(with_sotto: bool = False, out_dir: Path = paths.BUILD) -> dict:
             sink.write(json.dumps({**asdict(example), "dropped": reason}, ensure_ascii=False) + "\n")
     report = stats(final, dropped)
     (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    (out_dir / "stats.md").write_text(stats_markdown(report), encoding="utf-8")
+    markdown = stats_markdown(report)
+    if relabel.active("build"):
+        # Old against new by source; the old injected rows were copied aside with the relabel's inputs.
+        compared = relabel.compare([*relabel.inputs("build"), *relabel.old_injected()], final, relabel.load_records("build"))
+        report["relabel"] = compared
+        (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        markdown += "\n" + relabel.compare_markdown(compared)
+    (out_dir / "stats.md").write_text(markdown, encoding="utf-8")
     return report
 
 

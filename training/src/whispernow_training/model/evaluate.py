@@ -13,8 +13,9 @@ import json
 import random
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..datagen.audit import length_bucket
@@ -25,6 +26,20 @@ from .metrics import RowChecks, check, input_style
 
 JUDGE_CRITERIA = ("not_answered", "facts_kept", "nothing_invented")
 JUDGE_INSTRUCTIONS = PROMPTS / "judge" / "eval.md"
+# The judge lists each fault by kind, and the criterion each kind fails. An unresolved correction
+# (the output still says which value was taken back) loses nothing, so it is only counted.
+FAULT_KINDS: dict[str, str | None] = {
+    "dropped": "facts_kept",
+    "changed": "facts_kept",
+    "wrong_side": "facts_kept",
+    "unresolved": None,
+    "invented": "nothing_invented",
+}
+# The kinds that lose or corrupt a fact the speaker meant, counted together as `facts_lost`.
+LOST_KINDS = ("dropped", "changed", "wrong_side")
+# Judge and score files carry this after the reference tag, so verdicts of the pass/fail judge
+# before fault counts (`<stem>.r112.judge.jsonl`) are never resumed or overwritten.
+JUDGE_VERSION = "faults"
 # Categories the acceptance criteria name for answered transcripts.
 COMMAND_CATEGORIES = ("dictated_command", "command_question_list")
 # The held-out benchmarks of todo 110, scored like a split.
@@ -35,6 +50,19 @@ TEST_IDS_109 = TRAINING_ROOT / "configs" / "test-ids-109.txt"
 # A judge request holds up to 15 rows, or fewer when long rows would pass this many characters.
 JUDGE_BATCH_ROWS = 15
 JUDGE_MAX_CHARS = 16_000
+# Rows longer than this get a judge request each (todo 112).
+JUDGE_SOLO_OVER_WORDS = 300
+# References todo 112 rewrote are judged and scored apart from the old ones, by the model that wrote
+# them: `<stem>.r112.judge.jsonl` and `<stem>.r112.scores.json`.
+R112 = "r112"
+R112_TARGET = ("codex", "gpt-6.1-sol", "high")
+
+
+def reference_tag(rows: Sequence[Example]) -> str:
+    """`R112` when every row's reference is todo 112's, `""` for the references before it."""
+    if rows and all((row.teacher_model, row.teacher_reasoning) == R112_TARGET[1:] for row in rows):
+        return R112
+    return ""
 
 
 def load_rows(split: str, limit: int | None = None, seed: int = 109) -> list[Example]:
@@ -167,16 +195,36 @@ def read_outputs(path: Path) -> dict[str, dict]:
 # --- judging ------------------------------------------------------------------------------
 
 
-async def judge(rows: Sequence[Example], outputs: dict[str, dict], out: Path) -> dict[str, list[str]]:
-    """Judges every row not yet in `out`; returns the failed criteria per row id."""
+@dataclass(frozen=True)
+class Judged:
+    """One row's verdict: the failed criteria and the faults behind them."""
+
+    failed: list[str]
+    faults: list[dict]
+
+
+async def judge(
+    rows: Sequence[Example], outputs: dict[str, dict], out: Path, require: tuple[str, str, str] | None = None
+) -> dict[str, Judged]:
+    """Judges every row not yet in `out`; returns each row's verdict by id.
+
+    `require` is the judge's (backend, model, reasoning), checked before any request.
+    """
     from ..datagen.judge import judge_all
     from ..datagen.llm import LlmClient, LlmSettings
+
+    settings = LlmSettings.from_env()
+    if require and settings.target("judge") != require:
+        raise SystemExit(
+            f"these references are judged by {'/'.join(require)}; set LLM_JUDGE_BACKEND, LLM_JUDGE_MODEL and "
+            f"LLM_JUDGE_REASONING to it (now {'/'.join(settings.target('judge'))})"
+        )
 
     items = [
         (row.id, {"transcript": row.input, "reference": row.output, "output": outputs[row.id]["output"]})
         for row in rows
     ]
-    async with LlmClient(LlmSettings.from_env()) as llm:
+    async with LlmClient(settings) as llm:
         verdicts = await judge_all(
             llm,
             items,
@@ -185,8 +233,10 @@ async def judge(rows: Sequence[Example], outputs: dict[str, dict], out: Path) ->
             criteria=JUDGE_CRITERIA,
             batch_size=JUDGE_BATCH_ROWS,
             max_chars=JUDGE_MAX_CHARS,
+            solo_over_words=JUDGE_SOLO_OVER_WORDS,
+            fault_kinds=FAULT_KINDS,
         )
-    return {id_: verdict.failed for id_, verdict in verdicts.items()}
+    return {id_: Judged(verdict.failed, verdict.faults) for id_, verdict in verdicts.items()}
 
 
 # --- scoring ------------------------------------------------------------------------------
@@ -211,33 +261,72 @@ RATES: dict[str, tuple[str, bool]] = {
     "deleted_over_30pct": ("deleted_over_30pct", True),
     "loop": ("loop", True),
     "exact": ("exact", False),
+    "em_dash": ("em_dash", True),
+    "spelled_count": ("spelled_count", True),
+    "correction_cue": ("correction_cue", True),
 }
 
 
-def _value(name: str, checks: RowChecks, failed: list[str] | None) -> bool | None:
+def _value(name: str, checks: RowChecks, judged: Judged | None) -> bool | None:
     field, _ = RATES[name]
     if field.startswith("judge:"):
-        if failed is None:
+        if judged is None:
             return None
+        failed = judged.failed
         criterion = field.removeprefix("judge:")
         return criterion in failed if criterion == "judge_error" else (criterion in failed or "judge_error" in failed)
     return getattr(checks, field)
 
 
-def _summarize(entries: Sequence[tuple[RowChecks, list[str] | None]]) -> dict:
+def _fault_counts(entries: Sequence[tuple[RowChecks, Judged | None]]) -> dict | None:
+    """Faults per judged row and per 1,000 reference words by kind, and the share of rows with one.
+    A row the judge could not read counts in none."""
+    judged = [(checks, verdict) for checks, verdict in entries if verdict is not None and "judge_error" not in verdict.failed]
+    if not judged:
+        return None
+    words = sum(checks.reference_words for checks, _ in judged)
+    kinds = {kind: (kind,) for kind in FAULT_KINDS} | {"facts_lost": LOST_KINDS}
+    counts = {}
+    for name, members in kinds.items():
+        per_row = [sum(fault["kind"] in members for fault in verdict.faults) for _, verdict in judged]
+        counts[name] = {
+            "per_row": round(sum(per_row) / len(per_row), 3),
+            "per_1000_words": round(1000 * sum(per_row) / words, 2) if words else None,
+            "rows": round(100 * sum(count > 0 for count in per_row) / len(per_row), 2),
+            "n": len(per_row),
+        }
+    return counts
+
+
+def _summarize(entries: Sequence[tuple[RowChecks, Judged | None]]) -> dict:
     summary: dict = {"rows": len(entries)}
     if not entries:
         return summary
     for name in RATES:
-        values = [value for checks, failed in entries if (value := _value(name, checks, failed)) is not None]
+        values = [value for checks, judged in entries if (value := _value(name, checks, judged)) is not None]
         if values:
             summary[name] = {"rate": round(100 * sum(values) / len(values), 2), "n": len(values)}
     summary["chrf"] = round(sum(checks.chrf for checks, _ in entries) / len(entries), 2)
+    # Output words over reference words, summed: the length drift a preference stage can bring.
+    reference_words = sum(checks.reference_words for checks, _ in entries)
+    if reference_words:
+        summary["length_ratio"] = round(sum(checks.output_words for checks, _ in entries) / reference_words, 3)
+    # Hedges and reasons the transcript said that the output kept; a drop can be the abandoned side
+    # of a correction, so the rate is read beside the reference's own.
+    said, kept = Counter(), Counter()
+    for checks, _ in entries:
+        for word, (times, kept_times) in checks.kept_words.items():
+            said[word] += times
+            kept[word] += kept_times
+    if said:
+        summary["kept_words"] = {word: {"rate": round(100 * kept[word] / said[word], 2), "n": said[word]} for word in sorted(said)}
     total = sum(checks.protected_tokens_total for checks, _ in entries)
     if total:
         summary["protected_token_recall"] = round(
             100 * sum(checks.protected_tokens_kept for checks, _ in entries) / total, 2
         )
+    if (faults := _fault_counts(entries)) is not None:
+        summary["faults"] = faults
     return summary
 
 
@@ -245,14 +334,12 @@ def _test_ids_109() -> set[str]:
     return set(TEST_IDS_109.read_text(encoding="utf-8").split()) if TEST_IDS_109.exists() else set()
 
 
-def score(
-    rows: Sequence[Example], outputs: dict[str, dict], failed: dict[str, list[str]] | None = None
-) -> dict:
+def score(rows: Sequence[Example], outputs: dict[str, dict], judged: dict[str, Judged] | None = None) -> dict:
     """Overall rates, and the same rates per category, tag, input style, source, length bucket and
     noise pattern, and for test rows, todo 109's rows apart from rows added since."""
     old_test = _test_ids_109()
     entries = {
-        row.id: (check(row, outputs[row.id]["output"], hit_limit=outputs[row.id]["hit_limit"]), (failed or {}).get(row.id))
+        row.id: (check(row, outputs[row.id]["output"], hit_limit=outputs[row.id]["hit_limit"]), (judged or {}).get(row.id))
         for row in rows
     }
     groups: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
@@ -309,8 +396,18 @@ def evaluate(
         outputs |= {row["id"]: row for row in generated}
         write_outputs(outputs_file, list(outputs.values()))
     outputs = {row.id: outputs[row.id] for row in rows}
-    failed = asyncio.run(judge(rows, outputs, out_dir / f"{stem}.judge.jsonl")) if with_judge else None
-    scores = score(rows, outputs, failed)
+    tag = reference_tag(rows)
+    scored = f"{stem}.{tag}" if tag else stem
+    if with_judge:
+        scored = f"{scored}.{JUDGE_VERSION}"
+    judged = (
+        asyncio.run(judge(rows, outputs, out_dir / f"{scored}.judge.jsonl", R112_TARGET if tag else None))
+        if with_judge else None
+    )
+    scores = score(rows, outputs, judged)
     scores["judged"] = with_judge
-    (out_dir / f"{stem}.scores.json").write_text(json.dumps(scores, indent=2) + "\n", encoding="utf-8")
+    if with_judge:
+        scores["judge"] = JUDGE_VERSION
+    scores["references"] = tag or "before todo 112"
+    (out_dir / f"{scored}.scores.json").write_text(json.dumps(scores, indent=2) + "\n", encoding="utf-8")
     return scores

@@ -29,7 +29,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, replace
 
-from . import gates, generate, paths, rejudge
+from . import gates, generate, paths, rejudge, relabel
 from .compose import _BENCH_NAMES, _BENCH_SETTINGS
 from .llm import LlmClient, LlmError, parse_json_reply
 from .schema import EMPTY, Example, example_id, read_examples, read_jsonl, write_examples
@@ -433,6 +433,7 @@ def assemble() -> dict:
             )
         rows.append(replace(example, seed_group=f"noise-bench:{example.id}"))
     rows = rejudge.apply(rows, OUT_DIR, passes=("strict",))
+    rows = relabel.apply_bench(rows, "bench-noise")
     write_examples(BENCH_FILE, rows)
     return summary(rows)
 

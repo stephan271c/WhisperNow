@@ -18,6 +18,11 @@ SWEEP_VAL_ROWS = 500
 
 
 def cmd_train(args: argparse.Namespace) -> None:
+    import os
+
+    # Batches vary from a few tokens to 2,800 per row; expandable segments keep the long ones from
+    # failing on fragmented memory. Set before torch first touches the GPU.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     from . import config, train
 
     settings = config.load(args.config, args.set or [])
@@ -56,12 +61,15 @@ def cmd_eval(args: argparse.Namespace) -> None:
     if not overridden:
         args.repeat_penalty = prompt.REPEAT_PENALTY
     if args.reference:
-        out_dir = RUNS / "reference" / "eval"
+        # Its outputs are the references, so new references get a directory of their own.
+        tag = evaluate.reference_tag(evaluate.load_rows(args.split, args.limit))
+        out_dir = RUNS / "reference" / (f"eval-{tag}" if tag else "eval")
 
         def produce(rows):
             return [{"id": row.id, "output": row.output, "hit_limit": False, "tokens": None} for row in rows]
     elif args.teacher:
-        out_dir = RUNS / "teacher" / "eval"
+        # `--label` keeps a new teacher prompt's outputs apart, as todo 112's `eval-112`.
+        out_dir = RUNS / "teacher" / ("eval" if args.label == "server" else f"eval-{args.label}")
 
         def produce(rows):
             return asyncio.run(evaluate.generate_teacher(rows))
@@ -89,7 +97,15 @@ def cmd_eval(args: argparse.Namespace) -> None:
         args.repeat_last_n = prompt.REPEAT_LAST_N
     scores = evaluate.evaluate(produce, out_dir, args.split, args.limit, with_judge=args.judge)
     overall = scores["overall"]
-    print(json.dumps({key: value["rate"] if isinstance(value, dict) else value for key, value in overall.items()}))
+    def rate(value):
+        if not isinstance(value, dict):
+            return value
+        if "rate" in value or "per_row" in value:
+            # A rate, or a fault kind's count per judged row.
+            return value.get("rate", value.get("per_row"))
+        return {key: rate(inner) for key, inner in value.items()}
+
+    print(json.dumps({key: rate(value) for key, value in overall.items()}))
 
 
 def cmd_export(args: argparse.Namespace) -> None:
@@ -121,11 +137,47 @@ def cmd_bench(args: argparse.Namespace) -> None:
         args.save.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
 
 
+def cmd_handcheck(args: argparse.Namespace) -> None:
+    """Prints a server's (or the teacher's) cleanup of each dictation in `data/real/`, beside its draft
+    and reference, for reading by hand. These are personal: nothing is written, judged or scored."""
+    from ..datagen.paths import DATA
+    from ..datagen.schema import Example, read_jsonl
+    from . import evaluate
+
+    rows = [
+        Example(id=row["id"], input=row["input"], output=row["reference"], source="real", category="real", license=row["license"])
+        for row in read_jsonl(DATA / "real" / "real.jsonl")
+    ]
+    if args.teacher:
+        outputs = asyncio.run(evaluate.generate_teacher(rows))
+    elif args.server:
+        outputs = asyncio.run(evaluate.generate_server(args.server, rows))
+    else:
+        raise SystemExit("handcheck needs a server URL or --teacher")
+    for row, output in zip(rows, outputs, strict=True):
+        flags = " [hit the reply limit]" if output["hit_limit"] else ""
+        print(f"## {row.id} ({len(row.input.split())} words){flags}\n\nINPUT\n{row.input}\n\nREFERENCE\n{row.output}\n\nOUTPUT\n{output['output']}\n")
+
+
+def cmd_prefer(args: argparse.Namespace) -> None:
+    from . import prefer
+
+    print(json.dumps(prefer.run(RUNS / args.run / "prefer", args.server, args.concurrency), indent=2))
+
+
 def cmd_sweep_table(args: argparse.Namespace) -> None:
     from . import report
 
     _, runs = _sweep_runs(args.sweep)
     print(report.sweep_table([run["name"] for run in runs], f"val{SWEEP_VAL_ROWS}"))
+
+
+def cmd_judge_check(args: argparse.Namespace) -> None:
+    from . import judge_check
+
+    result = judge_check.report() if args.step == "report" else judge_check.run(args.step)
+    print(json.dumps(result, indent=1))
+    print(f"read every disagreement in {judge_check.OUT / 'disagreements.md'}")
 
 
 def cmd_compare(args: argparse.Namespace) -> None:
@@ -170,7 +222,7 @@ def main() -> None:
     eval_parser.add_argument("--limit", type=int, help="score a fixed random sample of this many rows")
     eval_parser.add_argument("--judge", action="store_true", help="also judge with LLM_JUDGE_MODEL")
     eval_parser.add_argument("--server", help="OpenAI-compatible base URL of llama-server, e.g. http://127.0.0.1:8080/v1")
-    eval_parser.add_argument("--label", default="server", help="names the eval-<label> directory for --server")
+    eval_parser.add_argument("--label", default="server", help="names the eval-<label> directory for --server, or for --teacher")
     eval_parser.add_argument("--concurrency", type=int, default=4)
     eval_parser.add_argument("--checkpoint", help="an epoch checkpoint of the run, e.g. epoch-1; scores go to eval-<checkpoint>")
     eval_parser.add_argument(
@@ -202,6 +254,27 @@ def main() -> None:
     bench_parser.add_argument("--repeats", type=int, default=5)
     bench_parser.add_argument("--save", type=Path, help="also write the result as JSON")
     bench_parser.set_defaults(handler=cmd_bench)
+
+    handcheck = commands.add_parser("handcheck", help="print outputs for the dictations in data/real/, to read by hand")
+    handcheck.add_argument("server", nargs="?", help="OpenAI-compatible base URL")
+    handcheck.add_argument("--teacher", action="store_true", help="LLM_MODEL with the app's hosted prompt instead")
+    handcheck.set_defaults(handler=cmd_handcheck)
+
+    prefer_parser = commands.add_parser(
+        "prefer", help="sample, judge and pair an SFT model's outputs for the preference stage; writes runs/<run>/prefer/"
+    )
+    prefer_parser.add_argument("run", help="the SFT run")
+    prefer_parser.add_argument("--server", help="llama-server serving the run's Q8_0, for the sampling step")
+    prefer_parser.add_argument("--concurrency", type=int, default=4)
+    prefer_parser.set_defaults(handler=cmd_prefer)
+
+    check = commands.add_parser(
+        "judge-check",
+        help="todo 112: the new eval judge on the 33 hand-reviewed rows (reviewed) and on stratified rows the old "
+        "judge scored (sample), against the old references; needs LLM_JUDGE_* on codex/gpt-6.1-sol/high",
+    )
+    check.add_argument("step", choices=["reviewed", "sample", "all", "report"])
+    check.set_defaults(handler=cmd_judge_check)
 
     compare = commands.add_parser("compare", help="print scores of several evaluations side by side")
     compare.add_argument("candidates", nargs="+", metavar="LABEL=RUN/EVAL_DIR")

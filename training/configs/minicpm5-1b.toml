@@ -3,18 +3,19 @@
 # master weights under bf16 autocast (as for LFM2.5) but uses bitsandbytes' paged 8-bit AdamW,
 # freezes the 200M-parameter input embeddings in bf16, recomputes activations, and uses Liger's
 # fused cross-entropy so the 130k-vocabulary logits are never materialized. Each optimizer step
-# still sees 32 examples (8 × 4), as LFM2.5's did (16 × 2).
+# still sees 32 examples: 2 × 16 at todo 111's max_length of 2,816, where 4 × 8 runs out of memory
+# on the longest batches and 2 × 16 peaks at 10.9 GB (todo 109 ran 8 × 4 at 1,280).
 # The sweep (`configs/sweep-minicpm5-1b.toml`) varies these with `--set key=value`.
 base_model = "openbmb/MiniCPM5-1B"
 method = "full"
 learning_rate = 1e-5
 epochs = 1
-batch_size = 8
-grad_accum = 4
+batch_size = 2
+grad_accum = 16
 warmup = 0.03
 weight_decay = 0.0
 lr_scheduler = "cosine"
-max_length = 1280
+max_length = 2816
 seed = 109
 optim = "paged_adamw_8bit"
 gradient_checkpointing = true

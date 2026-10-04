@@ -1,8 +1,9 @@
-"""Supervised fine-tuning with TRL: full fine-tune or LoRA, loss on the reply only."""
+"""Fine-tuning with TRL: SFT (full fine-tune or LoRA, loss on the reply only), or DPO on preference pairs."""
 
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 
@@ -11,25 +12,58 @@ from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
-from trl import SFTConfig, SFTTrainer
+from trl import DPOConfig, DPOTrainer, SFTConfig, SFTTrainer
 
-from ..datagen.paths import BUILD
+from ..datagen import epochs
+from ..datagen.paths import BUILD, TRAINING_ROOT
 from . import prompt
 from .config import TrainConfig
 
-# Validation loss is measured on a fixed slice of the val split to keep evaluation cheap.
+# Validation loss is measured on a fixed slice of the val split to keep evaluation cheap,
+# twice per epoch, so every epoch boundary has its own value.
 VAL_ROWS = 600
-EVALS_PER_RUN = 8
+EVALS_PER_EPOCH = 2
 
 
-def load_split(split: str, limit: int | None = None) -> Dataset:
-    rows = load_dataset("json", data_files=str(BUILD / f"{split}.jsonl"), split="train")
+def load_rows(files: list[Path], limit: int | None = None) -> Dataset:
+    rows = load_dataset("json", data_files=[str(path) for path in files], split="train")
     if limit is not None:
         rows = rows.shuffle(seed=109).select(range(min(limit, len(rows))))
     return rows.map(
         lambda row: prompt.prompt_completion(row["input"], row["output"]),
         remove_columns=rows.column_names,
     )
+
+
+def load_split(split: str, limit: int | None = None) -> Dataset:
+    return load_rows([BUILD / f"{split}.jsonl"], limit)
+
+
+def load_pairs(path: Path, split: str) -> Dataset:
+    """Preference pairs (`input`, `chosen`, `rejected`, `split`) in TRL's conversational shape."""
+    rows = load_dataset("json", data_files=str(path), split="train").filter(lambda row: row["split"] == split)
+    return rows.map(
+        lambda row: {
+            "prompt": prompt.messages(row["input"]),
+            "chosen": [{"role": "assistant", "content": row["chosen"]}],
+            "rejected": [{"role": "assistant", "content": row["rejected"]}],
+        },
+        remove_columns=rows.column_names,
+    )
+
+
+def resolve(path_or_id: str) -> str:
+    """A path under `training/` (a run's `model/`, a train file), else a Hub id as given."""
+    local = TRAINING_ROOT / path_or_id
+    return str(local) if local.exists() else path_or_id
+
+
+def train_files(config: TrainConfig) -> list[Path]:
+    if config.train_file:
+        return [Path(resolve(config.train_file))]
+    if config.noise_per_epoch:
+        return epochs.materialize(int(config.epochs))
+    return [BUILD / "train.jsonl"]
 
 
 def load_tokenizer(base_model: str):
@@ -64,16 +98,23 @@ def _bf16_state_dict(model) -> dict[str, torch.Tensor]:
 class EpochCheckpoints(TrainerCallback):
     """Saves a loadable bf16 model after every epoch but the last, whose model is `model/`.
 
+    Epochs are counted in steps, so a run over per-epoch noise variants (one pass over all of them)
+    saves at the same points as a run over the same rows for that many epochs.
+
     A checkpoint mid-schedule was taken before the learning rate decayed, so it scores somewhat
     below a run that ends at that epoch; it shows the trend, not the best a shorter run can do.
     """
 
     def __init__(self, out: Path, epochs: float, tokenizer) -> None:
         self.out, self.epochs, self.tokenizer = out, epochs, tokenizer
+        self.at: dict[int, int] = {}
 
-    def on_epoch_end(self, args, state, control, model=None, **kwargs):
-        epoch = round(state.epoch)
-        if epoch >= self.epochs or model is None:
+    def on_train_begin(self, args, state, control, **kwargs):
+        self.at = {round(state.max_steps * epoch / self.epochs): epoch for epoch in range(1, math.ceil(self.epochs))}
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        epoch = self.at.get(state.global_step)
+        if epoch is None or model is None:
             return
         target = checkpoint_dir(self.out, epoch)
         base = model.get_base_model() if hasattr(model, "get_base_model") else model
@@ -86,10 +127,11 @@ class EpochCheckpoints(TrainerCallback):
 def train(config: TrainConfig, out: Path) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
-    tokenizer = load_tokenizer(config.base_model)
+    base_model = resolve(config.base_model)
+    tokenizer = load_tokenizer(base_model)
     # Full fine-tunes keep fp32 master weights under bf16 autocast; LoRA trains fp32 adapters on bf16 weights.
     model = AutoModelForCausalLM.from_pretrained(
-        config.base_model,
+        base_model,
         dtype=torch.float32 if config.method == "full" else torch.bfloat16,
         attn_implementation="sdpa",
     )
@@ -108,13 +150,17 @@ def train(config: TrainConfig, out: Path) -> dict:
             task_type="CAUSAL_LM",
         )
 
-    train_rows = load_split("train")
-    steps_per_epoch = len(train_rows) // (config.batch_size * config.grad_accum)
-    total_steps = config.max_steps or int(steps_per_epoch * config.epochs)
-    args = SFTConfig(
+    files = train_files(config)
+    if config.objective == "dpo":
+        train_rows, eval_rows = load_pairs(files[0], "train"), load_pairs(files[0], "val")
+    else:
+        train_rows, eval_rows = load_rows(files), load_split("val", VAL_ROWS)
+    # Noise variants are one pass over every epoch's rows; otherwise the trainer counts epochs.
+    passes = 1 if config.noise_per_epoch else config.epochs
+    common = dict(
         output_dir=str(out / "checkpoints"),
         learning_rate=config.learning_rate,
-        num_train_epochs=config.epochs,
+        num_train_epochs=passes,
         max_steps=config.max_steps or -1,
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=config.batch_size * 2,
@@ -123,29 +169,51 @@ def train(config: TrainConfig, out: Path) -> dict:
         weight_decay=config.weight_decay,
         lr_scheduler_type=config.lr_scheduler,
         max_length=config.max_length,
-        completion_only_loss=True,
-        train_sampling_strategy="group_by_length",
         bf16=True,
         optim=config.optim,
         gradient_checkpointing=config.gradient_checkpointing,
         use_liger_kernel=config.liger,
-        logging_steps=25,
+        logging_steps=25 if config.objective == "sft" else 5,
         eval_strategy="steps",
-        eval_steps=max(1, total_steps // EVALS_PER_RUN),
+        # A short probe evaluates once, at its end; a ratio below 1 is a share of the total steps.
+        eval_steps=config.max_steps or 1 / (EVALS_PER_EPOCH * math.ceil(config.epochs)),
         save_strategy="no",
         report_to="none",
         seed=config.seed,
         dataloader_num_workers=2,
     )
-    trainer = SFTTrainer(
-        model=model,
-        args=args,
-        train_dataset=train_rows,
-        eval_dataset=load_split("val", VAL_ROWS),
-        processing_class=tokenizer,
-        peft_config=peft_config,
-        callbacks=[EpochCheckpoints(out, config.epochs, tokenizer)],
-    )
+    callbacks = [] if config.max_steps else [EpochCheckpoints(out, config.epochs, tokenizer)]
+    if config.objective == "dpo":
+        args = DPOConfig(
+            # The chunked log-prob path never holds a whole batch's logits, which the reference pass over
+            # 2,800-token pairs would otherwise need (over 10 GB at LFM2.5's 65k vocabulary).
+            **{**common, "use_liger_kernel": True},
+            precompute_ref_batch_size=config.batch_size,
+            beta=config.beta,
+            loss_type=["sigmoid", "sft"],
+            loss_weights=[1.0, config.sft_weight],
+            precompute_ref_log_probs=True,
+        )
+        trainer = DPOTrainer(
+            model=model,
+            args=args,
+            train_dataset=train_rows,
+            eval_dataset=eval_rows,
+            processing_class=tokenizer,
+            peft_config=peft_config,
+            callbacks=callbacks,
+        )
+    else:
+        args = SFTConfig(**common, completion_only_loss=True, train_sampling_strategy="group_by_length")
+        trainer = SFTTrainer(
+            model=model,
+            args=args,
+            train_dataset=train_rows,
+            eval_dataset=eval_rows,
+            processing_class=tokenizer,
+            peft_config=peft_config,
+            callbacks=callbacks,
+        )
     torch.cuda.reset_peak_memory_stats()
     started = time.monotonic()
     trainer.train()
@@ -161,6 +229,7 @@ def train(config: TrainConfig, out: Path) -> dict:
     tokenizer.save_pretrained(out / "model")
     summary = {
         "config": config.to_dict(),
+        "train_files": [str(path) for path in files],
         "train_rows": len(train_rows),
         "steps": trainer.state.global_step,
         "seconds": round(seconds),

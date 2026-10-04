@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from ..datagen.paths import TRAINING_ROOT
@@ -23,14 +24,38 @@ QUALITY_COLUMNS = {
     "answered %": "answered",
     "dropped %": "facts_dropped",
     "invented %": "facts_invented",
+    "out/ref words": "length_ratio",
 }
+
+
+# Column → (fault kind, measure) in scores.json's `faults`, shown when the judge counted faults.
+FAULT_COLUMNS = {
+    "lost /row": ("facts_lost", "per_row"),
+    "lost /1k words": ("facts_lost", "per_1000_words"),
+    "dropped /row": ("dropped", "per_row"),
+    "changed /row": ("changed", "per_row"),
+    "wrong side /row": ("wrong_side", "per_row"),
+    "unresolved %": ("unresolved", "rows"),
+    "invented /row": ("invented", "per_row"),
+}
+
+
+def fault_cells(summary: dict) -> list[str]:
+    faults = summary.get("faults", {})
+    cells = []
+    for kind, measure in FAULT_COLUMNS.values():
+        value = faults.get(kind, {}).get(measure)
+        cells.append("" if value is None else f"{value:.1f}" if measure == "rows" else f"{value:.2f}")
+    return cells
 
 
 def _rate(summary: dict, name: str) -> str:
     value = summary.get(name)
     if value is None:
         return ""
-    return f"{value['rate']:.1f}" if isinstance(value, dict) else f"{value:.1f}"
+    if isinstance(value, dict):
+        return f"{value['rate']:.1f}"
+    return f"{value:.2f}" if name == "length_ratio" else f"{value:.1f}"
 
 
 def _row(cells: list[str]) -> str:
@@ -39,6 +64,23 @@ def _row(cells: list[str]) -> str:
 
 def quality_cells(summary: dict) -> list[str]:
     return [_rate(summary, name) for name in QUALITY_COLUMNS.values()]
+
+
+def eval_loss_at(train: dict, epoch: float) -> float | None:
+    """Val loss nearest the end of `epoch`, counted in steps: a run over per-epoch noise variants is
+    one pass, so its trainer's own epoch count ends at 1."""
+    epochs = train["config"]["epochs"]
+    losses = [entry for entry in train["log_history"] if "eval_loss" in entry]
+    if not losses:
+        return None
+    nearest = min(losses, key=lambda entry: abs(epochs * entry["step"] / train["steps"] - epoch))
+    return nearest["eval_loss"]
+
+
+def val_loss_by_epoch(train: dict) -> list[float | None]:
+    """Val loss at the end of each epoch; the last is the final evaluation."""
+    epochs = math.ceil(train["config"]["epochs"])
+    return [eval_loss_at(train, epoch) for epoch in range(1, epochs)] + [train["final_eval_loss"]]
 
 
 def sweep_table(names: list[str], stem: str) -> str:
@@ -73,8 +115,7 @@ def sweep_table(names: list[str], stem: str) -> str:
             epoch = int(checkpoint.name.removeprefix("epoch-"))
             scores_file = RUNS / name / f"eval-{checkpoint.name}" / f"{stem}.scores.json"
             overall = json.loads(scores_file.read_text(encoding="utf-8"))["overall"] if scores_file.exists() else {}
-            losses = [entry for entry in train["log_history"] if "eval_loss" in entry]
-            nearest = min(losses, key=lambda entry: abs(entry["epoch"] - epoch)) if losses else None
+            nearest = eval_loss_at(train, epoch)
             lines.append(
                 _row(
                     [
@@ -85,7 +126,7 @@ def sweep_table(names: list[str], stem: str) -> str:
                         f"{epoch} of {config['epochs']:g}",
                         "",
                         "",
-                        f"{nearest['eval_loss']:.4f}" if nearest else "",
+                        f"{nearest:.4f}" if nearest is not None else "",
                         *quality_cells(overall),
                     ]
                 )
@@ -96,12 +137,14 @@ def sweep_table(names: list[str], stem: str) -> str:
 def comparison_table(candidates: dict[str, Path], group: str | None = None) -> str:
     """Candidates (label → scores.json) side by side, overall or per member of one group."""
     loaded = {label: json.loads(path.read_text(encoding="utf-8")) for label, path in candidates.items()}
-    header = ["model", *([group] if group else []), "rows", *QUALITY_COLUMNS]
+    with_faults = any("faults" in scores["overall"] for scores in loaded.values())
+    header = ["model", *([group] if group else []), "rows", *QUALITY_COLUMNS, *(FAULT_COLUMNS if with_faults else [])]
     lines = [_row(header), _row(["---"] * len(header))]
     for label, scores in loaded.items():
         section = scores["overall" if group is None else group]
         # `overall` and `commands` are one summary; the other groups map members to summaries.
         sections = {group or "": section} if "rows" in section else section
         for member, summary in sections.items():
-            lines.append(_row([label, *([member] if group else []), str(summary["rows"]), *quality_cells(summary)]))
+            faults = fault_cells(summary) if with_faults else []
+            lines.append(_row([label, *([member] if group else []), str(summary["rows"]), *quality_cells(summary), *faults]))
     return "\n".join(lines)

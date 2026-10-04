@@ -1,0 +1,20 @@
+# Todo 111: todo 109's chosen LFM2.5-350M recipe (full fine-tune, instruct, lr 1e-5) retrained on
+# todo 110's build, for 3 and 5 epochs, each with and without fresh noise per epoch
+# (`noise_per_epoch`: one pass over five, or three, freshly noised variants of the train split).
+config = "lfm25-350m.toml"
+
+[[run]]
+name = "long-full-inst-1e-5-e3"
+set = ["learning_rate=1e-5", "epochs=3"]
+
+[[run]]
+name = "long-full-inst-1e-5-e3-noise"
+set = ["learning_rate=1e-5", "epochs=3", "noise_per_epoch=true"]
+
+[[run]]
+name = "long-full-inst-1e-5-e5"
+set = ["learning_rate=1e-5", "epochs=5"]
+
+[[run]]
+name = "long-full-inst-1e-5-e5-noise"
+set = ["learning_rate=1e-5", "epochs=5", "noise_per_epoch=true"]

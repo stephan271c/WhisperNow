@@ -21,7 +21,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import asdict, replace
 
-from . import ami, compose, gates, noise, paths, rejudge
+from . import ami, compose, gates, noise, paths, rejudge, relabel
 from .audit import length_bucket, words
 from .llm import LlmClient
 from .schema import EMPTY, Example, read_examples, read_jsonl, write_examples
@@ -81,6 +81,7 @@ def assemble_long() -> dict:
     real = rejudge.apply(read_examples(AMI_FILE), AMI_FILE.parent) if AMI_FILE.exists() else []
     rows = [*compose.load(compose.BENCH), *real]
     rows = [replace(e, seed_group=f"long-bench:{e.id}") for e in sorted(rows, key=lambda e: e.id)]
+    rows = relabel.apply_bench(rows, "bench-long")
     write_examples(LONG_FILE, rows)
     return long_summary(rows)
 

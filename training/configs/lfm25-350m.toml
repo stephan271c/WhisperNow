@@ -4,13 +4,16 @@ base_model = "LiquidAI/LFM2.5-350M"
 method = "full"
 learning_rate = 3e-5
 epochs = 2
-batch_size = 16
-grad_accum = 2
+# 32 rows per optimizer step. Todo 109 ran 16 × 2 at max_length 1,280; todo 111's rows are up to
+# twice as long, so the micro-batch halves to keep the longest batch's memory.
+batch_size = 8
+grad_accum = 4
 warmup = 0.03
 weight_decay = 0.0
 lr_scheduler = "cosine"
-# The longest rendered training row is 1,231 tokens.
-max_length = 1280
+# The longest rendered training row is 2,784 tokens, over the build and its five per-epoch noise
+# variants (todo 111; todo 109's build peaked at 1,231 and ran at 1,280).
+max_length = 2816
 seed = 109
 
 [lora]

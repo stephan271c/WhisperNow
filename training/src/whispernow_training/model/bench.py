@@ -1,8 +1,9 @@
 """Latency against a running `llama-server`: time to first token and total time, one request at a time.
 
-The short dictation is one sentence; the long one is the test row nearest 300 words. Prompt caching
-is off so every request pays for its prompt, as a new dictation does. `bench_teacher` times the
-hosted teacher on the same two dictations, whole replies only.
+The short dictation is one sentence; the others are the test rows nearest 100, 200, 300, 500 and
+1,000 words (the long one is the 300-word row). Prompt caching is off so every request pays for its
+prompt, as a new dictation does. `bench_teacher` times the hosted teacher on the same dictations,
+whole replies only.
 """
 
 from __future__ import annotations
@@ -19,10 +20,18 @@ from .evaluate import load_rows
 
 SHORT = "um so can you remind me to call the dentist tomorrow morning about moving my appointment"
 LONG_WORDS = 300
+# The lengths todo 111 times, besides the short sentence.
+LENGTHS = (100, 200, LONG_WORDS, 500, 1000)
 
 
-def long_dictation() -> str:
-    return min(load_rows("test"), key=lambda row: abs(len(row.input.split()) - LONG_WORDS)).input
+def cases() -> dict[str, str]:
+    """Case name → transcript: `short`, `long` (300 words) and `words_<n>` for the other lengths."""
+    rows = load_rows("test")
+
+    def nearest(words: int) -> str:
+        return min(rows, key=lambda row: abs(len(row.input.split()) - words)).input
+
+    return {"short": SHORT, **{"long" if n == LONG_WORDS else f"words_{n}": nearest(n) for n in LENGTHS}}
 
 
 def _time_one(client: httpx.Client, url: str, transcript: str) -> dict:
@@ -49,12 +58,11 @@ def _time_one(client: httpx.Client, url: str, transcript: str) -> dict:
 
 
 def bench(url: str, repeats: int = 5) -> dict:
-    cases = {"short": SHORT, "long": long_dictation()}
     result: dict = {}
     # A fresh connection per request: llama-server closes kept-alive connections after a few requests.
     with httpx.Client(timeout=600, limits=httpx.Limits(max_keepalive_connections=0)) as client:
         _time_one(client, url, SHORT)  # warm-up
-        for name, transcript in cases.items():
+        for name, transcript in cases().items():
             runs = [_time_one(client, url, transcript) for _ in range(repeats)]
             result[name] = {
                 "input_words": len(transcript.split()),
@@ -75,7 +83,7 @@ def bench_teacher(repeats: int = 5) -> dict:
         result: dict = {"model": settings.model, "reasoning": settings.reasoning}
         async with LlmClient(settings) as llm:
             await llm.complete(teacher_messages(SHORT), cached=False)  # warm-up
-            for name, transcript in {"short": SHORT, "long": long_dictation()}.items():
+            for name, transcript in cases().items():
                 seconds, output = [], ""
                 for _ in range(repeats):
                     started = time.perf_counter()

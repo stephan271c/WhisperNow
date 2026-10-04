@@ -574,6 +574,7 @@ def injected_rows(
                 tags=["injected", f"style_{style}", f"from:{origin.source}", *injection.tags],
                 seed_group=origin.seed_group,
                 teacher_model=origin.teacher_model,
+                teacher_reasoning=origin.teacher_reasoning,
             )
         )
     return rows

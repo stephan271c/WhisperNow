@@ -56,16 +56,19 @@ _KILL_WAIT_SECONDS = 30.0
 # once the limit resets or another account signs in; the log says so at most this often.
 _LIMIT_WAIT_SECONDS = 60.0
 _LIMIT_REPORT_SECONDS = 600.0
+# Retried failures are logged at most this often, so a throttled run says why it is quiet.
+_RETRY_REPORT_SECONDS = 60.0
 
 
 class LlmError(RuntimeError):
     """A request failed. `retryable` marks rate limits, overloads and timeouts; `limited` an account that
     cannot take requests until its usage limit resets or the user signs in again."""
 
-    def __init__(self, message: str, *, retryable: bool, limited: bool = False) -> None:
+    def __init__(self, message: str, *, retryable: bool, limited: bool = False, throttled: bool = False) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.limited = limited
+        self.throttled = throttled
 
 
 def _backend(name: str, default: str) -> Backend:
@@ -331,6 +334,10 @@ class _OpencodeServer:
 _CODEX_LIMITED = re.compile(r"usage.?limit|insufficient_quota|budget_limited", re.I)
 # Signed out, as while the user switches accounts with `codex login`.
 _CODEX_SIGNED_OUT = re.compile(r"\b401\b|unauthori[sz]ed|not logged in|log ?in again|codex login|refresh token|token.{0,20}expired", re.I)
+# `codex exec` ends its stderr log with the request's token count, as "tokens used" and the number.
+_CODEX_TOKENS = re.compile(r"tokens used\s*:?\s*([\d,]+)", re.I)
+# The service refusing a connection while many requests run: back off and retry, however long it lasts.
+_CODEX_THROTTLED = re.compile(r"403 Forbidden|failed to connect to websocket|model is at capacity", re.I)
 _CODEX_RETRYABLE = re.compile(r"429|rate.?limit|usage limit|overloaded|timed? ?out|5\d\d|stream disconnected|try again", re.I)
 
 
@@ -363,6 +370,8 @@ class _CodexRunner:
         self.instructions = CACHE / "codex" / "instructions"
         self.instructions.mkdir(parents=True, exist_ok=True)
         self.work = Path(tempfile.mkdtemp(prefix="datagen-codex-"))
+        # Tokens the requests used, as codex reports them: the quota a run spends.
+        self.tokens = 0
 
     def _instructions_file(self, system: str) -> Path:
         path = self.instructions / f"{hashlib.sha256(system.encode()).hexdigest()[:16]}.md"
@@ -392,14 +401,28 @@ class _CodexRunner:
                 tail = stderr.decode(errors="replace").strip()[-600:]
                 raise LlmError(
                     f"codex exit {returncode}: {tail}",
-                    retryable=bool(_CODEX_RETRYABLE.search(tail)),
-                    limited=bool(_CODEX_LIMITED.search(tail) or _CODEX_SIGNED_OUT.search(tail)),
+                    retryable=bool(_CODEX_RETRYABLE.search(tail) or _CODEX_THROTTLED.search(tail)),
+                    limited=bool(_CODEX_LIMITED.search(tail) or _CODEX_SIGNED_OUT.search(tail))
+                    and not _CODEX_THROTTLED.search(tail),
+                    throttled=bool(_CODEX_THROTTLED.search(tail)),
                 )
             content = reply.read_text(encoding="utf-8")
+            log = stderr.decode(errors="replace")
+            used = _CODEX_TOKENS.findall(log)
+            if used:
+                self.tokens += int(used[-1].replace(",", ""))
         finally:
             reply.unlink(missing_ok=True)
         if not content.strip():
-            raise LlmError("codex returned an empty reply", retryable=True)
+            # codex can exit 0 without a reply when the service refuses the request; its log says why.
+            tail = log.strip()[-600:]
+            raise LlmError(
+                f"codex returned an empty reply: {tail}", retryable=True,
+                # A refused connection's log can mention tokens and auth, but it is throttling, not a sign-out.
+                limited=bool(_CODEX_LIMITED.search(tail))
+                or (bool(_CODEX_SIGNED_OUT.search(tail)) and not _CODEX_THROTTLED.search(tail)),
+                throttled=bool(_CODEX_THROTTLED.search(tail)),
+            )
         return content
 
     def stop(self) -> None:
@@ -423,8 +446,18 @@ class LlmClient:
         self._connect_lock = asyncio.Lock()
         self.calls = 0
         self.cache_hits = 0
+        # Seconds the answered requests took, summed, and usage-limit refusals waited out.
+        self.request_seconds = 0.0
+        self.limit_waits = 0
+        self.retries = 0
+        self._retry_reported = 0.0
         self._limit_reported = 0.0
         self._limited = False
+
+    @property
+    def tokens(self) -> int:
+        """Tokens the codex requests used so far; the other backends do not report them."""
+        return self._codex.tokens if self._codex is not None else 0
 
     async def __aenter__(self) -> LlmClient:
         return self
@@ -520,13 +553,15 @@ class LlmClient:
                 except LlmError as error:
                     if error.limited:
                         refused = True
+                        self.limit_waits += 1
                         self._report_limit(backend, error)
                         await asyncio.sleep(_LIMIT_WAIT_SECONDS * random.uniform(0.75, 1.0))
                         continue
                     attempt += 1
-                    if not error.retryable or attempt == _MAX_ATTEMPTS:
+                    if not error.retryable or (attempt >= _MAX_ATTEMPTS and not error.throttled):
                         raise
-                    delay = min(_BACKOFF_CAP_SECONDS, _BACKOFF_BASE_SECONDS * 2 ** (attempt - 1))
+                    self._report_retry(backend, error, attempt)
+                    delay = min(_BACKOFF_CAP_SECONDS, _BACKOFF_BASE_SECONDS * 2 ** min(attempt - 1, 8))
                     await asyncio.sleep(delay * random.uniform(0.5, 1.0))
             # Only a request that was refused itself shows the account is back; one sent before the
             # limit can still finish after it.
@@ -534,10 +569,21 @@ class LlmClient:
                 self._limited = False
                 print(f"{time.strftime('%H:%M')} ACCOUNT OK again on {backend}; requests go through", file=sys.stderr, flush=True)
             self.calls += 1
+            self.request_seconds += time.monotonic() - started
         content = strip_think(content)
         self.cache.put(key, content, {"model": model, "seconds": round(time.monotonic() - started, 2)})
         return content
 
+
+    def _report_retry(self, backend: Backend, error: LlmError, attempt: int) -> None:
+        """Logs a retried failure (a rate limit, overload or timeout), once per `_RETRY_REPORT_SECONDS`."""
+        self.retries += 1
+        if time.monotonic() - self._retry_reported >= _RETRY_REPORT_SECONDS:
+            self._retry_reported = time.monotonic()
+            print(
+                f"{time.strftime('%H:%M')} RETRY on {backend} ({self.retries} so far, attempt {attempt}): {str(error)[-300:]}",
+                file=sys.stderr, flush=True,
+            )
 
     def _report_limit(self, backend: Backend, error: LlmError) -> None:
         """Logs a usage-limit or signed-out refusal, once per `_LIMIT_REPORT_SECONDS` while it lasts."""
