@@ -32,7 +32,7 @@ class Example:
     seed_group: str = ""
     split: Split = ""
     teacher_model: str | None = None
-    # The teacher's reasoning effort for the reference, recorded from the todo 112 relabel on.
+    # The teacher's reasoning effort for the reference, recorded from the relabel on.
     teacher_reasoning: str | None = None
 
     def __post_init__(self) -> None:
@@ -49,7 +49,6 @@ class Example:
 
 
 def example_id(source: str, text: str) -> str:
-    """Stable id from the source and the input text."""
     digest = hashlib.sha256(f"{source}\0{text}".encode()).hexdigest()[:16]
     return f"{source.split('/')[-1]}-{digest}"
 
@@ -63,7 +62,6 @@ def _is_label(line: str) -> bool:
 
 
 def layout_of(output: str) -> Layout:
-    """Classifies an output's layout from its line structure."""
     lines = [line for line in output.strip().split("\n") if line.strip()]
     items = [line for line in lines if LIST_ITEM.match(line)]
     if items:

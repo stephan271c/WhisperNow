@@ -1,4 +1,4 @@
-"""Real spontaneous speech for the benchmarks (todo 110, step 2): long single-speaker turns from AMI.
+"""Real spontaneous speech for the benchmarks: long single-speaker turns from AMI.
 
 The AMI Meeting Corpus (`edinburghcstr/ami`, CC BY 4.0) has hand-made, word-level transcripts of
 meetings, fillers and false starts included, split into short per-speaker segments. A turn here is

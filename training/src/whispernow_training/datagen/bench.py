@@ -1,4 +1,4 @@
-"""The two held-out benchmarks (todo 110, step 4): `data/bench/long.jsonl` and `data/bench/noise.jsonl`.
+"""The two held-out benchmarks: `data/bench/long.jsonl` and `data/bench/noise.jsonl`.
 
 The long benchmark is the `compose` bench run's rows plus long single-speaker turns from the AMI
 meeting corpus (`ami.py`), the only real speech the license survey kept. The teacher writes an AMI

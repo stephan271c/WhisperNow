@@ -1,4 +1,4 @@
-"""The preference stage (todo 111): sample an SFT model, judge its outputs, and pair them.
+"""The preference stage: sample an SFT model, judge its outputs, and pair them.
 
 Every step writes a file under `runs/<run>/prefer/` and is skipped when its file exists, so a
 stopped run resumes:
@@ -11,8 +11,8 @@ stopped run resumes:
    have, Markdown, list markers, added layout, an assistant opener) and by the eval judge
    (`prompts/judge/eval.md`, `gpt-6.1-sol` at high reasoning, as `cleanup eval --judge` scores), which
    lists each fault by kind against the reference. An output fails on a dropped, changed, wrong-side
-   or invented fact or an answered transcript; an unresolved correction alone does not fail it
-   (todo 114). The judge's replies are kept in **verdicts.judge.jsonl**, so a stopped run resumes.
+   or invented fact or an answered transcript; an unresolved correction alone does not fail it.
+   The judge's replies are kept in **verdicts.judge.jsonl**, so a stopped run resumes.
 4. **restored.jsonl** — minimal pairs: a failing output whose only faults are lost facts (dropped,
    changed or wrong side) gets them fixed by the teacher (`prompts/prefer/restore.md`). It is kept
    when the code confirms the edit touches only those facts (`only_insertions` for drops,
@@ -102,9 +102,6 @@ def split_of(id_: str) -> str:
     return "val" if fraction < VAL_SHARE else "train"
 
 
-# --- 1. inputs ----------------------------------------------------------------------------
-
-
 def select_inputs(train: Sequence[Example], benchmark: Sequence[Example], seed: int = SEED) -> list[Example]:
     """Long train rows by bucket, then rows with a reasoned or re-decided correction."""
     held_out = {row.id for row in benchmark} | {row.seed_group for row in benchmark}
@@ -121,9 +118,6 @@ def select_inputs(train: Sequence[Example], benchmark: Sequence[Example], seed: 
     corrections = [row for row in rows if row.id not in taken and set(row.tags) & set(CORRECTION_TAGS)]
     picked += rng.sample(corrections, min(CORRECTIONS, len(corrections)))
     return picked
-
-
-# --- 2. samples ---------------------------------------------------------------------------
 
 
 async def sample(url: str, rows: Sequence[Example], samples: int = SAMPLES, temperature: float = TEMPERATURE,
@@ -158,9 +152,6 @@ async def sample(url: str, rows: Sequence[Example], samples: int = SAMPLES, temp
 
     async with httpx.AsyncClient(timeout=900) as client:
         return await asyncio.gather(*(one(client, row, k) for row in rows for k in range(samples + 1)))
-
-
-# --- 3. verdicts --------------------------------------------------------------------------
 
 
 def code_failures(row: Example, output: str, hit_limit: bool) -> list[str]:
@@ -237,9 +228,6 @@ async def verdicts_for(rows: dict[str, Example], samples: Sequence[dict], judged
     for result in results:
         result["passed"] = not result["failed"]
     return results
-
-
-# --- 4. minimal pairs ---------------------------------------------------------------------
 
 
 def only_insertions(before: str, after: str) -> bool:
@@ -338,9 +326,6 @@ async def restore(rows: dict[str, Example], verdicts: Sequence[dict], judged: Pa
     return results
 
 
-# --- 5. pairs -----------------------------------------------------------------------------
-
-
 def kind_of(failed: Sequence[str]) -> str:
     for name, kind in KINDS.items():
         if name in failed:
@@ -419,9 +404,6 @@ def stats(verdicts: Sequence[dict], restored: Sequence[dict], pairs: Sequence[di
         ),
         "rft_rows": len(rft),
     }
-
-
-# --- the steps ----------------------------------------------------------------------------
 
 
 def run(out: Path, server: str | None, concurrency: int = 4) -> dict:

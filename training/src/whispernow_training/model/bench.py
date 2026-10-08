@@ -20,7 +20,7 @@ from .evaluate import load_rows
 
 SHORT = "um so can you remind me to call the dentist tomorrow morning about moving my appointment"
 LONG_WORDS = 300
-# The lengths todo 111 times, besides the short sentence.
+# The lengths timed besides the short sentence.
 LENGTHS = (100, 200, LONG_WORDS, 500, 1000)
 
 

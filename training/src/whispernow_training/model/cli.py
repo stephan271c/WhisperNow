@@ -68,7 +68,7 @@ def cmd_eval(args: argparse.Namespace) -> None:
         def produce(rows):
             return [{"id": row.id, "output": row.output, "hit_limit": False, "tokens": None} for row in rows]
     elif args.teacher:
-        # `--label` keeps a new teacher prompt's outputs apart, as todo 112's `eval-112`.
+        # `--label` keeps a new teacher prompt's outputs apart, as in `eval-112`.
         out_dir = RUNS / "teacher" / ("eval" if args.label == "server" else f"eval-{args.label}")
 
         def produce(rows):
@@ -204,8 +204,6 @@ def cmd_compare(args: argparse.Namespace) -> None:
     for group in groups:
         print(report.comparison_table(candidates, group))
         print()
-
-
 
 
 def main() -> None:

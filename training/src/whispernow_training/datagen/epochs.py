@@ -1,4 +1,4 @@
-"""Fresh speech noise per epoch (todo 111): one noisy variant of every train row per epoch.
+"""Fresh speech noise per epoch: one noisy variant of every train row per epoch.
 
 Epoch 1 is the build's own train split. Epoch n > 1 draws the programmatic noise again with the
 salt `epoch<n>`, from the same code and the same clean text, so the target is unchanged:

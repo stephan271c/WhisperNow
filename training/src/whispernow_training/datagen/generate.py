@@ -50,7 +50,7 @@ TARGETS = {
     "ambiguous_intent": 300,
 }
 # Extra rows pinned to the test split, bringing each category to about 100 test rows (long
-# rambles to about 50) so its rates in todo 109 are not decided by one row.
+# rambles to about 50) so its test rates are not decided by one row.
 TEST_TARGETS = {
     "dictated_command": 70,
     "prose_mentions": 70,

@@ -54,9 +54,7 @@ SOURCE_SHARES = {
 }
 
 
-# --- The app's segmenter and join, ported from whispernow-core -----------------------------
-
-
+# The app's segmenter and join, ported from whispernow-core.
 def _ms(milliseconds: int) -> int:
     return milliseconds * SAMPLE_RATE // 1000
 
@@ -169,9 +167,6 @@ def join_segment_texts(texts) -> str:
     return joined
 
 
-# --- Speech ------------------------------------------------------------------------------
-
-
 def chunks(text: str, rng: random.Random) -> list[str]:
     """Pieces Kokoro reads in one breath: sentences when the text has them, else runs of 20-45 words."""
     pieces = [p for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p]
@@ -242,9 +237,6 @@ class Speaker:
                 parts.append(np.zeros(int(pauses[-1] * SAMPLE_RATE), dtype=np.float32))
         lead = np.zeros(int(0.3 * SAMPLE_RATE), dtype=np.float32)
         return Spoken(np.concatenate([lead, *parts, lead]), voice, speed, pieces, pauses)
-
-
-# --- Recognition -------------------------------------------------------------------------
 
 
 class Recognizer:
@@ -319,9 +311,6 @@ class Recognizer:
             self.recognizer.decode_stream(stream)
             texts.append(stream.result.text)
         return join_segment_texts(texts), texts
-
-
-# --- Probe -------------------------------------------------------------------------------
 
 
 def sample_rows(n: int, seed: int) -> list:
@@ -453,8 +442,6 @@ def load(model: str = "parakeet") -> list[dict]:
             record["model"] = "parakeet"
     return records
 
-
-# --- Report ------------------------------------------------------------------------------
 
 _WORD = re.compile(r"[A-Za-z0-9$%][\w'’.:,/%$-]*")
 _FILLERS = {"um", "uh", "erm", "hmm", "mm", "ah", "er"}

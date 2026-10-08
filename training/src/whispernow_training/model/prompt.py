@@ -77,5 +77,4 @@ def golden_cases() -> list[dict]:
 
 
 def decoding() -> dict[str, float | int]:
-    """The sampling fields sent with every request, besides `max_tokens`."""
     return {"temperature": TEMPERATURE, "repeat_penalty": REPEAT_PENALTY, "repeat_last_n": REPEAT_LAST_N}

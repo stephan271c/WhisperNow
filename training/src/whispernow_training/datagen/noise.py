@@ -1,4 +1,4 @@
-"""The noise benchmark (todo 110, step 4): short rows, each built around one hesitation or correction pattern.
+"""The noise benchmark: short rows, each built around one hesitation or correction pattern.
 
 Nine patterns, plus a control set where filler-like words carry meaning ("I'd like the red one", "I
 mean it"), so a model that deletes too much is caught. The generator writes each transcript with
@@ -341,9 +341,6 @@ async def generate_all(llm: LlmClient, kinds: Sequence[str] = KINDS) -> dict[str
     known = {e.input for e in load()}
     counts = await asyncio.gather(*(generate_kind(llm, kind, TARGETS[kind], known) for kind in kinds))
     return dict(zip(kinds, counts, strict=True))
-
-
-# --- Recognizer probe -------------------------------------------------------------------
 
 
 # A cleanup of what the recognizer heard cannot recover a name it misspelled.

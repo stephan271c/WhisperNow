@@ -24,14 +24,14 @@ from .schema import EMPTY, LIST_ITEM, Example, read_examples, write_examples
 SEED = 108
 INJECTED = 2000
 # Every long one- or multi-paragraph clean text not already injected gets one injected spoken
-# version too (todo 110): aawaaz references and the composed rows' references.
+# version too: aawaaz references and the composed rows' references.
 LONG_INJECTION_WORDS = 150
 LONG_INJECTION_SEED = 110
 # Shares of rows whose spoken input gets more hesitation (`inject.densify`), by kind of row. The
 # generator writes about 0.8 fillers per 100 words in long rows and the short sources 1.6 to 1.7;
-# real dictation measured 3.6 (todo 110). The rest keep their rate, as fluent dictation does.
+# real dictation measured 3.6. The rest keep their rate, as fluent dictation does.
 DENSIFY_PERCENT = {"composed": 50, "short": 30}
-# Short sources whose train and val inputs are densified. Their test rows are todo 109's and stay
+# Short sources whose train and val inputs are densified. Their test rows (`TEST_IDS_109`) stay
 # as built; aawaaz (4.2 per 100 words) and the injected rows already hesitate enough.
 SHORT_DENSIFY_SOURCES = {generate.SOURCE, sources.HANDY, sources.DISFL_QA}
 EMPTY_ROWS = 150
@@ -174,8 +174,8 @@ def restyled(rows: list[Example]) -> list[Example]:
 
 def _bare_fillers(example: Example) -> Example:
     """The `parakeet` share of the stage 3 recognizer-style inputs, which put commas around nearly
-    every filler, with the fillers mostly bare as Parakeet writes them. Todo 109's test rows were
-    built this way and stay so; `strip_filler_commas` goes further for train and val."""
+    every filler, with the fillers mostly bare as Parakeet writes them. The `TEST_IDS_109` test rows
+    were built this way and stay so; `strip_filler_commas` goes further for train and val."""
     if "style_recognizer" not in example.tags or "restyled" in example.tags or example.source == inject.SOURCE:
         return example
     if restyle.asr_style(example.id) != "parakeet":
@@ -238,8 +238,6 @@ def _empty_sentinel(example: Example) -> Example:
         return replace(example, output=EMPTY)
     return example
 
-
-# --- Filters -------------------------------------------------------------------------
 
 _MARKDOWN = re.compile(r"(?<![\w*])\*\*(?=\S).+?(?<=\S)\*\*(?![\w*])|`|^\s*#{1,6}\s|\[[^\]]+\]\([^)]+\)|^\s*\|.*\|\s*$", re.MULTILINE)
 _OTHER_BULLET = re.compile(r"^\s*[*•+]\s", re.MULTILINE)
@@ -398,8 +396,6 @@ def filter_reason(example: Example) -> str | None:
     return None
 
 
-# --- Duplicates ------------------------------------------------------------------------
-
 _PRIME = (1 << 61) - 1
 _PERMUTATIONS = 128
 _BANDS = 16
@@ -485,9 +481,6 @@ def deduplicate(examples: Iterable[Example]) -> tuple[list[Example], list[tuple[
     return final, dropped
 
 
-# --- Split ------------------------------------------------------------------------------
-
-
 def _bucket(seed_group: str) -> int:
     return int(hashlib.sha256(f"split\0{seed_group}".encode()).hexdigest(), 16) % 100
 
@@ -512,9 +505,6 @@ def assign_splits(examples: Iterable[Example]) -> list[Example]:
             split = "train"
         result += [replace(e, split=split) for e in members]
     return result
-
-
-# --- Stats ------------------------------------------------------------------------------
 
 
 def _percentiles(values: list[int]) -> dict[str, float]:

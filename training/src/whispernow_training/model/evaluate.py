@@ -42,24 +42,24 @@ LOST_KINDS = ("dropped", "changed", "wrong_side")
 JUDGE_VERSION = "faults"
 # Categories the acceptance criteria name for answered transcripts.
 COMMAND_CATEGORIES = ("dictated_command", "command_question_list")
-# The held-out benchmarks of todo 110, scored like a split.
+# The held-out benchmarks, scored like a split.
 BENCHMARKS = {"bench-long": DATA / "bench" / "long.jsonl", "bench-noise": DATA / "bench" / "noise.jsonl"}
 SPLITS = ("train", "val", "test", *BENCHMARKS)
-# Todo 109's test rows, by id: later builds add test rows, and scores report the two groups apart.
+# The original test rows, by id: later builds add test rows, and scores report the two groups apart.
 TEST_IDS_109 = TRAINING_ROOT / "configs" / "test-ids-109.txt"
 # A judge request holds up to 15 rows, or fewer when long rows would pass this many characters.
 JUDGE_BATCH_ROWS = 15
 JUDGE_MAX_CHARS = 16_000
-# Rows longer than this get a judge request each (todo 112).
+# Rows longer than this get a judge request each.
 JUDGE_SOLO_OVER_WORDS = 300
-# References todo 112 rewrote are judged and scored apart from the old ones, by the model that wrote
+# References the relabel rewrote are judged and scored apart from the old ones, by the model that wrote
 # them: `<stem>.r112.judge.jsonl` and `<stem>.r112.scores.json`.
 R112 = "r112"
 R112_TARGET = ("codex", "gpt-6.1-sol", "high")
 
 
 def reference_tag(rows: Sequence[Example]) -> str:
-    """`R112` when every row's reference is todo 112's, `""` for the references before it."""
+    """`R112` when every row's reference is the relabel's, `""` for the references before it."""
     if rows and all((row.teacher_model, row.teacher_reasoning) == R112_TARGET[1:] for row in rows):
         return R112
     return ""
@@ -74,9 +74,6 @@ def load_rows(split: str, limit: int | None = None, seed: int = 109) -> list[Exa
 
 def _progress(line: str) -> None:
     print(line, file=sys.stderr, flush=True)
-
-
-# --- generation ---------------------------------------------------------------------------
 
 
 def generate_hf(
@@ -193,13 +190,8 @@ def read_outputs(path: Path) -> dict[str, dict]:
     return {row["id"]: row for row in read_jsonl(path)}
 
 
-# --- judging ------------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class Judged:
-    """One row's verdict: the failed criteria and the faults behind them."""
-
     failed: list[str]
     faults: list[dict]
 
@@ -239,8 +231,6 @@ async def judge(
         )
     return {id_: Judged(verdict.failed, verdict.faults) for id_, verdict in verdicts.items()}
 
-
-# --- scoring ------------------------------------------------------------------------------
 
 # Rate name → (field or judge criterion, whether a True value is the bad outcome).
 RATES: dict[str, tuple[str, bool]] = {
@@ -337,7 +327,7 @@ def _test_ids_109() -> set[str]:
 
 def score(rows: Sequence[Example], outputs: dict[str, dict], judged: dict[str, Judged] | None = None) -> dict:
     """Overall rates, and the same rates per category, tag, input style, source, length bucket and
-    noise pattern, and for test rows, todo 109's rows apart from rows added since."""
+    noise pattern, and for test rows, the `TEST_IDS_109` rows apart from rows added since."""
     old_test = _test_ids_109()
     entries = {
         row.id: (check(row, outputs[row.id]["output"], hit_limit=outputs[row.id]["hit_limit"]), (judged or {}).get(row.id))

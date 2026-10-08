@@ -1,11 +1,11 @@
-"""The gates every new reference passes (todo 110, step 6).
+"""The gates every new reference passes.
 
 1. The teacher writes the reference, exactly as the app would.
 2. The completeness judge (`prompts/judge/completeness.md`) checks it against its own transcript:
    every fact the speaker kept, the right side of each self-correction, nothing invented.
 3. Code checks run first: every protected token the transcript wrote verbatim (a URL, email, path,
    identifier or number already in digits) is in the reference, and the reference has no em dash
-   and no correction cue kept from the transcript (todo 112). What code cannot settle, a spelled-out
+   and no correction cue kept from the transcript. What code cannot settle, a spelled-out
    number next to a word or a hedge or reason the reference says less often than the transcript, goes
    to the judge as the item's FLAGS.
 
@@ -246,8 +246,6 @@ async def check_references(
 
 @dataclass
 class Gated:
-    """A reference and how it passed or failed the gates."""
-
     id: str
     output: str
     passed: bool

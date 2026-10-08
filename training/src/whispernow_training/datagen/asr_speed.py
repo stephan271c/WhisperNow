@@ -1,0 +1,170 @@
+"""CPU speed and English WER of each catalog speech model, decoded as the app does.
+
+The audio is the probe's Kokoro dictations (`asr_probe.py`), cut by the app's segmenter and decoded
+with the app's recognizer settings: CPU, four threads, greedy search, Whisper with automatic
+language. Speed is seconds of segment audio per second of decoding. The synthetic speech is
+cleaner than a person, so WER here only ranks the models; the app's accuracy ratings come from
+the Open ASR Leaderboard where a model is listed.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+import wave
+
+import numpy as np
+import sherpa_onnx as so
+
+from . import asr_probe as probe
+from . import paths
+
+ASR = paths.CACHE / "asr"
+THREADS = 4
+CLIPS = 40
+OUT = paths.DATA / "probe" / "asr_speed.json"
+
+
+def transducer(d, precision):
+    return lambda: so.OfflineRecognizer.from_transducer(
+        encoder=str(d / f"encoder.{precision}.onnx"), decoder=str(d / f"decoder.{precision}.onnx"),
+        joiner=str(d / f"joiner.{precision}.onnx"), tokens=str(d / "tokens.txt"), num_threads=THREADS,
+        sample_rate=16000, feature_dim=80, decoding_method="greedy_search", model_type="nemo_transducer",
+        provider="cpu")
+
+
+def whisper(d, prefix):
+    return lambda: so.OfflineRecognizer.from_whisper(
+        encoder=str(d / f"{prefix}-encoder.int8.onnx"), decoder=str(d / f"{prefix}-decoder.int8.onnx"),
+        tokens=str(d / f"{prefix}-tokens.txt"), language="", task="transcribe", num_threads=THREADS,
+        decoding_method="greedy_search", tail_paddings=0)
+
+
+MODELS = {
+    "parakeet-v2-fp16": transducer(probe.APP_MODELS / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16", "fp16"),
+    "parakeet-v2-int8": transducer(ASR / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8", "int8"),
+    "parakeet-unified": transducer(ASR / "sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming", "int8"),
+    "parakeet-v3": transducer(ASR / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8", "int8"),
+    "parakeet-110m": transducer(ASR / "sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8", "int8"),
+    "sense-voice": lambda: so.OfflineRecognizer.from_sense_voice(
+        model=str(ASR / "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx"),
+        tokens=str(ASR / "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/tokens.txt"),
+        num_threads=THREADS, language="auto", use_itn=True),
+    "qwen3-asr": lambda: so.OfflineRecognizer.from_qwen3_asr(
+        conv_frontend=str(ASR / "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/conv_frontend.onnx"),
+        encoder=str(ASR / "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/encoder.int8.onnx"),
+        decoder=str(ASR / "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/decoder.int8.onnx"),
+        tokenizer=str(ASR / "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/tokenizer"),
+        num_threads=THREADS, max_total_len=1024, max_new_tokens=256),
+    "whisper-distil-v3.5": whisper(ASR / "sherpa-onnx-whisper-distil-large-v3.5", "distil-large-v3.5"),
+    "whisper-turbo": whisper(ASR / "sherpa-onnx-whisper-turbo", "turbo"),
+}
+
+ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split()
+TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+
+
+def say(n: int) -> str:
+    """An integer in English words, as Kokoro read the probe inputs."""
+    if n < 20:
+        return ONES[n]
+    if n < 100:
+        return TENS[n // 10] + ("" if n % 10 == 0 else " " + ONES[n % 10])
+    for size, word in ((10**9, "billion"), (10**6, "million"), (1000, "thousand"), (100, "hundred")):
+        if n >= size:
+            rest = n % size
+            return say(n // size) + " " + word + ("" if rest == 0 else " " + say(rest))
+    raise AssertionError
+
+
+def normalize(text: str) -> list[str]:
+    """Words for WER: lower case, digits spelled out, punctuation and fillers dropped."""
+    text = text.lower().replace("’", "'")
+    text = re.sub(r"(\d),(\d{3})", r"\1\2", text)
+    text = re.sub(r"\$(\d+(?:\.\d+)?)", r"\1 dollars", text)
+    text = text.replace("%", " percent").replace("&", " and ")
+    text = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", text)
+
+    def number(m):
+        whole, _, frac = m.group(0).partition(".")
+        spoken = say(int(whole))
+        return spoken + (" point " + " ".join(ONES[int(d)] for d in frac) if frac else "")
+
+    text = re.sub(r"\d+(?:\.\d+)?", number, text)
+    text = re.sub(r"[^a-z0-9' ]+", " ", text)
+    words = [w.strip("'") for w in text.split()]
+    fillers = {"uh", "um", "hmm", "mm", "ah", "er"}
+    return [w.replace("okay", "ok") for w in words if w and w not in fillers]
+
+
+def edits(ref: list[str], hyp: list[str]) -> int:
+    row = list(range(len(hyp) + 1))
+    for i, r in enumerate(ref, 1):
+        prev, row[0] = row[0], i
+        for j, h in enumerate(hyp, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (r != h))
+    return row[-1]
+
+
+def clips() -> list[tuple[str, str, list[np.ndarray]]]:
+    """Every n-th probe dictation, cut by the app's segmenter."""
+    records = probe.load()
+    records = sorted(records, key=lambda r: r["id"])[:: max(1, len(records) // CLIPS)][:CLIPS]
+    out = []
+    vad_config = so.VadModelConfig()
+    vad_config.silero_vad.model = str(probe.VAD_MODEL)
+    vad_config.silero_vad.threshold = 0.5
+    vad_config.silero_vad.min_silence_duration = 0.1
+    vad_config.silero_vad.min_speech_duration = 0.064
+    vad_config.silero_vad.window_size = probe.FRAME
+    vad_config.silero_vad.max_speech_duration = 30.0
+    vad_config.sample_rate = 16000
+    vad_config.num_threads = 1
+    for r in records:
+        with wave.open(str(probe.AUDIO_DIR / f"{r['id']}.wav")) as w:
+            samples = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+        detector = so.VoiceActivityDetector(vad_config, buffer_size_in_seconds=30)
+
+        def is_speech(frame):
+            detector.accept_waveform(frame)
+            speech = detector.is_speech_detected()
+            while not detector.empty():
+                detector.pop()
+            return speech
+
+        segments = [samples[a:b] for a, b in probe.segment(samples, is_speech)]
+        out.append((r["id"], r["spoken"], segments))
+    return out
+
+
+def run(only: list[str] | None = None) -> dict:
+    """Measures each model in `only` (default all) not already in `OUT`; returns every result."""
+    data = clips()
+    audio = sum(len(s) for _, _, segs in data for s in segs) / 16000
+    results = json.loads(OUT.read_text()) if OUT.exists() else {}
+    for name, make in MODELS.items():
+        if (only and name not in only) or name in results:
+            continue
+        recognizer = make()
+        warm = recognizer.create_stream()
+        warm.accept_waveform(16000, data[0][2][0])
+        recognizer.decode_stream(warm)
+        spent = 0.0
+        errors = words = 0
+        for _, spoken, segments in data:
+            texts = []
+            for segment in segments:
+                stream = recognizer.create_stream()
+                stream.accept_waveform(16000, segment)
+                start = time.perf_counter()
+                recognizer.decode_stream(stream)
+                spent += time.perf_counter() - start
+                texts.append(stream.result.text)
+            ref, hyp = normalize(spoken), normalize(probe.join_segment_texts(texts))
+            errors += edits(ref, hyp)
+            words += len(ref)
+        results[name] = {"times_real_time": round(audio / spent, 1), "wer": round(100 * errors / words, 2)}
+        print(name, results[name], flush=True)
+        OUT.write_text(json.dumps(results, indent=1) + "\n")
+    return results

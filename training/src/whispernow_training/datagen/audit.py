@@ -1,4 +1,4 @@
-"""The label audit (todo 110, step 1): are the long references complete against their own transcripts?
+"""The label audit: are the long references complete against their own transcripts?
 
 The stage 1 judge checked aawaaz rows against aawaaz's standard, never for completeness against the
 transcript. `run` judges every built row over 150 words, and a fixed random 500 of the shorter rows
@@ -164,7 +164,7 @@ def load_test_corrections() -> dict[str, str]:
 def apply(rows: Iterable[Example]) -> tuple[list[Example], list[tuple[Example, str]]]:
     """The audit's outcome for gathered rows: relabelled, corrected (test) or dropped (train and val).
 
-    A row keeps its id, so todo 109's test rows stay comparable. Rows the audit never judged, or
+    A row keeps its id, so the `TEST_IDS_109` test rows stay comparable. Rows the audit never judged, or
     passed, are unchanged. A test row's split is preset by its source, so it is known here.
     """
     verdicts = load_verdicts(VERDICTS)

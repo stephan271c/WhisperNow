@@ -1,4 +1,4 @@
-"""Fact-weighted SFT (todo 114): extra loss weight on the reply tokens that carry facts.
+"""Fact-weighted SFT: extra loss weight on the reply tokens that carry facts.
 
 The plain SFT loss averages over every reply token, and most tokens of a long reply are easy
 copying, so leaving out one fact costs little. Here the tokens inside `facts.fact_spans` weigh

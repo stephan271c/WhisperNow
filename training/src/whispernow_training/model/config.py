@@ -36,16 +36,15 @@ class TrainConfig:
     seed: int = 109
     # Stop after this many optimizer steps; 0 trains the full schedule.
     max_steps: int = 0
-    # Recompute activations in the backward pass; TRL's default, which every run so far used.
+    # Recompute activations in the backward pass; TRL's default.
     gradient_checkpointing: bool = True
     # Memory savers for models that do not fit a 12 GB GPU otherwise: a transformers optimizer
-    # name (e.g. "paged_adamw_8bit" from bitsandbytes; the default is transformers' own, which
-    # every run so far used), keeping the input embeddings frozen in bf16, and Liger's fused
-    # linear cross-entropy, which never materializes the logits.
+    # name (e.g. "paged_adamw_8bit" from bitsandbytes), keeping the input embeddings frozen in
+    # bf16, and Liger's fused linear cross-entropy, which never materializes the logits.
     optim: str = "adamw_torch_fused"
     freeze_embeddings: bool = False
     liger: bool = False
-    # Fresh speech noise per epoch (todo 111): train one pass over `epochs` noisy variants of the
+    # Fresh speech noise per epoch: train one pass over `epochs` noisy variants of the
     # train split (`datagen epochs`), so each row is seen once per epoch, each time with new noise.
     noise_per_epoch: bool = False
     # Train on this JSONL file (relative to `training/`) instead of the build's train split: the
@@ -55,7 +54,7 @@ class TrainConfig:
     # DPOTrainer, sigmoid loss plus `sft_weight` × the NLL of the chosen reply (RPO), against
     # reference log-probabilities computed once before training.
     objective: Objective = "sft"
-    # Fact-weighted SFT (todo 114): the loss on reply tokens inside fact spans (`model/facts.py`)
+    # Fact-weighted SFT: the loss on reply tokens inside fact spans (`model/facts.py`)
     # weighs this much against 1 for the rest, rescaled to average 1 per micro-batch. 0 is plain SFT.
     fact_weight: float = 0.0
     beta: float = 0.1

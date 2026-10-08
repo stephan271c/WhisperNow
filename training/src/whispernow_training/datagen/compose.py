@@ -1,4 +1,4 @@
-"""Long composed-task rows (todo 110, step 5) and the long-dictation benchmark (step 4).
+"""Long composed-task rows and the long-dictation benchmark.
 
 One dictation combines several behaviours: a list with corrections, choices revised with a reason,
 meeting notes whose owners and dates change, a ramble with an embedded list and a question. Each

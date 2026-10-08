@@ -37,11 +37,8 @@ def words(text: str) -> list[str]:
 
 
 def skeleton(text: str) -> str:
-    """Lowercase words without punctuation, used to compare inputs and outputs."""
     return " ".join(words(text))
 
-
-# --- British to American spelling -------------------------------------------------
 
 _UK_TO_US = {
     "colour": "color", "colours": "colors", "coloured": "colored", "favour": "favor", "favourite": "favorite",
@@ -84,8 +81,6 @@ def americanize(text: str) -> str:
 
     return _UK_WORD.sub(swap, text)
 
-
-# --- Output tidying ------------------------------------------------------------------
 
 _ORDINALS = {
     "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10, "eleventh": 11,
@@ -130,13 +125,10 @@ def modal_may(text: str) -> str:
 
 
 def question_mark(text: str) -> str:
-    """Ends a one-sentence wh-question with a question mark instead of a period."""
     if _WH_QUESTION.match(text) and text.endswith(".") and text.count(".") == 1:
         return text[:-1] + "?"
     return text
 
-
-# --- Switchboard-derived text ------------------------------------------------------
 
 _NGRAM = 6
 
@@ -178,9 +170,6 @@ class SwitchboardIndex:
                 return True
         row_grams = ngrams(example_input) | ngrams(example_output)
         return bool(row_grams) and len(row_grams & self.grams) >= max(1, len(row_grams) // 4)
-
-
-# --- Tags and categories -----------------------------------------------------------
 
 
 def handy_tags(source_input: str, output: str) -> list[str]:
@@ -318,7 +307,6 @@ _WRITTEN_SENTENCE_START = re.compile(
 
 
 def reworded(source_input: str, output: str) -> bool:
-    """True when the output uses words the speaker never said, beyond deleting the disfluency."""
     return not set(words(output)) <= set(words(source_input))
 
 

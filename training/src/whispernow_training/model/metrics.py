@@ -42,8 +42,7 @@ def protected_tokens(text: str) -> list[str]:
     return [match.group(0).rstrip(_TRAILING_PUNCTUATION) for match in _PROTECTED.finditer(text)]
 
 
-# --- The cleanup contract's style (todo 112): checked in references by the gates, reported for outputs.
-
+# The cleanup contract's style: checked in references by the gates, reported for outputs.
 EM_DASH = "—"
 _CARDINAL = (
     r"(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"

@@ -27,7 +27,7 @@ with at most the comma already before them. A small share of rows wraps them in 
 recognizers and pasted text do. Protected tokens (numbers, code, names) are never split, copied or
 recased, only moved apart from their neighbours by inserted words.
 
-`inject` is a pure function of the clean text, a seed and the style, so todo 111 can draw fresh
+`inject` is a pure function of the clean text, a seed and the style, so `epochs` can draw fresh
 noise per epoch. Each injected row keeps its origin's `seed_group`, so it never lands in a different
 split from the row it came from.
 """
@@ -121,7 +121,6 @@ def _is_plain_word(token: str) -> bool:
 
 
 def _bare_word(token: str) -> bool:
-    """A plain word with no punctuation after it."""
     return _is_plain_word(token) and token == token.rstrip(_EDGE_PUNCTUATION) and not token.startswith(tuple(_EDGE_PUNCTUATION))
 
 
@@ -486,7 +485,7 @@ def inject(
 
 _DENSIFY_KINDS = {"filler": 45, "cluster": 15, "determiner": 15, "repeat": 12, "pause": 13}
 # Fillers per 100 words a densified input is brought up to, drawn per row. Real Parakeet dictation
-# measured 4.5 (todo 110); the generator writes about 0.8.
+# measured 4.5; the generator writes about 0.8.
 DENSIFY_RATE = (3.0, 6.0)
 _FILLER_WORD = re.compile(r"^(?:um+|uh+|uhm|erm?|hmm+)[,.?!]?$", re.IGNORECASE)
 

@@ -259,9 +259,6 @@ def load() -> dict[str, str]:
     return {row["id"]: row["input"] for row in map(json.loads, OUT.open(encoding="utf-8"))}
 
 
-# --- Recognizer styles ---------------------------------------------------------------------
-
-
 class AsrStyle(NamedTuple):
     """How one recognizer formats a transcript, measured by `asr_probe` on the same 300 recordings
     (see `data/probe/report.<model>.json`). Chances apply per comma, filler, number or segment."""

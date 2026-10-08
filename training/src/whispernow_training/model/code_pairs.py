@@ -1,4 +1,4 @@
-"""DPO pairs made in code (todo 114): the reference against the same reference with one fact broken.
+"""DPO pairs made in code: the reference against the same reference with one fact broken.
 
 No sampling and no judge. Each rejected reply differs from its reference in one contiguous span:
 - `dropped_sentence`: a sentence of a line that has more than one, with the space before or after it;
@@ -29,7 +29,7 @@ from . import facts
 from .prefer import split_of
 
 SEED = 114
-# Share of pairs per kind, from the fault mix todo 113's model makes on bench-long (dropped 3.7,
+# Share of pairs per kind, from the fault mix the SFT model makes on bench-long (dropped 3.7,
 # changed 1.8, wrong side 0.5 per row); `build` re-weights when a row has no place for a kind.
 MIX = {
     "dropped_sentence": 1.4,
@@ -65,7 +65,7 @@ def _word_in(value: str, text: str) -> list[re.Match]:
     return list(re.finditer(rf"(?<![\w$.]){re.escape(value)}(?![\w]|\.\d)", text))
 
 
-# --- breakers: each returns the rejected text, or None when the row has no place for its kind ----
+# Breakers: each returns the rejected text, or None when the row has no place for its kind.
 
 
 def drop_sentence(text: str, rng: random.Random) -> str | None:

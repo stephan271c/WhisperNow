@@ -1,4 +1,4 @@
-"""Todo 112, step 7: check the new eval judge (`gpt-6.1-sol`, high, codex) before scores rely on it.
+"""Check the new eval judge (`gpt-6.1-sol`, high, codex) before scores rely on it.
 
 Both checks judge existing model outputs against the references they were scored against before
 (the old ones, from `data/relabel/inputs/` once the relabel has copied them), so only the judge
@@ -6,7 +6,7 @@ changes:
 
 - `reviewed`: the 33 rows of the user's hand review (`runs/judge-review.html`, verdicts in
   `runs/judge-review.verdicts.jsonl`). The user found a real fault in 30 outputs and part of one in 3.
-  Under the todo 112 contract hedges and reasons are facts, so all 33 should fail.
+  Under the relabel contract hedges and reasons are facts, so all 33 should fail.
 - `sample`: stratified rows that the old judge (glm-5.3, low) judged, judged again by the new one.
   The report lists every disagreement for reading.
 
@@ -31,7 +31,7 @@ from . import evaluate
 RUNS = TRAINING_ROOT / "runs"
 OUT = RUNS / "judge-check"
 VERDICTS = RUNS / "judge-review.verdicts.jsonl"
-# The evaluations the old judge scored: todo 111's two runs and the hosted teacher.
+# The evaluations the old judge scored: two SFT runs and the hosted teacher.
 EVALS = {
     "lfm-e3": RUNS / "long-full-inst-1e-5-e3" / "eval-gpu-q8",
     "lfm-e3-noise": RUNS / "long-full-inst-1e-5-e3-noise" / "eval-gpu-q8",

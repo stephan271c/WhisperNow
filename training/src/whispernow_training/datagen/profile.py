@@ -1,6 +1,6 @@
 """How transcripts write fillers and phrase corrections, to compare generated inputs with real dictation.
 
-Todo 110 measured four real Parakeet dictations this way: fillers per 100 words, the share with a
+Four real Parakeet dictations were measured this way: fillers per 100 words, the share with a
 comma after them, the share written as a capitalized bare "Uh"/"Um", and fillers between a repeated
 word. Corrections are counted by the stock cue phrases the generator leaned on, stacks of them, and
 the re-decision forms real speakers used instead ("let's go with", "instead").

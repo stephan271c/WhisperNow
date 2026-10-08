@@ -241,6 +241,12 @@ def cmd_asr_probe(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=1))
 
 
+def cmd_asr_speed(args: argparse.Namespace) -> None:
+    from . import asr_speed
+
+    print(json.dumps(asr_speed.run(args.model or None), indent=1))
+
+
 def cmd_publish(args: argparse.Namespace) -> None:
     build.publish(args.repo)
     print(f"pushed {paths.BUILD} splits to the private dataset {args.repo}")
@@ -388,6 +394,11 @@ def main() -> None:
     probe.add_argument("--shards", type=int, default=1, help="how many probe processes share the rows")
     probe.add_argument("--report", action="store_true", help="only rewrite report.<model>.json from the rows already probed")
     probe.set_defaults(run=cmd_asr_probe)
+    speed = commands.add_parser(
+        "asr-speed", help="time each catalog speech model on the probe audio and score its WER (needs --extra audio)"
+    )
+    speed.add_argument("--model", action="append", help="measure only this model; repeatable")
+    speed.set_defaults(run=cmd_asr_speed)
 
     publish = commands.add_parser("publish", help="push the built splits to a private Hugging Face dataset")
     publish.add_argument("repo", help="dataset repo id, such as your-name/whispernow-cleanup")

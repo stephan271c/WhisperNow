@@ -26,6 +26,7 @@ Every row has one schema (`datagen/schema.py`): `id`, `input`, `output`, `source
 | 3. Generate gaps and hard cases | `uv run datagen generate` | `data/stage3/<category>.jsonl` |
 | 3b. Extra test rows for the small categories | `uv run datagen generate --test` | `data/stage3/<category>.test.jsonl` |
 | Hear what the recognizers write (speaks with Kokoro, then transcribes as the app does; `--model whisper` or `qwen3` re-transcribes the kept audio; `--report` only rewrites the report) | `uv run --extra audio datagen asr-probe --n 300` | `data/probe/<model>*.jsonl`, `report.<model>.json` |
+| Time the app's speech models on 40 probe dictations and score their WER (`--model <name>` for one) | `uv run --extra audio datagen asr-speed` | `data/probe/asr_speed.json` |
 | 7. Restyle half the aawaaz inputs (`--recheck` re-checks rejects, no calls) | `uv run datagen restyle` | `data/restyle/aawaaz.jsonl`, `rejected.jsonl` |
 | 110.1 Completeness audit of every long reference and 500 short ones (`--fix` relabels the failures through the gates; `--report` only rewrites the report) | `uv run datagen audit` | `data/audit/{rows,verdicts}.jsonl`, `report.json` |
 | 110.3 Filler formatting and correction cues: real dictations, the build, the injection, any files | `uv run datagen profile [--injection] [FILE …]` | stdout |
@@ -202,7 +203,7 @@ After the register fix, the relabeled casual_conversation stories read as the sp
 
 ## Teacher prompt and agreement
 
-The teacher is `LLM_MODEL` sent exactly what the app sends for Clean Up & Format. That is `ENHANCEMENT_SYSTEM_CONTRACT` as the system message, and the `fix_grammar` edit request wrapped as `build_enhancement_prompt` does in Cleanup mode. `prompts/teacher/` holds copies, and `tests/test_teacher.py` fails if they drift from the Rust source.
+The teacher is `LLM_MODEL` sent exactly what the app sends a cleanup provider. That is `CLEANUP_SYSTEM_CONTRACT` as the system message, and `CLEANUP_PROMPT` wrapped as `build_cleanup_prompt` does. `prompts/teacher/` holds copies, and `tests/test_teacher.py` fails if they drift from the Rust source.
 
 The check runs the teacher on 50 held-out aawaaz rows, spread across categories. `glm-5.3` then compares each output with the aawaaz reference on layout, lead-ins and kept facts (`prompts/judge/agreement.md`).
 
@@ -349,7 +350,7 @@ Imported aawaaz inputs are lowercase and unpunctuated, but every recognizer the 
 
 ### What the recognizers write
 
-`asr-probe` speaks 300 sampled inputs (55% aawaaz, half of those from the longest quarter; 20% teacher, 15% handy, 10% disfl_qa) with a random English Kokoro voice at speed 0.95–1.15, in chunks with 0.15–1.4 s pauses: 2.3 hours of audio. It then runs the app's path in Python, with the same Silero VAD settings and segmenter constants and the same segment join, through three recognizers on the same audio: Parakeet TDT 0.6B v2 fp16 (greedy search), Whisper distil-large-v3.5 int8 with the app's settings (automatic language, no tail padding), and Qwen3-ASR 0.6B int8, which the app does not offer yet. `data/probe/report.<model>.json` has the numbers:
+`asr-probe` speaks 300 sampled inputs (55% aawaaz, half of those from the longest quarter; 20% teacher, 15% handy, 10% disfl_qa) with a random English Kokoro voice at speed 0.95–1.15, in chunks with 0.15–1.4 s pauses: 2.3 hours of audio. It then runs the app's path in Python, with the same Silero VAD settings and segmenter constants and the same segment join, through three recognizers on the same audio: Parakeet TDT 0.6B v2 fp16 (greedy search), Whisper distil-large-v3.5 int8 with the app's settings (automatic language, no tail padding), and Qwen3-ASR 0.6B int8. `data/probe/report.<model>.json` has the numbers:
 
 | | Parakeet | Whisper distil | Qwen3 0.6B |
 |---|---|---|---|
@@ -364,6 +365,28 @@ Imported aawaaz inputs are lowercase and unpunctuated, but every recognizer the 
 | WER against the spoken text (p50) | 5.3% | 7.1% | 6.2% |
 
 All three keep fillers ("uh" losses are Kokoro's: it says "uh" so that it is heard as "a" or "our"), keep spoken layout commands as words ("new line" 68–71 of 72), and sometimes write a spoken email or URL as an address. The app decodes long dictation in segments, about one per 75 words here, so a mid-sentence pause can leave a period and a new sentence ("I will. personally connect"). Synthetic speech is flatter than a person's, so treat the sentence-break numbers as rough.
+
+### Speech model speed
+
+`asr-speed` decodes every 7th probe dictation (40 of them, 1,032 s of segment audio after the app's segmenter) with each speech model in the app's catalog, using the app's recognizer settings: four CPU threads, greedy search. It needs every model in `.cache/asr/` (the app's FP16 Parakeet is read from the app's model directory). The catalog's speed ratings come from these numbers; accuracy comes from the Open ASR Leaderboard where a model is listed, because synthetic speech only ranks the models.
+
+Measured on a Ryzen 9 8945HS on 2026-10-08. The GPU column was measured on an RTX 5070 through sherpa-onnx 1.13.6's CUDA 13 build (commit bf759d3):
+
+| Model | × real time, CPU | × real time, GPU | WER on the probe (CPU / GPU) |
+|---|---|---|---|
+| Parakeet TDT v2 0.6B FP16 | 20.9 | 92.4 | 5.8% / 6.0% |
+| Parakeet TDT v2 0.6B int8 | 27.5 | 22.0 | 6.0% / 6.1% |
+| Parakeet Unified 0.6B int8 | 25.0 | 22.7 | 6.5% / 6.5% |
+| Parakeet TDT v3 0.6B int8 | 25.9 | 23.1 | 6.8% / 6.7% |
+| Parakeet TDT 110M int8 | 84.4 | 67.0 | 7.8% / 7.7% |
+| SenseVoice Small int8 (2024-07-17) | 55.6 | 48.3 | 12.6% / 12.7% |
+| Qwen3-ASR 0.6B int8 | 5.9 | 2.9 | 6.9% / 7.0% |
+| Whisper distil-large-v3.5 int8 | 4.9 | 7.6 | 7.5% / 7.7% |
+| Whisper large-v3-turbo int8 | 4.1 | 6.9 | 7.3% / 7.5% |
+
+The app runs speech models on the CPU only: the int8 builds are slower on the GPU and use more host memory there, and only FP16 Parakeet and the Whisper models gained.
+
+Three builds were tried and left out. Whisper large-v3 int8 ran slower than real time (0.5×; 6.3% WER), while Parakeet v2 is more accurate in English and Turbo covers the same languages. Moonshine Tiny (`sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27`) returns an empty result for any segment over about 9 s, and the app's segments run to 25 s. The 2025-09-09 SenseVoice build is a Cantonese fine-tune (WSYue) that writes English in garbled capitals (34% WER here).
 
 ### Restyle
 
@@ -603,8 +626,8 @@ The references for teacher-sourced rows are the teacher's own outputs, so the te
 The app runs the model itself, in process, on llama.cpp b11259's C API (todo 115); there is no server to start.
 
 1. In WhisperNow, choose the provider **Local cleanup model**, pick its **Cleanup model**, and download it when asked (Settings → Models also lists both). The default is `r112-full-inst-1e-5-e3` (LFM2.5-350M) at Q8_0 (379 MB), retrained on todo 112's relabeled build; the larger choice is `r112-minicpm-full-inst-1e-5-e3` (MiniCPM5-1B) at Q8_0 (1.15 GB), which loses a fifth to a quarter fewer facts but is slower. Both are pinned in the app's model registry by URL, size and SHA-256, and both use the same prompt, decoding and pre-cleaner. The chosen model loads when the provider or model is chosen, on the GPU when one works (Vulkan on Linux and Windows, Metal on Apple silicon) and otherwise on the CPU, and drafts from the pre-cleaned transcript as the patched server does. Only one is loaded at a time.
-2. Choose **Clean Up & Format** and turn visual context off. Settings refuse any other prompt, and visual context, with this provider.
-3. To use a `llama-server` of your own instead (`cleanup serve`), choose **Other** (OpenAI-compatible) with its URL. That path sends no `draft_text` and none of the decoding fields, so it is for trying other models.
+2. Choose **Clean Up & Format**. Settings refuse any other prompt with this provider.
+3. To use a `llama-server` of your own instead (`cleanup serve`), choose **Other** (OpenAI-compatible) with its URL. That path sends no `draft_text` and none of the decoding fields, so it is for trying other models, not for this one's parity.
 
-The patched server (`cleanup build-server`, `cleanup serve`) remains for training-side evaluation: `cleanup eval`, `bench` and `prefer`.
+The patched server (`cleanup build-server`, `cleanup serve`) remains for training-side evaluation: `cleanup eval`, `bench` and `prefer`. The parity harness that checked the app's engine against it was removed in todo 123; git history has it.
 

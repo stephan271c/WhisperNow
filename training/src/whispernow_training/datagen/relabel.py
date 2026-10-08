@@ -1,4 +1,4 @@
-"""Todo 112: every reference rewritten by one model under one contract.
+"""Every reference rewritten by one model under one contract.
 
 `gpt-6.1-sol` at high reasoning, through codex, writes the reference for every row of the build and
 both benchmarks, from the app's own request (`teacher.teacher_messages`), without seeing the old
@@ -323,15 +323,12 @@ async def run(
     }
 
 
-# --- The checks, old against new ------------------------------------------------------------
-
 _HESITATIONS = ("um", "umm", "uh", "uhh", "uhm", "erm", "er", "hmm", "mhm")
 # Lower case or capitalized only: "ER" and "UM" are acronyms.
 _HESITATION = re.compile(rf"\b(?:{'|'.join(f'[{w[0]}{w[0].upper()}]{w[1:]}' for w in _HESITATIONS)})\b")
 
 
 def writer(example: Example) -> str:
-    """Who wrote a reference, as todo 112's table names them."""
     if example.output == EMPTY and example.category == "empty":
         return "EMPTY (code)"
     model = example.teacher_model or "dataset authors"
@@ -339,7 +336,6 @@ def writer(example: Example) -> str:
 
 
 def kind(example: Example) -> str:
-    """The row's source, with the generated rows told apart: composed (todo 110) or stage 3 (todo 108)."""
     if example.source == "teacher":
         return "composed" if "composed" in example.tags else "generated"
     return example.source.split("/")[-1]
@@ -453,9 +449,6 @@ def scope_report(scope: str, root: Path | None = None) -> dict:
     return compare(old, new, records)
 
 
-# --- Pilot -----------------------------------------------------------------------------------
-
-
 def stratum(scope: str, example: Example) -> tuple[str, str]:
     return (f"{scope}:{kind(example)}:{writer(example)}", length_bucket(words(example.input)))
 
@@ -539,8 +532,6 @@ def pilot_report(runs: dict[str, dict] | None = None) -> dict:
     path.write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
     return report
 
-
-# --- Review page -----------------------------------------------------------------------------
 
 _TOKEN = re.compile(r"\s+|[^\s]+")
 
@@ -684,9 +675,6 @@ def review_page(rows: Sequence[tuple[str, Example, dict]], report: dict, out: Pa
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page, encoding="utf-8")
     return out
-
-
-# --- Applying the records ----------------------------------------------------------------------
 
 
 def apply_bench(rows: list[Example], scope: str) -> list[Example]:

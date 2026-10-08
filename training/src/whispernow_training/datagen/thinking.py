@@ -1,4 +1,4 @@
-"""What the teacher does with thinking aloud and mic checks (todo 110, step 3).
+"""What the teacher does with thinking aloud and mic checks.
 
 The hosted prompt says nothing about "let's see", "so yeah, I don't know" or "can you hear me?".
 This asks the generator for about 30 transcripts that contain them, each with the exact marker

@@ -1,5 +1,5 @@
 """Re-judges rows gated before the header rules reached the judges, and checks the long benchmark's
-references once more, one row per request (todo 110).
+references once more, one row per request.
 
 The judges now say how a cleanup treats a header: a lead-in, title or group label before a list is
 optional, but a header the speaker said must be kept and one that misnames what it heads is wrong.
@@ -55,7 +55,6 @@ def affected(example: Example) -> bool:
 
 
 def apply(rows: Sequence[Example], directory: Path, passes: Sequence[str] = PASSES) -> list[Example]:
-    """The rows with each pass's verdicts in `directory` applied."""
     kept = list(rows)
     for name in passes:
         path = overrides_file(directory, name)

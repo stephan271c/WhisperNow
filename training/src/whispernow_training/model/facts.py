@@ -1,4 +1,4 @@
-"""Where a reference carries its facts, found in code (todo 114).
+"""Where a reference carries its facts, found in code.
 
 Two uses:
 - **Fact-weighted SFT** weights the loss on the reference tokens inside `fact_spans`: values
@@ -123,7 +123,6 @@ def fact_spans(text: str) -> list[Span]:
 
 
 def char_mask(text: str, spans: list[Span] | None = None) -> list[bool]:
-    """True for each character of `text` inside a fact span."""
     mask = [False] * len(text)
     for span in fact_spans(text) if spans is None else spans:
         for index in range(span.start, span.end):
