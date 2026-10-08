@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use sherpa_onnx::{
-    OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig,
-    OfflineWhisperModelConfig,
+    OfflineQwen3ASRModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
+    OfflineSenseVoiceModelConfig, OfflineTransducerModelConfig, OfflineWhisperModelConfig,
 };
 use whispernow_core::{
     ResolvedModel,
@@ -14,6 +14,10 @@ use whispernow_domain::{ModelId, ModelLayout};
 const THREAD_COUNT: i32 = 4;
 const TRANSDUCER_FEATURE_DIM: i32 = 80;
 const GREEDY_SEARCH: &str = "greedy_search";
+/// A 25 s segment is about 325 audio tokens, more than sherpa-onnx's default 512-token budget
+/// leaves room for with the text.
+const QWEN3_ASR_MAX_TOTAL_TOKENS: i32 = 1024;
+const QWEN3_ASR_MAX_NEW_TOKENS: i32 = 256;
 
 #[derive(Default)]
 pub struct SherpaAsrEngine {
@@ -95,12 +99,42 @@ fn recognizer_config(model: &ResolvedModel) -> Result<OfflineRecognizerConfig, A
                 enable_segment_timestamps: false,
             };
         }
+        ModelLayout::SenseVoice {
+            model: network,
+            tokens,
+        } => {
+            config.model_config.tokens = Some(path(tokens)?);
+            config.model_config.sense_voice = OfflineSenseVoiceModelConfig {
+                model: Some(path(network)?),
+                language: Some("auto".to_owned()),
+                // Inverse text normalization: punctuation and digits.
+                use_itn: true,
+            };
+        }
+        ModelLayout::Qwen3Asr {
+            conv_frontend,
+            encoder,
+            decoder,
+            vocab,
+            ..
+        } => {
+            let tokenizer = Path::new(vocab).parent().ok_or(AsrError::LoadFailed)?;
+            config.model_config.qwen3_asr = OfflineQwen3ASRModelConfig {
+                conv_frontend: Some(path(conv_frontend)?),
+                encoder: Some(path(encoder)?),
+                decoder: Some(path(decoder)?),
+                tokenizer: Some(artifact_path(&model.root, tokenizer)?),
+                max_total_len: QWEN3_ASR_MAX_TOTAL_TOKENS,
+                max_new_tokens: QWEN3_ASR_MAX_NEW_TOKENS,
+                ..OfflineQwen3ASRModelConfig::default()
+            };
+        }
         ModelLayout::Gguf { .. } => return Err(AsrError::LoadFailed),
     }
     Ok(config)
 }
 
-fn artifact_path(root: &Path, artifact: &str) -> Result<String, AsrError> {
+fn artifact_path(root: &Path, artifact: impl AsRef<Path>) -> Result<String, AsrError> {
     root.join(artifact)
         .into_os_string()
         .into_string()
@@ -147,7 +181,7 @@ mod tests {
         assert_eq!(transducer.decoding_method.as_deref(), Some("greedy_search"));
 
         let whisper =
-            recognizer_config(&model("sherpa-onnx-whisper-tiny")).expect("whisper config");
+            recognizer_config(&model("sherpa-onnx-whisper-turbo")).expect("whisper config");
         assert_eq!(whisper.model_config.whisper.language.as_deref(), Some(""));
         assert_eq!(
             whisper.model_config.whisper.task.as_deref(),
@@ -155,5 +189,23 @@ mod tests {
         );
         assert!(!whisper.model_config.whisper.enable_token_timestamps);
         assert_eq!(whisper.model_config.transducer.joiner, None);
+
+        let qwen3 = recognizer_config(&model("sherpa-onnx-qwen3-asr-0.6b-int8-2026-03-25"))
+            .expect("qwen3 config");
+        assert_eq!(
+            qwen3.model_config.qwen3_asr.tokenizer.as_deref(),
+            Some("/models/sherpa-onnx-qwen3-asr-0.6b-int8-2026-03-25/tokenizer")
+        );
+        assert_eq!(qwen3.model_config.qwen3_asr.max_total_len, 1024);
+
+        let sense_voice = recognizer_config(&model(
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
+        ))
+        .expect("sense voice config");
+        assert_eq!(
+            sense_voice.model_config.sense_voice.language.as_deref(),
+            Some("auto")
+        );
+        assert!(sense_voice.model_config.sense_voice.use_itn);
     }
 }

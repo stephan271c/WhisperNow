@@ -203,7 +203,7 @@ small {
   padding-left: 26px;
 }
 
-.setup-model .model-ratings {
+.model-ratings {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1) var(--space-4);
@@ -233,7 +233,7 @@ small {
   background: var(--color-text-secondary);
 }
 
-.model-actions {
+.setup-model .model-actions {
   grid-column: 2;
   grid-row: 1 / span 2;
   justify-content: flex-end;
@@ -804,6 +804,29 @@ small {
 .download-phase {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
+}
+
+.model-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+
+.model-languages > summary {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.model-languages[open] {
+  flex-basis: 100%;
+}
+
+.model-languages > p {
+  max-width: 60ch;
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-primary);
 }
 
 .model-actions {

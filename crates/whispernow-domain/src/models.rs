@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
 
-const DEFAULT_SPEECH_MODEL_ID: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16";
+const DEFAULT_SPEECH_MODEL_ID: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
 
 pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-lfm2.5-350m-q8_0";
 /// The larger local cleanup model (a `MiniCPM5-1B` fine-tune): slower, but keeps more facts.
@@ -85,6 +85,8 @@ impl<'de> Deserialize<'de> for ModelId {
 pub enum ModelFamily {
     Transducer,
     Whisper,
+    SenseVoice,
+    Qwen3Asr,
     /// The local cleanup model: one GGUF that llama.cpp runs. It does not transcribe.
     Cleanup,
     /// Not a model: llama.cpp's CUDA backend, downloaded and listed with the models it runs.
@@ -94,7 +96,10 @@ pub enum ModelFamily {
 impl ModelFamily {
     #[must_use]
     pub const fn is_speech(self) -> bool {
-        matches!(self, Self::Transducer | Self::Whisper)
+        matches!(
+            self,
+            Self::Transducer | Self::Whisper | Self::SenseVoice | Self::Qwen3Asr
+        )
     }
 }
 
@@ -116,13 +121,6 @@ pub enum ModelAvailability {
     NotInstalled,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct AsrCapabilities {
-    /// BCP-47 tags tested with the model. Empty means unknown.
-    pub languages: Vec<String>,
-    pub automatic_language_detection: bool,
-}
-
 /// The files a model needs, as slash-separated paths relative to its directory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelLayout {
@@ -140,6 +138,19 @@ pub enum ModelLayout {
         decoder: String,
         tokens: String,
     },
+    SenseVoice {
+        model: String,
+        tokens: String,
+    },
+    /// sherpa-onnx reads the tokenizer as a directory; its three files sit in one.
+    Qwen3Asr {
+        conv_frontend: String,
+        encoder: String,
+        decoder: String,
+        vocab: String,
+        merges: String,
+        tokenizer_config: String,
+    },
 }
 
 impl ModelLayout {
@@ -148,6 +159,8 @@ impl ModelLayout {
         match self {
             Self::Transducer { .. } => ModelFamily::Transducer,
             Self::Whisper { .. } => ModelFamily::Whisper,
+            Self::SenseVoice { .. } => ModelFamily::SenseVoice,
+            Self::Qwen3Asr { .. } => ModelFamily::Qwen3Asr,
             Self::Gguf { .. } => ModelFamily::Cleanup,
         }
     }
@@ -167,6 +180,22 @@ impl ModelLayout {
                 decoder,
                 tokens,
             } => vec![encoder, decoder, tokens],
+            Self::SenseVoice { model, tokens } => vec![model, tokens],
+            Self::Qwen3Asr {
+                conv_frontend,
+                encoder,
+                decoder,
+                vocab,
+                merges,
+                tokenizer_config,
+            } => vec![
+                conv_frontend,
+                encoder,
+                decoder,
+                vocab,
+                merges,
+                tokenizer_config,
+            ],
         }
     }
 }
@@ -182,6 +211,16 @@ pub struct ModelSource {
     pub sha256: String,
 }
 
+impl ModelSource {
+    /// The directory a `.tar.bz2` archive holds the files under: the URL's file name without
+    /// the extension. It can differ from the model id in case.
+    #[must_use]
+    pub fn archive_root(&self) -> &str {
+        let name = self.url.rsplit('/').next().unwrap_or_default();
+        name.strip_suffix(".tar.bz2").unwrap_or(name)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ArchiveFormat {
     TarBz2,
@@ -189,35 +228,146 @@ pub enum ArchiveFormat {
     SingleFile,
 }
 
+/// A score from one to [`Rating::MAX`]; more is better.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RelativeRating {
-    Low,
-    Medium,
-    High,
-}
+#[serde(transparent)]
+pub struct Rating(u8);
 
-/// A hint for choosing between models on the same computer, not a measurement.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct ModelProfile {
-    pub speed: RelativeRating,
-    pub accuracy: RelativeRating,
-}
+impl Rating {
+    pub const MAX: u8 = 5;
 
-impl ModelProfile {
-    const fn new(speed: RelativeRating, accuracy: RelativeRating) -> Self {
-        Self { speed, accuracy }
+    #[must_use]
+    pub const fn new(score: u8) -> Self {
+        Self(if score == 0 {
+            1
+        } else if score > Self::MAX {
+            Self::MAX
+        } else {
+            score
+        })
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Where a speech model's English word error rate comes from.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WerSource {
+    /// The average over the Open ASR Leaderboard's English test sets.
+    Leaderboard,
+    /// Not on the leaderboard: placed among the models that are by its rate on the app's
+    /// dictation test (`datagen asr-speed`).
+    Estimated,
+}
+
+/// A speech model's measured accuracy and speed.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechBenchmark {
+    /// In percent.
+    pub english_wer: f32,
+    pub wer_source: WerSource,
+    /// Times faster than real time on the CPU, with the app's recognizer settings.
+    pub speed: f32,
+}
+
+impl SpeechBenchmark {
+    #[must_use]
+    pub fn accuracy(&self) -> Rating {
+        Rating::new(match self.english_wer {
+            wer if wer < 5.5 => 5,
+            wer if wer <= 6.25 => 4,
+            wer if wer <= 7.25 => 3,
+            wer if wer <= 9.0 => 2,
+            _ => 1,
+        })
+    }
+
+    #[must_use]
+    pub fn speed(&self) -> Rating {
+        Rating::new(match self.speed {
+            speed if speed >= 50.0 => 5,
+            speed if speed >= 24.0 => 4,
+            speed if speed >= 10.0 => 3,
+            speed if speed >= 2.0 => 2,
+            _ => 1,
+        })
+    }
+}
+
+/// A hint for choosing between models on the same computer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ModelProfile {
+    /// Ratings given without a benchmark.
+    Rated {
+        speed: Rating,
+        accuracy: Rating,
+    },
+    Measured(SpeechBenchmark),
+}
+
+impl ModelProfile {
+    #[must_use]
+    pub const fn rated(speed: u8, accuracy: u8) -> Self {
+        Self::Rated {
+            speed: Rating::new(speed),
+            accuracy: Rating::new(accuracy),
+        }
+    }
+
+    #[must_use]
+    pub fn accuracy(&self) -> Rating {
+        match self {
+            Self::Rated { accuracy, .. } => *accuracy,
+            Self::Measured(benchmark) => benchmark.accuracy(),
+        }
+    }
+
+    #[must_use]
+    pub fn speed(&self) -> Rating {
+        match self {
+            Self::Rated { speed, .. } => *speed,
+            Self::Measured(benchmark) => benchmark.speed(),
+        }
+    }
+
+    #[must_use]
+    pub fn benchmark(&self) -> Option<SpeechBenchmark> {
+        match self {
+            Self::Rated { .. } => None,
+            Self::Measured(benchmark) => Some(*benchmark),
+        }
+    }
+}
+
+fn leaderboard(english_wer: f32, speed: f32) -> ModelProfile {
+    ModelProfile::Measured(SpeechBenchmark {
+        english_wer,
+        wer_source: WerSource::Leaderboard,
+        speed,
+    })
+}
+
+fn estimated(english_wer: f32, speed: f32) -> ModelProfile {
+    ModelProfile::Measured(SpeechBenchmark {
+        english_wer,
+        wer_source: WerSource::Estimated,
+        speed,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ModelDefinition {
     pub id: ModelId,
     pub display_name: String,
-    /// An archive holds the files under a directory named after the id.
     pub source: ModelSource,
     pub layout: ModelLayout,
-    pub capabilities: AsrCapabilities,
+    /// The BCP-47 tags of the languages a speech model transcribes; empty for other models.
+    pub languages: Vec<String>,
     pub profile: ModelProfile,
 }
 
@@ -240,24 +390,67 @@ impl ModelRegistry {
         Self { models }
     }
 
+    /// Speech models in display order. Accuracy is the average English WER on the Open ASR
+    /// Leaderboard's 24 Jul 2026 snapshot; Parakeet Unified and `SenseVoice` are not listed and
+    /// are placed by their WER relative to the listed models in `datagen asr-speed`. Speed is
+    /// times real time with the app's recognizer settings on a Ryzen 9 8945HS, measured by
+    /// `datagen asr-speed` (training/README.md).
     #[must_use]
     pub fn builtin() -> Self {
         Self::new(vec![
-            transducer(
-                "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16",
-                "Parakeet TDT v2 0.6B (FP16)",
-                1_120_982_957,
-                "37f67a1a6c942dae27d345ee395fbd19e25ee48996faf70fca25779026054cf0",
-                "fp16",
-                ModelProfile::new(RelativeRating::Medium, RelativeRating::High),
-            ),
             transducer(
                 "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
                 "Parakeet TDT v2 0.6B (Int8)",
                 482_468_385,
                 "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad",
-                "int8",
-                ModelProfile::new(RelativeRating::High, RelativeRating::High),
+                ENGLISH,
+                leaderboard(5.39, 27.5),
+            ),
+            transducer(
+                "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16",
+                "Parakeet TDT v2 0.6B (FP16)",
+                1_120_982_957,
+                "37f67a1a6c942dae27d345ee395fbd19e25ee48996faf70fca25779026054cf0",
+                ENGLISH,
+                leaderboard(5.39, 20.9),
+            ),
+            transducer(
+                "sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
+                "Parakeet Unified 0.6B",
+                501_350_460,
+                "99f63605b3a85a54c250c0869670a687b7d6598a47bf2421515e1f839a76e150",
+                ENGLISH,
+                estimated(5.5, 25.0),
+            ),
+            transducer(
+                "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+                "Parakeet TDT v3 0.6B",
+                487_170_055,
+                "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
+                PARAKEET_V3_LANGUAGES,
+                leaderboard(5.66, 25.9),
+            ),
+            transducer(
+                "sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8",
+                "Parakeet TDT 110M",
+                108_035_095,
+                "f628312e9fdf8686374cb01a69425c41732529d540860311f16f37cbc32cfe9b",
+                ENGLISH,
+                leaderboard(6.61, 84.4),
+            ),
+            sense_voice(
+                "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
+                "SenseVoice Small",
+                163_002_883,
+                "7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e",
+                estimated(11.0, 55.6),
+            ),
+            qwen3_asr(
+                "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+                "Qwen3-ASR 0.6B",
+                878_702_423,
+                "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+                leaderboard(5.61, 5.9),
             ),
             whisper(
                 "sherpa-onnx-whisper-distil-large-v3.5",
@@ -265,31 +458,17 @@ impl ModelRegistry {
                 "distil-large-v3.5",
                 528_659_059,
                 "ec874c7346d24ef8063e05430ede616d66d80a410360283099d0bdf659187b1d",
-                ModelProfile::new(RelativeRating::Medium, RelativeRating::High),
+                ENGLISH,
+                leaderboard(6.10, 4.9),
             ),
             whisper(
-                "sherpa-onnx-whisper-small",
-                "Whisper Small",
-                "small",
-                639_387_718,
-                "486a46afbb7ba798507190ffe02fea2dd726049af212e774537efac6afb210a6",
-                ModelProfile::new(RelativeRating::Medium, RelativeRating::Medium),
-            ),
-            whisper(
-                "sherpa-onnx-whisper-tiny",
-                "Whisper Tiny",
-                "tiny",
-                116_204_861,
-                "c46116994e539aa165266d96b325252728429c12535eb9d8b6a2b10f129e66b1",
-                ModelProfile::new(RelativeRating::High, RelativeRating::Low),
-            ),
-            whisper(
-                "sherpa-onnx-whisper-large-v3",
-                "Whisper Large v3",
-                "large-v3",
-                1_068_482_488,
-                "2d0e134b3b5fc4a0533baf24a0c9d473b629aa47f030af0a165a05f461df7a03",
-                ModelProfile::new(RelativeRating::Low, RelativeRating::High),
+                "sherpa-onnx-whisper-turbo",
+                "Whisper Large v3 Turbo",
+                "turbo",
+                563_790_207,
+                "b11acbbcd660b44a8e0df33724feb5aaa709cf65668f2823d59f656312544f22",
+                WHISPER_LANGUAGES,
+                leaderboard(7.01, 4.1),
             ),
             // `training/runs/r112-full-inst-1e-5-e3/gguf/model-Q8_0.gguf`: LFM2.5-350M
             // fine-tuned for cleanup, under the
@@ -299,7 +478,7 @@ impl ModelRegistry {
                 "Local cleanup model (LFM2.5 350M)",
                 379_215_072,
                 "a46d6f79213615cd2faa960c24e8fb2ace09c28e3c1a07ef15f6e9cad974d53b",
-                ModelProfile::new(RelativeRating::High, RelativeRating::Medium),
+                ModelProfile::rated(5, 3),
             ),
             // `training/runs/r112-minicpm-full-inst-1e-5-e3/gguf/model-Q8_0.gguf`:
             // MiniCPM5-1B fine-tuned the same way, under Apache-2.0.
@@ -308,7 +487,7 @@ impl ModelRegistry {
                 "Local cleanup model (MiniCPM5 1B)",
                 1_153_520_640,
                 "9c28d3e0c029907624ad0c2dac0adda77d485ddbcfbfebd67658aceb434e3fbb",
-                ModelProfile::new(RelativeRating::Medium, RelativeRating::High),
+                ModelProfile::rated(3, 5),
             ),
         ])
     }
@@ -332,13 +511,42 @@ impl ModelRegistry {
     }
 }
 
-fn source(id: &str, archive_size_bytes: u64, sha256: &str) -> ModelSource {
+fn source(archive: &str, archive_size_bytes: u64, sha256: &str) -> ModelSource {
     ModelSource {
-        url: format!("{RELEASE_BASE}/{id}.tar.bz2"),
+        url: format!("{RELEASE_BASE}/{archive}.tar.bz2"),
         archive_format: ArchiveFormat::TarBz2,
         archive_size_bytes,
         sha256: sha256.to_owned(),
     }
+}
+
+const ENGLISH: &[&str] = &["en"];
+
+const PARAKEET_V3_LANGUAGES: &[&str] = &[
+    "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv", "mt",
+    "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+];
+
+/// Whisper's tokenizer languages, with `jw` written as its BCP-47 tag `jv`.
+const WHISPER_LANGUAGES: &[&str] = &[
+    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da",
+    "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw", "he",
+    "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jv", "ka", "kk", "km", "kn", "ko", "la",
+    "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl",
+    "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so",
+    "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz",
+    "vi", "yi", "yo", "yue", "zh",
+];
+
+const SENSE_VOICE_LANGUAGES: &[&str] = &["en", "ja", "ko", "yue", "zh"];
+
+const QWEN3_ASR_LANGUAGES: &[&str] = &[
+    "ar", "cs", "da", "de", "el", "en", "es", "fa", "fi", "fil", "fr", "hi", "hu", "id", "it",
+    "ja", "ko", "mk", "ms", "nl", "pl", "pt", "ro", "ru", "sv", "th", "tr", "vi", "yue", "zh",
+];
+
+fn tags(languages: &[&str]) -> Vec<String> {
+    languages.iter().map(|&tag| tag.to_owned()).collect()
 }
 
 fn transducer(
@@ -346,9 +554,13 @@ fn transducer(
     display_name: &str,
     archive_size_bytes: u64,
     sha256: &str,
-    precision: &str,
+    languages: &[&str],
     profile: ModelProfile,
 ) -> ModelDefinition {
+    let precision = id
+        .rsplit('-')
+        .find(|part| ["fp16", "int8"].contains(part))
+        .expect("a transducer id names its precision");
     ModelDefinition {
         id: ModelId::new(id).expect("built-in identifiers are non-empty"),
         display_name: display_name.to_owned(),
@@ -359,7 +571,7 @@ fn transducer(
             joiner: format!("joiner.{precision}.onnx"),
             tokens: "tokens.txt".to_owned(),
         },
-        capabilities: AsrCapabilities::default(),
+        languages: tags(languages),
         profile,
     }
 }
@@ -370,6 +582,7 @@ fn whisper(
     artifact_prefix: &str,
     archive_size_bytes: u64,
     sha256: &str,
+    languages: &[&str],
     profile: ModelProfile,
 ) -> ModelDefinition {
     ModelDefinition {
@@ -381,12 +594,51 @@ fn whisper(
             decoder: format!("{artifact_prefix}-decoder.int8.onnx"),
             tokens: format!("{artifact_prefix}-tokens.txt"),
         },
-        // Whisper detects the language. Only English is tested; tag claims stay
-        // conservative until each language is.
-        capabilities: AsrCapabilities {
-            languages: vec!["en".to_owned()],
-            automatic_language_detection: true,
+        languages: tags(languages),
+        profile,
+    }
+}
+
+fn sense_voice(
+    id: &str,
+    display_name: &str,
+    archive_size_bytes: u64,
+    sha256: &str,
+    profile: ModelProfile,
+) -> ModelDefinition {
+    ModelDefinition {
+        id: ModelId::new(id).expect("built-in identifiers are non-empty"),
+        display_name: display_name.to_owned(),
+        source: source(id, archive_size_bytes, sha256),
+        layout: ModelLayout::SenseVoice {
+            model: "model.int8.onnx".to_owned(),
+            tokens: "tokens.txt".to_owned(),
         },
+        languages: tags(SENSE_VOICE_LANGUAGES),
+        profile,
+    }
+}
+
+fn qwen3_asr(
+    archive: &str,
+    display_name: &str,
+    archive_size_bytes: u64,
+    sha256: &str,
+    profile: ModelProfile,
+) -> ModelDefinition {
+    ModelDefinition {
+        id: ModelId::new(archive.to_ascii_lowercase()).expect("built-in identifiers are valid"),
+        display_name: display_name.to_owned(),
+        source: source(archive, archive_size_bytes, sha256),
+        layout: ModelLayout::Qwen3Asr {
+            conv_frontend: "conv_frontend.onnx".to_owned(),
+            encoder: "encoder.int8.onnx".to_owned(),
+            decoder: "decoder.int8.onnx".to_owned(),
+            vocab: "tokenizer/vocab.json".to_owned(),
+            merges: "tokenizer/merges.txt".to_owned(),
+            tokenizer_config: "tokenizer/tokenizer_config.json".to_owned(),
+        },
+        languages: tags(QWEN3_ASR_LANGUAGES),
         profile,
     }
 }
@@ -410,7 +662,7 @@ fn local_cleanup(
         layout: ModelLayout::Gguf {
             model: CLEANUP_MODEL_FILE.to_owned(),
         },
-        capabilities: AsrCapabilities::default(),
+        languages: Vec::new(),
         profile,
     }
 }

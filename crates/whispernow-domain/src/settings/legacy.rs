@@ -6,8 +6,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    ApiKey, HistoryLimit, LlmProvider, ProviderEndpoint, ProviderSettings, RecordingMode, Settings,
-    Shortcut,
+    ApiKey, HistoryLimit, LlmProvider, ModelId, ModelRegistry, ProviderEndpoint, ProviderSettings,
+    RecordingMode, Settings, Shortcut,
 };
 
 /// Settings read from the Python release's `settings.json`, and the API keys it held in
@@ -26,6 +26,12 @@ impl PythonSettings {
         let mut settings = Settings::default();
         pick(document, "input_device", &mut settings.input_device);
         pick(document, "model_id", &mut settings.model_id);
+        if !ModelRegistry::builtin()
+            .speech_models()
+            .any(|model| model.id == settings.model_id)
+        {
+            settings.model_id = ModelId::default();
+        }
         pick(document, "start_minimized", &mut settings.start_minimized);
         pick(
             document,

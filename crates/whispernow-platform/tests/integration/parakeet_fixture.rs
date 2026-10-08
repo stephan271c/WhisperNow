@@ -5,17 +5,17 @@ use whispernow_domain::{ModelAvailability, ModelId, ModelRegistry};
 use whispernow_platform::SherpaAsrEngine;
 
 #[test]
-#[ignore = "manual native model test; requires the official extracted default archive and fixture (see docs/development.md)"]
-fn manual_default_parakeet_fixture_matches_documented_text() {
+#[ignore = "manual native model test; requires the official extracted Parakeet v2 FP16 archive and fixture (see docs/development.md)"]
+fn manual_parakeet_fixture_matches_documented_text() {
     const EXPECTED: &str = "Well, I don't wish to see it any more, observed Phebe, turning away her eyes. It is certainly very like the old portrait.";
 
-    let root = PathBuf::from(
-        std::env::var_os("WHISPERNOW_ASR_MODEL_ROOT")
-            .expect("WHISPERNOW_ASR_MODEL_ROOT must name the extracted default model archive root"),
-    );
+    let root =
+        PathBuf::from(std::env::var_os("WHISPERNOW_ASR_MODEL_ROOT").expect(
+            "WHISPERNOW_ASR_MODEL_ROOT must name the extracted Parakeet v2 FP16 archive root",
+        ));
     let definition = ModelRegistry::builtin()
-        .get(ModelId::default())
-        .expect("default model")
+        .get(ModelId::new("sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16").expect("model id"))
+        .expect("Parakeet v2 FP16")
         .clone();
     assert_eq!(
         root.file_name().and_then(|name| name.to_str()),

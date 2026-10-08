@@ -13,7 +13,7 @@ use super::actions::{DisabledReason, use_actions};
 use super::configuration::{RECORDING_MODES, choice_value, chosen};
 use super::home::percent;
 use super::labels::{self, format_bytes};
-use super::models::DownloadProgress;
+use super::models::{DownloadProgress, ModelLanguages};
 use super::ui::{Banner, Button, ButtonVariant, Icon, IconName, Segmented, ShortcutLabel, Tone};
 use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture, use_navigator};
 use crate::{
@@ -441,8 +441,9 @@ fn ModelChoice(model: ModelDto, checked: bool) -> Element {
                 if model.recommended { span { class: "pill", "Recommended" } }
             }
         }
-        p { id: "setup-model-{slug}-facts", class: "model-facts",
-            "{format_bytes(model.size_bytes)}"
+        div { id: "setup-model-{slug}-facts", class: "model-facts",
+            span { "{format_bytes(model.size_bytes)}" }
+            ModelLanguages { languages: model.languages.clone() }
         }
         div { class: "model-actions",
             if let Some(download) = download {

@@ -15,10 +15,10 @@ pub use history::{
     HistoryPageRequest, NewHistoryEntry, UtcMillis,
 };
 pub use models::{
-    ArchiveFormat, AsrCapabilities, CLEANUP_MODEL_FILE, CLEANUP_MODEL_IDS, CUDA_PACK_ID,
-    DEFAULT_CLEANUP_MODEL_ID, DownloadPhase, MINICPM_CLEANUP_MODEL_ID, ModelAvailability,
-    ModelDefinition, ModelFamily, ModelId, ModelLayout, ModelProfile, ModelRegistry, ModelSource,
-    RelativeRating,
+    ArchiveFormat, CLEANUP_MODEL_FILE, CLEANUP_MODEL_IDS, CUDA_PACK_ID, DEFAULT_CLEANUP_MODEL_ID,
+    DownloadPhase, MINICPM_CLEANUP_MODEL_ID, ModelAvailability, ModelDefinition, ModelFamily,
+    ModelId, ModelLayout, ModelProfile, ModelRegistry, ModelSource, Rating, SpeechBenchmark,
+    WerSource,
 };
 pub use provider::{EndpointError, LlmProvider, ProviderEndpoint};
 pub use settings::{

@@ -9,9 +9,10 @@ pub use dto::*;
 pub use whispernow_domain::{
     ApiKey, ClearDataCategory, DownloadPhase, EndpointError, EntryId, EntryStatus, HistoryCursor,
     HistoryEntry, HistoryFilter, HistoryLimit, HistoryPage, HistoryPageRequest, LlmProvider,
-    ModelAvailability, ModelFamily, ModelId, ProviderEndpoint, ProviderSettings, RecordingMode,
-    RelativeRating, Settings, SettingsError, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
-    ShortcutModifier, ThemePreference, UtcMillis, VocabularyReplacement,
+    ModelAvailability, ModelFamily, ModelId, ProviderEndpoint, ProviderSettings, Rating,
+    RecordingMode, Settings, SettingsError, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
+    ShortcutModifier, SpeechBenchmark, ThemePreference, UtcMillis, VocabularyReplacement,
+    WerSource,
 };
 
 pub const STATE_CHANGED_EVENT: &str = "whispernow://state-changed";

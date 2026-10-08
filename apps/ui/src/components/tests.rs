@@ -3,9 +3,10 @@ use whispernow_api::{
     ApiErrorDto, AppStateDto, ClearDataCategory, ClearDataRequest, ClearDataResult,
     ClearDataResultItemDto, DataLocationDto, ErrorCategoryDto, HistoryLimit, ListModelsResponse,
     LlmProvider, MicrophoneTestResponse, ModelAvailability, ModelDto, ModelId, ModelStateDto,
-    PhaseDto, ProviderSettings, RecordingMode, RelativeRating, SaveSettingsResponse, Settings,
+    PhaseDto, ProviderSettings, Rating, RecordingMode, SaveSettingsResponse, Settings,
     SettingsView, SetupCheckpoint, SetupStateView, SetupStep, Shortcut, ShortcutKey,
-    ShortcutModifier, TranscriptResponse, UpdateSettingsRequest, VocabularyReplacement,
+    ShortcutModifier, SpeechBenchmark, TranscriptResponse, UpdateSettingsRequest,
+    VocabularyReplacement, WerSource,
 };
 
 use crate::client::{ClientError, fake};
@@ -370,10 +371,10 @@ pub(super) fn model(id: &str, name: &str, availability: ModelAvailability) -> Mo
         family: whispernow_api::ModelFamily::Whisper,
         availability,
         languages: vec!["en".to_owned()],
-        automatic_language_detection: false,
         size_bytes: 75_000_000,
-        speed: RelativeRating::High,
-        accuracy: RelativeRating::Medium,
+        speed: Rating::new(5),
+        accuracy: Rating::new(3),
+        benchmark: None,
         recommended: name == "Base",
     }
 }
@@ -771,9 +772,50 @@ fn speech_models_show_speed_and_accuracy_as_bars() {
     let mut page = shell(snapshot(PhaseDto::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
-    assert!(html.contains("aria-label=\"Speed: 3 of 3\""), "{html}");
-    assert!(html.contains("aria-label=\"Accuracy: 2 of 3\""));
-    assert!(!html.contains("English"), "the languages are not listed");
+    assert!(html.contains("aria-label=\"Speed: 5 of 5\""), "{html}");
+    assert!(html.contains("aria-label=\"Accuracy: 3 of 5\""));
+}
+
+#[test]
+fn speed_and_accuracy_bars_explain_themselves_on_hover() {
+    let mut management = configured();
+    management.models[0].speed = Rating::new(3);
+    management.models[0].benchmark = Some(SpeechBenchmark {
+        english_wer: 5.39,
+        wer_source: WerSource::Leaderboard,
+        speed: 20.9,
+    });
+    management.models[1].benchmark = Some(SpeechBenchmark {
+        english_wer: 11.0,
+        wer_source: WerSource::Estimated,
+        speed: 55.6,
+    });
+    let mut page = shell(snapshot(PhaseDto::Idle), management);
+    open(&mut page, &["nav-settings", "nav-settings-models"]);
+    let html = page.html();
+    assert!(
+        html.contains("aria-label=\"Speed: 3 of 5. 21× real time\""),
+        "{html}"
+    );
+    assert!(html.contains("title=\"21× real time\""), "{html}");
+    assert!(html.contains("title=\"English word error rate: 5.39% (Open ASR Leaderboard)\""));
+    assert!(html.contains(
+        "title=\"English word error rate: about 11.0% (estimated; not on the Open ASR Leaderboard)\""
+    ));
+}
+
+#[test]
+fn one_language_is_named_and_several_open_as_a_list_by_name() {
+    let mut management = configured();
+    management.models[0].languages = vec!["en".to_owned()];
+    management.models[1].languages = ["uk", "de", "en", "xx"].map(str::to_owned).to_vec();
+    let mut page = shell(snapshot(PhaseDto::Idle), management);
+    open(&mut page, &["nav-settings", "nav-settings-models"]);
+    let html = page.html();
+    assert!(html.contains("<span>English</span>"), "{html}");
+    assert!(html.contains("<summary>4 languages</summary>"), "{html}");
+    // Sorted by name; a tag without a name shows as itself.
+    assert!(html.contains("English, German, Ukrainian, xx"), "{html}");
 }
 
 #[test]

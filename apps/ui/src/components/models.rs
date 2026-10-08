@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use whispernow_api::{
-    ActiveDownloadDto, LlmProvider, ModelAvailability, ModelDto, ModelId, ModelStateDto,
-    RelativeRating,
+    ActiveDownloadDto, LlmProvider, ModelAvailability, ModelDto, ModelId, ModelStateDto, Rating,
+    SpeechBenchmark, WerSource,
 };
 
 use super::NoticeRegion;
@@ -127,11 +127,16 @@ pub(super) fn ModelRow(model: ModelDto, kind: ModelRowKind) -> Element {
                         span { class: "pill", "Recommended" }
                     }
                 }
-                p { class: "model-facts", "{format_bytes(model.size_bytes)} download" }
+                div { class: "model-facts",
+                    span { "{format_bytes(model.size_bytes)} download" }
+                    ModelLanguages { languages: model.languages.clone() }
+                }
                 if kind != ModelRowKind::Runtime {
                     div { class: "model-ratings",
-                        Rating { label: "Speed", value: model.speed }
-                        Rating { label: "Accuracy", value: model.accuracy }
+                        RatingBars { label: "Speed", value: model.speed,
+                            detail: model.benchmark.map(|benchmark| speed_detail(&benchmark)) }
+                        RatingBars { label: "Accuracy", value: model.accuracy,
+                            detail: model.benchmark.map(|benchmark| accuracy_detail(&benchmark)) }
                     }
                 }
             }
@@ -224,25 +229,65 @@ pub(super) fn DownloadProgress(download: ActiveDownloadDto, name: String) -> Ele
     }
 }
 
-const RATING_STEPS: u8 = 3;
-
-const fn rating_steps(value: RelativeRating) -> u8 {
-    match value {
-        RelativeRating::Low => 1,
-        RelativeRating::Medium => 2,
-        RelativeRating::High => 3,
+fn speed_detail(benchmark: &SpeechBenchmark) -> String {
+    let speed = benchmark.speed;
+    if speed < 10.0 {
+        format!("{speed:.1}× real time")
+    } else {
+        format!("{speed:.0}× real time")
     }
 }
 
+fn accuracy_detail(benchmark: &SpeechBenchmark) -> String {
+    let wer = benchmark.english_wer;
+    match benchmark.wer_source {
+        WerSource::Leaderboard => {
+            format!("English word error rate: {wer:.2}% (Open ASR Leaderboard)")
+        }
+        WerSource::Estimated => format!(
+            "English word error rate: about {wer:.1}% (estimated; not on the Open ASR Leaderboard)"
+        ),
+    }
+}
+
+/// `detail` is the measurement behind the rating, shown on hover.
 #[component]
-fn Rating(label: &'static str, value: RelativeRating) -> Element {
-    let filled = rating_steps(value);
+fn RatingBars(label: &'static str, value: Rating, detail: Option<String>) -> Element {
+    let filled = value.get();
+    let spoken = detail.as_ref().map_or_else(
+        || format!("{label}: {filled} of {}", Rating::MAX),
+        |detail| format!("{label}: {filled} of {}. {detail}", Rating::MAX),
+    );
     rsx! {
-        span { class: "rating", role: "img", aria_label: "{label}: {filled} of {RATING_STEPS}",
+        span { class: "rating", role: "img", title: detail, aria_label: "{spoken}",
             span { aria_hidden: "true", "{label}" }
             span { class: "rating-bars", aria_hidden: "true",
-                for step in 1..=RATING_STEPS {
+                for step in 1..=Rating::MAX {
                     span { class: if step <= filled { "rating-bar filled" } else { "rating-bar" } }
+                }
+            }
+        }
+    }
+}
+
+/// One language by name, or a count that opens the full list.
+#[component]
+pub(super) fn ModelLanguages(languages: Vec<String>) -> Element {
+    let mut names: Vec<&str> = languages
+        .iter()
+        .map(|tag| labels::language_name(tag))
+        .collect();
+    names.sort_unstable();
+    match names.as_slice() {
+        [] => rsx! {},
+        [name] => rsx! { span { "{name}" } },
+        names => {
+            let count = names.len();
+            let list = names.join(", ");
+            rsx! {
+                details { class: "model-languages",
+                    summary { "{count} languages" }
+                    p { "{list}" }
                 }
             }
         }

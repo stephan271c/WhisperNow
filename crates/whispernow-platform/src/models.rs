@@ -45,7 +45,7 @@ where
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ModelListEntry {
     pub definition: ModelDefinition,
     pub availability: ModelAvailability,
@@ -218,8 +218,8 @@ impl ModelStore {
     ) -> Result<PathBuf, ModelStoreError> {
         let file = File::open(archive_file).map_err(|_| filesystem("open model archive"))?;
         let mut archive = Archive::new(BzDecoder::new(BufReader::new(file)));
-        let archive_root = Path::new(definition.id.as_str());
-        let staged_root = staging_base.join(archive_root);
+        let archive_root = Path::new(definition.source.archive_root());
+        let staged_root = staging_base.join(definition.id.as_str());
         let mut missing = definition.layout.required_artifacts();
         let entries = archive
             .entries()
@@ -234,6 +234,8 @@ impl ModelStore {
                 .path()
                 .map_err(|_| ModelStoreError::InvalidArchive)?
                 .into_owned();
+            // Some upstream archives name their entries `./<model>/…`.
+            let path = path.strip_prefix(".").unwrap_or(&path);
             let Some(index) = missing
                 .iter()
                 .position(|artifact| path == archive_root.join(artifact))

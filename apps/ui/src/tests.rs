@@ -246,10 +246,10 @@ fn history_unavailability_preserves_independently_loaded_management_sections() {
             family: whispernow_api::ModelFamily::Whisper,
             availability: ModelAvailability::Downloaded,
             languages: vec!["en".to_owned()],
-            automatic_language_detection: true,
             size_bytes: 116_204_861,
-            speed: whispernow_api::RelativeRating::High,
-            accuracy: whispernow_api::RelativeRating::Low,
+            speed: whispernow_api::Rating::new(5),
+            accuracy: whispernow_api::Rating::new(1),
+            benchmark: None,
             recommended: false,
         }],
     });

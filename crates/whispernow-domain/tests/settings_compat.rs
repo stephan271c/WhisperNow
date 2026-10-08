@@ -1,7 +1,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use whispernow_domain::{
-    ApiKey, HistoryLimit, LlmProvider, ProviderEndpoint, ProviderSettings, PythonSettings,
+    ApiKey, HistoryLimit, LlmProvider, ModelId, ProviderEndpoint, ProviderSettings, PythonSettings,
     RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
     VocabularyReplacement,
 };
@@ -27,7 +27,7 @@ fn fresh_settings_take_the_defaults() {
     assert_eq!(settings.cancel_shortcut, Some(Shortcut::default_cancel()));
     assert_eq!(
         settings.model_id.as_str(),
-        "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"
+        "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
     );
     assert!(!settings.first_run_complete);
     assert_eq!(settings.setup, None);
@@ -96,7 +96,8 @@ fn python_settings_import_picks_known_fields() {
         }
     );
     assert_eq!(settings.recording_mode, RecordingMode::Hold);
-    assert_eq!(settings.model_id.as_str(), "sherpa-onnx-whisper-small");
+    // The fixture's Whisper Small is no longer offered.
+    assert_eq!(settings.model_id, ModelId::default());
     assert!(settings.start_minimized && settings.auto_start_on_login);
     assert!(settings.first_run_complete);
     assert!(

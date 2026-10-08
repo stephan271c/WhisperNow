@@ -11,8 +11,8 @@ use tar::{Builder as TarBuilder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
 use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::{
-    ArchiveFormat, AsrCapabilities, DownloadPhase, ModelAvailability, ModelDefinition, ModelId,
-    ModelLayout, ModelProfile, ModelRegistry, ModelSource, RelativeRating,
+    ArchiveFormat, DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout,
+    ModelProfile, ModelRegistry, ModelSource,
 };
 use whispernow_platform::{
     AppPaths, DownloadProgress, DownloadTimeouts, ModelStore, ModelStoreError,
@@ -23,7 +23,7 @@ const OTHER_MODEL_ID: &str = "fixture-other";
 /// Bound for store operations that must not wait on an in-flight download.
 const PROMPT: Duration = Duration::from_secs(5);
 const ARTIFACTS: [&str; 3] = ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"];
-const MODEL_PATH: &str = "/model.tar.bz2";
+const MODEL_PATH: &str = "/fixture-whisper.tar.bz2";
 
 fn serve(response: Response) -> FixtureServer {
     FixtureServer::start([(MODEL_PATH, response)])
@@ -46,10 +46,14 @@ fn valid_archive() -> Vec<u8> {
 }
 
 fn archive_with_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    archive_under(MODEL_ID, entries)
+}
+
+fn archive_under(root: &str, entries: &[(&str, &[u8])]) -> Vec<u8> {
     let encoder = BzEncoder::new(Vec::new(), Compression::best());
     let mut archive = TarBuilder::new(encoder);
     for (relative_path, contents) in entries {
-        let path = format!("{MODEL_ID}/{relative_path}");
+        let path = format!("{root}/{relative_path}");
         let mut header = Header::new_gnu();
         header.set_size(contents.len() as u64);
         header.set_mode(0o600);
@@ -104,11 +108,8 @@ fn definition(url: String, archive: &[u8]) -> ModelDefinition {
             decoder: ARTIFACTS[1].to_owned(),
             tokens: ARTIFACTS[2].to_owned(),
         },
-        capabilities: AsrCapabilities::default(),
-        profile: ModelProfile {
-            speed: RelativeRating::Medium,
-            accuracy: RelativeRating::Medium,
-        },
+        languages: Vec::new(),
+        profile: ModelProfile::rated(3, 3),
     }
 }
 
@@ -212,6 +213,52 @@ fn a_single_file_model_is_downloaded_verified_installed_and_removed_as_is() {
     );
     manager.remove(&id).expect("remove the model");
     assert!(!resolved.root.exists());
+}
+
+#[test]
+fn an_archive_whose_entries_start_with_a_dot_directory_installs() {
+    let archive = archive_under(
+        &format!("./{MODEL_ID}"),
+        &[
+            (ARTIFACTS[0], b"encoder"),
+            (ARTIFACTS[1], b"decoder"),
+            (ARTIFACTS[2], b"tokens"),
+        ],
+    );
+    let server = serve(Response::ok(archive.clone()));
+    let (_root, manager, id) = make_manager(&server, &archive);
+
+    let resolved = manager
+        .download(&id, &CancellationToken::default(), &|_| {})
+        .expect("fixture download");
+
+    for artifact in ARTIFACTS {
+        assert!(resolved.root.join(artifact).is_file());
+    }
+}
+
+#[test]
+fn an_archive_may_name_its_directory_in_another_case_than_the_id() {
+    const PATH: &str = "/Fixture-Whisper.tar.bz2";
+    let archive = archive_under(
+        "Fixture-Whisper",
+        &[
+            (ARTIFACTS[0], b"encoder"),
+            (ARTIFACTS[1], b"decoder"),
+            (ARTIFACTS[2], b"tokens"),
+        ],
+    );
+    let server = FixtureServer::start([(PATH, Response::ok(archive.clone()))]);
+    let (_root, manager, id) = make_manager_for_url(&server.url(PATH), &archive);
+
+    let resolved = manager
+        .download(&id, &CancellationToken::default(), &|_| {})
+        .expect("fixture download");
+
+    assert!(resolved.root.ends_with(MODEL_ID));
+    for artifact in ARTIFACTS {
+        assert!(resolved.root.join(artifact).is_file());
+    }
 }
 
 #[test]

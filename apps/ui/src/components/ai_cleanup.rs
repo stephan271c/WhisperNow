@@ -295,7 +295,6 @@ fn CleanupModels(chosen_model: String) -> Element {
         .or(actions.blocked(UiOperation::ModelDelete));
     rsx! {
         Section { id: "cleanup-models", title: "WhisperNow models",
-            description: "Fine-tunes of Liquid AI's LFM2.5-350M (LFM Open License v1.0) and OpenBMB's MiniCPM5-1B (Apache-2.0).",
             div { class: "section-note",
                 DisabledReason { id: "models-disabled-reason", reason }
             }

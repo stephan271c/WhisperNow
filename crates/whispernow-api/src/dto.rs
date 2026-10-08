@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use whispernow_domain::{
     ApiKey, ClearDataCategory, DownloadPhase, EntryId, LlmProvider, ModelAvailability, ModelFamily,
-    ModelId, RecordingMode, RelativeRating, Settings, SetupCheckpoint,
+    ModelId, Rating, RecordingMode, Settings, SetupCheckpoint, SpeechBenchmark,
 };
 
 /// No API key crosses: `settings.api_keys` only names the providers that have one.
@@ -165,24 +165,25 @@ pub struct ListAudioDevicesResponse {
     pub devices: Vec<AudioDeviceDto>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelDto {
     pub id: ModelId,
     pub display_name: String,
     pub family: ModelFamily,
     pub availability: ModelAvailability,
-    /// The languages the model names, as BCP-47 tags; empty when it names none.
+    /// BCP-47 tags of the languages a speech model transcribes; empty for other models.
     pub languages: Vec<String>,
-    pub automatic_language_detection: bool,
     pub size_bytes: u64,
-    pub speed: RelativeRating,
-    pub accuracy: RelativeRating,
+    pub speed: Rating,
+    pub accuracy: Rating,
+    /// A speech model's measurements, which its ratings come from.
+    pub benchmark: Option<SpeechBenchmark>,
     /// The model new installations start with.
     pub recommended: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListModelsResponse {
     pub models: Vec<ModelDto>,

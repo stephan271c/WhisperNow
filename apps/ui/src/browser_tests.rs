@@ -188,10 +188,10 @@ fn management_with_history() -> ManagementState {
         family: whispernow_api::ModelFamily::Whisper,
         availability: ModelAvailability::Downloaded,
         languages: vec!["en".to_owned()],
-        automatic_language_detection: true,
         size_bytes: 116_204_861,
-        speed: whispernow_api::RelativeRating::High,
-        accuracy: whispernow_api::RelativeRating::Low,
+        speed: whispernow_api::Rating::new(5),
+        accuracy: whispernow_api::Rating::new(1),
+        benchmark: None,
         recommended: false,
     }];
     management.models_loaded = true;

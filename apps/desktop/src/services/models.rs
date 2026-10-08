@@ -9,7 +9,7 @@ use whispernow_api::{
     ModelAvailability, ModelDto,
 };
 use whispernow_core::{CancellationToken, ResolvedModel};
-use whispernow_domain::{CLEANUP_MODEL_IDS, CUDA_PACK_ID, ModelFamily, ModelId, RelativeRating};
+use whispernow_domain::{CLEANUP_MODEL_IDS, CUDA_PACK_ID, ModelFamily, ModelId, ModelProfile};
 use whispernow_platform::{
     CudaPackState, DownloadProgress, Llama, LocalCleanupService, ModelStore, ModelStoreError,
 };
@@ -77,14 +77,11 @@ impl ModelCoordinator {
                 id: entry.definition.id,
                 display_name: entry.definition.display_name,
                 availability: entry.availability,
-                languages: entry.definition.capabilities.languages.clone(),
-                automatic_language_detection: entry
-                    .definition
-                    .capabilities
-                    .automatic_language_detection,
+                languages: entry.definition.languages,
                 size_bytes: entry.definition.source.archive_size_bytes,
-                speed: entry.definition.profile.speed,
-                accuracy: entry.definition.profile.accuracy,
+                speed: entry.definition.profile.speed(),
+                accuracy: entry.definition.profile.accuracy(),
+                benchmark: entry.definition.profile.benchmark(),
             })
             .chain(self.cuda_pack())
             .collect();
@@ -105,10 +102,10 @@ impl ModelCoordinator {
             recommended: false,
             availability,
             languages: Vec::new(),
-            automatic_language_detection: false,
             size_bytes: self.store.cuda_pack_size(),
-            speed: RelativeRating::High,
-            accuracy: RelativeRating::Medium,
+            speed: CUDA_PACK_PROFILE.speed(),
+            accuracy: CUDA_PACK_PROFILE.accuracy(),
+            benchmark: None,
         })
     }
 
@@ -438,6 +435,8 @@ fn run_model_download(
         }
     });
 }
+
+const CUDA_PACK_PROFILE: ModelProfile = ModelProfile::rated(5, 3);
 
 const MIN_RATE_INTERVAL: Duration = Duration::from_millis(500);
 
