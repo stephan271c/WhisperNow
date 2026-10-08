@@ -26,7 +26,6 @@ REQUIREMENT = re.compile(r'^designated => .*\bcertificate (?:leaf|root) = H"([0-
 
 
 def pinned_certificate(path: Path) -> bytes:
-    """The DER bytes of the pinned PEM certificate."""
     return ssl.PEM_cert_to_DER_cert(path.read_text(encoding="ascii"))
 
 

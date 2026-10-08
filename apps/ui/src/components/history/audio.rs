@@ -1,5 +1,3 @@
-//! An entry's kept audio, loaded and played on request.
-
 use dioxus::prelude::*;
 use whispernow_api::EntryId;
 

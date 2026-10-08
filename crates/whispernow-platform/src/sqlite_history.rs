@@ -41,8 +41,7 @@ CREATE INDEX IF NOT EXISTS entries_newest_first ON entries (created_at_ms DESC, 
 const COLUMNS: &str = "id, created_at_ms, duration_ms, raw_text, cleaned_text, status, error, \
                        has_audio, asr_model_id, llm_model";
 
-/// `SQLite` transcription-history store. Callers serialize its use and keep it away from
-/// latency-sensitive runtime and UI threads.
+/// Callers serialize its use and keep it away from latency-sensitive runtime and UI threads.
 pub struct SqliteHistoryRepository {
     connection: Connection,
     audio_dir: PathBuf,
@@ -52,10 +51,6 @@ impl SqliteHistoryRepository {
     /// Opens the history database, imports the Python release's `history.json` when present,
     /// and deletes audio files that no entry owns. Also returns any non-fatal diagnostic, such
     /// as a malformed `history.json` that was quarantined rather than imported.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free error when the database cannot be opened.
     pub fn open(paths: &AppPaths) -> Result<(Self, Option<AppError>), AppError> {
         let database = paths.history_database_file();
         if let Some(parent) = database.parent() {
@@ -81,10 +76,6 @@ impl SqliteHistoryRepository {
     /// Stores one dictation. Its audio is kept when `keep_audio` is on or the dictation failed
     /// or was cancelled; entries beyond `limit` are then deleted with their audio. A failure to
     /// write the audio still stores the entry, without audio.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free error when the entry cannot be stored.
     pub fn insert(
         &self,
         entry: NewHistoryEntry,
@@ -140,11 +131,6 @@ impl SqliteHistoryRepository {
         get(connection, id)?.ok_or_else(|| history_error("history_insert"))
     }
 
-    /// Marks a stored transcript that never reached the focused application.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free error when the entry cannot be updated.
     pub fn mark_not_delivered(&self, id: EntryId, error: &str) -> Result<(), AppError> {
         self.connection
             .execute(
@@ -156,10 +142,6 @@ impl SqliteHistoryRepository {
     }
 
     /// Lists one newest-first page.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free error when the page cannot be read.
     pub fn list(&self, request: &HistoryPageRequest) -> Result<HistoryPage, AppError> {
         let limit = request.limit.max(1);
         let mut clauses = Vec::new();
@@ -212,20 +194,11 @@ impl SqliteHistoryRepository {
         })
     }
 
-    /// Loads one entry.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free error when the lookup fails.
     pub fn get(&self, id: EntryId) -> Result<Option<HistoryEntry>, AppError> {
         get(&self.connection, id)
     }
 
     /// Reads an entry's audio as a playable WAV file, or `None` when it has none.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free error when the entry's audio file cannot be read.
     pub fn audio(&self, id: EntryId) -> Result<Option<Vec<u8>>, AppError> {
         let Some(entry) = self.get(id)? else {
             return Ok(None);
@@ -241,10 +214,6 @@ impl SqliteHistoryRepository {
     }
 
     /// Deletes one entry and its audio; returns whether it existed.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free error when the entry cannot be deleted.
     pub fn delete(&self, id: EntryId) -> Result<bool, AppError> {
         let deleted = self
             .connection
@@ -255,10 +224,6 @@ impl SqliteHistoryRepository {
     }
 
     /// Deletes every entry and every audio file; returns whether anything was removed.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free error when history cannot be cleared.
     pub fn clear(&self) -> Result<bool, AppError> {
         let deleted = self
             .connection
@@ -269,19 +234,11 @@ impl SqliteHistoryRepository {
     }
 
     /// Deletes the entries beyond `limit`, with their audio; returns how many were deleted.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free error when pruning fails.
     pub fn prune(&self, limit: HistoryLimit) -> Result<usize, AppError> {
         prune(&self.connection, &self.audio_dir, limit)
     }
 
     /// Closes the database before its files are deleted or the application exits.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free error when the database does not close cleanly.
     pub fn close(self) -> Result<(), AppError> {
         self.connection
             .close()
@@ -444,7 +401,6 @@ fn audio_path(audio_dir: &Path, id: EntryId) -> PathBuf {
     audio_dir.join(format!("{}.wav", id.0))
 }
 
-/// Escapes `LIKE` wildcards so the search text matches literally.
 fn escape_like(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
     for character in text.chars() {

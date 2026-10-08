@@ -1,5 +1,3 @@
-//! Which controls this window keeps disabled.
-//!
 //! A control is disabled while its own call, or a change it would act on, is in flight, and a
 //! control that changes the workflow is disabled while the desktop dictates, is paused or
 //! installs an update. The desktop refuses anything else it cannot do, and says why.
@@ -8,7 +6,6 @@ use whispernow_api::{AppStateDto, PhaseDto};
 
 use crate::{ManagementState, NoticeScope};
 
-/// Why a control is disabled.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BlockedReason {
     /// No state snapshot has arrived from the desktop yet.
@@ -19,7 +16,6 @@ pub enum BlockedReason {
     UpdateInstalling,
     /// A change this window sent is still in flight.
     CommandPending,
-    /// This window is still loading history.
     HistoryLoading,
 }
 
@@ -37,28 +33,21 @@ impl BlockedReason {
     }
 }
 
-/// A control the UI can disable; while its call is in flight it is busy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiOperation {
     /// Any settings control; changes queue behind one another rather than refusing.
     SaveSettings,
-    /// Runs a saved prompt on sample text.
     TestPrompt,
     CredentialMutation,
     DownloadModel,
     CancelDownload,
     SaveSetup,
     CompleteSetup,
-    /// Starts setup again from Settings once it has finished.
     RestartSetup,
-    /// Asks the system for a permission setup needs.
     RequestPermission,
     OpenPermissionSettings,
-    /// Reads the permission cards.
     LoadPermissions,
-    /// Lists the microphones.
     ListDevices,
-    /// Setup's test dictation.
     StartSetupTest,
     StopSetupTest,
     /// Deleting one history entry or clearing them all.
@@ -67,7 +56,6 @@ pub enum UiOperation {
     ModelSwitch,
     ModelDelete,
     UpdateInstallRestart,
-    /// Lists the application data a clear would remove.
     ListDataLocations,
     ClearData,
     CheckForUpdates,
@@ -134,7 +122,6 @@ impl UiOperation {
 }
 
 impl UiOperation {
-    /// Where a failure of this control is explained.
     pub(crate) const fn notice_scope(self) -> NoticeScope {
         match self {
             Self::SaveSettings | Self::TestPrompt | Self::CredentialMutation => {
@@ -210,7 +197,6 @@ fn locally_blocked(operation: UiOperation, management: &ManagementState) -> Opti
         UiOperation::ChangeHistory => (!management.history_loaded())
             .then_some(BlockedReason::HistoryLoading)
             .or(change_in_flight),
-        // A settings change queues behind the ones still saving.
         UiOperation::SaveSettings => pending(
             management
                 .busy

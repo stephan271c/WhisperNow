@@ -61,7 +61,6 @@ pub fn parse_chords(specs: &[String]) -> Result<Vec<Chord>, String> {
     specs.iter().map(|spec| Chord::parse(spec)).collect()
 }
 
-/// Key state across every keyboard, and which chords are fully held.
 pub struct ChordTracker {
     chords: Vec<Chord>,
     down: HashMap<u32, HashSet<u16>>,
@@ -105,7 +104,6 @@ impl ChordTracker {
         }
     }
 
-    /// Whether any of `codes` is held on any keyboard.
     pub fn holds_any(&self, codes: &[u16]) -> bool {
         self.down
             .values()

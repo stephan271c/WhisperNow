@@ -1,5 +1,3 @@
-//! The update banner's commands.
-
 use std::future::Future;
 
 use whispernow_api::UpdateStateDto;

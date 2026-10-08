@@ -24,7 +24,6 @@ mod macos;
 
 pub use clipboard::{ClipboardContents, NativeClipboard};
 
-/// Content-free failure from clipboard, focus discovery, or input injection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativePasteError {
     PermissionDenied,
@@ -41,12 +40,6 @@ type NativePasteInjection = KeystrokeOutcome<NativePasteError>;
 const MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_millis(400);
 const MODIFIER_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-/// Waits until `is_held` reports no modifier key down.
-///
-/// # Errors
-///
-/// Returns [`NativePasteError::ModifierStillHeld`] after
-/// [`MODIFIER_RELEASE_TIMEOUT`], or the error `is_held` returns.
 pub(crate) fn wait_until_modifiers_released(
     mut is_held: impl FnMut() -> Result<bool, NativePasteError>,
 ) -> Result<(), NativePasteError> {
@@ -70,10 +63,6 @@ pub struct NativePastePlatform {
 impl NativePastePlatform {
     /// Connects to the clipboard of a Windows, macOS or native X11 session.
     /// Native Wayland sessions, including their `XWayland`, paste another way.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NativePasteError::Unavailable`] when no clipboard is reachable.
     pub fn connect() -> Result<Self, NativePasteError> {
         Ok(Self {
             clipboard: NativeClipboard::connect()?,

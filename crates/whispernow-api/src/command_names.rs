@@ -1,9 +1,6 @@
-//! The desktop command catalog.
-//!
 //! This file has no imports so the desktop build script can include it with
 //! `#[path]` and generate Tauri's command permissions from this same list.
 
-/// Exact command names exposed by the desktop shell.
 pub const COMMAND_NAMES: [&str; 40] = [
     "get_settings",
     "update_settings",

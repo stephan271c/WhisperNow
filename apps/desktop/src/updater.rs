@@ -1,5 +1,3 @@
-//! Signed updates through `tauri-plugin-updater`.
-//!
 //! macOS, Windows, and `AppImage` installations update in place. Debian and RPM installations
 //! belong to the system package manager, so a newer release is only offered through its
 //! release page.
@@ -27,7 +25,6 @@ pub(crate) fn is_newer_stable(current: &Version, release: &Version) -> bool {
     release.pre.is_empty() && release > current
 }
 
-/// How a newer release reaches the user.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum UpdateDelivery {
     /// The plugin replaces the running bundle after the user restarts.
@@ -72,12 +69,18 @@ fn error_dto(code: UpdateErrorCodeDto) -> UpdateErrorDto {
     }
 }
 
+/// A downloaded update and its signed bytes.
+#[derive(Debug, PartialEq)]
+struct ReadyUpdate<U> {
+    update: U,
+    bytes: Vec<u8>,
+}
+
 /// The published update state and what it holds. `U` is the downloaded update, so the
 /// transitions are tested without the plugin.
 struct Updates<U> {
     state: UpdateStateDto,
-    /// The downloaded update and its signed bytes.
-    ready: Option<(U, Vec<u8>)>,
+    ready: Option<ReadyUpdate<U>>,
     manual: Option<ManualUpdate>,
     /// Whether the user asked for the running check, which then reports its result.
     check_is_manual: bool,
@@ -177,7 +180,7 @@ impl<U> Updates<U> {
     }
 
     fn downloaded(&mut self, update: U, bytes: Vec<u8>) {
-        self.ready = Some((update, bytes));
+        self.ready = Some(ReadyUpdate { update, bytes });
         self.state.phase = UpdatePhaseDto::ReadyToRestart;
         self.state.progress = None;
         self.state.error = None;
@@ -220,7 +223,7 @@ impl<U> Updates<U> {
 
     /// Takes the downloaded update for installing. `dictating` tells the user the restart
     /// waits for the dictation in flight.
-    fn take_ready(&mut self, dictating: bool) -> Option<(U, Vec<u8>)> {
+    fn take_ready(&mut self, dictating: bool) -> Option<ReadyUpdate<U>> {
         if self.state.phase != UpdatePhaseDto::ReadyToRestart {
             return None;
         }
@@ -235,7 +238,7 @@ impl<U> Updates<U> {
         self.state.restart_deferred = false;
     }
 
-    fn restore_ready(&mut self, ready: (U, Vec<u8>), error: Option<UpdateErrorCodeDto>) {
+    fn restore_ready(&mut self, ready: ReadyUpdate<U>, error: Option<UpdateErrorCodeDto>) {
         self.ready = Some(ready);
         self.state.phase = UpdatePhaseDto::ReadyToRestart;
         self.state.error = error.map(error_dto);
@@ -262,8 +265,6 @@ impl UpdateController {
         self.lock().state.clone()
     }
 
-    /// A poisoned lock means another thread panicked mid-update, which is a bug; it is never
-    /// reported as an update error.
     fn lock(&self) -> MutexGuard<'_, Updates<Update>> {
         self.updates.lock().expect("updater state lock poisoned")
     }
@@ -351,8 +352,8 @@ impl UpdateController {
         self.snapshot()
     }
 
-    /// Opens the release page of the offered manual update. The page address never crosses the
-    /// webview boundary; it is derived here from the release's version.
+    /// The page address never crosses the webview boundary; it is derived here from the
+    /// release's version.
     pub(crate) fn open_release_page(&self) -> UpdateStateDto {
         let Some(release_page) = self.lock().release_page() else {
             return self.snapshot();
@@ -362,7 +363,6 @@ impl UpdateController {
         self.snapshot()
     }
 
-    /// Installs the downloaded update and restarts.
     pub(crate) async fn restart_to_update(self: &Arc<Self>) -> Result<UpdateStateDto, ApiErrorDto> {
         let dictating = self
             .app
@@ -385,14 +385,14 @@ impl UpdateController {
 
     /// Runs on a blocking worker: waiting for the dictation in flight, installing, and shutting
     /// down all block on native, filesystem, and process work.
-    fn install(&self, (update, bytes): (Update, Vec<u8>)) -> Result<(), ApiErrorDto> {
+    fn install(&self, ready: ReadyUpdate<Update>) -> Result<(), ApiErrorDto> {
         let state = self.app.state::<crate::gateway::Gateway>();
         if let Err(error) = state.services.dictation.begin_update() {
-            self.update(|updates| updates.restore_ready((update, bytes), None));
+            self.update(|updates| updates.restore_ready(ready, None));
             return Err(error);
         }
         self.update(Updates::installing);
-        match update.install(&bytes) {
+        match ready.update.install(&ready.bytes) {
             Ok(()) => {
                 shut_down_for_update(&self.app);
                 self.app.request_restart();
@@ -400,7 +400,7 @@ impl UpdateController {
             Err(error) => {
                 state.services.dictation.end_update();
                 let code = updater_error(error, UpdaterPhase::Install);
-                self.update(|updates| updates.restore_ready((update, bytes), Some(code)));
+                self.update(|updates| updates.restore_ready(ready, Some(code)));
             }
         }
         Ok(())
@@ -812,7 +812,10 @@ mod tests {
         );
         assert_eq!(
             updates.take_ready(false),
-            Some(("update", vec![1, 2, 3, 4])),
+            Some(ReadyUpdate {
+                update: "update",
+                bytes: vec![1, 2, 3, 4]
+            }),
             "the install can be retried"
         );
     }

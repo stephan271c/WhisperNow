@@ -1,17 +1,13 @@
-//! Model catalogue, selection, deletion, and download projection.
-
 use whispernow_api::{AppStateDto, ListModelsResponse, ModelFamily, ModelId};
 
 use super::ManagementState;
 use crate::components::ui::Tone;
 
 impl ManagementState {
-    /// The models that transcribe speech, in catalogue order.
     pub fn speech_models(&self) -> impl Iterator<Item = &whispernow_api::ModelDto> {
         self.models.iter().filter(|model| model.family.is_speech())
     }
 
-    /// The CUDA pack, where this computer's platform has one.
     #[must_use]
     pub fn cuda_pack(&self) -> Option<&whispernow_api::ModelDto> {
         self.models
@@ -19,14 +15,12 @@ impl ManagementState {
             .find(|model| model.family == ModelFamily::CudaPack)
     }
 
-    /// The local cleanup models, in catalogue order, once the catalogue has loaded.
     pub fn cleanup_models(&self) -> impl Iterator<Item = &whispernow_api::ModelDto> {
         self.models
             .iter()
             .filter(|model| model.family == ModelFamily::Cleanup)
     }
 
-    /// The model's human name; the id only before the catalogue loads.
     #[must_use]
     pub fn model_display_name(&self, model_id: &str) -> String {
         self.models
@@ -38,7 +32,6 @@ impl ManagementState {
             )
     }
 
-    /// Installs a finished microphone test and explains a silent one.
     pub fn finish_microphone_test(&mut self, result: whispernow_api::MicrophoneTestResponse) {
         const SILENT_PEAK: f32 = 0.01;
         if result.peak < SILENT_PEAK {
@@ -77,7 +70,6 @@ impl ManagementState {
         ended
     }
 
-    /// The download of `model_id`, while one runs.
     #[must_use]
     pub fn download(&self, model_id: &ModelId) -> Option<&whispernow_api::ActiveDownloadDto> {
         self.downloads

@@ -1,10 +1,7 @@
-//! What Home says about dictation, from the application state.
-
 use whispernow_api::{ModelStateDto, PhaseDto};
 
 use crate::{EventStreamHealth, Route, SettingsRoute, UiState};
 
-/// What Home says about dictation right now.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HomeStatusKind {
     Ready,

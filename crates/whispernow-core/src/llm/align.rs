@@ -37,7 +37,6 @@ impl WordAligner {
         }
     }
 
-    /// Whether there is nothing to draft from.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.words.is_empty()

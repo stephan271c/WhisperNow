@@ -1,6 +1,3 @@
-//! Model identifiers, and metadata for the supported speech models and the local cleanup
-//! models.
-//!
 //! Capabilities and artifact layouts are data owned by the registry. Consumers
 //! must not infer either from a model identifier, display name, or filename.
 
@@ -10,10 +7,8 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
 
-/// The default speech model, the Python release's default.
 const DEFAULT_SPEECH_MODEL_ID: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16";
 
-/// The local cleanup model AI cleanup uses unless another is chosen: LFM2.5 350M.
 pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-lfm2.5-350m-q8_0";
 /// The larger local cleanup model (a `MiniCPM5-1B` fine-tune): slower, but keeps more facts.
 pub const MINICPM_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-minicpm5-1b-q8_0";
@@ -22,7 +17,6 @@ pub const CLEANUP_MODEL_IDS: [&str; 2] = [DEFAULT_CLEANUP_MODEL_ID, MINICPM_CLEA
 /// The CUDA pack's id among downloads: llama.cpp's CUDA backend and NVIDIA's CUDA runtime,
 /// which run the cleanup models on NVIDIA GPUs. Not a model, and not in the registry.
 pub const CUDA_PACK_ID: &str = "llama-cuda-13.4";
-/// The GGUF inside a local cleanup model's directory.
 pub const CLEANUP_MODEL_FILE: &str = "model-Q8_0.gguf";
 /// Where the local cleanup models are published: pinned release assets. They are
 /// placeholders until the models are uploaded, which waits for the user's go-ahead.
@@ -35,12 +29,6 @@ const CLEANUP_MODEL_RELEASE: &str =
 pub struct ModelId(String);
 
 impl ModelId {
-    /// Creates a validated model identifier.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error unless the identifier is one safe filesystem component
-    /// containing only lowercase ASCII letters, digits, `.`, `_`, and `-`.
     pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
         let value = value.into();
         if value.is_empty() {
@@ -59,7 +47,6 @@ impl ModelId {
         Ok(Self(value))
     }
 
-    /// Returns the identifier as text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -93,13 +80,10 @@ impl<'de> Deserialize<'de> for ModelId {
     }
 }
 
-/// Artifact/configuration family understood by the model registry.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelFamily {
-    /// Encoder/decoder/joiner transducer models, including Parakeet TDT.
     Transducer,
-    /// Whisper encoder/decoder models.
     Whisper,
     /// The local cleanup model: one GGUF that llama.cpp runs. It does not transcribe.
     Cleanup,
@@ -108,14 +92,12 @@ pub enum ModelFamily {
 }
 
 impl ModelFamily {
-    /// Whether models of this family transcribe speech.
     #[must_use]
     pub const fn is_speech(self) -> bool {
         matches!(self, Self::Transducer | Self::Whisper)
     }
 }
 
-/// Where a model install has got to.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DownloadPhase {
@@ -126,7 +108,6 @@ pub enum DownloadPhase {
     Complete,
 }
 
-/// Whether a model is on this computer, and how it got there.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelAvailability {
@@ -135,28 +116,25 @@ pub enum ModelAvailability {
     NotInstalled,
 }
 
-/// The languages an ASR model is known to recognize.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AsrCapabilities {
     /// BCP-47 tags tested with the model. Empty means unknown.
     pub languages: Vec<String>,
-    /// Whether the model detects the spoken language itself.
     pub automatic_language_detection: bool,
 }
 
 /// The files a model needs, as slash-separated paths relative to its directory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelLayout {
-    /// Offline encoder/decoder/joiner transducer artifacts.
     Transducer {
         encoder: String,
         decoder: String,
         joiner: String,
         tokens: String,
     },
-    /// One GGUF for llama.cpp: the local cleanup model.
-    Gguf { model: String },
-    /// Offline Whisper encoder/decoder artifacts.
+    Gguf {
+        model: String,
+    },
     Whisper {
         encoder: String,
         decoder: String,
@@ -165,7 +143,6 @@ pub enum ModelLayout {
 }
 
 impl ModelLayout {
-    /// The recognizer configuration family this layout belongs to.
     #[must_use]
     pub const fn family(&self) -> ModelFamily {
         match self {
@@ -175,7 +152,6 @@ impl ModelLayout {
         }
     }
 
-    /// Returns every file that must exist before the model can be installed.
     #[must_use]
     pub fn required_artifacts(&self) -> Vec<&str> {
         match self {
@@ -195,10 +171,8 @@ impl ModelLayout {
     }
 }
 
-/// Download source and integrity metadata for one model archive.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelSource {
-    /// HTTPS URL for the release asset.
     pub url: String,
     /// Container/compression format expected independently of the URL suffix.
     pub archive_format: ArchiveFormat,
@@ -208,16 +182,13 @@ pub struct ModelSource {
     pub sha256: String,
 }
 
-/// Archive formats supported by the safe model installer.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ArchiveFormat {
-    /// A bzip2-compressed tar archive.
     TarBz2,
     /// The model's one required artifact itself, stored under the archive root.
     SingleFile,
 }
 
-/// A coarse rating that compares one model with the other built-in models.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RelativeRating {
@@ -226,8 +197,6 @@ pub enum RelativeRating {
     High,
 }
 
-/// How a model trades transcription speed for accuracy, relative to the other built-in models.
-///
 /// A hint for choosing between models on the same computer, not a measurement.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ModelProfile {
@@ -241,32 +210,24 @@ impl ModelProfile {
     }
 }
 
-/// One supported speech model.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelDefinition {
-    /// Stable model identifier used by settings and on-disk paths.
     pub id: ModelId,
-    /// User-facing model name.
     pub display_name: String,
-    /// Download and integrity metadata. An archive holds the files under a directory
-    /// named after the id.
+    /// An archive holds the files under a directory named after the id.
     pub source: ModelSource,
-    /// Required family-specific files; they determine the model family.
     pub layout: ModelLayout,
     pub capabilities: AsrCapabilities,
-    /// Relative speed and accuracy among the built-in models.
     pub profile: ModelProfile,
 }
 
 impl ModelDefinition {
-    /// Recognizer configuration family, derived from the artifact layout.
     #[must_use]
     pub const fn family(&self) -> ModelFamily {
         self.layout.family()
     }
 }
 
-/// The fixed set of supported models.
 #[derive(Clone, Debug)]
 pub struct ModelRegistry {
     models: Vec<ModelDefinition>,
@@ -279,7 +240,6 @@ impl ModelRegistry {
         Self { models }
     }
 
-    /// Builds the registry of the six ASR models and two local cleanup models.
     #[must_use]
     pub fn builtin() -> Self {
         Self::new(vec![
@@ -353,14 +313,12 @@ impl ModelRegistry {
         ])
     }
 
-    /// Finds a model by its exact stable identifier.
     #[must_use]
     pub fn get(&self, id: impl AsRef<str>) -> Option<&ModelDefinition> {
         let id = id.as_ref();
         self.models.iter().find(|model| model.id.as_str() == id)
     }
 
-    /// The models that transcribe speech, in display order.
     pub fn speech_models(&self) -> impl Iterator<Item = &ModelDefinition> {
         self.models
             .iter()
@@ -433,7 +391,6 @@ fn whisper(
     }
 }
 
-/// A local cleanup model: one GGUF, downloaded as is.
 fn local_cleanup(
     id: &str,
     display_name: &str,

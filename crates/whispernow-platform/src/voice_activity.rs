@@ -24,7 +24,6 @@ const MIN_SILENCE_DURATION_SECONDS: f32 = 0.1;
 const MAX_SPEECH_DURATION_SECONDS: f32 = 30.0;
 const VAD_BUFFER_SIZE_SECONDS: f32 = 30.0;
 
-/// Resolves the VAD model below a source or installed resource root.
 #[must_use]
 pub fn silero_vad_model_path(resource_root: impl AsRef<Path>) -> PathBuf {
     resource_root
@@ -33,8 +32,6 @@ pub fn silero_vad_model_path(resource_root: impl AsRef<Path>) -> PathBuf {
         .join(SILERO_VAD_MODEL_FILE)
 }
 
-/// Creates in-process Silero voice-activity state for each recording or retry.
-///
 /// This type retains only the model path. Each [`VoiceActivitySource::create`] constructs a
 /// fresh native detector, so no recurrent state crosses a recording boundary. A detector that
 /// cannot be built fails open to [`AlwaysSpeech`]: segments then end only at forced cuts and no
@@ -112,7 +109,6 @@ impl VoiceActivity for SileroVoiceActivity {
     }
 }
 
-/// Content-free failures from the Silero voice-activity adapter.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 enum SileroVadError {
     #[error("Silero VAD model path is invalid")]

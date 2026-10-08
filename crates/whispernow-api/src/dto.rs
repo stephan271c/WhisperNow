@@ -5,8 +5,7 @@ use whispernow_domain::{
     SetupCheckpoint,
 };
 
-/// The saved settings as the settings window edits them. No API key crosses:
-/// `settings.api_keys` only names the providers that have one.
+/// No API key crosses: `settings.api_keys` only names the providers that have one.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsView {
@@ -25,8 +24,8 @@ impl SettingsView {
     }
 }
 
-/// Saves the settings the window edited. The desktop keeps what the window does not edit: the
-/// providers with API keys, the model, setup's progress and the window geometry.
+/// The desktop keeps what the window does not edit: the providers with API keys, the model, setup's
+/// progress and the window geometry.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateSettingsRequest {
@@ -41,15 +40,12 @@ pub struct TestPromptRequest {
     pub sample_text: String,
 }
 
-/// The provider's cleaned-up version of the sample text.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestPromptResponse {
     pub text: String,
 }
 
-/// Settings that were persisted, plus every native side effect that could not follow them.
-///
 /// A warning never means the save failed: the settings file already holds `settings`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,7 +61,6 @@ pub struct SetupStateView {
     pub checkpoint: SetupCheckpoint,
 }
 
-/// Saves a provider's API key in the OS credential store.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetApiKeyRequest {
@@ -84,11 +79,9 @@ pub struct ClearApiKeyRequest {
 pub struct AudioDeviceDto {
     pub id: String,
     pub display_name: String,
-    /// The system default is this device now.
     pub is_default: bool,
 }
 
-/// A system permission or capability one of the first-run permission cards asks for.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionKindDto {
@@ -104,7 +97,6 @@ pub enum PermissionKindDto {
     PasteSupport,
 }
 
-/// What the desktop knows about one permission.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionStatusDto {
@@ -117,7 +109,6 @@ pub enum PermissionStatusDto {
     Unavailable,
 }
 
-/// One permission card: its state and the actions this platform allows for it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionDto {
@@ -151,7 +142,6 @@ pub struct PasteHelperSetupDto {
 }
 
 impl PermissionsResponse {
-    /// Whether every permission is granted.
     #[must_use]
     pub fn all_granted(&self) -> bool {
         self.permissions
@@ -159,7 +149,6 @@ impl PermissionsResponse {
             .all(|permission| permission.status == PermissionStatusDto::Granted)
     }
 
-    /// The state of `kind`, when this platform needs it.
     #[must_use]
     pub fn get(&self, kind: PermissionKindDto) -> Option<&PermissionDto> {
         self.permissions
@@ -200,11 +189,8 @@ pub struct ModelDto {
     pub availability: ModelAvailability,
     /// The languages the model names, as BCP-47 tags; empty when it names none.
     pub languages: Vec<String>,
-    /// Whether the model detects the spoken language itself.
     pub automatic_language_detection: bool,
-    /// Download size of the model archive.
     pub size_bytes: u64,
-    /// Speed and accuracy relative to the other built-in models.
     pub speed: RelativeRating,
     pub accuracy: RelativeRating,
     /// The model new installations start with.
@@ -260,7 +246,6 @@ pub struct ClearDataResultItemDto {
     pub deleted: bool,
 }
 
-/// Closed updater lifecycle exposed to the webview.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdatePhaseDto {
@@ -276,7 +261,6 @@ pub enum UpdatePhaseDto {
     Error,
 }
 
-/// Native Linux package format the user downloads from the release page and installs by hand.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManualUpdatePackageDto {
@@ -284,7 +268,7 @@ pub enum ManualUpdatePackageDto {
     Rpm,
 }
 
-/// Download progress for an update artifact. Artifact identity and location stay native-only.
+/// Artifact identity and location stay native-only.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateProgressDto {
@@ -292,7 +276,6 @@ pub struct UpdateProgressDto {
     pub total_bytes: Option<u64>,
 }
 
-/// Content-free update failures the frontend may present or recover from.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateErrorCodeDto {
@@ -309,7 +292,6 @@ pub enum UpdateErrorCodeDto {
     Internal,
 }
 
-/// Typed updater error with no raw native or remote error text.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateErrorDto {
@@ -317,7 +299,7 @@ pub struct UpdateErrorDto {
     pub recoverable: bool,
 }
 
-/// Complete updater snapshot. The native controller owns all download and install material.
+/// The native controller owns all download and install material.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStateDto {
@@ -343,8 +325,6 @@ pub enum ModelStateDto {
     Failed,
 }
 
-/// Content-free terminal status for the most recent transcript output attempt.
-///
 /// The status is deliberately closed: native error strings, target identity, clipboard
 /// contents, and transcript bodies must never cross the event/snapshot boundary through this
 /// field.
@@ -355,7 +335,6 @@ pub enum TextOutputStatusDto {
     PastedClipboardNotRestored,
     RestoreSkippedClipboardChanged,
     PasteFailed,
-    /// The user cancelled the dictation, so nothing was pasted.
     Cancelled,
 }
 
@@ -386,7 +365,7 @@ pub struct AppStateDto {
     pub overlay_position: OverlayPosition,
 }
 
-/// What the desktop is doing. Every surface derives its view from this one value.
+/// Every surface derives its view from this one value.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "phase",
@@ -395,7 +374,6 @@ pub struct AppStateDto {
 )]
 pub enum PhaseDto {
     Idle,
-    /// The microphone is capturing one dictation.
     Recording {
         mode: RecordingMode,
         session: u64,
@@ -415,15 +393,14 @@ pub enum PhaseDto {
 }
 
 impl PhaseDto {
-    /// Whether a dictation is capturing or being processed.
     #[must_use]
     pub const fn is_busy(&self) -> bool {
         matches!(self, Self::Recording { .. } | Self::Processing { .. })
     }
 }
 
-/// How setup's test dictation ended. The test reports only here: its transcript is not the
-/// last transcript and its failure is never the application's current problem.
+/// The test reports only here: its transcript is not the last transcript and its failure is never
+/// the application's current problem.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "outcome",
@@ -431,17 +408,19 @@ impl PhaseDto {
     rename_all_fields = "camelCase"
 )]
 pub enum SetupTestResultDto {
-    /// The words the model heard.
-    Heard { text: String },
+    Heard {
+        text: String,
+    },
     /// The microphone heard nothing, or nothing that sounded like speech.
     NoSpeech,
     /// The user cancelled the test, or the application interrupted it.
     Cancelled,
-    /// The test could not run or finish. Boxed so a snapshot stays small.
-    Failed { error: Box<ApiErrorDto> },
+    /// Boxed so a snapshot stays small.
+    Failed {
+        error: Box<ApiErrorDto>,
+    },
 }
 
-/// Main-window destination requested from the overlay.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MainWindowSectionDto {
@@ -463,7 +442,6 @@ pub struct TranscriptResponse {
     pub text_output_status: Option<TextOutputStatusDto>,
     /// AI cleanup fell back to the recognized transcript.
     pub cleanup_failed: bool,
-    /// The dictation was delivered but could not be saved to history.
     pub history_save_failed: bool,
 }
 
@@ -483,7 +461,6 @@ pub enum ErrorCategoryDto {
 }
 
 impl ErrorCategoryDto {
-    /// The recovery an error of this category offers unless it names another.
     #[must_use]
     pub const fn default_recovery(self) -> Option<RecoveryActionDto> {
         match self {
@@ -520,7 +497,6 @@ pub struct ApiErrorDto {
 }
 
 impl ApiErrorDto {
-    /// An error offering its category's usual recovery.
     #[must_use]
     pub fn new(category: ErrorCategoryDto, code: &str, summary: &str) -> Self {
         Self {
@@ -532,9 +508,8 @@ impl ApiErrorDto {
     }
 }
 
-/// The complete event surface. State and update changes carry authoritative snapshots; audio
-/// levels are the only independently throttled realtime signal. Every event except the partial
-/// transcript is broadcast and content-free.
+/// State and update changes carry authoritative snapshots; audio levels are the only independently
+/// throttled realtime signal.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(
     tag = "type",
@@ -557,12 +532,11 @@ pub enum EventPayload {
     },
     /// History may have changed; listeners re-fetch what they show.
     HistoryChanged,
-    /// Text of the recording's segments decoded so far, delivered only to the recording bar.
+    /// Text of the recording's segments decoded so far.
     PartialTranscript {
         session: u64,
         committed_text: String,
     },
-    /// The overlay asked the main window to show a section.
     NavigationRequested {
         section: MainWindowSectionDto,
     },

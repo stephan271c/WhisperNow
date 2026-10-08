@@ -1,6 +1,3 @@
-//! Settings: the saved settings, the edits on their way to the desktop, and each control's
-//! save status.
-//!
 //! Every control saves its own edit. The edit shows at once in the window's copy of the
 //! settings, which goes to the desktop whole; edits made while it is there go together once
 //! it answers. A refused edit drops out again while its control shows why.
@@ -14,7 +11,6 @@ use super::ManagementState;
 use crate::NoticeScope;
 use crate::components::ui::Tone;
 
-/// The control a settings change comes from; its save status is shown beside that control.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SettingKey {
     InputDevice,
@@ -42,7 +38,6 @@ pub enum SettingKey {
     Vocabulary,
 }
 
-/// What a control shows about its latest change.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum SaveStatus {
     #[default]
@@ -53,7 +48,6 @@ pub enum SaveStatus {
     Failed(String),
 }
 
-/// The latest prompt test and its result.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PromptTest {
     pub prompt_id: String,
@@ -128,13 +122,11 @@ impl ManagementState {
         })
     }
 
-    /// Whether an edit is waiting or with the desktop.
     #[must_use]
     pub fn settings_saving(&self) -> bool {
         !self.sending.is_empty() || !self.unsent.is_empty()
     }
 
-    /// The save status of the control `key`.
     #[must_use]
     pub fn setting_status(&self, key: &SettingKey) -> SaveStatus {
         if let Some(message) = self.setting_errors.get(key) {
@@ -177,7 +169,6 @@ impl ManagementState {
         self.settings = Some(response);
     }
 
-    /// Starts a test of the saved prompt `prompt_id` on `sample_text`.
     pub fn begin_prompt_test(
         &mut self,
         prompt_id: &str,

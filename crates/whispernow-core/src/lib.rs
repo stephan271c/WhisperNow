@@ -1,5 +1,3 @@
-//! Reusable workflows and framework-independent service ports.
-
 pub mod asr;
 pub mod audio;
 mod cancellation;

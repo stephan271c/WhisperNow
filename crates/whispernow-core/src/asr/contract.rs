@@ -18,17 +18,9 @@ pub trait AsrEngine: Send {
 
     /// Builds a recognizer for `model`, then replaces the resident one. A failed load leaves
     /// the previous model resident.
-    ///
-    /// # Errors
-    ///
-    /// Returns `LoadFailed` when the recognizer cannot be built.
     fn load(&mut self, model: &ResolvedModel) -> Result<(), AsrError>;
 
     /// Decodes one mono 16-kHz recording. A failure fails this call only.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TranscriptionFailed` when no model is loaded or decoding fails.
     fn transcribe(&mut self, samples: &[f32]) -> Result<String, AsrError>;
 
     fn unload(&mut self);

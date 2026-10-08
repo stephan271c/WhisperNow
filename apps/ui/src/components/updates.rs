@@ -1,5 +1,3 @@
-//! The installed version, update checks, and the update banner.
-
 use dioxus::prelude::*;
 use whispernow_api::{ManualUpdatePackageDto, UpdateErrorCodeDto, UpdatePhaseDto};
 
@@ -9,7 +7,6 @@ use super::labels::format_bytes;
 use super::ui::{Banner, Button, ButtonVariant, Card, ProgressBar, Tone};
 use crate::{NoticeScope, UiContext, UiOperation};
 
-/// About & Updates: the version and the update controls.
 #[component]
 pub(super) fn AboutPage() -> Element {
     let context = use_context::<UiContext>();
@@ -57,7 +54,6 @@ pub(super) fn AboutPage() -> Element {
     } }
 }
 
-/// The current update's progress or the action it needs.
 #[component]
 pub(super) fn UpdateStatus() -> Element {
     let context = use_context::<UiContext>();

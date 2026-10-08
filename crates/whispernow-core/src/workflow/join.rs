@@ -1,5 +1,3 @@
-//! Joins per-segment recognitions into one transcript for the whole recording.
-
 /// Whole-segment phrases Whisper produces for silence or noise, compared case-insensitively
 /// without trailing punctuation.
 const SILENCE_HALLUCINATIONS: &[&str] = &[
@@ -20,7 +18,6 @@ const SILENCE_HALLUCINATIONS: &[&str] = &[
 const SENTENCE_ENDINGS: &[char] = &['.', '!', '?', '…', '。', '！', '？'];
 const CLOSING_MARKS: &[char] = &['"', '\'', ')', ']', '”', '’', '»'];
 
-/// Returns whether a segment consists only of a known silence hallucination.
 fn is_silence_hallucination(text: &str) -> bool {
     let normalized = text
         .trim()

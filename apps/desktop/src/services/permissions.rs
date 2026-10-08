@@ -1,4 +1,4 @@
-//! The first-run permission cards. Each platform needs a different set: a
+//! Each platform needs a different set of first-run permission cards: a
 //! [`PermissionProbe`] answers what the system reports, and
 //! [`permission_states`] turns those answers into the cards setup shows and the
 //! actions this platform allows for each.
@@ -60,7 +60,6 @@ pub(crate) fn permission_states(probe: &dyn PermissionProbe) -> PermissionsRespo
     let mut permissions = vec![PermissionDto {
         kind: PermissionKindDto::Microphone,
         status: probe.microphone(),
-        // Listening briefly is how every platform asks for the microphone.
         can_request: true,
         can_open_settings: settings_page,
     }];
@@ -132,7 +131,6 @@ fn portal_card(kind: PermissionKindDto, status: PermissionStatusDto) -> Permissi
     }
 }
 
-/// The running system, as the desktop services see it.
 pub(super) struct SystemPermissions<'a> {
     pub(super) services: &'a NativeServices,
     pub(super) global_shortcuts: PermissionStatusDto,

@@ -1,5 +1,3 @@
-//! Moving focus after an item it was on is removed.
-
 use dioxus::prelude::*;
 
 /// The item next to position `index` once it is gone: the one after it, else the one before.

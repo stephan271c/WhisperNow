@@ -1,7 +1,7 @@
 /*
  * Settings window screens. Primitives live in ui.css; this file lays out the shell and
- * the screens that todos 095-099 redesign. Legacy element rules are wrapped in :where()
- * so they carry no specificity and never override a primitive.
+ * the screens. Element rules are wrapped in :where() so they carry no specificity and never
+ * override a primitive.
  */
 
 .wn-app {
@@ -882,10 +882,6 @@ small {
   display: flex;
   gap: var(--space-1);
 }
-
-/* Home -------------------------------------------------------------------- */
-
-/* The decorative waveform uses stylesheet rules to respect the desktop CSP. */
 
 /* History ----------------------------------------------------------------- */
 

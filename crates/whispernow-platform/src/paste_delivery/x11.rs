@@ -207,13 +207,13 @@ fn send_shortcut(
     presses: &[u8],
 ) -> NativePasteInjection {
     for (index, keycode) in presses.iter().enumerate() {
-        if let Err(possibly_sent) = fake_key(connection, root, KEY_PRESS_EVENT, *keycode) {
+        if let Err(failure) = fake_key(connection, root, KEY_PRESS_EVENT, *keycode) {
+            let possibly_sent = failure == KeyFailure::MaybeSent;
             release(
                 connection,
                 root,
                 &presses[..index + usize::from(possibly_sent)],
             );
-            // Only the final key completes the shortcut.
             return if possibly_sent && index + 1 == presses.len() {
                 NativePasteInjection::Uncertain(NativePasteError::InjectionFailed)
             } else {
@@ -237,15 +237,26 @@ fn release(connection: &RustConnection, root: Window, pressed: &[u8]) -> bool {
     released
 }
 
-/// Fails with `true` when the server may have received the event anyway.
-fn fake_key(connection: &RustConnection, root: Window, event: u8, keycode: u8) -> Result<(), bool> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KeyFailure {
+    NotSent,
+    /// The request went out but the server reported an error, so it may have acted on it.
+    MaybeSent,
+}
+
+fn fake_key(
+    connection: &RustConnection,
+    root: Window,
+    event: u8,
+    keycode: u8,
+) -> Result<(), KeyFailure> {
     const CURRENT_TIME: u32 = 0;
     const CORE_KEYBOARD: u8 = 0;
     connection
         .xtest_fake_input(event, keycode, CURRENT_TIME, root, 0, 0, CORE_KEYBOARD)
-        .map_err(|_| false)?
+        .map_err(|_| KeyFailure::NotSent)?
         .check()
-        .map_err(|_| true)
+        .map_err(|_| KeyFailure::MaybeSent)
 }
 
 #[cfg(test)]

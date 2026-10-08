@@ -7,8 +7,6 @@ use std::{
 
 use crate::CancellationToken;
 
-/// Waits around the transient transcript clipboard value.
-///
 /// `propagation` lets the clipboard change reach the focused application
 /// before the paste keystroke. `restore` is how long the target gets to read
 /// the transcript before the previous clipboard is put back; too short a wait
@@ -35,7 +33,6 @@ impl Default for PasteDelays {
     }
 }
 
-/// Result of injecting the paste shortcut for the application focused now.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KeystrokeOutcome<E> {
     Sent,
@@ -44,10 +41,8 @@ pub enum KeystrokeOutcome<E> {
     Uncertain(E),
 }
 
-/// The complete result vocabulary for automatic output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PasteOutcome<E> {
-    /// The transcript was pasted and the previous clipboard is back.
     PastedAndRestored,
     /// The transcript was pasted but stays on the clipboard: the previous
     /// clipboard could not be read or held nothing capturable, or putting it
@@ -61,10 +56,6 @@ pub enum PasteOutcome<E> {
     Failed(E),
 }
 
-/// OS boundary for one synchronous paste transaction.
-///
-/// The clipboard methods are plain reads and writes; the ordering and the
-/// compare-and-restore rule live in [`PasteQueue`].
 pub trait PastePlatform {
     /// The captured previous clipboard: text, HTML with its plain-text
     /// alternative, or an image.
@@ -76,35 +67,18 @@ pub trait PastePlatform {
     /// clearing it: a clipboard of only formats the platform cannot capture
     /// (file lists, RTF, private formats) must not be emptied, and platforms
     /// cannot reliably tell that apart from an empty clipboard.
-    ///
-    /// # Errors
-    ///
-    /// Returns a platform error when the clipboard cannot be read.
     fn snapshot_clipboard(&mut self) -> Result<Option<Self::Snapshot>, Self::Error>;
 
     /// Writes the transcript, excluded from clipboard history where the
     /// platform supports it.
-    ///
-    /// # Errors
-    ///
-    /// Returns a platform error when the write fails.
     fn write_transcript(&mut self, text: &str) -> Result<(), Self::Error>;
 
     /// Reports whether the clipboard's text is exactly `text`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a platform error when the clipboard cannot be read.
     fn clipboard_holds(&mut self, text: &str) -> Result<bool, Self::Error>;
 
-    /// Puts a snapshot back on the clipboard.
-    ///
-    /// # Errors
-    ///
-    /// Returns a platform error when the write fails.
     fn restore_clipboard(&mut self, snapshot: Self::Snapshot) -> Result<(), Self::Error>;
 
-    /// Waits for `duration`. Returns `false` if cancellation ended the wait.
+    /// Returns `false` if cancellation ended the wait.
     fn wait(&mut self, duration: Duration, cancellation: &CancellationToken) -> bool {
         let deadline = Instant::now() + duration;
         while !cancellation.is_cancelled() {
@@ -156,10 +130,6 @@ impl<P: PastePlatform> PasteQueue<P> {
 
     /// Leaves `text` on the clipboard, excluded from clipboard history, for the user to paste.
     /// Queued behind any paste so it never interleaves with a compare-and-restore.
-    ///
-    /// # Errors
-    ///
-    /// Returns the platform error when the clipboard cannot be written.
     pub fn copy(&self, text: &str) -> Result<(), P::Error> {
         let mut platform = self.platform.lock().unwrap_or_else(PoisonError::into_inner);
         platform.write_transcript(text)
@@ -179,8 +149,7 @@ enum Previous<S> {
 /// path after the write, including cancellation, ends in the same
 /// compare-and-restore. Cancellation only shortens the wait before the
 /// keystroke: once the keystroke may have been sent, the target always gets
-/// the whole (bounded) restore delay to read the transcript, because restoring
-/// earlier can make a slow target paste the previous clipboard instead.
+/// the whole (bounded) restore delay to read the transcript.
 fn paste_and_restore<P: PastePlatform>(
     platform: &mut P,
     text: &str,

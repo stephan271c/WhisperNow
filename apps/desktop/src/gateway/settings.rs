@@ -1,6 +1,3 @@
-//! Settings commands whose native side effects (shortcuts, start-on-login) follow the save,
-//! and the probes run from the settings and Home screens.
-
 use std::sync::Arc;
 
 use whispernow_api::{
@@ -70,9 +67,6 @@ impl Gateway {
     /// registration. A side effect that fails comes back as a warning next to the saved
     /// settings. A refused shortcut leaves the previous one active, and the previous one is
     /// saved in its place, so the saved settings name the shortcuts in effect.
-    ///
-    /// A refusal belongs to the control that asked, so it never becomes the
-    /// application's current problem.
     pub(crate) async fn update_settings(
         &self,
         request: UpdateSettingsRequest,
@@ -297,7 +291,6 @@ impl Gateway {
     }
 }
 
-/// The native side effects a saved change needs applied after the save.
 #[derive(Clone, Copy)]
 struct NativeEffects {
     cancel_shortcut: bool,

@@ -7,7 +7,6 @@ use std::{
     process::{Command, Stdio},
 };
 
-/// A system settings page that grants one of the permissions setup asks for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrivacySettingsPage {
     Microphone,
@@ -16,10 +15,6 @@ pub enum PrivacySettingsPage {
 }
 
 /// Opens `directory` in the desktop's file manager without waiting for it.
-///
-/// # Errors
-///
-/// Returns the spawn error when the platform opener cannot be started.
 pub fn open_in_file_manager(directory: &Path) -> io::Result<()> {
     let program = if cfg!(target_os = "macos") {
         "open"

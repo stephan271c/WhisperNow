@@ -1,11 +1,7 @@
 //! The local cleanup provider: the cleanup model run in process on llama.cpp.
 //!
 //! One dedicated thread owns the loaded model and decodes one request at a time, so the
-//! async runtime's threads never block on it. The model a request names loads on first use,
-//! or when the provider or model is chosen (`preload`), stays loaded until another is named,
-//! and is freed when the provider changes (`unload`). It runs on a GPU when a backend
-//! initializes, otherwise on the CPU; with the CUDA pack installed, an NVIDIA GPU runs it
-//! with CUDA.
+//! async runtime's threads never block on it.
 
 mod engine;
 
@@ -38,9 +34,7 @@ pub type CleanupModelLocator = Arc<dyn Fn(&str) -> Option<PathBuf> + Send + Sync
 pub type CudaPackLocator = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 
 enum Command {
-    /// Loads the named model, freeing another one first.
     Load(String),
-    /// Loads the loaded model again, as on the backend a new CUDA pack offers.
     Reload,
     /// Frees the model, then signals the sender.
     Unload(Option<mpsc::Sender<()>>),
@@ -60,7 +54,6 @@ struct Worker {
     thread: Option<JoinHandle<()>>,
 }
 
-/// The local cleanup model as an `LlmService`.
 pub struct LocalCleanupService {
     library_directory: PathBuf,
     model: CleanupModelLocator,
@@ -167,7 +160,6 @@ impl LocalCleanupService {
     }
 }
 
-/// Keeps the model unloaded while its file is removed; see [`LocalCleanupService::hold_unloaded`].
 pub struct HeldUnloaded<'service>(&'service LocalCleanupService);
 
 impl Drop for HeldUnloaded<'_> {
@@ -176,7 +168,6 @@ impl Drop for HeldUnloaded<'_> {
     }
 }
 
-/// What the decode thread shares with the service.
 struct Shared {
     library_directory: PathBuf,
     model: CleanupModelLocator,

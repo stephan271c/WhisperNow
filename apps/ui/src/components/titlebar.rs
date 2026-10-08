@@ -1,10 +1,7 @@
-//! The main window's own titlebar, drawn where the desktop leaves the window undecorated.
-
 use dioxus::prelude::*;
 
 use super::ui::{Icon, IconName};
 
-/// What the page knows about its window frame.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct WindowChrome {
     /// The window is undecorated, so the page draws the titlebar and its controls.

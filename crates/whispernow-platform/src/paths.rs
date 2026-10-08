@@ -10,7 +10,6 @@ const APP_DIRECTORY: &str = "WhisperNow";
 const SETTINGS_FILE: &str = "settings.json";
 const UNREADABLE_SETTINGS_MARKER: &str = ".bad-";
 
-/// Every mutable application location, resolved independently of a process CWD.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppPaths {
     config_dir: PathBuf,
@@ -20,11 +19,6 @@ pub struct AppPaths {
 impl AppPaths {
     /// Resolves the same config/data roots used by the Python `platformdirs`
     /// release and retains its capitalized application directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AppPathError::Unavailable`] when the operating system does
-    /// not expose user config and data roots.
     pub fn discover() -> Result<Self, AppPathError> {
         let base = BaseDirs::new().ok_or(AppPathError::Unavailable)?;
         #[cfg(target_os = "windows")]
@@ -87,10 +81,6 @@ impl AppPaths {
 
     /// Every existing `settings.json.bad-*` entry and the kept Python settings, sorted by
     /// path. A missing config directory has none.
-    ///
-    /// # Errors
-    ///
-    /// Returns the I/O error when the config directory cannot be listed.
     pub fn settings_backup_files(&self) -> io::Result<Vec<PathBuf>> {
         let unreadable = format!("{SETTINGS_FILE}{UNREADABLE_SETTINGS_MARKER}");
         let entries = match fs::read_dir(&self.config_dir) {
@@ -120,7 +110,6 @@ impl AppPaths {
         self.config_dir.join("history.json")
     }
 
-    /// Successfully imported legacy transcription-history document.
     #[must_use]
     pub fn migrated_history_file(&self) -> PathBuf {
         self.config_dir.join("history.json.migrated")
@@ -132,25 +121,21 @@ impl AppPaths {
         self.config_dir.join("history-quarantine")
     }
 
-    /// Durable transcription-history database.
     #[must_use]
     pub fn history_database_file(&self) -> PathBuf {
         self.data_dir.join("history.sqlite3")
     }
 
-    /// `SQLite` write-ahead log associated with [`Self::history_database_file`].
     #[must_use]
     pub fn history_database_wal_file(&self) -> PathBuf {
         self.data_dir.join("history.sqlite3-wal")
     }
 
-    /// `SQLite` shared-memory file associated with [`Self::history_database_file`].
     #[must_use]
     pub fn history_database_shm_file(&self) -> PathBuf {
         self.data_dir.join("history.sqlite3-shm")
     }
 
-    /// Retained normalized recordings eligible for future transcription retry.
     #[must_use]
     pub fn recordings_dir(&self) -> PathBuf {
         self.data_dir.join("recordings")

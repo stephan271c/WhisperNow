@@ -1,5 +1,3 @@
-//! Dioxus web frontend loaded by the sole Tauri desktop runtime.
-
 mod admission;
 mod client;
 mod components;
@@ -26,7 +24,6 @@ use client::{ListenerOwner, current_window_label};
 
 use dioxus::prelude::*;
 
-/// The window's state, its management projection and its page, shared by every component.
 #[derive(Clone, Copy, PartialEq)]
 struct UiContext {
     state: Signal<UiState>,

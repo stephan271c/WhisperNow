@@ -1,9 +1,6 @@
-//! The paste keystroke the focused application expects.
-
 /// The paste keystroke the focused application expects.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PasteKeys {
-    /// `Ctrl+V`.
     ControlV,
     /// `Ctrl+Shift+V`, for terminals, where `Ctrl+V` types a control character.
     ControlShiftV,

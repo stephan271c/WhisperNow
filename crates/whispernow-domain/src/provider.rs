@@ -1,12 +1,10 @@
-//! Which LLM provider AI cleanup uses, and the endpoint a provider may be reached at.
-
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use thiserror::Error;
 use url::{Host, Url};
 
-/// An LLM provider AI cleanup can use. It is saved by its [`LlmProvider::as_str`] name.
+/// Saved by its [`LlmProvider::as_str`] name.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum LlmProvider {
     OpenAi,
@@ -47,7 +45,6 @@ impl LlmProvider {
         }
     }
 
-    /// How the provider is named to the user.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -61,7 +58,6 @@ impl LlmProvider {
         }
     }
 
-    /// The provider a saved name refers to; `None` for a name this version does not know.
     #[must_use]
     pub fn from_name(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -76,8 +72,6 @@ impl LlmProvider {
         }
     }
 
-    /// The model name a request to this provider sends: the saved name trimmed, without a
-    /// leading `openai/`-style prefix naming this provider.
     #[must_use]
     pub fn request_model(self, model: &str) -> &str {
         let trimmed = model.trim();
@@ -106,7 +100,6 @@ impl<'de> Deserialize<'de> for LlmProvider {
     }
 }
 
-/// Why a provider endpoint cannot be used.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum EndpointError {
     #[error("Enter a full address without a user name, query or fragment")]
@@ -123,11 +116,6 @@ pub struct ProviderEndpoint {
 }
 
 impl ProviderEndpoint {
-    /// Validates a provider URL. Cleartext HTTP is accepted only for loopback.
-    ///
-    /// # Errors
-    ///
-    /// Returns why a malformed or insecure URL cannot be used.
     pub fn parse(value: impl Into<String>) -> Result<Self, EndpointError> {
         let value = value.into();
         // The URL parser strips surrounding whitespace and newlines; the saved text keeps them.
@@ -162,7 +150,6 @@ impl ProviderEndpoint {
     }
 }
 
-/// An error unless `url` is HTTPS, or HTTP to this computer.
 fn require_secure_transport(url: &Url) -> Result<(), EndpointError> {
     let loopback = match url.host() {
         Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),

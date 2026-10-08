@@ -15,7 +15,6 @@ const THREAD_COUNT: i32 = 4;
 const TRANSDUCER_FEATURE_DIM: i32 = 80;
 const GREEDY_SEARCH: &str = "greedy_search";
 
-/// The in-process sherpa-onnx recognizer and the model it was built for.
 #[derive(Default)]
 pub struct SherpaAsrEngine {
     loaded: Option<(ModelId, OfflineRecognizer)>,
@@ -96,7 +95,6 @@ fn recognizer_config(model: &ResolvedModel) -> Result<OfflineRecognizerConfig, A
                 enable_segment_timestamps: false,
             };
         }
-        // The cleanup model does not transcribe.
         ModelLayout::Gguf { .. } => return Err(AsrError::LoadFailed),
     }
     Ok(config)

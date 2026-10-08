@@ -8,33 +8,19 @@ use std::{
 use thiserror::Error;
 use whispernow_domain::ApiKey;
 
-/// Content-free failure to reach or use the credential store, such as a
+/// Failure to reach or use the credential store, such as a
 /// headless Linux session without a Secret Service provider or a locked keychain.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[error("the OS credential store is unavailable")]
 pub struct CredentialStoreUnavailable;
 
-/// Narrow secret-storage boundary keyed by a stable per-provider account name.
 pub trait CredentialStore: Send + Sync {
     /// Reads a stored key; `Ok(None)` means the store has no entry.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CredentialStoreUnavailable`] when the store cannot be read.
     fn read(&self, account: &str) -> Result<Option<ApiKey>, CredentialStoreUnavailable>;
 
-    /// Creates or replaces a stored key.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CredentialStoreUnavailable`] when the store cannot be written.
     fn write(&self, account: &str, key: &ApiKey) -> Result<(), CredentialStoreUnavailable>;
 
     /// Removes a stored key; removing an absent entry succeeds.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CredentialStoreUnavailable`] when the store cannot be written.
     fn delete(&self, account: &str) -> Result<(), CredentialStoreUnavailable>;
 }
 

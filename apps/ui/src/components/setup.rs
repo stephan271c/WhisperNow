@@ -1,7 +1,4 @@
-//! First-run setup: permissions first, then a speech model, shortcuts and a test dictation.
-//!
-//! Each step is saved as the user moves on, so setup resumes where it was left, and focus
-//! moves to the step's heading whenever the step changes.
+//! Each step is saved as the user moves on, so setup resumes where it was left.
 
 use std::rc::Rc;
 
@@ -132,7 +129,6 @@ fn SetupStepper(step: SetupStep) -> Element {
     } }
 }
 
-/// Back, the step's own action, and "Finish later", which keeps the progress for Home.
 #[component]
 fn SetupFooter(step: SetupStep) -> Element {
     let actions = use_actions();
@@ -219,9 +215,7 @@ fn WelcomeStep() -> Element {
     } }
 }
 
-/// One card per permission this platform needs; after a request the cards are read again
-/// about every second for up to two minutes, and setup moves on by itself once no card can
-/// change any more and the microphone is granted. Leaving the step stops the polling.
+/// One card per permission this platform needs. Leaving the step stops the polling.
 #[component]
 fn PermissionsStep() -> Element {
     let actions = use_actions();
@@ -378,7 +372,6 @@ const fn permission_help(
     }
 }
 
-/// The recommended models, and the rest behind "Show all".
 #[component]
 fn ModelStep(selected: String) -> Element {
     let management = use_context::<UiContext>().management;
@@ -556,7 +549,6 @@ fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
     } }
 }
 
-/// The choices so far, a microphone to test with, and a test dictation.
 #[component]
 fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
     let actions = use_actions();
@@ -686,7 +678,6 @@ const fn recovery_fix(recovery: Option<RecoveryActionDto>) -> &'static str {
     }
 }
 
-/// Setup has finished: the shortcut reminder and optional AI cleanup.
 #[component]
 fn DoneStep() -> Element {
     let navigator = use_navigator();

@@ -1,5 +1,3 @@
-//! Setup: resuming, the permission watch, focus, the summary and the test dictation.
-
 use dioxus::prelude::*;
 use whispernow_api::{
     ApiErrorDto, AppStateDto, ErrorCategoryDto, EventPayload, ListModelsResponse,
@@ -46,7 +44,6 @@ fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState
     management
 }
 
-/// The main window on Home.
 fn home(management: ManagementState) -> Page {
     shell(snapshot(PhaseDto::Idle), management)
 }
@@ -84,7 +81,6 @@ fn outcome(page: &Page) -> Option<SetupTestResultDto> {
     }
 }
 
-/// Starts the test dictation.
 fn start_test(page: &mut Page) {
     page.click("setup-test-start");
     assert_eq!(page.sent(), ["start_test_dictation"]);

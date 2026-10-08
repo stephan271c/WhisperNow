@@ -31,7 +31,6 @@ const RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 /// Shift, Ctrl, Alt and Super, left and right. A paste waits until none is
 /// physically held, because a held one would combine with the shortcut.
 const MODIFIERS: [u16; 8] = [29, 97, 42, 54, 56, 100, 125, 126];
-/// How long a paste waits for held modifiers before it is refused.
 const MODIFIER_WAIT: Duration = Duration::from_secs(1);
 
 enum Message {
@@ -51,8 +50,6 @@ enum Message {
     InputClosed,
 }
 
-/// Watches the tracker's chords and, with a keyboard, answers each paste
-/// command with `sent` or, when modifiers stay held, `held`.
 pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> ExitCode {
     let (sender, messages) = mpsc::channel();
     let stdin_sender = sender.clone();

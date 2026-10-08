@@ -37,9 +37,7 @@ fn request<'a>(
 #[derive(Clone, Copy)]
 enum Behavior {
     Text(&'static str),
-    /// Text cut off because generation reached the output token limit.
     Truncated(&'static str),
-    /// Generation stopped by the provider's content filter.
     Filtered(&'static str),
     Error(LlmError),
     /// Never answers.

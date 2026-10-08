@@ -1,19 +1,17 @@
-//! The recording overlay: a compact pill that follows the published dictation phase.
-
 use dioxus::prelude::*;
 use whispernow_api::{OverlayPosition, RecordingMode};
 
 use super::actions::UiActions;
 use super::ui::{Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
-use crate::overlay::{OverlayAction, OverlayPhase, format_elapsed};
+use crate::overlay::{LEVEL_BARS, OverlayAction, OverlayPhase, format_elapsed};
 use crate::{OverlayView, UiContext, UiOperation};
 
 /// Meter geometry in SVG units; bars are attributes because the CSP forbids inline styles.
 const BAR_WIDTH: f32 = 4.0;
 const BAR_GAP: f32 = 3.0;
 const METER_HEIGHT: f32 = 20.0;
-/// Nine bars and the gaps between them.
-const METER_WIDTH: f32 = 60.0;
+#[allow(clippy::cast_precision_loss, reason = "LEVEL_BARS is small")]
+const METER_WIDTH: f32 = LEVEL_BARS as f32 * BAR_WIDTH + (LEVEL_BARS - 1) as f32 * BAR_GAP;
 const MIN_BAR_HEIGHT: f32 = 3.0;
 
 /// The status line, which is also what the polite live region announces.
@@ -47,8 +45,15 @@ const fn action_label(action: OverlayAction) -> &'static str {
     }
 }
 
-/// `(x, y, height)` of each bar, oldest first.
-fn meter_bars(view: &OverlayView) -> Vec<(f32, f32, f32)> {
+#[derive(Clone, Copy)]
+struct MeterBar {
+    x: f32,
+    y: f32,
+    height: f32,
+}
+
+/// Oldest first.
+fn meter_bars(view: &OverlayView) -> Vec<MeterBar> {
     view.levels
         .iter()
         .enumerate()
@@ -57,7 +62,11 @@ fn meter_bars(view: &OverlayView) -> Vec<(f32, f32, f32)> {
             let height = MIN_BAR_HEIGHT + (METER_HEIGHT - MIN_BAR_HEIGHT) * level.clamp(0.0, 1.0);
             #[allow(clippy::cast_precision_loss, reason = "the index is below LEVEL_BARS")]
             let x = index as f32 * (BAR_WIDTH + BAR_GAP);
-            (x, (METER_HEIGHT - height) / 2.0, height)
+            MeterBar {
+                x,
+                y: (METER_HEIGHT - height) / 2.0,
+                height,
+            }
         })
         .collect()
 }
@@ -152,7 +161,7 @@ pub fn RecordingBar() -> Element {
                     if capturing {
                         svg { class: "overlay-bars {arming}", view_box: "0 0 {METER_WIDTH} {METER_HEIGHT}",
                             "aria-hidden": "true",
-                            for (x, y, height) in bars.iter().copied() {
+                            for MeterBar { x, y, height } in bars.iter().copied() {
                                 rect { class: "overlay-bar", x: "{x}", y: "{y:.2}",
                                     width: "{BAR_WIDTH}", height: "{height:.2}", rx: "1"
                                 }

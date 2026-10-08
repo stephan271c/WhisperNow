@@ -1,7 +1,3 @@
-//! Speech models: what each one costs and offers, and installing, choosing and removing them;
-//! the local cleanup models, which AI cleanup can use; and the CUDA download that runs them
-//! on NVIDIA GPUs.
-
 use dioxus::prelude::*;
 use whispernow_api::{
     ActiveDownloadDto, LlmProvider, ModelAvailability, ModelDto, ModelId, ModelStateDto,
@@ -16,7 +12,6 @@ use super::ui::{
 };
 use crate::{NoticeScope, UiContext, UiOperation};
 
-/// Speech models: install, choose and remove local models. Below them, the local cleanup models.
 #[component]
 pub(super) fn ModelsPage() -> Element {
     let context = use_context::<UiContext>();
@@ -132,19 +127,20 @@ fn ordered_models(models: &[ModelDto], active_id: Option<&ModelId>) -> Vec<Model
     ordered
 }
 
-/// What a model row is for.
 #[derive(Clone, Copy, PartialEq)]
 enum ModelRowKind {
-    /// A speech model; `active` is the one in use.
-    Speech { active: bool },
+    Speech {
+        active: bool,
+    },
     /// A cleanup model: installed and removed here, but chosen under AI cleanup; `in_use`
     /// marks the one AI cleanup uses.
-    Cleanup { in_use: bool },
+    Cleanup {
+        in_use: bool,
+    },
     /// The CUDA pack, which has no speed or accuracy of its own.
     Runtime,
 }
 
-/// One model: what it offers, and the action that fits its state.
 #[component]
 fn ModelRow(model: ModelDto, kind: ModelRowKind, active_state: ModelStateDto) -> Element {
     let actions = use_actions();
@@ -225,7 +221,6 @@ fn ModelRow(model: ModelDto, kind: ModelRowKind, active_state: ModelStateDto) ->
     }
 }
 
-/// A download's progress, speed and cancel control.
 #[component]
 pub(super) fn DownloadProgress(download: ActiveDownloadDto, name: String) -> Element {
     let actions = use_actions();

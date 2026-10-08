@@ -1,5 +1,3 @@
-//! The setgid `whispernow-input-helper` helper, run in two modes.
-//!
 //! [`ReleaseWatcher`] learns when a held recording shortcut is released, because GNOME's
 //! `GlobalShortcuts` portal sometimes drops the release. The portal still decides when a
 //! shortcut is pressed; without the helper, releases fall back to the portal's key repeats.

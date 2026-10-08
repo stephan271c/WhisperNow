@@ -10,7 +10,6 @@ use whispernow_api::ShortcutKey;
 
 use super::*;
 
-/// A lifecycle probe the test flips between running and not running.
 fn lifecycle_switch() -> (Arc<AtomicBool>, LifecycleProbe) {
     let running = Arc::new(AtomicBool::new(true));
     let probe = Arc::clone(&running);

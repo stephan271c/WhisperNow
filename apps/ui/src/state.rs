@@ -14,7 +14,6 @@ pub enum EventStreamHealth {
     Failed,
 }
 
-/// Frontend projection of the single authoritative application state.
 #[derive(Clone, Default, PartialEq)]
 pub struct UiState {
     pub snapshot: Option<AppStateDto>,
@@ -24,7 +23,6 @@ pub struct UiState {
     pub update_command_error: Option<String>,
     pub connection_failed: bool,
     pub event_stream_health: EventStreamHealth,
-    /// The recording bar's phase, meter and live text.
     pub overlay: OverlayView,
 }
 
@@ -53,7 +51,6 @@ impl UiState {
         self.connection_failed = false;
     }
 
-    /// Replaces updater presentation state from the native controller's authoritative snapshot.
     pub fn hydrate_update(&mut self, state: UpdateStateDto) {
         self.apply_update_state(state);
     }

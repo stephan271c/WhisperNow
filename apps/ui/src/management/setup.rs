@@ -1,5 +1,3 @@
-//! First-run setup: checkpoint transitions, the permission watch and the test dictation.
-
 use whispernow_api::{
     ApiErrorDto, AppStateDto, ErrorCategoryDto, ModelAvailability, PermissionKindDto,
     PermissionStatusDto, PermissionsResponse, SaveSettingsResponse, SetupCheckpoint,
@@ -10,7 +8,6 @@ use super::ManagementState;
 use crate::components::ui::Tone;
 use crate::{NoticeScope, client::ClientError};
 
-/// Setup's test dictation, from the request to its result.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SetupTest {
     /// Asked for or listening; `active` once a snapshot showed the dictation running.
@@ -80,7 +77,6 @@ impl ManagementState {
         }
     }
 
-    /// Whether the checkpoint's model is installed.
     #[must_use]
     pub fn setup_model_ready(&self) -> bool {
         self.setup.as_ref().is_some_and(|setup| {
@@ -91,7 +87,6 @@ impl ManagementState {
         })
     }
 
-    /// Whether the checkpoint's model is downloading.
     #[must_use]
     pub fn setup_model_downloading(&self) -> bool {
         self.setup
@@ -163,10 +158,9 @@ impl ManagementState {
             .map(|permission| permission.status)
     }
 
-    /// Installs the permission cards. A watch ends once no card can change any more; when the
-    /// microphone is then granted, the returned checkpoint moves setup on to the model step.
-    /// A card this session cannot provide does not hold setup back: dictation works without
-    /// it.
+    /// A watch ends once no card can change any more; when the microphone is then granted, the
+    /// returned checkpoint moves setup on to the model step. A card this session cannot provide
+    /// does not hold setup back: dictation works without it.
     pub fn install_permissions(
         &mut self,
         permissions: PermissionsResponse,
@@ -199,7 +193,6 @@ impl ManagementState {
         })
     }
 
-    /// Whether the test dictation has been asked for and has not finished.
     #[must_use]
     pub fn setup_test_running(&self) -> bool {
         matches!(self.setup_test, Some(SetupTest::Running { .. }))

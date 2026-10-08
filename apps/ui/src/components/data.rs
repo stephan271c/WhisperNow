@@ -1,5 +1,3 @@
-//! Removing local application data after listing exactly where it lives.
-
 use dioxus::prelude::*;
 
 use super::actions::{DisabledReason, use_actions};

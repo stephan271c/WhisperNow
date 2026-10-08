@@ -1,6 +1,3 @@
-//! The cleanup prompts: the system contract every provider shares, and the user message
-//! that carries the transcript and edit request in delimited blocks.
-
 use std::fmt;
 
 use whispernow_domain::CleanupPrompt;
@@ -38,23 +35,17 @@ Rename user_id to account_id in main.rs and run cargo test.
 
 Output only the edited transcript text.";
 
-/// Block names that delimit untrusted values in the cleanup user message.
 const PROMPT_BLOCK_NAMES: [&str; 2] = ["transcript", "edit_request"];
 
-/// Output sentinel for a transcript that contains no dictated words.
 pub(crate) const EMPTY_TRANSCRIPT_SENTINEL: &str = "EMPTY";
 
-/// The kind of edit the prompt asks for.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PromptKind {
-    /// Grammar, spelling, filler-word, and formatting cleanup.
     #[default]
     Cleanup,
-    /// A deliberate tone or concision rewrite.
     Rewrite,
 }
 
-/// Provider prompt. Captured contents are redacted from `Debug`.
 #[derive(Clone, Eq, PartialEq)]
 pub struct LlmPrompt {
     system: String,
@@ -91,9 +82,9 @@ impl fmt::Debug for LlmPrompt {
     }
 }
 
-/// Builds a provider prompt. Every untrusted value sits inside its own
-/// delimited block with any delimiter look-alikes neutralized, and the output
-/// rule is repeated after the transcript so it is the last thing the model reads.
+/// Every untrusted value sits inside its own delimited block with any delimiter look-alikes
+/// neutralized, and the output rule is repeated after the transcript so it is the last thing the
+/// model reads.
 #[must_use]
 pub fn build_cleanup_prompt(
     deterministic_text: &str,

@@ -21,15 +21,14 @@ use super::{
     state::StateCell,
 };
 
-/// A caller-held settings transaction. The guard preserves the
-/// model-transition -> settings -> state lock order.
+/// The guard preserves the model-transition -> settings -> state lock order.
 pub(super) struct SettingsTransaction<'a> {
     coordinator: &'a SettingsCoordinator,
     _mutation: MutexGuard<'a, ()>,
 }
 
 impl SettingsTransaction<'_> {
-    /// The saved settings. A file that could not be read is reported once here.
+    /// A file that could not be read is reported once here.
     pub(super) fn load(&self) -> Result<Settings, ApiErrorDto> {
         let loaded = self.coordinator.persistence.load().map_err(|error| {
             ApiErrorDto::new(ErrorCategoryDto::General, &error.code, &error.summary)
@@ -50,7 +49,6 @@ impl SettingsTransaction<'_> {
     }
 }
 
-/// The recording shortcuts a settings save changes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PersistedShortcuts {
     shortcut: Shortcut,
@@ -167,9 +165,7 @@ impl SettingsCoordinator {
             .publish_error(ApiErrorDto::new(ErrorCategoryDto::General, code, summary));
     }
 
-    /// Provider configurations in the snapshot carry no API key: the key is
-    /// read when the LLM call is prepared, so starting a recording never waits
-    /// on the OS credential store.
+    /// Provider configurations in the snapshot carry no API key.
     pub(super) fn recording_settings(&self) -> Result<RecordingSettings, ApiErrorDto> {
         let settings = self.transaction().load()?;
         let cleanup = cleanup_plan(&settings);

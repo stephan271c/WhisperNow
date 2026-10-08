@@ -1,5 +1,3 @@
-//! Local-time and summary wording for the History page.
-//!
 //! Entries carry UTC milliseconds; everything here turns them into the viewer's local day and
 //! time. The clock is a context value so tests and galleries can pin both the time and the
 //! offset from UTC.
@@ -9,7 +7,6 @@ use whispernow_api::{HistoryEntry, HistoryLimit, UtcMillis};
 const MINUTE_MILLIS: i64 = 60_000;
 const DAY_MILLIS: i64 = 86_400_000;
 
-/// The current time and the viewer's offset from UTC.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct LocalClock {
     now: UtcMillis,
@@ -26,7 +23,6 @@ enum Zone {
 }
 
 impl LocalClock {
-    /// A clock at `now` in a zone `offset_minutes` east of UTC.
     #[cfg(test)]
     pub(crate) const fn fixed(now: UtcMillis, offset_minutes: i64) -> Self {
         Self {
@@ -160,7 +156,6 @@ pub(crate) fn duration_label(milliseconds: u64) -> String {
     }
 }
 
-/// What the retention settings keep, as one sentence.
 pub(crate) fn retention_summary(limit: HistoryLimit, keep_audio: bool) -> String {
     let transcripts = limit.max_entries().map_or_else(
         || "every transcript".to_owned(),

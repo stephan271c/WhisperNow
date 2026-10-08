@@ -1,5 +1,3 @@
-//! The desktop's composition root.
-
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -80,7 +78,6 @@ impl NativeServices {
         ));
         settings.report_loaded(&persisted);
         let store = Arc::new(ModelStore::new(paths, Vec::new()));
-        // A CUDA pack removed while it was loaded goes now, before anything loads it.
         store.finish_cuda_pack_removal();
         let local_cleanup = Arc::new(LocalCleanupService::new(
             llama_dir,

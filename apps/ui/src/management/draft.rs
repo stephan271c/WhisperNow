@@ -1,10 +1,7 @@
-//! Typed edits of the unsaved setup checkpoint.
-
 use whispernow_api::{ModelId, RecordingMode, Shortcut};
 
 use super::ManagementState;
 
-/// One change to the unsaved setup checkpoint.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SetupEdit {
     Model(ModelId),
@@ -16,7 +13,6 @@ pub enum SetupEdit {
 }
 
 impl ManagementState {
-    /// Applies one edit to the setup checkpoint; does nothing before setup loads.
     pub fn edit_setup(&mut self, edit: SetupEdit) {
         let Some(setup) = &mut self.setup else {
             return;

@@ -3,9 +3,6 @@ use super::{
     convert_interleaved_to_mono,
 };
 
-/// Complete worker-side normalized-f32 path: equal-weight downmix, stateful
-/// resampling, bounded delivery framing, and constant-memory levels.
-///
 /// A native callback may copy/convert into pooled `f32` storage, but it must
 /// hand that storage to a worker before calling this allocation-heavy type.
 pub struct AudioProcessor {
@@ -17,11 +14,6 @@ pub struct AudioProcessor {
 }
 
 impl AudioProcessor {
-    /// Creates one per-recording worker path.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed error for zero channels, sample rate, or output block size.
     pub fn new(
         input_sample_rate: u32,
         channels: usize,
@@ -44,10 +36,6 @@ impl AudioProcessor {
 
     /// Accepts interleaved `f32` from a bounded worker queue. It may return zero
     /// blocks while the resampler accumulates frames.
-    ///
-    /// # Errors
-    ///
-    /// Returns conversion, lifecycle, or resampling failures.
     pub fn push_interleaved(
         &mut self,
         input: &[f32],
@@ -58,10 +46,6 @@ impl AudioProcessor {
     }
 
     /// Flushes the resampler and any final partial delivery block.
-    ///
-    /// # Errors
-    ///
-    /// Returns lifecycle or resampling failures.
     pub fn finish(&mut self) -> Result<Vec<AudioBlock>, AudioProcessingError> {
         let tail = self.resampler.finish()?;
         let mut blocks = self.process_resampled(tail);
@@ -69,8 +53,6 @@ impl AudioProcessor {
         Ok(blocks)
     }
 
-    /// Returns level aggregates since the previous call and starts a fresh
-    /// observation window. No captured samples are retained by this summary.
     pub fn take_level_summary(&mut self) -> AudioLevelSummary {
         self.levels.take_summary()
     }

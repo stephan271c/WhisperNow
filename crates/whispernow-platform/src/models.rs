@@ -25,7 +25,6 @@ pub use self::cuda_pack::{CudaPackArchive, CudaPackFormat, CudaPackState};
 
 const DOWNLOAD_BUFFER_BYTES: usize = 64 * 1024;
 
-/// Content-free progress suitable for a later command/event adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DownloadProgress {
     pub phase: DownloadPhase,
@@ -33,7 +32,6 @@ pub struct DownloadProgress {
     pub total_bytes: Option<u64>,
 }
 
-/// Observer for bounded model-operation progress.
 pub trait DownloadObserver: Send + Sync {
     fn report(&self, progress: DownloadProgress);
 }
@@ -53,8 +51,7 @@ pub struct ModelListEntry {
     pub availability: ModelAvailability,
 }
 
-/// Stable model lifecycle failures. Raw URLs, native paths, response bodies,
-/// and archive contents are intentionally excluded.
+/// Raw URLs, native paths, response bodies, and archive contents are intentionally excluded.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum ModelStoreError {
     #[error("unknown model identifier")]
@@ -83,7 +80,6 @@ pub enum ModelStoreError {
     Filesystem { operation: &'static str },
 }
 
-/// Network deadlines suitable for multi-gigabyte pinned model assets.
 #[derive(Clone, Copy, Debug)]
 pub struct DownloadTimeouts {
     pub connect: Duration,
@@ -101,8 +97,6 @@ impl Default for DownloadTimeouts {
     }
 }
 
-/// Filesystem/resource resolver and safe blocking downloader used by the desktop app.
-///
 /// Downloads transfer, verify and extract into per-download staging paths
 /// without holding the store lock, so resolving, listing and removing other
 /// models stays responsive. The store lock covers only directory scans,
@@ -113,7 +107,6 @@ pub struct ModelStore {
     bundled_roots: Vec<PathBuf>,
     http: ModelHttp,
     mutation: Mutex<()>,
-    /// The CUDA pack's release assets; none where there is no pack.
     cuda_pack: &'static [CudaPackArchive],
 }
 
@@ -123,7 +116,6 @@ struct ModelHttp {
 }
 
 impl ModelStore {
-    /// Creates a manager with the built-in pinned registry.
     #[must_use]
     pub fn new(paths: AppPaths, bundled_roots: Vec<PathBuf>) -> Self {
         Self::with_registry_and_timeouts(
@@ -135,9 +127,6 @@ impl ModelStore {
     }
 
     /// Injects a registry and timeouts for fixture-server tests.
-    ///
-    /// # Panics
-    /// When the HTTP client or its runtime cannot be built.
     #[must_use]
     pub fn with_registry_and_timeouts(
         registry: ModelRegistry,
@@ -275,7 +264,6 @@ impl ModelStore {
         Ok(staged_root)
     }
 
-    /// Stages a download that is the model's one artifact itself.
     fn stage_single_file(
         definition: &ModelDefinition,
         download: NamedTempFile,
@@ -334,7 +322,6 @@ async fn download_archive(
     .await
 }
 
-/// A download pinned by its exact size and SHA-256 digest.
 struct PinnedFile<'a> {
     url: &'a str,
     size_bytes: u64,
@@ -425,20 +412,12 @@ async fn download_file(
 
 impl ModelStore {
     /// Resolves a usable model, preferring downloaded data over bundled data.
-    ///
-    /// # Errors
-    ///
-    /// Returns a stable error for unknown identifiers or filesystem failures.
     pub fn resolve(&self, model_id: &ModelId) -> Result<Option<ResolvedModel>, ModelStoreError> {
         let _guard = self.lock_store()?;
         self.resolve_unlocked(self.definition(model_id)?)
     }
 
     /// Lists the complete supported registry with current availability.
-    ///
-    /// # Errors
-    ///
-    /// Returns a stable error when model roots cannot be inspected.
     pub fn list(&self) -> Result<Vec<ModelListEntry>, ModelStoreError> {
         let _guard = self.lock_store()?;
         self.registry
@@ -457,10 +436,6 @@ impl ModelStore {
     }
 
     /// Removes only the downloaded model selected by a registry identifier.
-    ///
-    /// # Errors
-    ///
-    /// Returns a stable error when the model is unknown, absent, or cannot be removed.
     pub fn remove(&self, model_id: &ModelId) -> Result<(), ModelStoreError> {
         let _guard = self.lock_store()?;
         let definition = self.definition(model_id)?;
@@ -474,11 +449,6 @@ impl ModelStore {
         })
     }
 
-    /// Downloads, verifies, stages, and installs one registered model.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed download, cancellation, validation, or filesystem error.
     pub fn download(
         &self,
         model_id: &ModelId,

@@ -1,5 +1,3 @@
-//! Native Tauri tray construction and closed state-to-presentation mapping.
-
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -119,7 +117,6 @@ pub(crate) fn tray_state(snapshot: &AppStateDto) -> TrayState {
     }
 }
 
-/// What the tray's pause item reads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PauseIntent {
     Pause,
@@ -135,7 +132,6 @@ impl PauseIntent {
     }
 }
 
-/// Menu enablement derived from the snapshot's phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TrayMenu {
     pub(crate) pause_intent: PauseIntent,
@@ -143,7 +139,6 @@ pub(crate) struct TrayMenu {
     pub(crate) quick: QuickActions,
 }
 
-/// Whether the dictation shortcuts in the tray can be used now.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct QuickActions {
     pub(crate) copy_last: bool,
@@ -163,8 +158,7 @@ impl TrayMenu {
     };
 }
 
-/// `copy_capable` is whether this session can copy a transcript at all; native Wayland output
-/// has no clipboard access of its own.
+/// `copy_capable` is whether this session can copy a transcript at all.
 pub(crate) fn tray_menu(snapshot: &AppStateDto, copy_capable: bool) -> TrayMenu {
     let (pause_intent, pause_enabled) = match snapshot.phase {
         PhaseDto::Paused => (PauseIntent::Resume, true),

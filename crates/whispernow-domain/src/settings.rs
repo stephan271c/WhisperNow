@@ -1,5 +1,3 @@
-//! User settings.
-
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -17,15 +15,12 @@ mod legacy;
 
 pub use legacy::PythonSettings;
 
-/// Default total time allowed for AI cleanup before the deterministic
-/// transcript is used instead.
 pub const DEFAULT_LLM_TIMEOUT_SECONDS: u32 = 20;
 
-/// Accepted range for the configurable AI cleanup deadline.
 pub const LLM_TIMEOUT_SECONDS_RANGE: std::ops::RangeInclusive<u32> = 5..=120;
 
-/// First-run step. An unfinished setup keeps its step and choices in
-/// [`Settings::setup`] so an interrupted wizard resumes without claiming setup is complete.
+/// An unfinished setup keeps its step and choices in [`Settings::setup`] so an interrupted wizard
+/// resumes without claiming setup is complete.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SetupStep {
@@ -48,22 +43,18 @@ impl SetupStep {
     ];
 }
 
-/// Colour theme applied to the desktop windows.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemePreference {
-    /// Follow the operating system's light or dark appearance.
     #[default]
     System,
     Light,
     Dark,
 }
 
-/// How much the recording overlay shows while dictating.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverlayStyle {
-    /// Never show the overlay.
     Off,
     /// Show phases, level bars and outcomes without transcript text.
     Minimal,
@@ -72,7 +63,6 @@ pub enum OverlayStyle {
     WithLiveText,
 }
 
-/// Screen edge the recording overlay is placed against.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverlayPosition {
@@ -81,9 +71,8 @@ pub enum OverlayPosition {
     Bottom,
 }
 
-/// Non-secret, resumable first-run draft. Download operation identifiers are
-/// intentionally excluded because they are process-scoped. The saved settings stay in
-/// effect until setup finishes and commits these choices.
+/// Download operation identifiers are intentionally excluded because they are process-scoped. The
+/// saved settings stay in effect until setup finishes and commits these choices.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct SetupCheckpoint {
@@ -92,10 +81,8 @@ pub struct SetupCheckpoint {
     pub input_device: Option<String>,
     #[serde(rename = "hotkey")]
     pub hold_shortcut: Shortcut,
-    /// Whether the hold-to-record shortcut is enabled.
     #[serde(rename = "hotkey_enabled")]
     pub hold_shortcut_enabled: bool,
-    /// Optional press-once/press-again recording shortcut.
     #[serde(rename = "toggle_hotkey")]
     pub toggle_shortcut: Option<Shortcut>,
 }
@@ -122,17 +109,11 @@ impl Default for SetupCheckpoint {
 #[serde(transparent)]
 pub struct ApiKey(String);
 
-/// A typed API key that is empty or spans more than one line.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[error("Enter the API key on one line")]
 pub struct InvalidApiKey;
 
 impl ApiKey {
-    /// The key typed as `value`, trimmed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InvalidApiKey`] when the trimmed key is empty or holds a control character.
     pub fn new(value: impl Into<String>) -> Result<Self, InvalidApiKey> {
         let value = value.into();
         let key = value.trim();
@@ -142,7 +123,6 @@ impl ApiKey {
         Ok(Self(key.to_owned()))
     }
 
-    /// Deliberately exposes the key for authentication at the provider boundary.
     #[must_use]
     pub fn expose_secret(&self) -> &str {
         &self.0
@@ -161,16 +141,11 @@ impl fmt::Debug for ApiKey {
     }
 }
 
-/// Provider-specific model and endpoint settings. The API key is kept in the OS
-/// credential store, never here.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct ProviderSettings {
-    /// Provider model name.
     pub model: String,
-    /// Optional custom provider endpoint.
     pub api_base: Option<ProviderEndpoint>,
-    /// Provider model names saved by the user.
     pub saved_models: Vec<String>,
 }
 
@@ -234,63 +209,47 @@ impl From<WindowGeometry> for (i32, i32, u32, u32) {
     }
 }
 
-/// Persisted application settings. Fields missing from a saved document take their defaults.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct Settings {
     /// Selected input device name, or the host default.
     pub input_device: Option<String>,
-    /// The hold-to-record shortcut.
     #[serde(rename = "hotkey")]
     pub hold_shortcut: Shortcut,
-    /// Whether the hold-to-record shortcut is enabled.
     #[serde(rename = "hotkey_enabled")]
     pub hold_shortcut_enabled: bool,
-    /// Optional press-once/press-again recording shortcut.
     #[serde(rename = "toggle_hotkey")]
     pub toggle_shortcut: Option<Shortcut>,
     /// Shortcut that cancels the active dictation; `None` turns it off. Documents from
     /// before this setting get the Escape default.
     #[serde(rename = "cancel_hotkey")]
     pub cancel_shortcut: Option<Shortcut>,
-    /// Selected speech model.
     pub model_id: ModelId,
-    /// Whether the desktop window starts hidden.
     pub start_minimized: bool,
-    /// Whether the OS should start `WhisperNow` on login.
     pub auto_start_on_login: bool,
-    /// Colour theme. Absent from documents before this setting.
     pub theme: ThemePreference,
-    /// Recording overlay detail. Absent from documents before this setting.
     pub overlay_style: OverlayStyle,
-    /// Recording overlay screen edge. Absent from documents before this setting.
     pub overlay_position: OverlayPosition,
-    /// Whether first-run setup has completed.
     pub first_run_complete: bool,
-    /// The unfinished first-run setup's step and choices.
     pub setup: Option<SetupCheckpoint>,
-    /// The AI cleanup prompts. Unedited built-in prompts load as their current text, and an
-    /// empty list loads as the built-in prompts.
+    /// Unedited built-in prompts load as their current text, and an empty list loads as the
+    /// built-in prompts.
     #[serde(rename = "enhancements", deserialize_with = "upgraded_prompts")]
     pub prompts: Vec<CleanupPrompt>,
     /// The prompt AI cleanup uses; `None` turns AI cleanup off.
     #[serde(rename = "active_enhancement_id")]
     pub active_prompt_id: Option<String>,
-    /// Selected LLM provider.
     pub llm_provider: LlmProvider,
-    /// Settings isolated by provider.
     pub llm_provider_settings: BTreeMap<LlmProvider, ProviderSettings>,
     /// Providers whose API key is saved in the OS credential store.
     pub api_keys: BTreeSet<LlmProvider>,
     /// Total seconds AI cleanup may take before the deterministic
-    /// transcript is used instead. Absent from documents before this setting.
+    /// transcript is used instead.
     pub llm_timeout_seconds: u32,
     /// Ordered literal replacements applied to transcripts.
     pub vocabulary_replacements: Vec<VocabularyReplacement>,
-    /// The settings window's last bounds.
     pub window_geometry: Option<WindowGeometry>,
-    /// How many history entries to keep.
     pub history_limit: HistoryLimit,
     /// Whether successful dictations keep their audio. Failed and cancelled ones always do.
     pub keep_audio: bool,
@@ -337,7 +296,6 @@ impl Settings {
             .unwrap_or(DEFAULT_CLEANUP_MODEL_ID)
     }
 
-    /// Returns settings for a provider, or provider defaults when absent.
     #[must_use]
     pub fn provider_settings(&self, provider: LlmProvider) -> ProviderSettings {
         self.llm_provider_settings
@@ -346,7 +304,6 @@ impl Settings {
             .unwrap_or_default()
     }
 
-    /// The settings of `provider` to edit, created with defaults when absent.
     pub fn provider_settings_mut(&mut self, provider: LlmProvider) -> &mut ProviderSettings {
         self.llm_provider_settings.entry(provider).or_default()
     }

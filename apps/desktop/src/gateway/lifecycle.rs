@@ -1,5 +1,3 @@
-//! Starting and ending dictations, pausing, shortcut routing, shutdown, and update installs.
-
 use std::sync::{Arc, atomic::Ordering};
 
 use whispernow_api::ApiErrorDto;
@@ -31,7 +29,6 @@ impl Gateway {
         }
     }
 
-    /// Hands a shortcut press or release to the dictation worker.
     pub(crate) fn shortcut_action(&self, action: ShortcutAction) {
         let sent = match action {
             ShortcutAction::Pressed(trigger) => self.services.dictation.shortcut_pressed(trigger),
@@ -43,10 +40,8 @@ impl Gateway {
         }
     }
 
-    /// Cancels the running dictation for the cancel shortcut or the tray. The
-    /// dictation is kept in history as cancelled. A press that arrives after
-    /// the dictation ended has nothing to cancel, so failures stay out of the
-    /// application's current problem and are only logged.
+    /// A press that arrives after the dictation ended has nothing to cancel, so failures are
+    /// only logged.
     pub(crate) async fn cancel_dictation(&self) {
         if let Err(error) = self
             .run_command("cancel_dictation", Failure::Local, |services, _| {
@@ -58,9 +53,8 @@ impl Gateway {
         }
     }
 
-    /// Copies the last transcript for the tray. The tray offers the copy only where the
-    /// session can copy, and has no place to show a failure; a failed copy is logged and never
-    /// becomes the application's current problem.
+    /// The tray offers the copy only where the session can copy, and has no place to show a
+    /// failure, so a failed copy is only logged.
     pub(crate) async fn copy_last_transcript_from_tray(&self) {
         if let Err(error) = self
             .run_command("copy_last_transcript", Failure::Local, |services, _| {
@@ -148,7 +142,6 @@ impl Gateway {
             )
     }
 
-    /// Refuses a user update check while an update is being installed.
     pub(crate) fn refuse_while_updating(&self) -> Result<(), ApiErrorDto> {
         self.services.state.refuse_while_updating()
     }

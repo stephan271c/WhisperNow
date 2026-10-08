@@ -10,14 +10,12 @@ pub use whispernow_domain::ClearDataCategory;
 
 use crate::AppPaths;
 
-/// One existing application-data target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataLocation {
     pub category: ClearDataCategory,
     pub path: PathBuf,
 }
 
-/// What happened to one target; a failure carries the I/O error kind.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClearDataResultEntry {
     pub category: ClearDataCategory,
@@ -32,7 +30,6 @@ pub struct ClearDataError {
     pub kind: io::ErrorKind,
 }
 
-/// Lists and deletes only the fixed targets represented by [`AppPaths`].
 #[derive(Debug)]
 pub struct DataCleaner {
     paths: AppPaths,
@@ -45,10 +42,6 @@ impl DataCleaner {
     }
 
     /// The fixed targets that currently exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a target's metadata cannot be inspected.
     pub fn locations(&self) -> Result<Vec<DataLocation>, ClearDataError> {
         let mut locations = Vec::new();
         for (category, path) in self.fixed_targets()? {
@@ -66,14 +59,8 @@ impl DataCleaner {
         Ok(locations)
     }
 
-    /// Deletes the existing targets in `categories` and reports each one.
-    ///
     /// Retained recordings are removed before the `SQLite` lifecycle database; if they cannot
     /// be removed, the database and its sidecars are kept so the recordings stay recoverable.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the targets cannot be listed; nothing is deleted then.
     pub fn clear(
         &self,
         categories: &[ClearDataCategory],
@@ -137,9 +124,7 @@ impl DataCleaner {
                 ClearDataCategory::History,
                 self.paths.history_quarantine_dir(),
             ),
-            // Retained recordings are removed before the SQLite lifecycle authority. Desktop
-            // preflight has already tombstoned and deleted referenced audio while the database is
-            // open; this ordering also preserves recovery metadata if directory deletion fails.
+            // Before the database, which `clear` keeps when the recordings cannot be removed.
             (ClearDataCategory::History, self.paths.recordings_dir()),
             (
                 ClearDataCategory::History,

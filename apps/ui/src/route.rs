@@ -1,10 +1,7 @@
-//! The main window's typed destinations.
-
 use whispernow_api::MainWindowSectionDto;
 
 use crate::notice::NoticeScope;
 
-/// One page of the main window.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Route {
     #[default]
@@ -15,7 +12,6 @@ pub enum Route {
     Setup,
 }
 
-/// A Settings sub-page.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum SettingsRoute {
     #[default]
@@ -53,7 +49,6 @@ impl SettingsRoute {
         }
     }
 
-    /// The id of this sub-page's sidebar link.
     #[must_use]
     pub const fn nav_id(self) -> &'static str {
         match self {
@@ -68,7 +63,6 @@ impl SettingsRoute {
     }
 }
 
-/// A sidebar entry at the top level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TopLevel {
     Home,
@@ -97,7 +91,6 @@ impl TopLevel {
         }
     }
 
-    /// Where selecting this entry goes.
     #[must_use]
     pub const fn route(self) -> Route {
         match self {
@@ -109,7 +102,6 @@ impl TopLevel {
 }
 
 impl Route {
-    /// The destination an overlay action or tray request names.
     #[must_use]
     pub const fn from_section(section: MainWindowSectionDto) -> Self {
         match section {
@@ -129,7 +121,6 @@ impl Route {
         }
     }
 
-    /// The sidebar entry this page belongs to; setup is reached from Home.
     #[must_use]
     pub const fn top_level(self) -> TopLevel {
         match self {
@@ -139,8 +130,6 @@ impl Route {
         }
     }
 
-    /// Whether this page shows notices of `scope` next to the controls that raised them.
-    /// Notices of other scopes go to the window's toast region.
     #[must_use]
     pub const fn hosts(self, scope: NoticeScope) -> bool {
         match scope {
@@ -156,7 +145,6 @@ impl Route {
     }
 }
 
-/// Where arrow, Home and End keys move focus in a list of `count` navigation links.
 #[must_use]
 pub fn nav_keyboard_target(key: &str, current: usize, count: usize) -> Option<usize> {
     if count == 0 {

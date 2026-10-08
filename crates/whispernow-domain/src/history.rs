@@ -1,17 +1,14 @@
-//! Transcription history: one entry per dictation.
-
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::ModelId;
 
-/// Identifies one history entry. Ids are never reused, so an entry's audio file name is unique.
+/// Never reused, so an entry's audio file name is unique.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct EntryId(pub u64);
 
-/// A UTC instant represented as signed milliseconds from the Unix epoch.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct UtcMillis(pub i64);
@@ -31,7 +28,6 @@ impl UtcMillis {
     }
 }
 
-/// How many history entries to keep.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum HistoryLimit {
     #[default]
@@ -48,7 +44,6 @@ pub enum HistoryLimit {
 impl HistoryLimit {
     pub const ALL: [Self; 4] = [Self::Last20, Self::Last100, Self::Last1000, Self::Unlimited];
 
-    /// The number of entries kept, or `None` when history is unlimited.
     #[must_use]
     pub const fn max_entries(self) -> Option<u32> {
         match self {
@@ -84,7 +79,6 @@ impl HistoryLimit {
     }
 }
 
-/// How a dictation ended.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryStatus {
@@ -92,7 +86,6 @@ pub enum EntryStatus {
     Ok,
     /// Transcription failed, including its automatic retry.
     Failed,
-    /// The user cancelled the dictation.
     Cancelled,
     /// Transcribed, but the text never reached the focused application.
     NotDelivered,
@@ -106,12 +99,10 @@ impl EntryStatus {
     }
 }
 
-/// One dictation, as stored.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HistoryEntry {
     pub id: EntryId,
     pub created_at: UtcMillis,
-    /// Length of the captured audio.
     pub duration_millis: Option<u64>,
     /// The recognized transcript; absent when recognition never produced one.
     pub raw_text: Option<String>,
@@ -121,21 +112,18 @@ pub struct HistoryEntry {
     pub status: EntryStatus,
     /// A plain-language explanation of a failure or an undelivered paste.
     pub error: Option<String>,
-    /// Whether the dictation's audio is kept and can be played.
     pub has_audio: bool,
     pub asr_model_id: Option<ModelId>,
     pub llm_model: Option<String>,
 }
 
 impl HistoryEntry {
-    /// The text a user copies: the pasted text when it differs, otherwise the transcript.
     #[must_use]
     pub fn text(&self) -> Option<&str> {
         self.cleaned_text.as_deref().or(self.raw_text.as_deref())
     }
 }
 
-/// A dictation about to be stored; the store assigns its id and keeps its audio.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NewHistoryEntry {
     pub created_at: UtcMillis,
@@ -155,22 +143,19 @@ pub struct HistoryCursor {
     pub id: EntryId,
 }
 
-/// Narrows a history listing. The default lists every entry.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct HistoryFilter {
     /// Keeps entries whose transcript or cleaned text contains this text, ignoring ASCII case.
     /// Blank text does not filter.
     pub query: String,
-    /// Keeps failed entries. A cancelled dictation is the user's choice, not a failure.
+    /// A cancelled dictation is the user's choice, not a failure.
     pub failed_only: bool,
 }
 
 impl HistoryFilter {
-    /// Longest accepted search text, in bytes.
     pub const MAX_QUERY_BYTES: usize = 256;
 
-    /// The trimmed search text, or `None` when it does not filter.
     #[must_use]
     pub fn search_text(&self) -> Option<&str> {
         let query = self.query.trim();
@@ -178,7 +163,6 @@ impl HistoryFilter {
     }
 }
 
-/// One bounded page of a newest-first listing.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HistoryPageRequest {
     pub before: Option<HistoryCursor>,

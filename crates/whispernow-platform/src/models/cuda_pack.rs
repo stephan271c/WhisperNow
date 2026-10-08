@@ -1,12 +1,6 @@
 //! The CUDA pack: llama.cpp's CUDA backend and NVIDIA's CUDA runtime, which run the cleanup
 //! models on an NVIDIA GPU with CUDA instead of Vulkan.
 //!
-//! It is an optional download, straight from the pinned llama.cpp release's assets: the CUDA
-//! 13.4 build, of which only the backend is kept, and the CUDA runtime published beside it.
-//! Each archive is checked against its pinned size and SHA-256 before anything is extracted.
-//! The files are installed flat in one directory, which the cleanup engine loads on top of
-//! the bundled backends ([`crate::Llama::load_cuda`]).
-//!
 //! A loaded pack cannot be unloaded, and on Windows its files cannot be deleted while
 //! loaded, so removing a pack in use only marks it; it is deleted when the app next starts.
 
@@ -29,12 +23,10 @@ use super::{
 };
 use crate::llama::CUDA_LIBRARIES;
 
-/// The pack's directory under the app's data directory.
 const PACK_DIRECTORY: &str = "llama-cuda";
 /// Left in a pack that was removed while loaded; such a pack is deleted at the next start.
 const REMOVAL_MARKER: &str = ".whispernow-remove";
 
-/// One release asset of the pack, and the files taken from it.
 #[derive(Clone, Copy, Debug)]
 pub struct CudaPackArchive {
     pub url: &'static str,
@@ -113,10 +105,8 @@ pub(super) const CUDA_PACK: &[CudaPackArchive] = &[
 )))]
 pub(super) const CUDA_PACK: &[CudaPackArchive] = &[];
 
-/// Where the pack is in its life on this computer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CudaPackState {
-    /// This platform has no CUDA pack.
     Unsupported,
     NotInstalled,
     Installed,
@@ -130,7 +120,6 @@ impl ModelStore {
         self
     }
 
-    /// The pack's download size: all its archives together.
     #[must_use]
     pub fn cuda_pack_size(&self) -> u64 {
         self.cuda_pack
@@ -162,7 +151,6 @@ impl ModelStore {
         (Self::cuda_pack_complete(&root) && !root.join(REMOVAL_MARKER).exists()).then_some(root)
     }
 
-    /// Whether `root` holds every file of the pack.
     fn cuda_pack_complete(root: &Path) -> bool {
         CUDA_LIBRARIES.is_some_and(|libraries| {
             libraries
@@ -173,9 +161,6 @@ impl ModelStore {
 
     /// Downloads, verifies and installs the pack. A complete pack marked for removal is kept
     /// instead, without downloading it again.
-    ///
-    /// # Errors
-    /// Returns a typed download, cancellation, validation, or filesystem error.
     pub fn download_cuda_pack(
         &self,
         cancellation: &CancellationToken,
@@ -265,9 +250,6 @@ impl ModelStore {
 
     /// Removes the pack, or, while `in_use` (loaded in this process), marks it so that it is
     /// no longer used and is deleted at the next start.
-    ///
-    /// # Errors
-    /// When there is no pack, or it cannot be removed or marked.
     pub fn remove_cuda_pack(&self, in_use: bool) -> Result<(), ModelStoreError> {
         let _guard = self.lock_store()?;
         let root = self.cuda_pack_root();
@@ -308,7 +290,6 @@ impl ModelStore {
     }
 }
 
-/// Extracts `archive`'s members from the verified `file` into `into`, under their pack names.
 fn extract(
     archive: &CudaPackArchive,
     file: &Path,

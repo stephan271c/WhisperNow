@@ -8,15 +8,8 @@ use super::{
     PipelineFailureKind, PreparedTranscription, UNKNOWN_TOKEN_PATTERN, join_segment_texts,
 };
 
-/// Decodes one speech segment.
-///
 /// Blank text is not a failure here: a segment may hold only noise, and the joined transcript
 /// decides whether the recording produced text.
-///
-/// # Errors
-///
-/// Returns `Cancelled` before decoding a cancelled segment and `RecognitionFailed` when the
-/// engine rejects it.
 pub fn recognize_segment(
     samples: &[f32],
     asr: &mut dyn AsrEngine,
@@ -45,10 +38,6 @@ pub fn recognize_segment(
 
 /// Joins the decoded segment texts and applies the vocabulary once to the whole transcript.
 /// A recording without segments contained no speech.
-///
-/// # Errors
-///
-/// Returns `NoSpeech`, `EmptyTranscription` or `UnknownTokens`.
 pub fn prepare_segmented(
     timestamp: UtcMillis,
     segments: &[String],
@@ -81,7 +70,6 @@ pub fn prepare_segmented(
     })
 }
 
-/// Returns whether the exact lowercase Python compatibility marker occurs.
 #[must_use]
 fn contains_unknown_tokens(text: &str) -> bool {
     text.contains(UNKNOWN_TOKEN_PATTERN)

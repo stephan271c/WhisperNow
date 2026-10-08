@@ -63,22 +63,13 @@ impl fmt::Debug for ClipboardContents {
 pub struct NativeClipboard(Clipboard);
 
 impl NativeClipboard {
-    /// Opens the native clipboard.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NativePasteError::Unavailable`] when no clipboard is reachable.
     pub fn connect() -> Result<Self, NativePasteError> {
         Clipboard::new().map(Self).map_err(clipboard_error)
     }
 
-    /// Captures the one representation [`capture_order`] selects. `Ok(None)`
+    /// Captures the one representation `capture_order` selects. `Ok(None)`
     /// means none of text, HTML or an image is present: the clipboard may be
     /// empty or hold only formats `arboard` cannot read.
-    ///
-    /// # Errors
-    ///
-    /// Returns a clipboard error when present content cannot be read.
     pub fn snapshot(&mut self) -> Result<Option<ClipboardContents>, NativePasteError> {
         // Windows reports a missing HTML format as a generic error, so any HTML
         // read failure just means "no HTML".
@@ -121,20 +112,10 @@ impl NativeClipboard {
         Ok(None)
     }
 
-    /// Writes the transcript as plain text.
-    ///
-    /// # Errors
-    ///
-    /// Returns a clipboard error when the write fails.
     pub fn write_text(&mut self, text: &str) -> Result<(), NativePasteError> {
         excluded(self.0.set()).text(text).map_err(clipboard_error)
     }
 
-    /// Reports whether the clipboard's text is exactly `text`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a clipboard error when present text cannot be read.
     pub fn holds_text(&mut self, text: &str) -> Result<bool, NativePasteError> {
         Ok(present(self.0.get().text())?.is_some_and(|mut current| {
             let holds = current == text;
@@ -143,11 +124,6 @@ impl NativeClipboard {
         }))
     }
 
-    /// Puts captured contents back.
-    ///
-    /// # Errors
-    ///
-    /// Returns a clipboard error when the write fails.
     pub fn restore(&mut self, contents: &ClipboardContents) -> Result<(), NativePasteError> {
         let set = excluded(self.0.set());
         match contents {

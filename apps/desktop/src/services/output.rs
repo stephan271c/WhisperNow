@@ -1,5 +1,3 @@
-//! Current-focus desktop paste-and-restore output.
-
 use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
@@ -32,22 +30,19 @@ pub(crate) enum OutputNotice {
     PermissionDenied,
     CapabilityUnavailable,
     PasteFailed,
-    /// The user cancelled the dictation before its transcript was pasted.
     Cancelled,
 }
 
-/// The clipboard could not take a copied transcript.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CopyUnavailable;
 
-/// The recording workflow's only automatic text-output boundary.
 pub(crate) trait TranscriptOutput: Send + Sync {
     fn output(&self, text: &str, cancellation: &CancellationToken) -> OutputNotice;
 }
 
-/// Owns the only automatic output operation. The [`PasteQueue`]s run one
-/// paste at a time, so a paste never snapshots another's transcript, and the
-/// Wayland portal runs on one joined worker that handles one command at a time.
+/// The [`PasteQueue`]s run one paste at a time, so a paste never snapshots another's
+/// transcript, and the Wayland portal runs on one joined worker that handles one command at
+/// a time.
 pub(crate) struct OutputCoordinator {
     operation: Option<OutputOperation>,
     stopping: CancellationToken,
@@ -118,7 +113,6 @@ impl OutputCoordinator {
         }
     }
 
-    /// Whether [`Self::copy`] can put a transcript on the clipboard in this session.
     pub(crate) const fn can_copy(&self) -> bool {
         match self.operation {
             Some(OutputOperation::Native(_)) => true,
@@ -145,8 +139,6 @@ impl OutputCoordinator {
         })
     }
 
-    /// Whether this is a native Wayland session, where the paste helper or the
-    /// portal presses the paste keystroke.
     pub(crate) const fn native_wayland(&self) -> bool {
         match self.operation {
             #[cfg(target_os = "linux")]
@@ -293,7 +285,6 @@ const fn consent_after<T>(result: &Result<T, WaylandPortalError>) -> Option<Perm
 
 #[cfg(target_os = "linux")]
 impl WaylandOutputPortal {
-    /// The longest a paste or a consent request may wait on the portal.
     const PORTAL_TIMEOUT: Duration = Duration::from_mins(2);
 
     fn spawn(restore_token_path: PathBuf, stopping: CancellationToken) -> Self {

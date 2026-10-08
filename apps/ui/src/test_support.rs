@@ -1,5 +1,3 @@
-//! Snapshot fixtures and virtual-DOM helpers shared by the UI test modules.
-
 #[cfg(not(target_arch = "wasm32"))]
 use std::{any::Any, cell::RefCell, future::Future, pin::Pin, rc::Rc, sync::Once};
 
@@ -12,17 +10,18 @@ use dioxus_html::{
     HtmlEventConverter, MountedResult, RenderedElementBacking, SerializedFormData,
     SerializedHtmlEventConverter, SerializedKeyboardData, SerializedMouseData,
 };
+use whispernow_api::{
+    AppStateDto, EntryId, EntryStatus, HistoryEntry, ModelId, ModelStateDto, PhaseDto, UtcMillis,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use whispernow_api::{
-    AppStateDto, EventPayload, HistoryLimit, LlmProvider, ModelId, ModelStateDto, ProviderSettings,
+    EventPayload, HistoryFilter, HistoryLimit, HistoryPage, LlmProvider, ProviderSettings,
     RecordingMode, Settings,
 };
-use whispernow_api::{EntryId, EntryStatus, HistoryEntry, PhaseDto, UtcMillis};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{UiContext, client::fake, components::UiActions};
 
-/// Provides the window context over `state` and `management`, on Home.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn use_test_context(
     state: Signal<crate::UiState>,
@@ -36,8 +35,7 @@ pub(crate) fn use_test_context(
     })
 }
 
-/// The window context over `state` and `management`, on Home, for actions run outside a
-/// component; the caller must be in a runtime scope.
+/// For actions run outside a component; the caller must be in a runtime scope.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn test_context(
     state: crate::UiState,
@@ -64,8 +62,6 @@ impl PartialEq for Probe {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Probe {
-    /// Provides the window context over `state` and `management`, on Home, and keeps it for
-    /// the test.
     pub(crate) fn provide(
         &self,
         state: Signal<crate::UiState>,
@@ -94,7 +90,6 @@ pub(crate) struct Page {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Page {
-    /// Mounts the surface `build` makes around a fresh [`Probe`], over a reset fake desktop.
     pub(crate) fn new(build: impl FnOnce(Probe) -> VirtualDom) -> Self {
         fake::reset();
         let probe = Probe::default();
@@ -120,7 +115,6 @@ impl Page {
         self.rendered.edits.extend(mutations.edits);
     }
 
-    /// Runs the calls and timers that are ready and renders what they changed.
     pub(crate) fn settle(&mut self) -> &mut Self {
         for _ in 0..4 {
             self.dom.process_events();
@@ -130,14 +124,12 @@ impl Page {
         self
     }
 
-    /// Clicks `id`, then runs the calls the click started and renders their result.
     pub(crate) fn click(&mut self, id: &str) -> &mut Self {
         let mutations = click_rendered(&mut self.dom, &self.rendered, id);
         self.keep(mutations);
         self.settle()
     }
 
-    /// Fires a form event (`"input"`, `"change"` or `"submit"`) carrying `value` at `id`.
     pub(crate) fn fire(&mut self, id: &str, name: &'static str, value: &str) -> &mut Self {
         let mutations = form_event_rendered(&mut self.dom, &self.rendered, id, name, value);
         self.keep(mutations);
@@ -161,13 +153,11 @@ impl Page {
         self
     }
 
-    /// Lets every waiting timer fire, then renders.
     pub(crate) fn wait(&mut self) -> &mut Self {
         fake::run_timers();
         self.settle()
     }
 
-    /// Answers the oldest waiting `command` and renders the result.
     pub(crate) fn answer(
         &mut self,
         command: &str,
@@ -185,14 +175,12 @@ impl Page {
         sent
     }
 
-    /// Runs `act` as a control of this page would, then renders.
     pub(crate) fn act(&mut self, act: impl FnOnce(UiActions)) -> &mut Self {
         let actions = UiActions::new(self.context());
         self.dom.in_scope(ScopeId::ROOT, || act(actions));
         self.settle()
     }
 
-    /// Delivers a desktop event as the event listener does.
     pub(crate) fn publish(&mut self, event: EventPayload) -> &mut Self {
         self.act(|actions| actions.apply_event(event))
     }
@@ -213,7 +201,6 @@ pub(crate) fn snapshot(phase: PhaseDto) -> AppStateDto {
     }
 }
 
-/// The opening tag of the element rendered with `id`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tag<'a>(html: &'a str, id: &str) -> Option<&'a str> {
     let start = html.find(&format!("id=\"{id}\""))?;
@@ -326,7 +313,6 @@ pub(crate) fn label_in_name_violations(html: &str) -> Vec<String> {
     violations
 }
 
-/// A toggle recording, the phase of most tests that need one.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const RECORDING: PhaseDto = PhaseDto::Recording {
     mode: RecordingMode::Toggle,
@@ -334,6 +320,18 @@ pub(crate) const RECORDING: PhaseDto = PhaseDto::Recording {
 };
 
 pub(crate) const PROCESSING: PhaseDto = PhaseDto::Processing { cleaning_up: false };
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn show_history(management: &mut crate::ManagementState, entries: Vec<HistoryEntry>) {
+    management.finish_history_refresh(
+        1,
+        &HistoryFilter::default(),
+        HistoryPage {
+            entries,
+            next_cursor: None,
+        },
+    );
+}
 
 /// Valid saved settings with a hold-to-record shortcut and AI cleanup off.
 #[cfg(not(target_arch = "wasm32"))]
@@ -372,7 +370,6 @@ pub(crate) fn history_entry(id: u64, text: &str) -> HistoryEntry {
     }
 }
 
-/// Clicks the element rendered with `target` as its id and renders the result.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn click_rendered(
     dom: &mut VirtualDom,
@@ -388,8 +385,6 @@ pub(crate) fn click_rendered(
     )
 }
 
-/// Fires a form event (`"input"` or `"change"`) carrying `value` at the element rendered with
-/// `target` as its id, and renders the result.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn form_event_rendered(
     dom: &mut VirtualDom,
@@ -410,7 +405,6 @@ pub(crate) fn form_event_rendered(
     )
 }
 
-/// Presses `key` on the element rendered with `target` as its id and renders the result.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn key_rendered(
     dom: &mut VirtualDom,

@@ -1,5 +1,3 @@
-//! The desktop's one state value and the channel that publishes it.
-
 use std::{
     collections::BTreeMap,
     sync::{Mutex, MutexGuard, mpsc},
@@ -12,8 +10,8 @@ use whispernow_api::{
 use whispernow_core::CancellationToken;
 use whispernow_domain::ModelId;
 
-/// Sends events to the desktop's event loop, which forwards them to the windows. Sending never
-/// blocks, so a snapshot can be sent while the state lock is held and arrives in change order.
+/// Sending never blocks, so a snapshot can be sent while the state lock is held and arrives
+/// in change order.
 #[derive(Clone)]
 pub(crate) struct Events(mpsc::Sender<EventPayload>);
 
@@ -28,7 +26,6 @@ impl Events {
     }
 }
 
-/// What started a recording.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RecordingTrigger {
     Hold,
@@ -39,13 +36,12 @@ pub(crate) enum RecordingTrigger {
 }
 
 impl RecordingTrigger {
-    /// Whether this is setup's test dictation, which is neither pasted nor kept in history.
     pub(crate) const fn is_setup_test(self) -> bool {
         matches!(self, Self::SetupTest)
     }
 }
 
-/// What the desktop is doing. Every surface derives its view from this one value.
+/// Every surface derives its view from this one value.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Phase {
     Idle,
@@ -85,7 +81,6 @@ impl Phase {
         }
     }
 
-    /// Whether a dictation is capturing or being processed.
     pub(crate) const fn is_busy(&self) -> bool {
         matches!(self, Self::Recording { .. } | Self::Processing { .. })
     }
@@ -115,7 +110,6 @@ fn conflict(code: &str, summary: &str) -> ApiErrorDto {
     ApiErrorDto::new(ErrorCategoryDto::General, code, summary)
 }
 
-/// What the recognizer holds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ModelStatus {
     Unloaded,
@@ -135,7 +129,6 @@ pub(crate) enum CancelReason {
     Shutdown,
 }
 
-/// A model download in progress, and how to cancel it.
 pub(crate) struct ActiveDownload {
     pub(crate) progress: ActiveDownloadDto,
     pub(crate) cancellation: CancellationToken,
@@ -216,8 +209,7 @@ impl State {
     }
 }
 
-/// The one mutex-guarded state value. Each change publishes its snapshot before the lock is
-/// released.
+/// Each change publishes its snapshot before the lock is released.
 pub(crate) struct StateCell {
     value: Mutex<State>,
     events: Events,
@@ -231,9 +223,6 @@ impl StateCell {
         }
     }
 
-    /// Locks the state. A poisoned lock means another thread panicked mid-change, which is a
-    /// bug; it is not reported to the user as a recoverable error.
-    /// Refuses work that would race an update being installed.
     pub(crate) fn refuse_while_updating(&self) -> Result<(), ApiErrorDto> {
         let phase = &self.lock().phase;
         if *phase == Phase::Updating {
@@ -266,7 +255,6 @@ impl StateCell {
         Ok(result)
     }
 
-    /// Applies a change that cannot fail and publishes it.
     pub(crate) fn apply(&self, change: impl FnOnce(&mut State)) {
         let mut state = self.lock();
         change(&mut state);

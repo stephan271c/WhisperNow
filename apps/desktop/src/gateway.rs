@@ -1,6 +1,3 @@
-//! Tauri command boundary: owns the application state shared by every command and runs each
-//! command on a blocking worker, publishing its failure when it is the application's.
-
 pub(crate) mod commands;
 mod events;
 pub(crate) mod lifecycle;
@@ -76,7 +73,6 @@ impl Gateway {
         self.services.state.publish();
     }
 
-    /// Asks the main window to show `section`.
     pub(crate) fn request_navigation(&self, section: whispernow_api::MainWindowSectionDto) {
         self.services
             .state
@@ -137,8 +133,6 @@ pub(crate) enum Failure {
     Local,
 }
 
-/// Runs blocking native, portal, or process work off the async runtime's
-/// worker threads.
 async fn run_blocking<T, F>(work: F) -> Result<T, ApiErrorDto>
 where
     T: Send + 'static,

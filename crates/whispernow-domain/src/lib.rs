@@ -1,5 +1,3 @@
-//! Framework-independent domain primitives shared by every composition root.
-
 mod data;
 mod history;
 mod models;
@@ -33,18 +31,15 @@ pub use settings::{
 pub use shortcut::{RecordingMode, Shortcut, ShortcutKey, ShortcutModifier};
 pub use validation::SettingsError;
 
-/// A stable, content-free error suitable for crossing an application boundary.
 #[derive(Clone, Debug, Deserialize, Error, Eq, PartialEq, Serialize)]
 #[error("{code}: {summary}")]
 pub struct AppError {
-    /// Stable machine-readable error code.
     pub code: String,
-    /// Safe summary that must not contain captured or secret data.
+    /// Must not contain captured or secret data.
     pub summary: String,
 }
 
 impl AppError {
-    /// Creates a redacted application error.
     #[must_use]
     pub fn redacted(code: impl Into<String>, summary: impl Into<String>) -> Self {
         Self {

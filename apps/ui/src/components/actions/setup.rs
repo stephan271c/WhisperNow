@@ -1,5 +1,3 @@
-//! First-run setup: its checkpoint, microphones, permissions and test dictation.
-
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use whispernow_api::{
@@ -11,10 +9,8 @@ use super::UiActions;
 use crate::client::{self, ClientError};
 use crate::{SetupEdit, UiOperation};
 
-/// How often setup reads the permission cards while it waits for a grant.
 const PERMISSION_POLL_MS: u32 = 1_000;
 
-/// How many times setup reads the cards after a request before it stops waiting.
 pub(crate) const PERMISSION_POLLS: u32 = 120;
 
 impl UiActions {
@@ -31,7 +27,6 @@ impl UiActions {
         });
     }
 
-    /// Saves setup's progress so it can continue from Home.
     pub(crate) fn finish_setup_later(self) {
         let request = self.management().peek().finish_setup_later_request();
         if let Some(request) = request {
@@ -88,7 +83,6 @@ impl UiActions {
         );
     }
 
-    /// Starts setup again from its first step.
     pub(crate) fn restart_setup(self) {
         let operation = UiOperation::RestartSetup;
         self.run(
@@ -101,7 +95,6 @@ impl UiActions {
         );
     }
 
-    /// Lists microphones the first time setup has moved past its permission step.
     pub(crate) fn list_devices_once_allowed(self) {
         let allowed = {
             let management = self.management();

@@ -21,8 +21,7 @@ use super::{
     state::{ActiveDownload, StateCell},
 };
 
-/// Owns installed models and their download workers. The dictation worker owns the
-/// recognizer; selecting a model asks it to load the model.
+/// The dictation worker owns the recognizer; selecting a model asks it to load the model.
 pub(crate) struct ModelCoordinator {
     store: Arc<ModelStore>,
     state: Arc<StateCell>,
@@ -375,7 +374,6 @@ impl ModelCoordinator {
     }
 }
 
-/// Maps a failed model store listing to its public error.
 pub(super) fn model_list_error<E>(_error: E) -> ApiErrorDto {
     ApiErrorDto::new(
         ErrorCategoryDto::Model,
@@ -441,7 +439,6 @@ fn run_model_download(
     });
 }
 
-/// Shortest interval that gives a meaningful average transfer rate.
 const MIN_RATE_INTERVAL: Duration = Duration::from_millis(500);
 
 /// The average transfer rate over `elapsed`, or `None` before the interval is long enough.

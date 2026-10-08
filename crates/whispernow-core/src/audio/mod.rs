@@ -1,8 +1,3 @@
-//! Framework-independent audio capture and processing contracts.
-//!
-//! Native callback ownership belongs to a platform adapter. The types in this
-//! module are deliberately independent of CPAL and UI frameworks.
-
 mod level;
 mod pipeline;
 mod ports;

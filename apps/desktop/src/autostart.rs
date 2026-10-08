@@ -1,5 +1,3 @@
-//! Synchronization between the persisted startup setting and the OS registration.
-
 use tauri_plugin_autostart::ManagerExt as _;
 
 pub(crate) trait AutostartRegistration: Send + Sync {

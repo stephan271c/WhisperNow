@@ -1,5 +1,3 @@
-//! AI cleanup: whether transcripts are rewritten, by which provider, with which prompt.
-
 use dioxus::prelude::*;
 use whispernow_api::{
     ApiKey, CleanupPrompt, LlmProvider, ModelAvailability, ProviderEndpoint, ProviderSettings,
@@ -17,7 +15,6 @@ use super::ui::{
 };
 use crate::{SettingKey, UiContext, UiOperation};
 
-/// Text a prompt test starts with; the user can replace it.
 const SAMPLE_TEXT: &str = "um so i think we should uh meet on tuesday to go over the the budget";
 
 /// Queues `edit`; while the desktop has refused the provider the user chose, asks for it
@@ -54,7 +51,6 @@ fn edit_prompt(
     }
 }
 
-/// AI cleanup: the on/off switch, the provider and the prompts.
 #[component]
 pub(super) fn AiCleanupPage() -> Element {
     let actions = use_actions();
@@ -109,8 +105,6 @@ pub(super) fn AiCleanupPage() -> Element {
     } }
 }
 
-/// The provider, its model, endpoint and API key, and the time limit.
-///
 /// Picking a provider shows its fields. While AI cleanup is on, the desktop refuses a provider
 /// without a model (or a custom provider without an endpoint): the refusal beside the picker
 /// says what is missing, and the switch is asked for again once the fields below change or AI
@@ -279,8 +273,6 @@ fn ProviderSection(settings: Settings, chosen: Signal<Option<LlmProvider>>) -> E
     }
 }
 
-/// Which local cleanup model AI cleanup uses, and its install state and download. They run
-/// inside the app, so they have no endpoint or key; a server of your own is a custom provider.
 #[component]
 fn CleanupModelRows(chosen_model: String) -> Element {
     let actions = use_actions();
@@ -345,7 +337,6 @@ fn CleanupModelRows(chosen_model: String) -> Element {
     }
 }
 
-/// The saved prompts, a sample to test them on, and a form for a new one.
 #[component]
 fn PromptsSection(prompts: Vec<CleanupPrompt>) -> Element {
     let actions = use_actions();

@@ -75,8 +75,6 @@ pub(super) fn PasteHelperNotice(setup: PasteHelperSetupDto, scope: NoticeScope) 
     } }
 }
 
-/// Shows a shortcut and captures a new one from the keyboard.
-///
 /// The button's accessible name is its visible text followed by `label`; the current keys
 /// and the capture guidance describe it. With `lone_keys`, Escape or a function key may be
 /// pressed without a modifier (as the cancel shortcut allows), so Escape is captured and

@@ -40,7 +40,6 @@ pub enum SettingsNotice {
     ApiKeysNotImported { path: PathBuf },
 }
 
-/// Loads and saves `settings.json` and the API keys kept beside it in the OS credential store.
 pub struct SettingsStore {
     paths: AppPaths,
     keys: Arc<dyn CredentialStore>,
@@ -48,7 +47,6 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
-    /// Settings in `paths` with API keys in the platform keychain.
     #[must_use]
     pub fn new(paths: AppPaths) -> Self {
         Self::with_store(paths, Arc::new(OsCredentialStore))
@@ -66,10 +64,6 @@ impl SettingsStore {
     /// Loads the saved settings; without a file they are the defaults. The Python
     /// release's file is imported and replaced. A file that cannot be read is renamed to
     /// `settings.json.bad-<timestamp>` and the defaults are loaded; see [`Self::take_notice`].
-    ///
-    /// # Errors
-    ///
-    /// Returns a redacted error when the file cannot be read, renamed or imported.
     pub fn load(&self) -> Result<Settings, AppError> {
         let path = self.paths.settings_file();
         let document = match fs::read(&path) {
@@ -103,11 +97,6 @@ impl SettingsStore {
         Ok(Settings::default())
     }
 
-    /// Replaces `settings.json` with `settings`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a redacted error when the file cannot be written.
     pub fn save(&self, settings: &Settings) -> Result<(), AppError> {
         let document = serde_json::to_vec_pretty(&Stored {
             settings_version: SETTINGS_VERSION,
@@ -128,10 +117,6 @@ impl SettingsStore {
 
     /// The API key of `provider` in the credential store. Callers ask only when
     /// [`Settings::api_keys`] says it holds one.
-    ///
-    /// # Errors
-    ///
-    /// Returns a redacted error when the credential store cannot be read.
     pub fn api_key(&self, provider: LlmProvider) -> Result<Option<ApiKey>, AppError> {
         self.keys.read(&account(provider)).map_err(|_| {
             redacted(
@@ -143,10 +128,6 @@ impl SettingsStore {
 
     /// Saves the API key of `provider` in the credential store. The caller records it in
     /// [`Settings::api_keys`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CredentialStoreUnavailable`] when the store refuses it.
     pub fn store_api_key(
         &self,
         provider: LlmProvider,
@@ -156,10 +137,6 @@ impl SettingsStore {
     }
 
     /// Removes the API key of `provider` from the credential store; an absent key is removed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CredentialStoreUnavailable`] when the store refuses the removal.
     pub fn delete_api_key(&self, provider: LlmProvider) -> Result<(), CredentialStoreUnavailable> {
         self.keys.delete(&account(provider))
     }

@@ -1,6 +1,3 @@
-//! Tauri implementation of the overlay window layer. Window changes run on the event-loop
-//! thread through `run_on_main_thread` and are never awaited.
-
 use tauri::Manager as _;
 use whispernow_api::OverlayPosition;
 

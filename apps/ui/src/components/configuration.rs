@@ -1,5 +1,3 @@
-//! General & Shortcuts, Audio, and Privacy & Data, and the row every self-saving control uses.
-
 use dioxus::prelude::*;
 use whispernow_api::{
     HistoryLimit, LlmProvider, OverlayPosition, OverlayStyle, PermissionKindDto, Settings,
@@ -42,7 +40,6 @@ fn history_limit_value(limit: HistoryLimit) -> String {
         .map_or_else(|| "unlimited".to_owned(), |entries| entries.to_string())
 }
 
-/// The select value for `current` in `choices`.
 fn choice_value<T: PartialEq>(choices: &[(T, &'static str, &str)], current: &T) -> &'static str {
     choices
         .iter()
@@ -50,7 +47,6 @@ fn choice_value<T: PartialEq>(choices: &[(T, &'static str, &str)], current: &T) 
         .map_or("", |(_, value, _)| value)
 }
 
-/// The setting a select value names in `choices`.
 fn chosen<T: Copy>(choices: &[(T, &str, &str)], value: &str) -> Option<T> {
     choices
         .iter()
@@ -68,8 +64,6 @@ pub(super) fn status_parts(status: SaveStatus) -> (Option<String>, Option<String
     }
 }
 
-/// A settings row whose control saves itself: "Saving…", "Saved", or why the change was not
-/// saved appear beside the control.
 #[component]
 pub(super) fn AutosaveRow(
     id: String,
@@ -92,13 +86,11 @@ pub(super) fn SettingsBlockedReason() -> Element {
     rsx! { DisabledReason { id: "settings-disabled-reason", reason: blocked } }
 }
 
-/// Shown until the desktop sends the settings.
 #[component]
 pub(super) fn SettingsLoading() -> Element {
     rsx! { p { role: "status", "Loading settings…" } }
 }
 
-/// General & Shortcuts: recording shortcuts, appearance and startup.
 #[component]
 pub(super) fn GeneralPage() -> Element {
     let actions = use_actions();
@@ -260,7 +252,6 @@ pub(super) fn GeneralPage() -> Element {
     } }
 }
 
-/// Audio: the input device, a microphone test, and microphone permission.
 #[component]
 pub(super) fn AudioPage() -> Element {
     let actions = use_actions();
@@ -316,7 +307,6 @@ pub(super) fn AudioPage() -> Element {
     } }
 }
 
-/// Privacy & Data: what leaves this computer, what is kept, and removing it.
 #[component]
 pub(super) fn PrivacyPage() -> Element {
     let actions = use_actions();

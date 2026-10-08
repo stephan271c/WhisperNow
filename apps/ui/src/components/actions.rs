@@ -1,8 +1,6 @@
-//! One path from a control to the desktop: mark busy, call the client, apply the answer.
-//!
-//! Every control calls a method here; the methods for each screen are in a submodule. A failed
-//! call is explained by a notice in the scope of the control that made it, unless the control
-//! shows the failure itself.
+//! One path from a control to the desktop: mark busy, call the client, apply the answer. A
+//! failed call is explained by a notice in the scope of the control that made it, unless the
+//! control shows the failure itself.
 
 mod history;
 mod models;
@@ -30,7 +28,6 @@ pub(crate) struct UiActions {
     context: UiContext,
 }
 
-/// The facade for the current window.
 pub(crate) fn use_actions() -> UiActions {
     UiActions::new(use_context::<UiContext>())
 }
@@ -48,7 +45,6 @@ impl UiActions {
         self.context.state
     }
 
-    /// Why `operation` is disabled right now, or `None` when it may be sent.
     pub(crate) fn blocked(self, operation: UiOperation) -> Option<BlockedReason> {
         crate::blocked(
             operation,
@@ -80,7 +76,6 @@ impl UiActions {
         });
     }
 
-    /// Explains a failed call beside the control that made it.
     fn report(self, operation: UiOperation, error: &ClientError) {
         self.management()
             .write()
@@ -115,8 +110,6 @@ impl UiActions {
             match client::get_setup_state().await {
                 Ok(setup) => {
                     self.management().write().install_setup(setup);
-                    // Listing microphones can ask for access, which setup asks for on its own
-                    // step.
                     if self.management().peek().may_list_devices() {
                         self.list_devices();
                     }
@@ -136,8 +129,6 @@ impl UiActions {
         );
     }
 
-    /// Applies a desktop event to this window.
-    ///
     /// A failed history read is retried once the workflow returns to idle, so a change
     /// published while the read could not be served still reaches the history window.
     #[cfg_attr(
@@ -171,7 +162,6 @@ impl UiActions {
         self.state().write().apply_event(event);
     }
 
-    /// Copies `text` and confirms the copy next to the control in `scope`.
     pub(crate) fn copy_text(self, text: String, scope: NoticeScope) {
         spawn_forever(async move {
             let copied = client::write_clipboard(&text).await.is_ok();
@@ -197,7 +187,6 @@ impl UiActions {
         );
     }
 
-    /// Lists the application data a clear would remove.
     pub(crate) fn review_data(self) {
         let operation = UiOperation::ListDataLocations;
         self.management().write().clear_result = None;
@@ -231,7 +220,6 @@ impl UiActions {
     }
 }
 
-/// The visible explanation for a disabled control.
 #[component]
 pub(crate) fn DisabledReason(id: String, reason: Option<BlockedReason>) -> Element {
     let Some(reason) = reason else {

@@ -1,12 +1,10 @@
-//! The rules saved settings follow, each broken rule worded for the person changing it.
-
 use thiserror::Error;
 
 use crate::{
     CLEAN_UP_PROMPT_ID, LLM_TIMEOUT_SECONDS_RANGE, LlmProvider, Settings, SetupCheckpoint, Shortcut,
 };
 
-/// A rule the settings break. Its message is shown beside the control that broke it.
+/// Its message is shown beside the control that broke it.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum SettingsError {
     #[error("Keep at least one recording shortcut on")]
@@ -94,9 +92,6 @@ impl Settings {
         problems
     }
 
-    /// # Errors
-    ///
-    /// Returns the first rule the settings break.
     pub fn validate(&self) -> Result<(), SettingsError> {
         self.problems().into_iter().next().map_or(Ok(()), Err)
     }
@@ -104,10 +99,6 @@ impl Settings {
     /// Checks settings an edit turned `before` into. A rule `before` already broke does not
     /// block the edit: settings saved by an older version, or before a provider changed its
     /// rules, still accept other changes and the change that repairs them.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first rule the edit broke.
     pub fn validate_update(&self, before: &Self) -> Result<(), SettingsError> {
         let existing = before.problems();
         self.problems()
@@ -128,8 +119,6 @@ impl Settings {
         )
     }
 
-    /// What AI cleanup, when on, lacks to use the chosen provider: a model, and for a
-    /// custom provider an endpoint.
     #[must_use]
     fn cleanup_provider_missing(&self) -> Option<&'static str> {
         self.active_prompt_id.as_ref()?;
@@ -179,8 +168,6 @@ impl Settings {
         }
     }
 
-    /// The identifier for a new prompt: `prompt-N` with the smallest unused `N`. Saved
-    /// prompts, including the built-in ones, keep the identifiers they already have.
     #[must_use]
     pub fn next_prompt_id(&self) -> String {
         // One more candidate than there are prompts, so at least one is free.
@@ -190,7 +177,6 @@ impl Settings {
             .unwrap_or_default()
     }
 
-    /// Removes prompt `id`; AI cleanup is then off if it was the chosen prompt.
     pub fn delete_prompt(&mut self, id: &str) {
         self.prompts.retain(|prompt| prompt.id != id);
         if self.active_prompt_id.as_deref() == Some(id) {
@@ -200,7 +186,6 @@ impl Settings {
 }
 
 impl SetupCheckpoint {
-    /// Whether the chosen recording shortcuts break no rule.
     #[must_use]
     pub fn shortcuts_ready(&self) -> bool {
         shortcut_problems(
@@ -213,7 +198,6 @@ impl SetupCheckpoint {
     }
 }
 
-/// Every rule the shortcuts break.
 fn shortcut_problems(
     hold: &Shortcut,
     hold_enabled: bool,

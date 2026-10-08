@@ -18,8 +18,8 @@ pub struct PythonSettings {
 }
 
 impl PythonSettings {
-    /// Picks the settings the Python release knew from `document`. A missing or unreadable
-    /// value takes its default, and everything the Python release did not have is default.
+    /// A missing or unreadable value takes its default, and everything the Python release did
+    /// not have is default.
     #[must_use]
     pub fn import(document: &Value) -> Self {
         let mut settings = Settings::default();
@@ -101,8 +101,6 @@ impl PythonSettings {
     }
 }
 
-/// Imports each provider the Python release saved settings for, and returns the API keys
-/// it held.
 fn import_providers(document: &Value, settings: &mut Settings) -> BTreeMap<LlmProvider, ApiKey> {
     let mut api_keys = BTreeMap::new();
     let providers = document
@@ -141,7 +139,6 @@ fn import_providers(document: &Value, settings: &mut Settings) -> BTreeMap<LlmPr
     api_keys
 }
 
-/// Replaces `target` with `document[name]` when it holds a readable value.
 fn pick<T: DeserializeOwned>(document: &Value, name: &str, target: &mut T) {
     if let Some(value) = document
         .get(name)
@@ -151,7 +148,6 @@ fn pick<T: DeserializeOwned>(document: &Value, name: &str, target: &mut T) {
     }
 }
 
-/// `document[name]` when it is non-empty text.
 fn text(document: &Value, name: &str) -> Option<String> {
     document
         .get(name)

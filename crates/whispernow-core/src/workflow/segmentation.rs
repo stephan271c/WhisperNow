@@ -1,10 +1,6 @@
-//! Pause-based speech segmentation for per-segment batch decoding.
-//!
 //! A recording is split at pauses so each finished segment can be decoded as an ordinary offline
-//! batch request while capture continues. This is not streaming recognition: every segment is a
-//! complete buffer and no decoder state crosses a segment boundary. The per-frame speech decision
-//! is an input, so this module has no native detector types; production plugs in Silero and tests
-//! use an energy detector.
+//! batch request while capture continues. Every segment is a complete buffer and no decoder state
+//! crosses a segment boundary.
 
 use std::{collections::VecDeque, ops::Range};
 
@@ -45,9 +41,7 @@ const fn millis(milliseconds: usize) -> usize {
 
 // Segmentation constants, in samples at 16 kHz. These are tuning constants, not user settings.
 
-/// Detector frame length.
 pub const FRAME_SAMPLES: usize = 512;
-/// Silence after speech that ends a segment.
 const END_SILENCE_SAMPLES: usize = millis(600);
 /// Audio kept before the first and after the last speech frame of a segment. It fits inside the
 /// pause that ends a segment.
@@ -64,14 +58,12 @@ const MAX_SEGMENT_SAMPLES: usize = millis(25_000);
 /// segment, so a forced cut always leaves a non-empty segment.
 const CUT_SEARCH_SAMPLES: usize = millis(2_000);
 
-/// One contiguous span of a recording, decoded as one ordinary batch request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AudioSegment {
     /// First sample, in recording coordinates.
     pub start: usize,
     /// One past the last sample.
     pub end: usize,
-    /// Samples the detector classified as speech.
     pub speech_samples: usize,
 }
 

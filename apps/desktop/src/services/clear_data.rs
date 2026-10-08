@@ -1,6 +1,3 @@
-//! Clearing application data: the storage targets, the OS credential store entry, and the
-//! application-state repair that follows a clear.
-
 use whispernow_api::{
     ApiErrorDto, ClearDataCategory, ClearDataRequest, ClearDataResult, ClearDataResultItemDto,
     DataLocationDto, ErrorCategoryDto,
@@ -107,7 +104,6 @@ impl NativeServices {
     }
 }
 
-/// Clear-data entry for the LLM API keys held outside the settings file.
 pub(super) const CREDENTIAL_STORE_CLEAR_TARGET: &str = "OS credential store: saved LLM API keys";
 
 fn inspect_error(_: ClearDataError) -> ApiErrorDto {

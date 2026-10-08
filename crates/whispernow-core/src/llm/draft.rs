@@ -195,7 +195,6 @@ fn scale(word: &str) -> Option<u64> {
     }
 }
 
-/// A unit word below ten, as its digit.
 fn digit(word: &str) -> Option<char> {
     unit(word)
         .and_then(|value| u32::try_from(value).ok())

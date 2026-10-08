@@ -36,7 +36,6 @@ struct CapturedAudio {
     segments: Vec<AudioSegment>,
 }
 
-/// Everything one recording captured and the speech segments found in it.
 pub(super) struct CapturedSpeech {
     pub(super) samples: Vec<f32>,
     pub(super) segments: Vec<AudioSegment>,

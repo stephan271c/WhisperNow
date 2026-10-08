@@ -1,20 +1,15 @@
-//! Global shortcuts: the recording shortcuts and the cancel shortcut.
-
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
-/// How a recording ends, and so which of the two recording shortcuts starts it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordingMode {
-    /// Stops when the held shortcut is released.
     Hold,
     /// Stops on a second press or the stop button.
     Toggle,
 }
 
-/// A modifier key held with a shortcut's key.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ShortcutModifier {
     Control,
@@ -25,7 +20,6 @@ pub enum ShortcutModifier {
 }
 
 impl ShortcutModifier {
-    /// The name settings files store.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -36,7 +30,6 @@ impl ShortcutModifier {
         }
     }
 
-    /// How the settings window shows the modifier.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -100,7 +93,6 @@ impl<'de> Deserialize<'de> for ShortcutModifier {
 /// desktop portal takes and the Linux input codes the input helper watches.
 macro_rules! shortcut_keys {
     ($($variant:ident => $name:literal, $code:literal, $label:literal, $keysym:literal, [$($evdev:literal),+];)*) => {
-        /// A key a shortcut may use: a letter, a digit, F1–F24 or a named key.
         #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
         pub enum ShortcutKey {
             $($variant,)*
@@ -109,25 +101,21 @@ macro_rules! shortcut_keys {
         impl ShortcutKey {
             pub const ALL: &'static [Self] = &[$(Self::$variant),*];
 
-            /// The name settings files store.
             #[must_use]
             pub const fn name(self) -> &'static str {
                 match self { $(Self::$variant => $name,)* }
             }
 
-            /// The physical `KeyboardEvent.code` of the key.
             #[must_use]
             pub const fn code(self) -> &'static str {
                 match self { $(Self::$variant => $code,)* }
             }
 
-            /// How the settings window shows the key.
             #[must_use]
             pub const fn label(self) -> &'static str {
                 match self { $(Self::$variant => $label,)* }
             }
 
-            /// The XKB keysym name a desktop portal's shortcut trigger uses.
             #[must_use]
             pub const fn keysym(self) -> &'static str {
                 match self { $(Self::$variant => $keysym,)* }
@@ -221,7 +209,6 @@ shortcut_keys! {
 }
 
 impl ShortcutKey {
-    /// Reads a stored key name, ignoring case and surrounding space.
     #[must_use]
     pub fn from_name(value: &str) -> Option<Self> {
         let value = value.trim();
@@ -231,7 +218,6 @@ impl ShortcutKey {
             .find(|key| key.name().eq_ignore_ascii_case(value))
     }
 
-    /// The key a captured `KeyboardEvent.code` presses; the keypad's Enter is Enter.
     #[must_use]
     pub fn from_code(code: &str) -> Option<Self> {
         if code == "NumpadEnter" {
@@ -240,7 +226,6 @@ impl ShortcutKey {
         Self::ALL.iter().copied().find(|key| key.code() == code)
     }
 
-    /// Whether the key may be the whole cancel shortcut: Escape or F1–F24, which type no text.
     #[must_use]
     pub const fn may_stand_alone(self) -> bool {
         matches!(
@@ -287,7 +272,7 @@ impl<'de> Deserialize<'de> for ShortcutKey {
     }
 }
 
-/// A global shortcut: modifiers held with one key. The modifiers iterate in display order.
+/// The modifiers iterate in display order.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Shortcut {
     #[serde(default)]
@@ -306,7 +291,6 @@ impl Default for Shortcut {
 }
 
 impl Shortcut {
-    /// The cancel shortcut's default, Escape alone.
     #[must_use]
     pub const fn default_cancel() -> Self {
         Self {
@@ -315,7 +299,6 @@ impl Shortcut {
         }
     }
 
-    /// Whether this can be a recording shortcut: at least one modifier with its key.
     #[must_use]
     pub fn is_recording_shortcut(&self) -> bool {
         !self.modifiers.is_empty()

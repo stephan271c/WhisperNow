@@ -42,8 +42,8 @@ mod permissions;
 mod settings;
 mod state;
 
-/// The native services. Tauri commands call its coordinators directly, and its own
-/// methods for work that spans several coordinators.
+/// Tauri commands call its coordinators directly, and its own methods for work that spans
+/// several coordinators.
 pub(crate) struct NativeServices {
     pub(crate) settings: Arc<SettingsCoordinator>,
     pub(crate) history: Arc<HistoryStore>,
@@ -64,8 +64,8 @@ impl NativeServices {
         self.state.events().publish(EventPayload::HistoryChanged);
     }
 
-    /// Runs one history change. A change or a failure broadcasts `HistoryChanged` so every
-    /// listener re-fetches. The history store's lock orders it against dictations.
+    /// A change or a failure broadcasts `HistoryChanged` so every listener re-fetches. The
+    /// history store's lock orders it against dictations.
     fn run_history_mutation(
         &self,
         operation: impl FnOnce() -> Result<bool, ApiErrorDto>,
@@ -112,7 +112,6 @@ impl NativeServices {
         }
     }
 
-    /// Runs a saved prompt on sample text with the saved provider settings.
     pub(crate) fn test_prompt(
         &self,
         request: &TestPromptRequest,
@@ -132,7 +131,6 @@ impl NativeServices {
         self.output.can_copy()
     }
 
-    /// Copies the last dictation's final text for a manual paste.
     pub(crate) fn copy_last_transcript(&self) -> Result<(), ApiErrorDto> {
         let text = self
             .state
@@ -207,8 +205,8 @@ impl NativeServices {
         }
     }
 
-    /// The first-run permission cards. The shortcut portal's consent is the
-    /// shortcut coordinator's to report, so the caller passes it in.
+    /// The shortcut portal's consent is the shortcut coordinator's to report, so the caller
+    /// passes it in.
     pub(crate) fn permissions(&self, global_shortcuts: PermissionStatusDto) -> PermissionsResponse {
         permission_states(&SystemPermissions {
             services: self,
@@ -216,8 +214,7 @@ impl NativeServices {
         })
     }
 
-    /// Asks for one first-run permission where the desktop services can. The
-    /// shortcut portal's consent belongs to the shortcut coordinator.
+    /// Asks for one first-run permission where the desktop services can.
     pub(crate) fn request_permission(&self, kind: PermissionKindDto) -> Result<(), ApiErrorDto> {
         match kind {
             PermissionKindDto::Microphone => self.request_microphone(),
@@ -228,7 +225,6 @@ impl NativeServices {
         }
     }
 
-    /// Opens the system settings page that grants `kind`, where the platform has one.
     pub(crate) fn open_permission_settings(kind: PermissionKindDto) -> Result<(), ApiErrorDto> {
         let page = match kind {
             PermissionKindDto::Microphone => PrivacySettingsPage::Microphone,
@@ -351,8 +347,7 @@ impl NativeServices {
         Ok(page)
     }
 
-    /// Opens the retained-recordings directory in the desktop file manager. The
-    /// path never crosses the webview boundary.
+    /// The path never crosses the webview boundary.
     pub(crate) fn open_recordings_folder(&self) -> Result<(), ApiErrorDto> {
         let directory = self.history.recordings_dir()?;
         open_in_file_manager(&directory).map_err(|_| {
@@ -402,7 +397,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().expect("service state lock poisoned")
 }
 
-/// This platform has no in-app way to ask for the permission.
 fn permission_not_requestable() -> ApiErrorDto {
     ApiErrorDto::new(
         ErrorCategoryDto::General,

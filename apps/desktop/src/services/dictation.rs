@@ -59,11 +59,8 @@ use outcome::{
     delivery_failure, interruption_warning, text_output_status,
 };
 
-/// Thirty minutes of 16 kHz audio.
 const MAX_RECORDING_SAMPLES: usize = 16_000 * 60 * 30;
 
-/// The non-secret settings one dictation is transcribed and cleaned up with, read when it
-/// starts. The provider API key is read only when an LLM call is prepared.
 #[derive(Clone)]
 pub(crate) struct DictationSettings {
     pub(crate) model_id: ModelId,
@@ -76,13 +73,11 @@ pub(crate) struct DictationSettings {
     pub(crate) keep_audio: bool,
 }
 
-/// Everything a recording reads from the settings when it starts.
 pub(crate) struct RecordingSettings {
     pub(crate) input_device: Option<String>,
     pub(crate) dictation: DictationSettings,
 }
 
-/// What the worker needs to run dictations.
 pub(crate) struct DictationParts {
     pub(crate) state: Arc<StateCell>,
     pub(crate) settings: Arc<SettingsCoordinator>,
@@ -103,7 +98,6 @@ impl DictationParts {
 
 type Reply<T> = mpsc::Sender<Result<T, ApiErrorDto>>;
 
-/// The work the worker does, in the order it was asked for.
 pub(super) enum Message {
     Start {
         trigger: RecordingTrigger,
@@ -136,14 +130,12 @@ pub(super) enum Message {
         duration: Duration,
         reply: Reply<MicrophoneTestResponse>,
     },
-    /// Enters `Updating` once no dictation is in flight.
     BeginUpdate {
         reply: Reply<()>,
     },
     Shutdown,
 }
 
-/// The handle every command uses to reach the dictation worker.
 pub(crate) struct Dictation {
     state: Arc<StateCell>,
     sender: mpsc::Sender<Message>,
@@ -188,7 +180,6 @@ impl Dictation {
         self.sender.send(message).map_err(|_| worker_stopped())
     }
 
-    /// Sends one message and waits for the worker's answer.
     fn ask<T>(&self, message: impl FnOnce(Reply<T>) -> Message) -> Result<T, ApiErrorDto> {
         if self.stopping.load(Ordering::Acquire) {
             return Err(shutting_down());
@@ -238,12 +229,10 @@ impl Dictation {
         }
     }
 
-    /// The hold shortcut came up; it ends the recording it started.
     pub(crate) fn hold_released(&self) -> Result<(), ApiErrorDto> {
         self.send(Message::HoldReleased)
     }
 
-    /// Asks the worker to stop capturing and process the recording.
     pub(crate) fn stop(&self) -> Result<(), ApiErrorDto> {
         let Phase::Recording { session, .. } = self.state.lock().phase else {
             return Err(not_recording());
@@ -307,7 +296,7 @@ impl Dictation {
         })
     }
 
-    /// Loads `model` into the recognizer. A model never changes during a dictation.
+    /// A model never changes during a dictation.
     pub(crate) fn load_model(&self, model: ResolvedModel) -> Result<(), ApiErrorDto> {
         self.ask(|reply| Message::LoadModel {
             model: Box::new(model),
@@ -520,8 +509,6 @@ impl Worker {
         Ok(session)
     }
 
-    /// A second press of the toggle shortcut ends its recording; a press while idle starts
-    /// one. A press during another recording, a pause or an update is dropped.
     fn shortcut_pressed(&mut self, trigger: RecordingTrigger) {
         if let Some(recording) = &self.recording {
             if trigger == RecordingTrigger::Toggle && recording.trigger == trigger {
@@ -887,7 +874,6 @@ impl Worker {
         self.set_model(ModelStatus::Unloaded);
     }
 
-    /// Replaces an engine that panicked.
     fn replace_engine(&mut self) {
         let failed = std::mem::replace(&mut self.engine, (self.parts.engine)());
         let _drop_panicked = catch_unwind(AssertUnwindSafe(move || drop(failed)));

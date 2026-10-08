@@ -1,6 +1,3 @@
-//! The `#[tauri::command]` entry points. Each runs its work through [`Gateway::run_command`],
-//! or calls an [`Gateway`] method where the command also has native effects.
-
 use whispernow_api::{
     ApiErrorDto, AppStateDto, ClearApiKeyRequest, ClearDataRequest, ClearDataResult,
     DataLocationDto, DeleteHistoryEntryRequest, GetHistoryAudioRequest, HistoryPage,
@@ -28,8 +25,6 @@ pub(crate) async fn update_settings(
     state.update_settings(request).await
 }
 
-/// Runs the saved prompt against a sample. Its failure is the prompt test's result, shown next
-/// to the prompt.
 #[tauri::command]
 pub(crate) async fn test_prompt(
     request: TestPromptRequest,
@@ -87,8 +82,6 @@ pub(crate) async fn list_audio_devices(
         .await
 }
 
-/// Listens briefly to the selected microphone and returns its levels without starting a
-/// dictation. Like the prompt test, a failure stays with the control that asked.
 #[tauri::command]
 pub(crate) async fn test_microphone(
     state: tauri::State<'_, Gateway>,
@@ -182,8 +175,6 @@ pub(crate) async fn get_state(
         .await
 }
 
-/// One history page. A search that is too long is the search field's to show; a store that
-/// cannot be read is the application's problem, and the history service reports that itself.
 #[tauri::command]
 pub(crate) async fn get_history(
     request: HistoryPageRequest,
@@ -196,8 +187,7 @@ pub(crate) async fn get_history(
         .await
 }
 
-/// Returns an entry's kept audio as raw WAV bytes, never as a path; the player explains a
-/// failure.
+/// Returns an entry's kept audio as raw WAV bytes, never as a path.
 #[tauri::command]
 pub(crate) async fn get_history_audio(
     request: GetHistoryAudioRequest,
@@ -331,7 +321,6 @@ pub(crate) async fn complete_setup(
     state.complete_setup(request).await
 }
 
-/// Starts first-run setup again from its first step.
 #[tauri::command]
 pub(crate) async fn restart_setup(
     state: tauri::State<'_, Gateway>,
@@ -343,7 +332,6 @@ pub(crate) async fn restart_setup(
         .await
 }
 
-/// The first-run permission cards for this platform.
 #[tauri::command]
 pub(crate) async fn get_permissions(
     state: tauri::State<'_, Gateway>,
@@ -366,8 +354,7 @@ pub(crate) async fn open_permission_settings(
     run_blocking(move || NativeServices::open_permission_settings(request.kind)).await?
 }
 
-/// Starts setup's test dictation; `stop_recording` ends it, and its transcript is neither
-/// pasted nor kept. A start failure is shown in setup.
+/// `stop_recording` ends it, and its transcript is neither pasted nor kept.
 #[tauri::command]
 pub(crate) async fn start_test_dictation(
     state: tauri::State<'_, Gateway>,

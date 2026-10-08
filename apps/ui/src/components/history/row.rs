@@ -1,5 +1,3 @@
-//! One dictation in the list: when it happened, its text, and Copy, Play and Delete.
-
 use dioxus::prelude::*;
 use whispernow_api::{EntryStatus, HistoryEntry};
 

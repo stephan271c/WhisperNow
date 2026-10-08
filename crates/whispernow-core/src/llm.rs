@@ -1,7 +1,3 @@
-//! Provider-independent AI cleanup: the provider interface, and the call that
-//! puts one deadline, cancellation and retries around a provider. The prompts are in
-//! `prompt`.
-//!
 //! Captured text and credentials are redacted from `Debug` output.
 
 use std::{fmt, future::Future, pin::Pin, time::Duration};
@@ -20,12 +16,9 @@ mod prompt;
 use prompt::EMPTY_TRANSCRIPT_SENTINEL;
 pub use prompt::{LlmPrompt, PromptKind, build_cleanup_prompt, build_local_cleanup_prompt};
 
-/// Retries after a transport, rate-limit, or availability failure, while the deadline has
-/// time left.
 const TRANSIENT_RETRIES: u32 = 2;
 
-/// The provider and model to call, with its credentials. `Debug` never exposes the key,
-/// model, or endpoint.
+/// `Debug` never exposes the key, model, or endpoint.
 #[derive(Clone, Eq, PartialEq)]
 pub struct LlmProviderConfig {
     pub provider: LlmProvider,
@@ -52,12 +45,10 @@ pub struct LlmDecoding {
     /// Output tokens after which generation stops and the reply counts as cut off; `None`
     /// leaves the provider's own limit.
     pub max_output_tokens: Option<u64>,
-    /// What the local cleanup model's speculative decoding drafts from.
     pub draft: Option<DraftText>,
 }
 
-/// The pre-cleaned transcript the local cleanup model drafts from (see `draft`). It holds
-/// captured text, so `Debug` shows only its length.
+/// The pre-cleaned transcript the local cleanup model drafts from (see `draft`).
 #[derive(Clone, Eq, PartialEq)]
 pub struct DraftText(String);
 
@@ -93,7 +84,6 @@ impl LlmDecoding {
     }
 }
 
-/// Request delivered to one concrete provider adapter.
 #[derive(Clone)]
 pub struct LlmRequest {
     pub config: LlmProviderConfig,
@@ -112,21 +102,15 @@ impl fmt::Debug for LlmRequest {
     }
 }
 
-/// Why the provider stopped generating, when the provider reports it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum LlmFinishReason {
-    /// The provider did not say why it stopped.
     #[default]
     Unknown,
-    /// The model finished its answer.
     Completed,
-    /// Generation hit the output token limit, so the text is cut off.
     OutputLimit,
-    /// The provider's content filter stopped generation.
     ContentFilter,
 }
 
-/// Provider response. Captured output is redacted from `Debug`.
 #[derive(Clone, PartialEq)]
 pub struct LlmResponse {
     pub text: String,
@@ -143,7 +127,6 @@ impl fmt::Debug for LlmResponse {
     }
 }
 
-/// Content-free provider failures.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum LlmError {
     #[error("LLM request was cancelled")]
@@ -233,7 +216,6 @@ fn accept_response(response: &LlmResponse) -> Result<String, CleanupFallback> {
     }
 }
 
-/// Complete input for one cleanup.
 #[derive(Clone, Copy)]
 pub struct CleanupRequest<'input> {
     pub deterministic_text: &'input str,
@@ -264,19 +246,12 @@ pub enum CleanupFallback {
     ProviderFailed(LlmError),
     /// The response was empty, or the model reported no dictated words.
     EmptyOutput,
-    /// Generation stopped at the output limit, so the text is cut off.
     Truncated,
-    /// The provider's content filter stopped generation.
     ContentFiltered,
 }
 
 /// Asks `service` to edit the transcript and returns the reply. One `timeout` covers every
 /// attempt, and cancellation drops the call in flight.
-///
-/// # Errors
-///
-/// Returns why the deterministic text stays: cancellation, a provider failure, or a
-/// mechanically failed reply.
 pub async fn clean_up(
     service: &dyn LlmService,
     input: CleanupRequest<'_>,

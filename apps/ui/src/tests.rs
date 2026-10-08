@@ -13,7 +13,9 @@ use whispernow_api::{
 use crate::client::fake;
 use crate::components::UiActions;
 use crate::components::cleanup_recipient;
-use crate::test_support::{editable_settings, snapshot, test_context, use_test_context};
+use crate::test_support::{
+    editable_settings, show_history, snapshot, test_context, use_test_context,
+};
 use crate::{
     AppShell, EventStreamHealth, HomeStatus, HomeStatusKind, ManagementState, SaveStatus,
     SettingKey, UiState,
@@ -82,10 +84,6 @@ fn history_entry(id: u64, text: &str) -> HistoryEntry {
 }
 
 /// Installs a read of `entries`, the first page of all history.
-fn show_history(management: &mut ManagementState, entries: Vec<HistoryEntry>) {
-    management.finish_history_refresh(1, &HistoryFilter::default(), history_window(entries));
-}
-
 fn history_window(entries: Vec<HistoryEntry>) -> HistoryPage {
     HistoryPage {
         entries,
@@ -93,7 +91,6 @@ fn history_window(entries: Vec<HistoryEntry>) -> HistoryPage {
     }
 }
 
-/// The text of the notice shown, if any.
 fn notice_message(management: &ManagementState) -> Option<&str> {
     management
         .notice

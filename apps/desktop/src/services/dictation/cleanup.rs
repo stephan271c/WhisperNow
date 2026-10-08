@@ -1,5 +1,3 @@
-//! AI cleanup of a recognized transcript, and the saved-prompt test that runs the same call.
-
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -28,7 +26,6 @@ pub(crate) struct CleanupPlan {
     pub(crate) vocabulary: Vec<VocabularyReplacement>,
 }
 
-/// The LLM provider service, the runtime its calls run on, and the saved API keys.
 pub(crate) struct AiCleanup {
     pub(crate) service: Arc<dyn LlmService>,
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,

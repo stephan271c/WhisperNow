@@ -23,7 +23,6 @@ pub(crate) fn default_threads() -> i32 {
     i32::try_from((logical / 2).max(1)).unwrap_or(1)
 }
 
-/// The cleanup model, loaded once, with its speculative-decoding context.
 pub(crate) struct LocalCleanupEngine {
     model: Rc<LlamaModel>,
     context: Option<LlamaContext>,
@@ -33,9 +32,6 @@ pub(crate) struct LocalCleanupEngine {
 impl LocalCleanupEngine {
     /// Loads llama.cpp from `library_directory`, with the CUDA pack in `cuda` when given, and
     /// the model from `model_path`. A CUDA pack that does not load leaves the other backends.
-    ///
-    /// # Errors
-    /// When llama.cpp or the model cannot be loaded.
     pub(crate) fn load(
         library_directory: &Path,
         cuda: Option<&Path>,
@@ -63,10 +59,6 @@ impl LocalCleanupEngine {
 
     /// Decodes the reply to `prompt`: speculatively when `decoding` carries a draft.
     /// `between_passes` sees the reply so far and stops the decode by breaking.
-    ///
-    /// # Errors
-    /// When the context cannot be created, the prompt does not fit, the model fails, or
-    /// `between_passes` stops the decode.
     pub(crate) fn decode(
         &mut self,
         prompt: &LlmPrompt,

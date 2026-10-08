@@ -1,6 +1,3 @@
-//! Forwards application events to the webviews, the tray, the recording overlay and the
-//! shortcuts.
-//!
 //! The partial transcript carries dictated text and is emitted only to the recording bar.
 //! Tauri still delivers a window-targeted event to a listener registered for any target, so
 //! the other windows must never subscribe to it.

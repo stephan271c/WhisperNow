@@ -1,7 +1,6 @@
 //! Rig-backed LLM provider adapter.
 //!
-//! Provider request and response bodies are intentionally never logged. The
-//! adapter exposes only typed, content-free failures.
+//! Provider request and response bodies are intentionally never logged.
 
 use std::time::Duration;
 
@@ -57,7 +56,6 @@ impl RemoteProvider {
     }
 }
 
-/// Native provider service using Rig's provider integrations.
 #[derive(Debug, Default)]
 pub struct RigLlmService;
 
@@ -193,7 +191,7 @@ fn gemini_finish_reason(reason: Option<&GeminiFinishReason>) -> LlmFinishReason 
     }
 }
 
-/// The provider-independent request for one cleanup. API providers get no output
+/// API providers get no output
 /// limit or temperature of ours, so reasoning models keep their full budget. An empty
 /// system prompt sends no system message at all, where rig would otherwise send an empty
 /// one.
@@ -342,8 +340,6 @@ mod tests {
         );
     }
 
-    /// An API request is a system and a user message with the provider's own temperature
-    /// and output limit.
     #[test]
     fn an_api_request_sends_no_temperature_or_output_limit() {
         let request = request(LlmProvider::Ollama, "local");
@@ -374,7 +370,6 @@ mod tests {
         );
     }
 
-    /// Anthropic requires an output limit: the model's own maximum.
     #[test]
     fn an_anthropic_request_carries_the_model_maximum() {
         for (model_id, maximum) in [

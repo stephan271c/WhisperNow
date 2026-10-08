@@ -1,5 +1,3 @@
-//! The history list: reading it, filtering, copying and changing entries.
-
 use std::future::Future;
 
 use dioxus::core::spawn_forever;
@@ -10,17 +8,14 @@ use super::UiActions;
 use crate::client::{self, ClientError};
 use crate::{HistoryCopied, UiOperation};
 
-/// How long a history entry's Copy button shows the copy's outcome.
 const COPIED_MS: u32 = 2_000;
 
 impl UiActions {
-    /// Re-reads the loaded history window.
     pub(crate) fn refresh_history(self) {
         let (pages, filter) = self.management().peek().history_request();
         self.read_history(pages, filter);
     }
 
-    /// Reads one more page of older entries.
     pub(crate) fn load_older_history(self) {
         let (pages, filter) = self.management().write().older_history_request();
         self.read_history(pages, filter);

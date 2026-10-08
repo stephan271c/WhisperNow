@@ -9,11 +9,6 @@ use super::{AudioBlock, AudioLevelSummary};
 pub struct AudioDeviceId(String);
 
 impl AudioDeviceId {
-    /// Creates a non-empty opaque identifier supplied by a platform adapter.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AudioInputError::InvalidDeviceId`] for an empty identifier.
     pub fn new(value: impl Into<String>) -> Result<Self, AudioInputError> {
         let value = value.into();
         if value.trim().is_empty() {
@@ -28,7 +23,6 @@ impl AudioDeviceId {
     }
 }
 
-/// A deliberate selection of the current default or one stable device.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum AudioDeviceChoice {
     /// Resolve the system default at start time. A later default change is an
@@ -37,22 +31,18 @@ pub enum AudioDeviceChoice {
     Device(AudioDeviceId),
 }
 
-/// One displayable input choice returned by device enumeration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AudioDeviceDescriptor {
     pub choice: AudioDeviceChoice,
     pub display_name: String,
-    /// Whether this explicit physical device is currently the system default.
     pub is_current_default: bool,
 }
 
-/// Capture options understood by every platform adapter.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartCaptureRequest {
     pub device: AudioDeviceChoice,
 }
 
-/// Content-free, monotonic timing and level observations.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AudioObservation {
     StreamReady { request_to_stream_ready: Duration },
@@ -60,7 +50,7 @@ pub enum AudioObservation {
     Level { summary: AudioLevelSummary },
 }
 
-/// Capture faults. No event contains captured audio.
+/// No event contains captured audio.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AudioEvent {
     DeviceLost,
@@ -85,7 +75,6 @@ pub enum AudioSinkError {
     Closed,
 }
 
-/// Stable capture failures suitable for Tauri and tests.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum AudioInputError {
     #[error("audio device identifier is empty")]
@@ -104,21 +93,12 @@ pub enum AudioInputError {
     Backend { operation: &'static str },
 }
 
-/// Framework-independent audio input port. Native callbacks only enqueue bounded raw
-/// data; conversion and sink calls happen on a worker.
+/// Native callbacks only enqueue bounded raw data; conversion and sink calls happen on a worker.
 pub trait AudioInput: Send + Sync {
     /// Lists an explicit `SystemDefault` entry plus stable physical choices.
-    ///
-    /// # Errors
-    ///
-    /// Returns a backend error when enumeration fails.
     fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError>;
 
     /// Starts one recording. Dropping the returned capture stops it.
-    ///
-    /// # Errors
-    ///
-    /// Returns typed device, configuration, or backend failures.
     fn start(
         &self,
         request: StartCaptureRequest,
@@ -126,13 +106,8 @@ pub trait AudioInput: Send + Sync {
     ) -> Result<Box<dyn AudioCapture>, AudioInputError>;
 }
 
-/// One running recording.
 pub trait AudioCapture: Send {
     /// Stops the stream and delivers the audio still queued.
-    ///
-    /// # Errors
-    ///
-    /// Returns a backend failure when the stream or the final delivery fails.
     fn stop(self: Box<Self>) -> Result<(), AudioInputError>;
 }
 

@@ -1,5 +1,3 @@
-//! History window, search and filter, and copy.
-
 use whispernow_api::{
     ApiErrorDto, EntryId, ErrorCategoryDto, HistoryEntry, HistoryFilter, HistoryPage,
 };
@@ -27,7 +25,6 @@ impl ManagementState {
         self.history_request()
     }
 
-    /// Whether a history window is installed.
     #[must_use]
     pub const fn history_loaded(&self) -> bool {
         self.history_rows_filter.is_some()
@@ -128,13 +125,11 @@ impl ManagementState {
         self.history.iter().find(|entry| entry.id == id)
     }
 
-    /// The text a copy of one entry puts on the clipboard.
     #[must_use]
     pub fn history_copy(&self, id: EntryId) -> Option<String> {
         self.history_entry(id)?.text().map(str::to_owned)
     }
 
-    /// Confirms a clipboard copy next to the control that asked for it.
     pub fn finish_copy(&mut self, scope: NoticeScope, copied: bool) {
         if copied {
             self.notify(Tone::Success, scope, "Copied to the clipboard");

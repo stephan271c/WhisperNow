@@ -1,5 +1,3 @@
-//! The recording bar's projection of the published dictation phase and its live meter.
-//!
 //! The desktop decides the phase and the window's visibility; this model only adds what
 //! arrives between snapshots: the smoothed level history, the elapsed time and the committed
 //! partial text of the current recording.
@@ -9,7 +7,6 @@ use whispernow_api::{
     RecordingMode, RecoveryActionDto,
 };
 
-/// Bars in the level meter, one reading each, newest on the right.
 pub(crate) const LEVEL_BARS: usize = 9;
 
 /// Microphone RMS, in dBFS, shown as an empty and as a full bar. Normal speech fills about
@@ -26,7 +23,6 @@ const RELEASE: f32 = 0.6;
 /// shows; older text scrolls out under the fade.
 const LIVE_TEXT_CHARS: usize = 120;
 
-/// What the pill shows.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum OverlayPhase {
     #[default]
@@ -44,7 +40,6 @@ pub enum OverlayPhase {
     },
 }
 
-/// The one action a failure offers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OverlayAction {
     CopyTranscript,
@@ -53,7 +48,6 @@ pub enum OverlayAction {
 }
 
 impl OverlayAction {
-    /// The action that recovers from `error`, if the overlay offers one.
     #[must_use]
     pub fn for_error(error: &ApiErrorDto) -> Option<Self> {
         match (error.recovery, error.category) {
@@ -80,7 +74,6 @@ impl OverlayAction {
 pub struct OverlayView {
     pub phase: OverlayPhase,
     pub position: OverlayPosition,
-    /// Whether the style shows the committed partial transcript.
     pub show_live_text: bool,
     /// Newest last; each value is in `0.0..=1.0`.
     pub levels: [f32; LEVEL_BARS],
@@ -95,7 +88,6 @@ pub struct OverlayView {
 }
 
 impl OverlayView {
-    /// Follows a state snapshot.
     pub fn install(&mut self, snapshot: &AppStateDto) {
         let phase = match &snapshot.phase {
             PhaseDto::Idle | PhaseDto::Paused | PhaseDto::Updating => OverlayPhase::Hidden,
@@ -149,7 +141,6 @@ impl OverlayView {
         self.elapsed_ms = elapsed_ms;
     }
 
-    /// Replaces the committed text of the current recording.
     pub fn apply_partial(&mut self, session: u64, committed_text: String) {
         if self.session.is_some_and(|current| session < current)
             || self

@@ -1,5 +1,3 @@
-//! History: one entry per dictation, grouped by local day and searchable.
-
 mod audio;
 mod format;
 mod row;
@@ -30,7 +28,6 @@ const CLEAR_ID: &str = "history-clear";
 const OPEN_FOLDER_ID: &str = "history-open-folder";
 const RETENTION_ID: &str = "history-retention-settings";
 
-/// How long typing must pause before the history is searched.
 const SEARCH_PAUSE_MS: u32 = 300;
 
 #[component]

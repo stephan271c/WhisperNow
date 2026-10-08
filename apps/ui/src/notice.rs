@@ -1,5 +1,3 @@
-//! Typed user feedback: what happened, how serious it is, and where it belongs.
-
 use crate::Route;
 use crate::components::ui::Tone;
 
@@ -17,14 +15,12 @@ pub enum NoticeScope {
     Updates,
 }
 
-/// An optional follow-up link inside a notice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NoticeAction {
     pub label: &'static str,
     pub route: Route,
 }
 
-/// One message for the user.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Notice {
     /// Distinguishes a repeated message so a new notice restarts its dismissal timer.
@@ -36,7 +32,6 @@ pub struct Notice {
 }
 
 impl Notice {
-    /// How long a success notice stays before it dismisses itself.
     pub const AUTO_DISMISS_MS: u32 = 4_000;
 
     /// Success notices confirm and leave; the others wait to be read and dismissed.

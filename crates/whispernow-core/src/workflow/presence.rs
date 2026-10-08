@@ -1,13 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-/// Peak below which a recording can only contain effectively flat device noise.
 const NO_AUDIO_PEAK_THRESHOLD: f32 = 0.000_5;
 
-/// RMS below which a recording can only contain effectively flat device noise.
 const NO_AUDIO_RMS_THRESHOLD: f32 = 0.000_1;
 
-/// Whether a normalized recording holds more than flat device noise: an empty buffer, or one
-/// whose peak and RMS are both below threshold, holds none. No speech detector runs.
+/// Whether a normalized recording holds more than flat device noise. No speech detector runs.
 #[must_use]
 pub fn has_microphone_audio(samples: &[f32]) -> bool {
     if samples.is_empty() {

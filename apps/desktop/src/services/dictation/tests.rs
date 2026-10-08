@@ -1,6 +1,3 @@
-//! Dictation scenarios run on the real worker with a scripted recognizer, fake capture and a
-//! temporary history.
-
 use std::{
     collections::VecDeque,
     fs,

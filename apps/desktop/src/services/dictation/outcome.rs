@@ -1,6 +1,3 @@
-//! How a dictation ends: what it publishes, and what history keeps of one that has no
-//! transcript.
-
 use whispernow_api::{
     ApiErrorDto, ErrorCategoryDto, RecoveryActionDto, SetupTestResultDto, TextOutputStatusDto,
     TranscriptResponse,
@@ -19,7 +16,6 @@ use crate::services::{
     state::{CancelReason, Phase},
 };
 
-/// How one dictation ended.
 pub(super) enum Outcome {
     Delivered {
         transcript: TranscriptResponse,
@@ -93,7 +89,6 @@ impl Worker {
         }
     }
 
-    /// Why the dictation was cancelled decides what history keeps of it.
     pub(super) fn cancelled(&self, recording: &Recording, samples: &[f32]) -> Outcome {
         let reason = self.parts.state.lock().cancel;
         let (status, error) = match reason {
@@ -285,7 +280,7 @@ pub(super) fn interruption_warning(interruption: CaptureInterruption) -> Option<
     }
 }
 
-/// The public error for a pipeline failure. A cancelled pipeline ends without one.
+/// A cancelled pipeline ends without one.
 pub(super) fn pipeline_error(kind: PipelineFailureKind) -> Option<ApiErrorDto> {
     Some(match kind {
         PipelineFailureKind::Cancelled => return None,
@@ -312,7 +307,6 @@ pub(super) fn pipeline_error(kind: PipelineFailureKind) -> Option<ApiErrorDto> {
     })
 }
 
-/// Whether a pipeline failure is kept in history as a failed dictation.
 const fn kept_failure(kind: PipelineFailureKind) -> bool {
     match kind {
         PipelineFailureKind::RecognitionFailed

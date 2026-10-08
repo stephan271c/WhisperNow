@@ -10,7 +10,6 @@ use rubato::{
 };
 use thiserror::Error;
 
-/// The only sample rate accepted by downstream ASR consumers.
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 const RESAMPLER_CHUNK_FRAMES: usize = 1_024;
 
@@ -44,12 +43,10 @@ impl AudioBlock {
         self.samples.is_empty()
     }
 
-    /// Combines normalized blocks without reopening the raw-sample boundary.
     pub(super) fn append(&mut self, mut block: Self) {
         self.samples.append(&mut block.samples);
     }
 
-    /// Reframes a prefix while preserving the samples' normalization invariant.
     pub(super) fn drain_prefix(&mut self, sample_count: usize) -> Self {
         Self {
             samples: self.samples.drain(..sample_count).collect(),
@@ -58,10 +55,6 @@ impl AudioBlock {
 }
 
 /// Downmixes interleaved samples with equal channel weights (`sum / channel_count`).
-///
-/// # Errors
-///
-/// Returns a typed error for zero channels or an incomplete interleaved frame.
 pub(crate) fn convert_interleaved_to_mono(
     input: &[f32],
     channels: usize,
@@ -82,8 +75,6 @@ pub(crate) fn convert_interleaved_to_mono(
         .collect())
 }
 
-/// Stateful mono streaming sample-rate converter.
-///
 /// Arbitrary worker-side chunks are buffered until Rubato can process a full
 /// input block. `finish` supplies the final partial block and pumps the filter
 /// delay, returning exactly `ceil(input_frames * 16_000 / input_rate)` samples
@@ -99,11 +90,6 @@ pub(crate) struct StreamingResampler {
 }
 
 impl StreamingResampler {
-    /// Creates a clean stateful resampler for one recording.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed error for a zero sample rate or construction failure.
     pub fn new(input_sample_rate: u32) -> Result<Self, AudioProcessingError> {
         if input_sample_rate == 0 {
             return Err(AudioProcessingError::InvalidSampleRate);
@@ -145,11 +131,6 @@ impl StreamingResampler {
         })
     }
 
-    /// Adds arbitrary mono input and returns currently available 16 kHz samples. Processing is intended for a worker, not an audio callback.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AlreadyFinished` after `finish`, or a resampling failure.
     pub fn push(&mut self, input: &[f32]) -> Result<AudioBlock, AudioProcessingError> {
         if self.finished {
             return Err(AudioProcessingError::AlreadyFinished);
@@ -183,10 +164,6 @@ impl StreamingResampler {
 
     /// Flushes the final partial chunk and filter delay. Calling it twice is an
     /// error, preventing accidental duplicate tail delivery.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AlreadyFinished` or a resampling failure.
     pub fn finish(&mut self) -> Result<AudioBlock, AudioProcessingError> {
         if self.finished {
             return Err(AudioProcessingError::AlreadyFinished);

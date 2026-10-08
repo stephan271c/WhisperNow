@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download, verify, and extract the pinned llama.cpp release libraries the app loads.
+r"""Download, verify, and extract the pinned llama.cpp release libraries the app loads.
 
 The local cleanup model runs in process on llama.cpp's public C API. The app opens these
 shared libraries at run time from its `llama/` resources (`Contents/Frameworks` on macOS).

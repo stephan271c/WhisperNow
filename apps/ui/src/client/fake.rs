@@ -34,7 +34,6 @@ struct Desktop {
     calls: Vec<Call>,
 }
 
-/// How often the timers have run, and the timers waiting for the next run.
 #[derive(Default)]
 struct Timers {
     runs: u64,
@@ -46,7 +45,6 @@ thread_local! {
     static TIMERS: RefCell<Timers> = RefCell::new(Timers::default());
 }
 
-/// Waits until the test next runs the timers.
 pub(super) async fn delay() {
     let started = TIMERS.with_borrow(|timers| timers.runs);
     poll_fn(|context| {
@@ -62,7 +60,6 @@ pub(super) async fn delay() {
     .await;
 }
 
-/// Ends every delay started so far.
 pub(crate) fn run_timers() {
     let waiting = TIMERS.with_borrow_mut(|timers| {
         timers.runs += 1;
@@ -97,17 +94,12 @@ fn reply(answer: Result<impl Serialize, ClientError>) -> Reply {
     answer.map(|value| serde_json::to_value(value).expect("serializable answer"))
 }
 
-/// Forgets every call and timer.
 pub(crate) fn reset() {
     DESKTOP.with_borrow_mut(|desktop| *desktop = Desktop::default());
     TIMERS.with_borrow_mut(|timers| *timers = Timers::default());
 }
 
 /// Answers the oldest unanswered call of `command`.
-///
-/// # Panics
-///
-/// When no call of `command` is waiting.
 pub(crate) fn answer(command: &str, answer: Result<impl Serialize, ClientError>) {
     let answer = reply(answer);
     let waker = DESKTOP.with_borrow(|desktop| {
@@ -146,7 +138,6 @@ pub(crate) fn requests<T: serde::de::DeserializeOwned>(command: &str) -> Vec<T> 
     })
 }
 
-/// How many calls of `command` have been made.
 pub(crate) fn count(command: &str) -> usize {
     DESKTOP.with_borrow(|desktop| {
         desktop

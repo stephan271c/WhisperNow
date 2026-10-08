@@ -23,7 +23,7 @@ pub const HISTORY_CHANGED_EVENT: &str = "whispernow://history-changed";
 /// that window subscribes to it.
 pub const PARTIAL_TRANSCRIPT_EVENT: &str = "whispernow://partial-transcript";
 pub const NAVIGATION_REQUESTED_EVENT: &str = "whispernow://navigation-requested";
-/// Content-free events broadcast to every window.
+/// Broadcast to every window.
 pub const EVENT_NAMES: [&str; 5] = [
     STATE_CHANGED_EVENT,
     AUDIO_LEVEL_EVENT,
@@ -31,7 +31,6 @@ pub const EVENT_NAMES: [&str; 5] = [
     HISTORY_CHANGED_EVENT,
     NAVIGATION_REQUESTED_EVENT,
 ];
-/// Everything the recording bar subscribes to: the broadcasts and the partial transcript.
 pub const RECORDING_BAR_EVENT_NAMES: [&str; 6] = [
     STATE_CHANGED_EVENT,
     AUDIO_LEVEL_EVENT,

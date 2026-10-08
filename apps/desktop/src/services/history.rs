@@ -19,8 +19,8 @@ struct HistoryState {
     warning: Option<AppError>,
 }
 
-/// Transcription history: one database file and a folder of WAV files. Every use holds the lock, so a
-/// data clear never races a write.
+/// One database file and a folder of WAV files. Every use holds the lock, so a data clear
+/// never races a write.
 pub(crate) struct HistoryStore {
     paths: AppPaths,
     state: Mutex<HistoryState>,
@@ -43,7 +43,6 @@ impl HistoryStore {
         store
     }
 
-    /// Takes the problem found while opening history, if any.
     pub(super) fn take_warning(&self) -> Option<ApiErrorDto> {
         self.lock()
             .warning

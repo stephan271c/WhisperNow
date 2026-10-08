@@ -1,7 +1,3 @@
-//! First-run permission commands: the permission cards, asking for one, and
-//! opening the system page that grants one. Probes and requests run on
-//! background workers, never on the async runtime.
-
 use whispernow_api::{
     ApiErrorDto, PermissionKindDto, PermissionRequest, PermissionStatusDto, PermissionsResponse,
 };
@@ -12,7 +8,6 @@ use super::{Failure, Gateway, run_blocking, settings::shortcut_error};
 use crate::shortcuts::ShortcutRegistrationError;
 
 impl Gateway {
-    /// The permission cards this platform needs, with what the system reports now.
     pub(crate) async fn permissions(&self) -> Result<PermissionsResponse, ApiErrorDto> {
         let global_shortcuts = self.global_shortcuts_consent();
         self.run_command("get_permissions", Failure::Local, move |services, _| {
@@ -33,7 +28,6 @@ impl Gateway {
             // Registering the saved shortcuts again opens the compositor's consent
             // dialog. Serialized with settings saves like a shortcut capture.
             let _native_settings = self.native_settings.lock().await;
-            // A refusal or a missing portal is an answer, shown on the card.
             if let Err(error) = run_blocking(move || shortcuts.sync_lifecycle()).await?
                 && !matches!(
                     error,

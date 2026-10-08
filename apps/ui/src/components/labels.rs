@@ -1,5 +1,3 @@
-//! Plain-language names for values the desktop reports as enums.
-
 use whispernow_api::{ClearDataCategory, DownloadPhase, ModelStateDto, SetupStep};
 
 pub(crate) const fn model_state(state: ModelStateDto) -> &'static str {
@@ -44,7 +42,6 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
     format!("{whole}.{tenth} {suffix}")
 }
 
-/// A setup step's name in the stepper.
 pub(crate) const fn setup_step(step: SetupStep) -> &'static str {
     match step {
         SetupStep::Welcome => "Welcome",

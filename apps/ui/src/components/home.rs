@@ -1,5 +1,3 @@
-//! Home: whether dictation is ready, the shortcuts, a microphone check and the latest text.
-
 use dioxus::prelude::*;
 use whispernow_api::{MicrophoneTestResponse, SetupStep, Shortcut};
 
@@ -63,7 +61,7 @@ pub(super) fn HomePage() -> Element {
     } }
 }
 
-/// Replaces the old redirect: setup waits here until the user continues it.
+/// Setup waits here until the user continues it.
 #[component]
 fn SetupChecklist(step: SetupStep) -> Element {
     let navigator = use_navigator();
@@ -197,7 +195,6 @@ fn MicrophoneCard(test: Option<MicrophoneTestResponse>) -> Element {
     }
 }
 
-/// The levels heard during the last microphone test.
 #[component]
 pub(super) fn LevelMeter(test: MicrophoneTestResponse) -> Element {
     let peak = percent(test.peak);

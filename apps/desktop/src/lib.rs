@@ -107,12 +107,6 @@ registered_commands![
     updater::open_update_release_page,
 ];
 
-/// Starts the Tauri desktop runtime.
-///
-/// # Panics
-///
-/// Panics when Tauri cannot construct the desktop application from the
-/// compile-time configuration and registered plugins.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[allow(
     clippy::too_many_lines,
@@ -464,7 +458,6 @@ fn handle_tray_action(app: &tauri::AppHandle, action: TrayAction) {
     }
 }
 
-/// Resumes when dictation is paused at the time of the click, and pauses otherwise.
 fn toggle_pause(state: &Gateway) {
     let paused = matches!(state.services.state.lock().phase, services::Phase::Paused);
     let dictation = &state.services.dictation;

@@ -1,5 +1,5 @@
-//! One typed async function per desktop command, over a single transport: Tauri's `invoke`
-//! in the browser, and a scripted fake in native tests.
+//! One async function per desktop command, over a single transport: Tauri's `invoke` in the
+//! browser, and a scripted fake in native tests.
 #![cfg_attr(
     not(target_arch = "wasm32"),
     allow(dead_code, reason = "natively only tests call the desktop")
@@ -18,10 +18,8 @@ use whispernow_api::{
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod fake;
 
-/// Why a desktop call failed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClientError {
-    /// The desktop refused the call and said why.
     Api(ApiErrorDto),
     /// The call or its answer could not cross the bridge.
     Transport,
@@ -36,7 +34,6 @@ impl ClientError {
         }
     }
 
-    /// The sentence a notice shows for this failure.
     #[must_use]
     pub fn summary(&self) -> String {
         match self {
@@ -249,7 +246,6 @@ pub(crate) const fn document_hidden() -> bool {
     false
 }
 
-/// Writes `text` to the system clipboard.
 pub(crate) async fn write_clipboard(text: &str) -> Answer<()> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -283,7 +279,6 @@ mod wasm {
         #[wasm_bindgen(js_name = objectUrl)]
         fn object_url(blob: &JsValue) -> String;
 
-        /// Releases an object URL made by [`RecordingAudio::object_url`].
         #[wasm_bindgen(js_name = revokeObjectUrl)]
         pub fn revoke_object_url(url: &str);
 
@@ -302,11 +297,9 @@ mod wasm {
         #[wasm_bindgen(js_name = resetSettingsScroll)]
         pub fn reset_settings_scroll();
 
-        /// Resolves after `ms` milliseconds; used to retire success notices.
         #[wasm_bindgen(js_name = delay)]
         async fn delay_js(ms: u32) -> JsValue;
 
-        /// Sets the document `data-theme` to `"light"` or `"dark"`; `None` follows the system.
         #[wasm_bindgen(js_name = applyTheme)]
         pub fn apply_theme(theme: Option<String>);
 
@@ -363,7 +356,6 @@ mod wasm {
         }
     }
 
-    /// Loads one recording's retained audio into this window.
     pub async fn history_audio(request: &GetHistoryAudioRequest) -> Answer<RecordingAudio> {
         let request = serde_wasm_bindgen::to_value(request).map_err(|_| ClientError::Transport)?;
         audio_blob("get_history_audio", request)
@@ -372,7 +364,7 @@ mod wasm {
             .map_err(from_js)
     }
 
-    /// Subscribes to `event_names`. Only the recording bar may pass the partial transcript.
+    /// Only the recording bar may pass the partial transcript.
     pub async fn listen_all(
         event_names: &[&str],
         callback: impl FnMut(EventPayload) + 'static,
@@ -460,7 +452,6 @@ mod wasm {
         }
     }
 
-    /// Waits `ms` milliseconds without blocking the UI thread.
     pub(crate) async fn delay(ms: u32) {
         let _ = delay_js(ms).await;
     }

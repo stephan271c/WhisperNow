@@ -1,5 +1,3 @@
-//! Speech model downloads, selection and deletion.
-
 use whispernow_api::ModelId;
 
 use super::UiActions;

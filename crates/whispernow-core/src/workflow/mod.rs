@@ -1,9 +1,5 @@
-//! Pure batch transcription preparation.
-//!
-//! Application phase, recording ownership, cancellation, history, and output are desktop
-//! responsibilities. This module splits one immutable 16-kHz recording into speech segments,
-//! decodes each segment as an ordinary offline batch request, and joins the results into one
-//! final transcript without workflow sessions or destination identity.
+//! Pure batch transcription preparation. Phase, recording ownership, cancellation, history and
+//! output belong to the desktop.
 
 mod join;
 mod pipeline;
@@ -21,7 +17,6 @@ pub use segmentation::{
 };
 pub use types::{BATCH_SAMPLE_RATE_HZ, PipelineFailureKind, PreparedTranscription};
 
-/// Exact, case-sensitive marker emitted by the current ASR worker.
 pub(crate) const UNKNOWN_TOKEN_PATTERN: &str = "<unk>";
 
 #[cfg(test)]

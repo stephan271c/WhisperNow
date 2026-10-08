@@ -1,5 +1,3 @@
-//! Keeps the stylesheets in `public/` within the design-system contract.
-//!
 //! Colour tokens are read from `tokens.css` itself, so a palette edit that breaks WCAG 2.2
 //! contrast (4.5:1 for text, 3:1 for control boundaries and focus) fails here.
 
@@ -206,7 +204,6 @@ fn controls_focus_and_accents_meet_3_to_1_on_every_surface_in_both_themes() {
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
-/// Stylesheet text without comments.
 fn without_comments(css: &str) -> String {
     let mut output = String::with_capacity(css.len());
     let mut rest = css;
@@ -294,7 +291,6 @@ fn inverse_colours_are_the_same_in_every_theme() {
     assert_eq!(inverse(&light), inverse(&dark));
 }
 
-/// The body of the `@media (prefers-reduced-motion: reduce)` block in `css`.
 fn reduced_motion_block(css: &str) -> &str {
     let opening = "@media (prefers-reduced-motion: reduce) {";
     let start = css.find(opening).expect("a reduced-motion block") + opening.len();

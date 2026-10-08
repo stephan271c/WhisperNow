@@ -61,7 +61,6 @@ pub fn render_prompt(bos: &str, prompt: &LlmPrompt) -> String {
     )
 }
 
-/// Failures of one decode. Content-free.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum LocalDecodeError {
     #[error("the prompt could not be tokenized")]
@@ -89,9 +88,6 @@ pub enum Outputs {
 /// A loaded model with one sequence of memory: what the decode loop needs from llama.cpp.
 pub trait DecodeContext {
     /// Tokenizes without adding BOS, parsing special-token text when `parse_special`.
-    ///
-    /// # Errors
-    /// When the text cannot be tokenized.
     fn tokenize(&self, text: &[u8], parse_special: bool) -> Result<Vec<Token>, LocalDecodeError>;
     /// A token's text, with special tokens rendered empty.
     fn piece(&self, token: Token) -> Vec<u8>;
@@ -105,12 +101,8 @@ pub trait DecodeContext {
     /// Whether the server would checkpoint this model's memory, and so split the prompt:
     /// when it cannot remove a sequence's tail freely, or only a bounded one.
     fn checkpoints_prompt(&self) -> bool;
-    /// Empties the memory.
     fn clear(&mut self);
     /// Decodes `tokens` at positions `first_position..`.
-    ///
-    /// # Errors
-    /// When the model fails to decode.
     fn decode(
         &mut self,
         tokens: &[Token],
@@ -118,18 +110,11 @@ pub trait DecodeContext {
         outputs: Outputs,
     ) -> Result<(), LocalDecodeError>;
     /// The logits at `batch_index` of the last decode.
-    ///
-    /// # Errors
-    /// When that position produced none.
     fn logits(&mut self, batch_index: usize) -> Result<&[f32], LocalDecodeError>;
     /// Removes positions `from..` from the memory.
-    ///
-    /// # Errors
-    /// When the memory cannot be rolled back that far.
     fn remove_from(&mut self, from: usize) -> Result<(), LocalDecodeError>;
 }
 
-/// One reply to decode.
 pub struct LocalDecodeRequest<'request> {
     /// The rendered prompt (`render_prompt`).
     pub prompt: &'request str,
@@ -154,10 +139,8 @@ impl fmt::Debug for LocalDecodeRequest<'_> {
     }
 }
 
-/// Why decoding stopped.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalFinish {
-    /// The model ended its turn.
     EndOfTurn,
     /// The reply reached `max_tokens`: cut off.
     OutputLimit,

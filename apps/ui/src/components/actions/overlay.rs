@@ -1,5 +1,3 @@
-//! The recording bar's controls.
-
 use std::future::Future;
 
 use whispernow_api::{MainWindowSectionDto, OpenMainWindowRequest};
@@ -41,7 +39,6 @@ impl UiActions {
         self.overlay_command(UiOperation::CancelRecording, client::cancel_recording());
     }
 
-    /// Dismisses the failure the overlay shows.
     pub(crate) fn dismiss_overlay(self) {
         self.overlay_command(
             UiOperation::OverlayAction,

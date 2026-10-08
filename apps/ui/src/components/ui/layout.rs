@@ -2,7 +2,6 @@ use dioxus::prelude::*;
 
 use super::{Icon, IconName};
 
-/// A bordered surface grouping related content.
 #[component]
 pub(crate) fn Card(
     #[props(extends = GlobalAttributes)] attributes: Vec<Attribute>,

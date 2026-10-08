@@ -46,7 +46,6 @@ pub use sqlite_history::SqliteHistoryRepository;
 use tracing_subscriber::EnvFilter;
 pub use voice_activity::{SileroVoiceActivitySource, silero_vad_model_path};
 
-/// Initializes content-free structured logging once at a composition root.
 pub fn init_logging() {
     let mut filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     // Rig provider targets can include request/response bodies and, for Gemini,

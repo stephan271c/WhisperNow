@@ -279,11 +279,6 @@ impl WaylandOutput {
     /// Cancellation may abandon the paste only before the paste keystroke;
     /// once the transcript is offered, every path ends in the conditional
     /// restore before this returns.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free portal, clipboard, or permission error when the
-    /// paste cannot complete, or [`WaylandPortalError::Cancelled`].
     pub async fn paste(
         &mut self,
         transcript: &str,
@@ -330,10 +325,6 @@ impl WaylandOutput {
     /// Opens the `RemoteDesktop` output session the paste keystroke uses, asking
     /// the user for consent unless a saved restore token covers it. Dropping the
     /// future abandons the wait for the user's answer.
-    ///
-    /// # Errors
-    ///
-    /// Returns a content-free portal or permission error.
     pub async fn prepare_output(&mut self) -> Result<(), WaylandPortalError> {
         self.ensure_output().await.map(drop)
     }

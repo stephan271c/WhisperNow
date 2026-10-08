@@ -1,5 +1,3 @@
-//! The main window: sidebar navigation, the routed page, and where notices appear.
-
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use dioxus::prelude::*;
@@ -52,7 +50,6 @@ mod tests;
 /// The page heading's id; focus moves to it on navigation.
 const PAGE_HEADING: &str = "page-heading";
 
-/// The window's current page and the requests to move focus to its heading.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Navigator {
     route: Signal<Route>,
@@ -86,7 +83,6 @@ pub(crate) fn use_navigator() -> Navigator {
     use_context::<UiContext>().navigator
 }
 
-/// One sidebar link.
 #[derive(Clone, Copy, PartialEq)]
 struct NavEntry {
     id: &'static str,
@@ -146,7 +142,6 @@ fn is_current(entry: &NavEntry, current: Route) -> bool {
     }
 }
 
-/// The CSS class of a sidebar link.
 fn nav_class(entry: &NavEntry, current: Route) -> &'static str {
     if is_current(entry, current) {
         "nav-item selected"
@@ -157,7 +152,6 @@ fn nav_class(entry: &NavEntry, current: Route) -> &'static str {
     }
 }
 
-/// The main window: the sidebar and the page the [`Navigator`] shows.
 #[component]
 pub fn AppShell() -> Element {
     let context = use_context::<UiContext>();
@@ -280,7 +274,6 @@ fn Sidebar(route: Route) -> Element {
     }
 }
 
-/// The model in use, a quick switcher, update status, and the version.
 #[component]
 fn SidebarFooter() -> Element {
     let context = use_context::<UiContext>();
@@ -400,7 +393,6 @@ fn SettingsPage(page: SettingsRoute) -> Element {
     }
 }
 
-/// Shows the current notice next to the controls of `scope` when this page hosts it.
 #[component]
 pub(super) fn NoticeRegion(scope: NoticeScope) -> Element {
     let context = use_context::<UiContext>();

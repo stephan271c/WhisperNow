@@ -1,5 +1,3 @@
-//! The main window shell: routes, focus, the Home checklist, notices and disabled reasons.
-
 use dioxus::prelude::*;
 use whispernow_api::{
     ApiErrorDto, AppStateDto, CleanupPrompt, ClearDataCategory, ClearDataRequest, ClearDataResult,
@@ -28,7 +26,6 @@ fn Shell(snapshot: AppStateDto, management: ManagementState, probe: Probe) -> El
     rsx! { AppShell {} }
 }
 
-/// The main window over `snapshot` and `management`, on Home.
 pub(super) fn shell(snapshot: AppStateDto, management: ManagementState) -> Page {
     Page::new(|probe| {
         VirtualDom::new_with_props(
@@ -358,7 +355,6 @@ fn the_latest_transcript_can_be_copied_from_home() {
     );
 }
 
-/// Clicks through `ids` in order.
 fn open(page: &mut Page, ids: &[&str]) {
     for id in ids {
         page.click(id);

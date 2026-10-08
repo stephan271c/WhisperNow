@@ -7,7 +7,7 @@ use whispernow_api::{
 use super::format::group_by_day;
 use super::{HistoryScreen, LocalClock};
 use crate::client::fake;
-use crate::test_support::{Page, Probe, snapshot, tag, text};
+use crate::test_support::{Page, Probe, show_history, snapshot, tag, text};
 use crate::{HistoryCopied, ManagementState, Route, SettingsRoute, UiState};
 
 /// 2026-09-27 10:30 UTC.
@@ -28,7 +28,6 @@ fn Surface(management_state: ManagementState, snapshot: AppStateDto, probe: Prob
     rsx! { HistoryScreen {} }
 }
 
-/// The history page over `management`.
 fn history_page(management_state: ManagementState) -> Page {
     Page::new(|probe| {
         VirtualDom::new_with_props(
@@ -62,18 +61,6 @@ fn management(entries: Vec<HistoryEntry>) -> ManagementState {
     });
     show_history(&mut management, entries);
     management
-}
-
-/// Installs a read of the first page of all history.
-fn show_history(management: &mut ManagementState, entries: Vec<HistoryEntry>) {
-    management.finish_history_refresh(
-        1,
-        &HistoryFilter::default(),
-        HistoryPage {
-            entries,
-            next_cursor: None,
-        },
-    );
 }
 
 /// Entry 7, an hour old.

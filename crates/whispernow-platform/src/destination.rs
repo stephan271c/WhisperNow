@@ -47,7 +47,6 @@ impl NativeDestination {
     }
 }
 
-/// The application that has focus now.
 pub(crate) fn capture() -> Result<NativeDestination, NativePasteError> {
     foreign(capture_system_destination()?, process::id())
 }

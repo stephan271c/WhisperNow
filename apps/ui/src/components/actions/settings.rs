@@ -1,5 +1,3 @@
-//! Settings edits, API keys and prompt tests.
-
 use whispernow_api::{
     ApiKey, ClearApiKeyRequest, LlmProvider, SetApiKeyRequest, Settings, SettingsView,
 };
@@ -21,8 +19,6 @@ impl UiActions {
         true
     }
 
-    /// Sends the changes made since the last save, unless a save is already with the desktop;
-    /// changes made meanwhile go out once it answers.
     fn send_settings_changes(self) {
         let Some(request) = self.management().write().next_settings_update() else {
             return;
@@ -36,7 +32,6 @@ impl UiActions {
         });
     }
 
-    /// Runs the saved prompt `prompt_id` on `sample_text`.
     /// Sample text that cannot be sent is explained beside the test's result instead.
     pub(crate) fn test_prompt(self, prompt_id: &str, sample_text: &str) {
         let request = self

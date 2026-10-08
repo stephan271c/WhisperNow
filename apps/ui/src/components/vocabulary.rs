@@ -1,5 +1,3 @@
-//! Vocabulary: replacement rules applied to each transcript, in order.
-
 use std::rc::Rc;
 
 use dioxus::prelude::*;
@@ -33,13 +31,11 @@ fn rule_name(entry: &VocabularyReplacement) -> String {
 /// Where focus goes after a rule is deleted.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum RuleFocus {
-    /// The rule at this position.
     Rule(usize),
     /// No rule is left in view, so the list is gone: the form that adds one.
     AddForm,
 }
 
-/// Whether `entry` matches the search `query`, ignoring case.
 fn matches(entry: &VocabularyReplacement, query: &str) -> bool {
     let query = query.trim().to_lowercase();
     query.is_empty()
@@ -47,7 +43,6 @@ fn matches(entry: &VocabularyReplacement, query: &str) -> bool {
         || entry.replacement.to_lowercase().contains(&query)
 }
 
-/// Vocabulary: add, search, edit, reorder, delete, import and export rules.
 #[component]
 pub(super) fn VocabularyPage() -> Element {
     let actions = use_actions();
@@ -211,7 +206,6 @@ fn VocabularyRow(
     }
 }
 
-/// Copying the rules out as JSON, and adding rules pasted as JSON.
 #[component]
 fn VocabularyTransfer(rules: Vec<VocabularyReplacement>) -> Element {
     let actions = use_actions();

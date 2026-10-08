@@ -17,20 +17,16 @@ struct Cancellation {
 }
 
 impl CancellationToken {
-    /// Requests cancellation. The worker checks this between bounded reads and
-    /// before every filesystem commit.
     pub fn cancel(&self) {
         self.0.requested.store(true, Ordering::Release);
         self.0.waiters.notify_waiters();
     }
 
-    /// Reports whether cancellation has been requested.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.0.requested.load(Ordering::Acquire)
     }
 
-    /// Resolves once cancellation is requested.
     pub async fn cancelled(&self) {
         // Registered before the check, so a cancel between the two still wakes it.
         let notified = self.0.waiters.notified();

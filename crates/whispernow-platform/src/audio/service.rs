@@ -22,8 +22,6 @@ const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const DEFAULT_DEVICE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const LEVEL_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
 
-/// CPAL-backed implementation of the framework-independent audio input port.
-///
 /// Every start creates a dedicated worker that owns downmixing, resampling,
 /// level aggregation, and sink delivery. The CPAL callback only normalizes into
 /// a pooled buffer and calls `try_send` on a bounded queue; a pooled buffer
@@ -202,7 +200,6 @@ impl Worker {
         }
     }
 
-    /// Delivers every chunk the callback queued before the stream stopped.
     fn drain_queued_chunks(
         &self,
         processor: &mut AudioProcessor,

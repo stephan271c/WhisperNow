@@ -38,7 +38,6 @@ impl Tone {
     }
 }
 
-/// An inline message placed next to the content it concerns.
 #[component]
 pub(crate) fn Banner(tone: Tone, title: Option<String>, children: Element) -> Element {
     rsx! {
@@ -54,7 +53,6 @@ pub(crate) fn Banner(tone: Tone, title: Option<String>, children: Element) -> El
     }
 }
 
-/// The fixed corner region that stacks `Toast`s.
 #[component]
 pub(crate) fn ToastRegion(children: Element) -> Element {
     rsx! { section { class: "toast-region", aria_label: "Notifications", {children} } }

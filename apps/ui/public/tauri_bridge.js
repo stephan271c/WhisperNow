@@ -66,7 +66,6 @@ export function resetSettingsScroll() {
   window.scrollTo(0, 0);
 }
 
-// Resolves after the given number of milliseconds; lets success notices retire themselves.
 export function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

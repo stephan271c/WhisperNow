@@ -27,7 +27,6 @@ const PROMPT: Duration = Duration::from_secs(5);
 const ARTIFACTS: [&str; 3] = ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"];
 const MODEL_PATH: &str = "/model.tar.bz2";
 
-/// Serves `response` as the fixture model.
 fn serve(response: Response) -> FixtureServer {
     FixtureServer::start([(MODEL_PATH, response)])
 }

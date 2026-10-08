@@ -97,7 +97,6 @@ impl VirtualKeyboard {
         Ok(keyboard)
     }
 
-    /// Presses the shortcut's keys in order and releases them in reverse.
     pub fn press(&mut self, shortcut: PasteShortcut) -> io::Result<()> {
         let keys = shortcut.keys();
         let mut pressed = 0;

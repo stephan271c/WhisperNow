@@ -1,5 +1,3 @@
-//! A short, bounded microphone check that never starts a dictation.
-//!
 //! The probe keeps only level summaries. Audio blocks are dropped as they
 //! arrive, so a test never stores or transcribes speech.
 
@@ -17,7 +15,6 @@ use whispernow_core::audio::{
 
 use super::capture_start_error;
 
-/// How long one test listens.
 pub(super) const TEST_DURATION: Duration = Duration::from_secs(3);
 /// How long setup listens to make the system ask for the microphone.
 pub(super) const PERMISSION_CHECK_DURATION: Duration = Duration::from_millis(300);
@@ -30,10 +27,8 @@ struct ProbeState {
     lost: bool,
 }
 
-/// The most windows a test reports.
 const MAX_LEVELS: usize = 64;
 
-/// Collects level windows up to [`MAX_LEVELS`].
 #[derive(Default)]
 struct LevelProbe(Mutex<ProbeState>);
 

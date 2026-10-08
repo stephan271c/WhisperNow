@@ -1,5 +1,3 @@
-//! Design-system primitives shared by both windows.
-//!
 //! Each primitive has one section in `public/ui.css`; colour, spacing, type, radius and
 //! elevation values come from the tokens in `public/tokens.css`.
 

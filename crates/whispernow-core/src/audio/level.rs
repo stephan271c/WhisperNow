@@ -1,5 +1,4 @@
-/// Aggregate capture levels. It contains no audio samples and is safe to emit
-/// to diagnostics or a recording indicator.
+/// Holds no audio samples, so it is safe to emit to diagnostics or a recording indicator.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AudioLevelSummary {
     pub peak: f32,
@@ -7,7 +6,6 @@ pub struct AudioLevelSummary {
     pub sample_count: u64,
 }
 
-/// Constant-memory level accumulator for one observation window.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct AudioLevelAccumulator {
     peak: f32,
@@ -16,7 +14,6 @@ pub(crate) struct AudioLevelAccumulator {
 }
 
 impl AudioLevelAccumulator {
-    /// Observes normalized samples without retaining them.
     pub fn observe(&mut self, samples: &[f32]) {
         for sample in samples.iter().copied() {
             self.peak = self.peak.max(sample.abs());
@@ -40,7 +37,6 @@ impl AudioLevelAccumulator {
         }
     }
 
-    /// Returns the current window and starts a new empty one.
     pub fn take_summary(&mut self) -> AudioLevelSummary {
         let result = self.summary();
         *self = Self::default();

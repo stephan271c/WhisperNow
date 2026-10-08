@@ -1,5 +1,3 @@
-//! Platform-independent push-to-talk and shortcut-registration policy.
-
 use std::{
     collections::HashSet,
     sync::{
@@ -13,11 +11,10 @@ use whispernow_api::{RecordingMode, Settings, Shortcut, ShortcutModifier};
 
 use crate::services::RecordingTrigger;
 
-/// Stable identity derived by the native shortcut library.
+/// Derived by the native shortcut library.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ShortcutId(pub(crate) u32);
 
-/// Normalized shortcut plus the native library identity used by callbacks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShortcutBinding {
     pub(crate) id: ShortcutId,
@@ -86,13 +83,12 @@ pub(crate) enum ShortcutEvent {
     CapabilityLost(ShortcutRegistrationError),
 }
 
-/// What a shortcut transition asks the dictation worker for. The worker decides from its own
-/// recording whether a press starts or stops one and whether a release stops it.
+/// The worker decides from its own recording whether a press starts or stops one and whether a
+/// release stops it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShortcutAction {
     Pressed(RecordingTrigger),
     HoldReleased,
-    /// The cancel shortcut was pressed: cancel the running dictation.
     CancelDictation,
 }
 
@@ -195,11 +191,9 @@ pub(crate) type LifecycleProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 /// The native registrations, changed only while the `native` lock is held.
 #[derive(Default)]
 struct Native {
-    /// The configured recording shortcuts.
     bindings: ShortcutBindings,
     /// The recording shortcuts registered now: all of `bindings`, or none.
     live: Vec<ShortcutBinding>,
-    /// The settings UI is capturing a new shortcut combination.
     capturing: bool,
     cancel: CancelShortcut,
 }
@@ -216,9 +210,6 @@ struct Published {
     cancel_failure: Option<ShortcutRegistrationError>,
 }
 
-/// Routes shortcut input to the dictation worker and keeps the native registrations in step with
-/// the settings, the application phase and the running dictation.
-///
 /// Lock order is `native -> pressed -> published`. `native` is the only lock held while the
 /// registrar runs, which may wait on the event-loop thread or a desktop portal; input and
 /// settings reads take only `pressed` and `published`, so they never wait for it.

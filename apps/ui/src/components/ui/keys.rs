@@ -1,13 +1,11 @@
 use dioxus::prelude::*;
 use whispernow_api::Shortcut;
 
-/// One key of a shortcut.
 #[component]
 pub(crate) fn Kbd(children: Element) -> Element {
     rsx! { kbd { class: "kbd", {children} } }
 }
 
-/// A shortcut rendered as one key cap per part, in `shortcut_parts` order.
 #[component]
 pub(crate) fn ShortcutLabel(shortcut: Shortcut) -> Element {
     rsx! {

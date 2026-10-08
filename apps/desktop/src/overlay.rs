@@ -1,9 +1,5 @@
-//! The recording overlay: the recording-bar window, shown while a dictation runs and while its
-//! failure waits to be dismissed.
-//!
 //! The pill renders the published state snapshot itself; this module only decides where the
-//! window is and whether it shows. Placement and visibility are pure functions so they can be
-//! tested without a window; [`OverlayWindow`] is the only native boundary.
+//! window is and whether it shows.
 
 use std::sync::{Arc, Mutex};
 
@@ -23,7 +19,6 @@ const EDGE_MARGIN: f64 = 48.0;
 const NOT_PASTED_NOTIFICATION: &str =
     "The text was not pasted. Open History in WhisperNow to copy it.";
 
-/// Where the overlay is presented for a phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OverlayPresentation {
     None,
@@ -59,7 +54,6 @@ pub(crate) struct PhysicalRect {
 }
 
 impl PhysicalRect {
-    /// Whether the two rectangles share any area.
     pub(crate) fn overlaps(&self, other: &Self) -> bool {
         let (left, top) = (i64::from(self.x), i64::from(self.y));
         let (other_left, other_top) = (i64::from(other.x), i64::from(other.y));
@@ -139,7 +133,6 @@ pub(crate) const fn overlay_presentation(
     }
 }
 
-/// The message a failure notification shows.
 fn notification(error: &ApiErrorDto) -> String {
     if error.recovery == Some(RecoveryActionDto::CopyManually) {
         NOT_PASTED_NOTIFICATION.to_owned()
@@ -171,7 +164,6 @@ impl RecordingOverlay {
         }
     }
 
-    /// Follows a published state snapshot.
     pub(crate) fn observe(&self, snapshot: &AppStateDto) {
         let presentation =
             overlay_presentation(snapshot.overlay_style, &snapshot.phase, self.can_float);

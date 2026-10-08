@@ -1,11 +1,7 @@
 //! llama.cpp, linked at run time from the shared libraries of a pinned release (b11259).
 //!
 //! Only its public C API is used. The libraries are loaded from one directory, once per
-//! process, and stay loaded: ggml's backends do not support being unloaded. Release builds
-//! load their backends (the CPU variants, Vulkan, Metal) from the same directory; source
-//! builds that link their backends in need nothing more. On Linux and Windows `x86_64` the
-//! optional CUDA pack adds the CUDA backend, with NVIDIA's runtime beside it, from another
-//! directory (`Llama::load_cuda`); a model then goes to a CUDA GPU that can run it first.
+//! process, and stay loaded: ggml's backends do not support being unloaded.
 #![allow(unsafe_code)]
 
 mod ffi;
@@ -53,7 +49,6 @@ pub struct CudaLibraries {
 }
 
 impl CudaLibraries {
-    /// Every file of the pack.
     pub fn files(&self) -> impl Iterator<Item = &'static str> {
         self.runtime.into_iter().chain([self.backend])
     }
@@ -82,8 +77,7 @@ const CUDA_COMPUTE_MINOR: c_int = 76;
 /// `cudaDeviceGetAttribute(int *value, enum cudaDeviceAttr attr, int device)`.
 type CudaDeviceGetAttribute = unsafe extern "C" fn(*mut c_int, c_int, c_int) -> c_int;
 
-/// The CUDA pack's device query, once the pack is loaded. The app loads llama.cpp and the
-/// pack from one directory each per process, and their libraries stay loaded until it exits.
+/// The CUDA pack's device query, once the pack is loaded.
 static CUDA: Mutex<Option<CudaDeviceGetAttribute>> = Mutex::new(None);
 /// Held while llama.cpp loads, so its global state is initialized once.
 static LOADED: Mutex<Option<&'static Llama>> = Mutex::new(None);
@@ -102,7 +96,6 @@ pub(crate) enum LlamaError {
     Probe(i32),
 }
 
-/// The loaded libraries and their functions.
 pub struct Llama {
     api: ffi::Api,
     _libraries: Vec<Library>,
@@ -116,9 +109,6 @@ unsafe impl Sync for Llama {}
 
 impl Llama {
     /// Loads llama.cpp from `directory`, or returns the copy already loaded.
-    ///
-    /// # Errors
-    /// When a library or symbol is missing.
     pub(crate) fn load(directory: &Path) -> Result<&'static Self, LlamaError> {
         let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(llama) = *loaded {
@@ -163,12 +153,7 @@ impl Llama {
         Ok(llama)
     }
 
-    /// Adds the CUDA backend from the CUDA pack in `directory`, once per process. Its
-    /// libraries stay loaded until the process exits, as ggml's backends do.
-    ///
-    /// # Errors
-    /// When the platform has no CUDA pack, a library or symbol is missing, or ggml refuses
-    /// the backend.
+    /// Adds the CUDA backend from the CUDA pack in `directory`, once per process.
     pub(crate) fn load_cuda(&self, directory: &Path) -> Result<(), LlamaError> {
         let failed = |message: String| LlamaError::Library {
             directory: directory.to_owned(),
@@ -321,7 +306,6 @@ unsafe extern "C" fn log(level: c_int, message: *const c_char, _data: *mut c_voi
     }
 }
 
-/// Where the model runs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Backend {
     /// A GPU, by its backend's name and description.
@@ -329,7 +313,6 @@ pub(crate) enum Backend {
     Cpu,
 }
 
-/// A loaded model.
 pub(crate) struct LlamaModel {
     llama: &'static Llama,
     model: NonNull<ffi::Model>,
@@ -339,9 +322,6 @@ pub(crate) struct LlamaModel {
 
 impl LlamaModel {
     /// Loads a GGUF on the first GPU that takes it, else on the CPU.
-    ///
-    /// # Errors
-    /// When the model cannot be loaded even on the CPU.
     pub(crate) fn load(llama: &'static Llama, path: &Path) -> Result<Self, LlamaError> {
         let path =
             CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| LlamaError::Model)?;
@@ -503,9 +483,6 @@ impl LlamaContext {
     /// room for 4 draft tokens' outputs, recurrent state that can roll back 4 tokens
     /// (`n_rs_seq`) as the patched server sets up for `ngram-simple`, Flash Attention when
     /// the backend supports it, and a warm-up decode.
-    ///
-    /// # Errors
-    /// When the context cannot be created or its test decode fails.
     pub(crate) fn new(
         model: Rc<LlamaModel>,
         context_size: u32,

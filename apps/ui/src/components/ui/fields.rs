@@ -46,8 +46,6 @@ fn current_wiring() -> Option<FieldWiring> {
     try_use_context::<Memo<FieldWiring>>().map(|wiring| wiring())
 }
 
-/// A stacked label, optional description, control and optional error.
-///
 /// A control that saves itself passes `status`: the frame then keeps a polite live region for
 /// it, so "Saving…" and "Saved" are announced without taking focus. Only `error` is an alert.
 #[component]
@@ -77,7 +75,6 @@ pub(crate) fn Field(
     }
 }
 
-/// The live region that reports a control's save status.
 #[component]
 fn SaveStatusText(id: String, status: String) -> Element {
     rsx! {

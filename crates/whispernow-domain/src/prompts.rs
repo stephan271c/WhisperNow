@@ -1,5 +1,3 @@
-//! AI cleanup prompts and the revisions of the prompts shipped by default.
-//!
 //! A shipped prompt the user never edited is upgraded to the newest default on
 //! load. An edited one is kept, and records which shipped default it was last
 //! reconciled with so the user can be told when a newer default exists.
@@ -7,14 +5,10 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// A user-selectable AI cleanup prompt.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CleanupPrompt {
-    /// Stable prompt identifier.
     pub id: String,
-    /// Display title.
     pub title: String,
-    /// Provider instruction.
     pub prompt: String,
     /// Lowercase SHA-256 of the shipped default text this prompt was last
     /// reconciled with. Absent for custom prompts and legacy documents.
@@ -97,7 +91,6 @@ fn prompt_hash(text: &str) -> String {
         })
 }
 
-/// Built-in cleanup prompts at their current shipped revision.
 #[must_use]
 pub fn default_prompts() -> Vec<CleanupPrompt> {
     BUILT_IN_PROMPTS
@@ -111,7 +104,6 @@ pub fn default_prompts() -> Vec<CleanupPrompt> {
         .collect()
 }
 
-/// Replaces unedited copies of earlier shipped defaults with the current text and title.
 pub(crate) fn upgrade_unedited_defaults(prompts: &mut [CleanupPrompt]) {
     for prompt in prompts {
         let Some(built_in) = built_in(&prompt.id) else {

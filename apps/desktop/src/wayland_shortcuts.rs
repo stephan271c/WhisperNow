@@ -1,5 +1,3 @@
-//! Native Wayland push-to-talk shortcuts through the XDG `GlobalShortcuts` portal.
-
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex, mpsc as std_mpsc},
@@ -387,7 +385,6 @@ struct KeyRelease {
 }
 
 impl HeldShortcuts {
-    /// The transitions a portal or helper key signal stands for.
     fn key_signal(&mut self, signal: PortalSignal, now: Instant) -> Vec<KeyTransition> {
         let released = match signal {
             PortalSignal::Transition(TimedTransition {

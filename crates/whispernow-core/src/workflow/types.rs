@@ -2,10 +2,9 @@ use whispernow_domain::UtcMillis;
 
 use crate::llm::CleanupFallback;
 
-/// Sample rate accepted by the batch transcription pipeline.
 pub const BATCH_SAMPLE_RATE_HZ: u32 = 16_000;
 
-/// Fully prepared text. It has not yet caused history or output side effects.
+/// Has not yet caused history or output side effects.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedTranscription {
     pub timestamp: UtcMillis,
@@ -18,7 +17,6 @@ pub struct PreparedTranscription {
 }
 
 impl PreparedTranscription {
-    /// Uses AI cleanup's text, or keeps the deterministic text and records why.
     pub fn apply_cleanup(&mut self, cleanup: Result<String, CleanupFallback>) {
         match cleanup {
             Ok(text) => self.final_text = text,
@@ -27,7 +25,6 @@ impl PreparedTranscription {
     }
 }
 
-/// Failure classes produced before history or output side effects are permitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PipelineFailureKind {
     NoAudio,

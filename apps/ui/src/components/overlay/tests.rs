@@ -337,7 +337,7 @@ fn ordinary_speech_scrolls_in_from_the_right_below_loud_speech() {
         }
         let heights: Vec<f32> = meter_bars(&state.overlay)
             .iter()
-            .map(|(_, _, height)| *height)
+            .map(|bar| bar.height)
             .collect();
         heights
     };
@@ -406,7 +406,6 @@ fn live_text_follows_the_style_and_resets_for_each_recording() {
     assert!(shown.starts_with("word"), "cut at a word boundary: {shown}");
 }
 
-/// A mounted recording bar in `state`.
 fn mount_bar(state: UiState) -> Page {
     Page::new(|probe| {
         VirtualDom::new_with_props(
@@ -431,7 +430,6 @@ fn announced(bar: &Page) -> String {
     announcement(&bar.html()).to_owned()
 }
 
-/// Whether the control rendered with `id` accepts a click.
 fn enabled(bar: &Page, id: &str) -> bool {
     let html = bar.html();
     !tag(&html, id)
@@ -439,7 +437,6 @@ fn enabled(bar: &Page, id: &str) -> bool {
         .contains("disabled")
 }
 
-/// The request of the latest call of `command`, as JSON.
 fn last_request(command: &str) -> Value {
     fake::requests::<Value>(command).pop().expect("a call")
 }
