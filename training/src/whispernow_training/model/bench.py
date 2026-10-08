@@ -15,7 +15,7 @@ import time
 
 import httpx
 
-from . import prompt
+from . import draft, prompt
 from .evaluate import load_rows
 
 SHORT = "um so can you remind me to call the dentist tomorrow morning about moving my appointment"
@@ -39,6 +39,7 @@ def _time_one(client: httpx.Client, url: str, transcript: str) -> dict:
         "messages": prompt.messages(transcript),
         "max_tokens": prompt.max_tokens(transcript),
         **prompt.decoding(),
+        "draft_text": draft.preclean(transcript),
         "stream": True,
         "cache_prompt": False,
     }

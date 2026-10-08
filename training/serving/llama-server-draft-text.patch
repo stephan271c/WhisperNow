@@ -1,0 +1,299 @@
+--- a/common/common.h
++++ b/common/common.h
+@@ -398,7 +398,17 @@
+             return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
+         });
+ 
+-        return needs_rs_seq ? draft.n_max : 0u;
++        if (needs_rs_seq) {
++            return draft.n_max;
++        }
++
++        // text draft (draft_text request field) rides on ngram-simple: roll back recurrent state in place
++        // instead of restoring a checkpoint after every partly rejected draft
++        const bool has_ngram_simple = std::any_of(types.begin(), types.end(), [&](auto t) {
++            return t == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE;
++        });
++
++        return has_ngram_simple ? ngram_simple.size_m : 0u;
+     }
+ };
+ 
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -2888,7 +2888,7 @@
+     common_speculative_impl * impl = spec->impl_last[seq_id];
+ 
+     if (impl == nullptr) {
+-        GGML_ASSERT(n_accepted == 0);
++        // a draft_text draft (server) when no implementation drafted: nothing to account
+         return;
+     }
+ 
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -18,6 +18,8 @@
+ #include "mtmd-helper.h"
+ 
+ #include <algorithm>
++#include <cctype>
++#include <cstring>
+ #include <cstddef>
+ #include <cinttypes>
+ #include <exception>
+@@ -195,6 +197,168 @@
+     }
+ };
+ 
++// draft_text request field: the words of a per-request text (for an editing task, the input as code
++// can clean it), matched against the words generated so far ignoring case and punctuation; the words
++// after the match are the draft. The pointer is only the last match: each pass re-derives it from the
++// output, so a rejected draft needs no undo.
++struct server_text_draft {
++    std::vector<std::string> words;
++    std::vector<std::string> keys;
++    size_t pointer = 0;
++
++    static std::string norm(const std::string & w) {
++        std::string out;
++        for (unsigned char c : w) {
++            if (std::isalnum(c) || c == '_' || c >= 0x80) {
++                out += (char) std::tolower(c);
++            }
++        }
++        return out;
++    }
++
++    static std::vector<std::string> split(const std::string & s) {
++        std::vector<std::string> out;
++        std::string cur;
++        for (char c : s) {
++            if (std::isspace((unsigned char) c)) {
++                if (!cur.empty()) {
++                    out.push_back(cur);
++                    cur.clear();
++                }
++            } else {
++                cur += c;
++            }
++        }
++        if (!cur.empty()) {
++            out.push_back(cur);
++        }
++        return out;
++    }
++
++    static std::string lower(const std::string & s) {
++        std::string out = s;
++        for (auto & c : out) {
++            c = (char) std::tolower((unsigned char) c);
++        }
++        return out;
++    }
++
++    void init(const std::string & text) {
++        words = split(text);
++        keys.clear();
++        for (const auto & w : words) {
++            keys.push_back(norm(w));
++        }
++        pointer = 0;
++    }
++
++    bool empty() const { return words.empty(); }
++
++    // keys[p, p + n) equal the last n of k
++    bool match(const std::vector<std::string> & k, size_t p, size_t n) const {
++        for (size_t j = 0; j < n; ++j) {
++            if (keys[p + j] != k[k.size() - n + j]) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    long nearest(const std::vector<std::string> & k, size_t n, size_t lo, size_t hi) const {
++        long best = -1;
++        for (size_t p = lo; p + n <= hi; ++p) {
++            if (match(k, p, n)) {
++                const auto d  = p > pointer ? p - pointer : pointer - p;
++                const auto db = (size_t) best > pointer ? (size_t) best - pointer : pointer - (size_t) best;
++                if (best < 0 || d < db) {
++                    best = (long) p;
++                }
++            }
++        }
++        return best;
++    }
++
++    // position after the match of the last words of k, or -1
++    long find(const std::vector<std::string> & k) const {
++        for (size_t n : {3, 2, 1}) {
++            if (k.size() < n) {
++                continue;
++            }
++            const size_t lo = pointer > 8 ? pointer - 8 : 0;
++            const size_t hi = std::min(keys.size(), pointer + 60);
++            const long p = nearest(k, n, lo, hi);
++            if (p >= 0) {
++                return p + (long) n;
++            }
++        }
++        // lost: the whole text, on two or more words, nearest the pointer
++        for (size_t n : {3, 2}) {
++            if (k.size() < n) {
++                continue;
++            }
++            const long p = nearest(k, n, 0, keys.size());
++            if (p >= 0) {
++                return p + (long) n;
++            }
++        }
++        return -1;
++    }
++
++    std::string join(size_t from, size_t to, bool lead) const {
++        std::string out;
++        for (size_t i = from; i < std::min(to, words.size()); ++i) {
++            if (lead || i > from) {
++                out += ' ';
++            }
++            out += words[i];
++        }
++        return out;
++    }
++
++    // the draft text to follow `text`, or "" when there is none
++    std::string draft(const std::string & text) {
++        if (text.empty()) {
++            return join(0, words.size(), false);
++        }
++        const auto parts = split(text);
++        if (parts.empty()) {
++            return "";
++        }
++        std::vector<std::string> k;
++        for (const auto & p : parts) {
++            auto n = norm(p);
++            if (!n.empty()) {
++                k.push_back(std::move(n));
++            }
++        }
++        // the last word taken as complete: draft the words after it
++        long pos = find(k);
++        if (pos >= 0 && (size_t) pos < words.size()) {
++            pointer = pos;
++            std::string rest = join(pos, pos + 24, false);
++            if (std::strchr(".?!:", parts.back().back()) && !rest.empty()) {
++                rest[0] = (char) std::toupper((unsigned char) rest[0]);
++            }
++            const bool ws = text.back() == ' ' || text.back() == '\n';
++            return (ws ? "" : " ") + rest;
++        }
++        // the last word unfinished: complete it from the next word
++        if (std::isalnum((unsigned char) text.back()) && k.size() > 1) {
++            std::vector<std::string> k2(k.begin(), k.end() - 1);
++            pos = find(k2);
++            if (pos >= 0 && (size_t) pos < words.size()) {
++                pointer = pos;
++                const auto & word = words[pos];
++                const auto & last = parts.back();
++                if (word.size() > last.size() && lower(word).rfind(lower(last), 0) == 0) {
++                    return word.substr(last.size()) + join(pos + 1, pos + 24, true);
++                }
++            }
++        }
++        return "";
++    }
++};
++
+ struct server_slot {
+     int id;
+ 
+@@ -216,6 +379,7 @@
+     common_prompt_checkpoint spec_ckpt;
+     bool spec_is_replay = false;
+     std::mt19937 spec_synth_rng;
++    server_text_draft spec_text_draft;
+ 
+     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
+     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
+@@ -1686,6 +1850,8 @@
+     }
+ 
+     bool launch_slot_with_task(server_slot & slot, server_task && task) {
++        slot.spec_text_draft.init(task.params.draft_text);
++
+         // process per-request lora adapters
+         if (!task.params.lora.empty()) {
+             auto task_loras = construct_lora_list(task.params.lora);
+@@ -3024,6 +3190,42 @@
+             queue_tasks.yield_to_queue([&]() {
+                 common_speculative_draft(spec.get());
+             });
++
++            // draft_text: replace the draft with the request text's next words, when it has any
++            iterate(drafting, [&](server_slot & slot) {
++                if (slot.spec_text_draft.empty()) {
++                    return;
++                }
++                const std::string words = slot.spec_text_draft.draft(slot.generated_text);
++                if (words.empty()) {
++                    return;
++                }
++                const int32_t n_max = std::min(common_speculative_n_max(spec.get()), slot.get_n_draft_max());
++                if (n_max <= 0) {
++                    return;
++                }
++                // re-tokenize the last generated tokens with the draft, so it tokenizes as it would in context
++                const size_t n_tail = std::min<size_t>({ 6, (size_t) std::max(1, (int) slot.stats.n_gen), slot.spec_prompt.size() + 1 });
++                llama_tokens tail(slot.spec_prompt.end() - (n_tail - 1), slot.spec_prompt.end());
++                tail.push_back(slot.sampled);
++                std::string tail_text;
++                for (auto t : tail) {
++                    tail_text += common_token_to_piece(slot.ctx_tgt, t, false);
++                }
++                llama_tokens joined = common_tokenize(slot.ctx_tgt, tail_text + words, false, false);
++                llama_tokens result;
++                if (joined.size() > tail.size() && std::equal(tail.begin(), tail.end(), joined.begin())) {
++                    result.assign(joined.begin() + tail.size(), joined.end());
++                } else {
++                    result = common_tokenize(slot.ctx_tgt, words, false, false);
++                }
++                if ((int32_t) result.size() > n_max) {
++                    result.resize(n_max);
++                }
++                if (!result.empty()) {
++                    slot.spec_draft = std::move(result);
++                }
++            });
+         }
+ 
+         // make checkpoints if needed
+--- a/tools/server/server-task.h
++++ b/tools/server/server-task.h
+@@ -75,6 +75,9 @@
+     bool timings_per_token   = false;
+     bool post_sampling_probs = false;
+ 
++    // draft_text: text whose words are drafted for speculative decoding (with --spec-type ngram-simple)
++    std::string draft_text;
++
+     struct common_params_sampling sampling;
+     struct common_params_speculative speculative;
+ 
+--- a/tools/server/server-schema.cpp
++++ b/tools/server/server-schema.cpp
+@@ -190,6 +190,12 @@
+     add((new field_bool("post_sampling_probs", params.post_sampling_probs))
+         ->set_desc("Return probabilities of top n_probs tokens after applying the sampling chain"));
+ 
++    add((new field_str("draft_text"))
++        ->set_desc("Text whose words are drafted for speculative decoding (needs --spec-type ngram-simple)")
++        ->set_handler([&](field_eval_context & ctx, const json & data) {
++            ctx.params.draft_text = data.at("draft_text").get<std::string>();
++        }));
++
+     //
+     // Speculative decoding params
+     //

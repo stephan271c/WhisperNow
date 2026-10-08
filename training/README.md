@@ -515,7 +515,8 @@ A small model fine-tuned on `data/build/` to do Clean Up & Format alone. It take
 ### The prompt contract
 
 - `serving/chat_template.jinja` is the one chat template. Training renders every row with it, and `llama-server --chat-template-file` serves with it, so the two cannot drift. It refuses a system turn.
-- `serving/prompt_golden.json` holds the messages, the rendered prompt and the output budget for a few transcripts. `tests/test_model_prompt.py` and the Rust test `local_cleanup_prompt_matches_the_training_golden_fixture` (whispernow-core) both check against it. Change the fixture, the template, `model/prompt.py` and `build_local_cleanup_prompt` together.
+- `serving/prompt_golden.json` holds the messages, the rendered prompt, the output budget and the draft (`draft_text`, below) for a few transcripts. `tests/test_model_prompt.py` and the Rust test `local_cleanup_prompt_matches_the_training_golden_fixture` (whispernow-core) both check against it. Change the fixture, the template, `model/prompt.py` and `build_local_cleanup_prompt` together.
+- Each request also has a draft: the transcript pre-cleaned by code (`model/draft.py`; in the app, `llm/draft.rs` in whispernow-core). The app's in-process engine drafts from it for speculative decoding (`llm/local.rs`); training-side requests send it as `draft_text` to the patched llama-server, and the release build ignores it.
 - Decoding is greedy, with `repeat_penalty` 1.05 over `repeat_last_n` 4096 tokens (the whole prompt and reply, as transformers' `repetition_penalty` works; llama.cpp's default window of 64 keeps fewer protected tokens), and `max_tokens` = max(64, ⌈2.5 × input words⌉). No build row needs more. A reply that hits the limit is treated as a loop: the app keeps the deterministic text. The fixture's `decoding` pins these fields for both sides.
 
 ### Setup
@@ -525,6 +526,7 @@ A small model fine-tuned on `data/build/` to do Clean Up & Format alone. It take
   - `src/`: the release source (`https://github.com/ggml-org/llama.cpp/archive/refs/tags/b11259.tar.gz`), for `convert_hf_to_gguf.py` and `gguf-py`;
   - `cuda/llama-b11259/`: `llama-b11259-bin-ubuntu-cuda-13.4-x64.tar.gz`, which loads the CUDA 13 runtime from `/usr/local/cuda`;
   - `cpu/llama-b11259/`: `llama-b11259-bin-ubuntu-x64.tar.gz`.
+  - `draft-text/`: `cleanup build-server [--cpu]` copies `src/`, applies `serving/llama-server-draft-text.patch` and builds `llama-server` into `build-cuda/` or `build-cpu/`. It takes about 10 minutes, bounded like a Cargo build (four jobs, four CPUs, low I/O priority), and needs CMake (or `uvx` to fetch it) and, for the CUDA build, the CUDA toolkit (`/usr/local/cuda`). Ninja is used when installed.
 - Runs land in `runs/<name>/` (gitignored): `config.json`, `train.json` (steps, time, peak GPU memory, loss history), `model/` (the merged bf16 checkpoint), `eval*/` and `gguf/`.
 - Before training, check `nvidia-smi` and `df -h .`. Run under `nice -n 10 ionice -c2 -n7`, and never while Cargo builds (AGENTS.md).
 
@@ -538,13 +540,15 @@ A small model fine-tuned on `data/build/` to do Clean Up & Format alone. It take
 | Evaluate a checkpoint (HF, batched greedy) | `cleanup eval NAME --split test --judge` | `runs/NAME/eval/test.{outputs,judge}.jsonl`, `test.scores.json` |
 | Evaluate the teacher (`LLM_MODEL` with the app's hosted prompt) | `cleanup eval --teacher --split test --judge` | `runs/teacher/eval/` |
 | Export to GGUF | `cleanup export NAME [--quant Q8_0 Q4_K_M]` | `runs/NAME/gguf/model-{BF16,Q8_0,Q4_K_M}.gguf` |
-| Serve a GGUF with the committed template | `cleanup serve NAME [--quant Q8_0] [--cpu] [--parallel 4] [--port 8080]` | llama-server on `127.0.0.1:8080` |
+| Build llama-server with the transcript drafter | `cleanup build-server [--cpu]` | `.cache/llama.cpp/draft-text/build-{cuda,cpu}/` |
+| Serve a GGUF with the committed template, drafting from each request's `draft_text` (`--no-draft`: the release build, plain decoding) | `cleanup serve NAME [--quant Q8_0] [--cpu] [--parallel 4] [--port 8080] [--no-draft]` | llama-server on `127.0.0.1:8080` |
 | Evaluate what llama-server returns | `cleanup eval NAME --server http://127.0.0.1:8080/v1 --label q4 --split test --judge` | `runs/NAME/eval-q4/` |
 | Latency for a short dictation and test rows of about 100, 200, 300 (`long`), 500 and 1,000 words | `cleanup bench http://127.0.0.1:8080/v1 --save runs/NAME/bench-gpu-q4.json` | the JSON |
 | The teacher's latency on the same dictations | `cleanup bench --teacher --save runs/teacher/bench.json` | the JSON |
 | Read a server's (or the teacher's) cleanup of the dictations in `data/real/` by hand; nothing is written or scored | `cleanup handcheck http://127.0.0.1:8080/v1` / `cleanup handcheck --teacher` | stdout |
 | Fresh noise per epoch: one re-noised copy of the train split per epoch after the first (`noise_per_epoch` runs make it themselves) | `uv run datagen epochs [--epochs 5]` | `data/build/epochs/train.epoch-<n>.jsonl`, `stats.json` |
-| Preference stage: sample an SFT model behind llama-server, judge, restore dropped facts for minimal pairs, write pairs (see [Preference stage](#preference-stage-todo-111)) | `LLM_BACKEND=codex LLM_MODEL=gpt-6.1-sol LLM_JUDGE_BACKEND=codex LLM_JUDGE_MODEL=gpt-6.1-sol LLM_CODEX_CONCURRENCY=64 cleanup prefer NAME --server http://127.0.0.1:8080/v1` | `runs/NAME/prefer/` |
+| Preference stage: sample an SFT model behind llama-server, judge, restore lost facts for minimal pairs, write pairs (see [Preference stage](#preference-stage-todo-111)) | `LLM_BACKEND=codex LLM_MODEL=gpt-6.1-sol LLM_REASONING=high LLM_JUDGE_BACKEND=codex LLM_JUDGE_MODEL=gpt-6.1-sol LLM_JUDGE_REASONING=high LLM_CODEX_CONCURRENCY=64 cleanup prefer NAME --server http://127.0.0.1:8080/v1` | `runs/NAME/prefer/` |
+| Code-made preference pairs: each reference against itself with one fact broken (see [Keeping every fact](#keeping-every-fact-todo-114)) | `cleanup code-pairs NAME [--count 8000] [--long-share 0.7]` | `runs/NAME/pairs.jsonl`, `stats.json` |
 | Evaluate an epoch checkpoint | `cleanup eval NAME --checkpoint epoch-1 --split val --limit 500` | `runs/NAME/eval-epoch-1/` |
 | Score the split's own references, as a baseline for the judge | `cleanup eval --reference --split val --limit 500 --judge` | `runs/reference/eval/` |
 | Decode with another repeat penalty, or penalty window (server only) | `cleanup eval NAME … --repeat-penalty 1.0` / `--repeat-last-n 64` | `runs/NAME/eval…-rp1/`, `…-last64/` |
@@ -567,11 +571,20 @@ Todo 111's runs on todo 110's build are in `configs/sweep-lfm25-350m-long.toml` 
 
 1. **Inputs:** 400 train rows from each of the 150–300, 300–600 and 600–1,000-word buckets, and 300 more with a reasoned or re-decided correction. Never a benchmark row or its seed group.
 2. **Samples:** the greedy output and 4 samples at temperature 0.8 per input, from llama-server with the app's request and penalty.
-3. **Verdicts:** each distinct output goes through the code checks (loop, fillers the reference lacks, Markdown, list markers, added layout, assistant opener, wrong `EMPTY`), then todo 110's completeness judge (`prompts/judge/completeness.md`). The judge takes one row per request, at low reasoning up to 600 words and high above, as in the long-data gate.
-4. **Minimal pairs:** a failing output whose only fault is dropped facts goes to the teacher with the judge's note (`prompts/prefer/restore.md`). The repair is kept only if the code finds nothing but inserted words (`only_insertions`) and the judge passes it.
-5. **Pairs:** up to 2 per input. The minimal pair comes first, then failing outputs against the passing output nearest in length. An input where nothing passes pairs a failure with its gated reference. `kind` names the rejected output's fault (dropped, invented, correction, filler, format, loop), and 5% of inputs by id hash are a val split. `rft.jsonl` holds one passing output per train input, for the rejection-sampling baseline.
+3. **Verdicts:** each distinct output goes through the code checks (loop, fillers the reference lacks, Markdown, list markers, added layout, assistant opener, wrong `EMPTY`), then the eval judge (`prompts/judge/eval.md`) against the reference, batched as in evaluation and resumed from `verdicts.judge.jsonl`. An output fails on any dropped, changed, wrong-side or invented fault, or an answered request; an unresolved correction alone passes. The judge and the teacher must be gpt-6.1-sol at high reasoning through codex, as the scores are.
+4. **Minimal pairs:** a failing output whose only faults are lost facts (dropped, changed, wrong side) goes to the teacher with the judge's faults (`prompts/prefer/restore.md`). The repair is kept only if the code finds no other edit (only inserted words when everything lost was dropped, `only_insertions`; otherwise only the words the faults quote, `only_fact_edits`) and the judge passes it.
+5. **Pairs:** up to 2 per input. The minimal pair comes first, then failing outputs against the passing output nearest in length. An input where nothing passes pairs a failure with its gated reference. `kind` names the rejected output's first fault (loop, answered, invented, wrong_side, changed, dropped, filler, format), and 5% of inputs by id hash are a val split. `rft.jsonl` holds one passing output per train input, for the rejection-sampling baseline.
 
 DPO trains from the SFT model: `cleanup train configs/<model>.toml --name NAME-dpo --set objective='dpo' --set train_file='runs/NAME/prefer/pairs.jsonl' --set base_model='runs/NAME/model' --set epochs=1 --set learning_rate=1e-6`. It uses TRL's sigmoid loss plus an SFT term on the chosen reply (`beta` 0.1, `sft_weight` 1.0) and reference log-probs computed once before training. The baseline is plain SFT on `rft.jsonl` from the same model (`--set train_file='runs/NAME/prefer/rft.jsonl'`).
+
+### Keeping every fact (todo 114)
+
+Two ways to make a lost fact cost more than the plain SFT loss does, both from `model/facts.py`, which finds a reference's fact spans in code: values (numbers, amounts, times, dates, weekdays, colours and the protected tokens), names, hedges, negations (`not`, `no`, `never`, `nothing`, `without`, words ending in `n't` and the like), reasons (`because`, `since`, `so that`, `in case`, `otherwise` to the end of the clause), and the first word of each sentence and list item. They cover about a quarter of the reference tokens.
+
+- **Fact-weighted SFT:** `--set fact_weight=3.0` weighs the loss on reply tokens inside fact spans 3 times the rest, rescaled to average 1 per micro-batch, so the learning rate stays comparable (`model/weighted.py`). The val loss stays the plain one. It cannot run with `liger`.
+- **Code-made pairs:** `cleanup code-pairs NAME` writes DPO pairs in the preference stage's format, each a train reference against the same reference with one span broken (`model/code_pairs.py`): a sentence, list item, reason or hedge dropped, a value changed, or a correction's abandoned value put back (`wrong_side`, from rows whose input states the correction). The mix follows the eval judge's faults, 70% of the pairs come from rows of 150 words or more, and no benchmark row or its seed group is used. DPO on them runs as above with `--set train_file='runs/NAME/pairs.jsonl'`.
+
+Todo 114 ran neither of these. It ran the preference stage with DPO and rejection-sampling SFT instead, and none of those runs beat todo 113's SFT model without regressions. DPO dropped fewer facts but restated content, and the pairs whose chosen side is the train reference did the most harm.
 
 ### What evaluation reports
 
@@ -587,7 +600,11 @@ The references for teacher-sourced rows are the teacher's own outputs, so the te
 
 ### Using it in the app
 
-1. `cleanup serve full-inst-1e-5-e3`, the chosen model at Q8_0 (on a machine without a GPU, `--cpu --quant Q4_K_M` is faster for long dictations). The app never starts the server or ships the model.
-2. In WhisperNow, choose the provider **Local cleanup model**. It defaults to `http://127.0.0.1:8080/v1` and needs no API key. The model name is required but llama-server ignores it; any name works.
-3. Choose **Clean Up & Format** and turn visual context off. Settings refuse any other prompt, and visual context, with this provider.
+The app runs the model itself, in process, on llama.cpp b11259's C API (todo 115); there is no server to start.
+
+1. In WhisperNow, choose the provider **Local cleanup model**, pick its **Cleanup model**, and download it when asked (Settings → Models also lists both). The default is `r112-full-inst-1e-5-e3` (LFM2.5-350M) at Q8_0 (379 MB), retrained on todo 112's relabeled build; the larger choice is `r112-minicpm-full-inst-1e-5-e3` (MiniCPM5-1B) at Q8_0 (1.15 GB), which loses a fifth to a quarter fewer facts but is slower. Both are pinned in the app's model registry by URL, size and SHA-256, and both use the same prompt, decoding and pre-cleaner. The chosen model loads when the provider or model is chosen, on the GPU when one works (Vulkan on Linux and Windows, Metal on Apple silicon) and otherwise on the CPU, and drafts from the pre-cleaned transcript as the patched server does. Only one is loaded at a time.
+2. Choose **Clean Up & Format** and turn visual context off. Settings refuse any other prompt, and visual context, with this provider.
+3. To use a `llama-server` of your own instead (`cleanup serve`), choose **Other** (OpenAI-compatible) with its URL. That path sends no `draft_text` and none of the decoding fields, so it is for trying other models.
+
+The patched server (`cleanup build-server`, `cleanup serve`) remains for training-side evaluation: `cleanup eval`, `bench` and `prefer`.
 

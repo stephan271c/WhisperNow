@@ -8,11 +8,15 @@ stopped run resumes:
 2. **samples.jsonl** — per input, the greedy output (`k` 0) and `SAMPLES` samples at `TEMPERATURE`,
    from `llama-server` serving the SFT model with the app's request and penalty.
 3. **verdicts.jsonl** — each distinct output, checked in code (loops, fillers the reference does not
-   have, Markdown, list markers, added layout, an assistant opener) and by todo 110's completeness
-   judge (`gates.check_references`), one row per request at `JUDGE_REASONING` by length.
-4. **restored.jsonl** — minimal pairs: a failing output whose only fault is dropped facts gets them
-   back from the teacher (`prompts/prefer/restore.md`). It is kept when the code confirms the only
-   change is inserted words (`only_insertions`) and the judge passes it.
+   have, Markdown, list markers, added layout, an assistant opener) and by the eval judge
+   (`prompts/judge/eval.md`, `gpt-6.1-sol` at high reasoning, as `cleanup eval --judge` scores), which
+   lists each fault by kind against the reference. An output fails on a dropped, changed, wrong-side
+   or invented fact or an answered transcript; an unresolved correction alone does not fail it
+   (todo 114). The judge's replies are kept in **verdicts.judge.jsonl**, so a stopped run resumes.
+4. **restored.jsonl** — minimal pairs: a failing output whose only faults are lost facts (dropped,
+   changed or wrong side) gets them fixed by the teacher (`prompts/prefer/restore.md`). It is kept
+   when the code confirms the edit touches only those facts (`only_insertions` for drops,
+   `only_fact_edits` otherwise) and the eval judge passes it.
 5. **pairs.jsonl** — up to `PAIRS_PER_INPUT` pairs per input: the minimal pair first, then failing
    outputs against the passing output nearest in length. An input with nothing passing pairs a
    failure with its gated reference instead. `kind` names the rejected output's fault.
@@ -35,12 +39,21 @@ from dataclasses import asdict
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from ..datagen import gates
 from ..datagen.audit import length_bucket
 from ..datagen.paths import BUILD, PROMPTS
 from ..datagen.schema import EMPTY, Example, read_examples, read_jsonl
 from . import prompt
-from .evaluate import BENCHMARKS
+from .evaluate import (
+    BENCHMARKS,
+    FAULT_KINDS,
+    JUDGE_BATCH_ROWS,
+    JUDGE_CRITERIA,
+    JUDGE_INSTRUCTIONS,
+    JUDGE_MAX_CHARS,
+    JUDGE_SOLO_OVER_WORDS,
+    LOST_KINDS,
+    R112_TARGET,
+)
 from .metrics import check
 
 PER_BUCKET = {"150-300": 400, "300-600": 400, "600-1000": 400}
@@ -51,18 +64,17 @@ TEMPERATURE = 0.8
 PAIRS_PER_INPUT = 2
 VAL_SHARE = 0.05
 SEED = 111
-# As the long-data gate: low up to 600 words, high above.
-JUDGE_REASONING = {"over 1000": "high", "600-1000": "high"}
 RESTORE = PROMPTS / "prefer" / "restore.md"
 # Code checks a passing output must also pass.
 CODE_CHECKS = ("loop", "leftover_filler", "markdown", "bad_list_marker", "formatting_added", "assistant_opener", "false_empty")
 # Rejected outputs' faults, most serious first; a pair is named by its first.
 KINDS = {
     "loop": "loop",
-    "nothing_invented": "invented",
-    "corrections_right": "correction",
-    "facts_complete": "dropped",
-    "protected_tokens": "dropped",
+    "answered": "answered",
+    "invented": "invented",
+    "wrong_side": "wrong_side",
+    "changed": "changed",
+    "dropped": "dropped",
     "leftover_filler": "filler",
     "assistant_opener": "format",
     "false_empty": "dropped",
@@ -70,7 +82,9 @@ KINDS = {
     "bad_list_marker": "format",
     "formatting_added": "format",
 }
-_DROPPED_ONLY = {"facts_complete", "protected_tokens"}
+# The judge's failures, by fault kind; an unresolved correction loses nothing and fails nothing.
+JUDGE_FAILURES = (*LOST_KINDS, "invented")
+_REPAIRABLE = set(LOST_KINDS)
 _TOKEN = re.compile(r"\w+(?:['’]\w+)*|[^\w\s]")
 
 
@@ -154,17 +168,37 @@ def code_failures(row: Example, output: str, hit_limit: bool) -> list[str]:
     return [name for name in CODE_CHECKS if getattr(checks, name)]
 
 
-async def judge_outputs(llm, rows: dict[str, Example], items: Sequence[tuple[str, str, str]]) -> dict[str, gates.Verdict]:
-    """(key, row id, output) items through the completeness judge, one per request, by length bucket."""
-    by_bucket: dict[str | None, list[tuple[str, str, str]]] = defaultdict(list)
-    for key, id_, output in items:
-        bucket = length_bucket(len(rows[id_].input.split()))
-        by_bucket[JUDGE_REASONING.get(bucket)].append((key, rows[id_].input, output))
-    verdicts: dict[str, gates.Verdict] = {}
-    for reasoning, group in by_bucket.items():
-        judge = gates.Judge(max_items=1, reasoning=reasoning or "low")
-        verdicts |= await gates.check_references(llm, group, judge)
-    return verdicts
+def require_r112(settings, role: str) -> None:
+    """Every judge and restore call is `gpt-6.1-sol` at high reasoning through codex, as the scores are."""
+    if settings.target(role) != R112_TARGET:
+        raise SystemExit(f"the preference stage's {role} must be {'/'.join(R112_TARGET)} "
+                         f"(now {'/'.join(settings.target(role))})")
+
+
+async def judge_outputs(llm, rows: dict[str, Example], items: Sequence[tuple[str, str, str]], out: Path) -> dict:
+    """(key, row id, output) items through the eval judge, against each row's reference; resumes from `out`."""
+    from ..datagen.judge import judge_all
+
+    payload = [(key, {"transcript": rows[id_].input, "reference": rows[id_].output, "output": output})
+               for key, id_, output in items]
+    return await judge_all(llm, payload, out, instructions_file=JUDGE_INSTRUCTIONS, criteria=JUDGE_CRITERIA,
+                           batch_size=JUDGE_BATCH_ROWS, max_chars=JUDGE_MAX_CHARS,
+                           solo_over_words=JUDGE_SOLO_OVER_WORDS, fault_kinds=FAULT_KINDS, progress=_progress)
+
+
+def judge_failures(verdict) -> tuple[list[str], list[dict]]:
+    """The fault kinds an output fails on, most serious first, and the faults behind them."""
+    if "judge_error" in verdict.failed:
+        return ["judge_error"], []
+    faults = [fault for fault in verdict.faults if fault.get("kind") in JUDGE_FAILURES]
+    kinds = {fault["kind"] for fault in faults}
+    failed = ["answered"] if "not_answered" in verdict.failed else []
+    failed += [kind for kind in ("invented", "wrong_side", "changed", "dropped") if kind in kinds]
+    return failed, faults
+
+
+def fault_note(faults: Sequence[dict]) -> str:
+    return "\n".join(f"- {fault['kind']}: {fault.get('fact', '')}" for fault in faults)
 
 
 def distinct_outputs(samples: Sequence[dict]) -> list[dict]:
@@ -178,25 +212,28 @@ def distinct_outputs(samples: Sequence[dict]) -> list[dict]:
     return out
 
 
-async def verdicts_for(rows: dict[str, Example], samples: Sequence[dict], batch: int = 400) -> list[dict]:
-    """A verdict per distinct output: code failures, then the judge's on outputs the code passed."""
+async def verdicts_for(rows: dict[str, Example], samples: Sequence[dict], judged: Path) -> list[dict]:
+    """A verdict per distinct output: code failures, then the eval judge's on outputs the code passed."""
     from ..datagen.llm import LlmClient, LlmSettings
 
     distinct = distinct_outputs(samples)
     results = []
     for item in distinct:
         failed = code_failures(rows[item["id"]], item["output"], item["hit_limit"])
-        results.append({"id": item["id"], "k": item["k"], "output": item["output"], "failed": failed, "note": ""})
-    to_judge = [result for result in results if "loop" not in result["failed"] and result["output"] != EMPTY]
-    async with LlmClient(LlmSettings.from_env()) as llm:
-        for start in range(0, len(to_judge), batch):
-            chunk = to_judge[start : start + batch]
-            verdicts = await judge_outputs(llm, rows, [(f"{r['id']}#{r['k']}", r["id"], r["output"]) for r in chunk])
-            for result in chunk:
-                verdict = verdicts[f"{result['id']}#{result['k']}"]
-                result["failed"] = [*verdict.failed, *result["failed"]]
-                result["note"] = verdict.note
-            _progress(f"judged {start + len(chunk)}/{len(to_judge)}; llm calls {llm.calls}, cached {llm.cache_hits}")
+        results.append({"id": item["id"], "k": item["k"], "output": item["output"], "failed": failed, "faults": [],
+                        "note": ""})
+    to_judge = [result for result in results if "loop" not in result["failed"]]
+    settings = LlmSettings.from_env()
+    require_r112(settings, "judge")
+    async with LlmClient(settings) as llm:
+        verdicts = await judge_outputs(llm, rows, [(f"{r['id']}#{r['k']}", r["id"], r["output"]) for r in to_judge],
+                                       judged)
+        _progress(f"judged {len(to_judge)} outputs; llm calls {llm.calls}, cached {llm.cache_hits}")
+    for result in to_judge:
+        failed, faults = judge_failures(verdicts[f"{result['id']}#{result['k']}"])
+        result["failed"] = [*failed, *result["failed"]]
+        result["faults"] = faults
+        result["note"] = fault_note(faults)
     for result in results:
         result["passed"] = not result["failed"]
     return results
@@ -220,6 +257,31 @@ def only_insertions(before: str, after: str) -> bool:
     return inserted
 
 
+_QUOTED = re.compile(r"(?<!\w)'(.+?)'(?!\w)")
+
+
+def only_fact_edits(before: str, after: str, faults: Sequence[dict]) -> bool:
+    """Whether `after` is `before` with words inserted and only words the faults quote removed or
+    replaced: the fix of a changed or wrong-side value touches that value and nothing else."""
+    quoted = {
+        token.lower()
+        for fault in faults
+        for phrase in _QUOTED.findall(fault.get("fact", ""))
+        for token in _TOKEN.findall(phrase)
+    }
+    a = [token.lower() for token in _TOKEN.findall(before)]
+    b = [token.lower() for token in _TOKEN.findall(after)]
+    edited = False
+    for op, i1, i2, j1, j2 in SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op == "equal":
+            continue
+        removed = [token for token in a[i1:i2] if re.match(r"\w", token)]
+        if any(token not in quoted for token in removed):
+            return False
+        edited = edited or bool(removed) or any(re.match(r"\w", token) for token in b[j1:j2])
+    return edited
+
+
 def restore_messages(transcript: str, output: str, note: str) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": RESTORE.read_text(encoding="utf-8")},
@@ -228,45 +290,51 @@ def restore_messages(transcript: str, output: str, note: str) -> list[dict[str, 
 
 
 def restore_candidates(verdicts: Sequence[dict]) -> list[dict]:
-    """Per input, one failing output whose only fault is dropped facts, the lowest `k` first."""
+    """Per input, one failing output whose only faults are lost facts, the lowest `k` first."""
     picked: dict[str, dict] = {}
     for verdict in sorted(verdicts, key=lambda v: (v["id"], v["k"])):
-        if verdict["failed"] and set(verdict["failed"]) <= _DROPPED_ONLY and verdict["id"] not in picked:
+        if verdict["failed"] and set(verdict["failed"]) <= _REPAIRABLE and verdict["id"] not in picked:
             picked[verdict["id"]] = verdict
     return list(picked.values())
 
 
-async def restore(rows: dict[str, Example], verdicts: Sequence[dict]) -> list[dict]:
+def edit_ok(candidate: dict, restored: str) -> bool:
+    """Drops are fixed by insertion only; a changed or wrong-side value may be replaced, and nothing else."""
+    if set(candidate["failed"]) == {"dropped"}:
+        return only_insertions(candidate["output"], restored)
+    return only_fact_edits(candidate["output"], restored, candidate["faults"])
+
+
+async def restore(rows: dict[str, Example], verdicts: Sequence[dict], judged: Path) -> list[dict]:
     from ..datagen.llm import LlmClient, LlmSettings
     from ..datagen.teacher import clean_teacher_output
 
     candidates = restore_candidates(verdicts)
-    async with LlmClient(LlmSettings.from_env()) as llm:
+    settings = LlmSettings.from_env()
+    require_r112(settings, "teacher")
+    require_r112(settings, "judge")
+    async with LlmClient(settings) as llm:
         replies = await asyncio.gather(
-            *(
-                llm.complete(
-                    restore_messages(rows[c["id"]].input, c["output"], c["note"]),
-                    reasoning=JUDGE_REASONING.get(length_bucket(len(rows[c["id"]].input.split())), "low"),
-                )
-                for c in candidates
-            )
+            *(llm.complete(restore_messages(rows[c["id"]].input, c["output"], c["note"])) for c in candidates)
         )
         results = []
         for candidate, reply in zip(candidates, replies, strict=True):
             restored = clean_teacher_output(reply).strip()
-            inserted = only_insertions(candidate["output"], restored)
+            ok = edit_ok(candidate, restored)
             results.append({"id": candidate["id"], "k": candidate["k"], "rejected": candidate["output"],
-                            "restored": restored, "inserted_only": inserted, "failed": [] if inserted else ["edited"]})
-        checked = [r for r in results if r["inserted_only"]]
-        verdicts_ = await judge_outputs(llm, rows, [(f"{r['id']}#restored", r["id"], r["restored"]) for r in checked])
+                            "restored": restored, "fixed": candidate["failed"], "edit_ok": ok,
+                            "failed": [] if ok else ["edited"]})
+        checked = [r for r in results if r["edit_ok"]]
+        verdicts_ = await judge_outputs(llm, rows, [(f"{r['id']}#restored", r["id"], r["restored"]) for r in checked],
+                                        judged)
         for result in checked:
-            verdict = verdicts_[f"{result['id']}#restored"]
-            result["failed"] = [*verdict.failed, *code_failures(rows[result["id"]], result["restored"], False)]
-            result["note"] = verdict.note
+            failed, faults = judge_failures(verdicts_[f"{result['id']}#restored"])
+            result["failed"] = [*failed, *code_failures(rows[result["id"]], result["restored"], False)]
+            result["note"] = fault_note(faults)
     for result in results:
         result["passed"] = not result["failed"]
     _progress(f"restored {sum(r['passed'] for r in results)}/{len(results)} "
-              f"({sum(r['inserted_only'] for r in results)} inserted only)")
+              f"({sum(r['edit_ok'] for r in results)} edited only the named facts)")
     return results
 
 
@@ -340,7 +408,7 @@ def stats(verdicts: Sequence[dict], restored: Sequence[dict], pairs: Sequence[di
             for bucket in sorted({length_bucket(_words(row.input)) for row in rows.values()})
         },
         "restore_attempts": len(restored),
-        "restore_inserted_only": sum(r["inserted_only"] for r in restored),
+        "restore_edit_ok": sum(r["edit_ok"] for r in restored),
         "restore_passed": sum(r["passed"] for r in restored),
         "pairs": len(pairs),
         "pairs_by_kind": dict(Counter(p["kind"] for p in pairs).most_common()),
@@ -372,11 +440,11 @@ def run(out: Path, server: str | None, concurrency: int = 4) -> dict:
     samples = list(read_jsonl(samples_file))
     verdicts_file = out / "verdicts.jsonl"
     if not verdicts_file.exists():
-        _write(verdicts_file, asyncio.run(verdicts_for(rows, samples)))
+        _write(verdicts_file, asyncio.run(verdicts_for(rows, samples, out / "verdicts.judge.jsonl")))
     verdicts = list(read_jsonl(verdicts_file))
     restored_file = out / "restored.jsonl"
     if not restored_file.exists():
-        _write(restored_file, asyncio.run(restore(rows, verdicts)))
+        _write(restored_file, asyncio.run(restore(rows, verdicts, out / "restored.judge.jsonl")))
     restored = list(read_jsonl(restored_file))
     pairs, rft = build_pairs(rows, verdicts, restored)
     _write(out / "pairs.jsonl", pairs)

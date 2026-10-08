@@ -614,6 +614,14 @@ def parse_json_reply(text: str) -> dict | list:
     try:
         return json.loads(text)
     except json.JSONDecodeError as error:
+        # A reply that ends before its last closing brackets, as the judge's one-row replies
+        # sometimes do ({"results": [{...}] with no "]}"), is completed.
+        closed = _close_brackets(text)
+        if closed is not None:
+            try:
+                return json.loads(closed)
+            except json.JSONDecodeError:
+                pass
         # The outermost object or array, then the first array alone: long replies sometimes drop
         # the closing brace of {"items": [...]}.
         pairs = sorted((("{", "}"), ("[", "]")), key=lambda pair: (text.find(pair[0]) < 0, text.find(pair[0])))
@@ -625,3 +633,33 @@ def parse_json_reply(text: str) -> dict | list:
                 except json.JSONDecodeError:
                     pass
         raise error
+
+
+def _close_brackets(text: str) -> str | None:
+    """`text` from its first `{` or `[` with the brackets still open at its end closed, or None when
+    nothing is open, a bracket is mismatched, or the text ends inside a string."""
+    starts = [index for index in (text.find("{"), text.find("[")) if index >= 0]
+    if not starts:
+        return None
+    text = text[min(starts) :]
+    closers = {"{": "}", "[": "]"}
+    stack: list[str] = []
+    in_string = escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character in closers:
+            stack.append(closers[character])
+        elif character in "}]":
+            if not stack or stack.pop() != character:
+                return None
+    if in_string or not stack:
+        return None
+    return text.rstrip() + "".join(reversed(stack))

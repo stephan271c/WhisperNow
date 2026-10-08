@@ -55,6 +55,9 @@ class TrainConfig:
     # DPOTrainer, sigmoid loss plus `sft_weight` × the NLL of the chosen reply (RPO), against
     # reference log-probabilities computed once before training.
     objective: Objective = "sft"
+    # Fact-weighted SFT (todo 114): the loss on reply tokens inside fact spans (`model/facts.py`)
+    # weighs this much against 1 for the rest, rescaled to average 1 per micro-batch. 0 is plain SFT.
+    fact_weight: float = 0.0
     beta: float = 0.1
     sft_weight: float = 1.0
     lora: LoraSettings = field(default_factory=LoraSettings)

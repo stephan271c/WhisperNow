@@ -1,0 +1,25 @@
+# Todo 113: todo 109's LFM2.5-350M recipe (full fine-tune from the instruct checkpoint, lr 1e-5)
+# retrained from the base model on todo 112's relabeled build, for 3 and 5 epochs, each with and
+# without fresh noise per epoch. New names, so `cleanup sweep` never keeps a pre-relabel run.
+config = "lfm25-350m.toml"
+
+[[run]]
+name = "r112-full-inst-1e-5-e3"
+set = ["learning_rate=1e-5", "epochs=3"]
+
+[[run]]
+name = "r112-full-inst-1e-5-e3-noise"
+set = ["learning_rate=1e-5", "epochs=3", "noise_per_epoch=true"]
+
+[[run]]
+name = "r112-full-inst-1e-5-e5"
+set = ["learning_rate=1e-5", "epochs=5"]
+
+[[run]]
+name = "r112-full-inst-1e-5-e5-noise"
+set = ["learning_rate=1e-5", "epochs=5", "noise_per_epoch=true"]
+
+# Todo 114: fact-weighted SFT, the same recipe with 3× loss weight on fact tokens.
+[[run]]
+name = "r112-full-inst-1e-5-e3-fw3"
+set = ["learning_rate=1e-5", "epochs=3", "fact_weight=3.0"]

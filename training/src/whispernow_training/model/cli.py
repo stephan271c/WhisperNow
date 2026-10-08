@@ -44,10 +44,10 @@ def cmd_sweep(args: argparse.Namespace) -> None:
         if not (RUNS / run["name"] / "train.json").exists():
             overrides = [item for value in run["set"] for item in ("--set", value)]
             subprocess.run([sys.argv[0], "train", str(base), "--name", run["name"], *overrides], check=True)
-        if not (RUNS / run["name"] / "eval" / f"val{SWEEP_VAL_ROWS}.scores.json").exists():
+        if not any((RUNS / run["name"] / "eval").glob(f"val{SWEEP_VAL_ROWS}.*scores.json")):
             subprocess.run([sys.argv[0], "eval", run["name"], "--split", "val", "--limit", str(SWEEP_VAL_ROWS)], check=True)
         for checkpoint in sorted((RUNS / run["name"]).glob("epoch-*")):
-            if not (RUNS / run["name"] / f"eval-{checkpoint.name}" / f"val{SWEEP_VAL_ROWS}.scores.json").exists():
+            if not any((RUNS / run["name"] / f"eval-{checkpoint.name}").glob(f"val{SWEEP_VAL_ROWS}.*scores.json")):
                 subprocess.run(
                     [sys.argv[0], "eval", run["name"], "--checkpoint", checkpoint.name, "--split", "val", "--limit", str(SWEEP_VAL_ROWS)],
                     check=True,
@@ -120,9 +120,15 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     from . import export
 
-    command = export.server_command(export.gguf_path(RUNS / args.run, args.quant), args.port, args.cpu, args.parallel)
+    command = export.server_command(export.gguf_path(RUNS / args.run, args.quant), args.port, args.cpu, args.parallel, not args.no_draft)
     print(" ".join(command), file=sys.stderr)
     os.execv(command[0], command)
+
+
+def cmd_build_server(args: argparse.Namespace) -> None:
+    from . import export
+
+    print(export.build_server(args.cpu))
 
 
 def cmd_bench(args: argparse.Namespace) -> None:
@@ -165,6 +171,12 @@ def cmd_prefer(args: argparse.Namespace) -> None:
     print(json.dumps(prefer.run(RUNS / args.run / "prefer", args.server, args.concurrency), indent=2))
 
 
+def cmd_code_pairs(args: argparse.Namespace) -> None:
+    from . import code_pairs
+
+    print(json.dumps(code_pairs.run(RUNS / args.name, args.count, args.long_share), indent=2))
+
+
 def cmd_sweep_table(args: argparse.Namespace) -> None:
     from . import report
 
@@ -192,6 +204,8 @@ def cmd_compare(args: argparse.Namespace) -> None:
     for group in groups:
         print(report.comparison_table(candidates, group))
         print()
+
+
 
 
 def main() -> None:
@@ -246,7 +260,12 @@ def main() -> None:
     serve.add_argument("--port", type=int, default=8080)
     serve.add_argument("--cpu", action="store_true", help="the CPU build, with no layers on the GPU")
     serve.add_argument("--parallel", type=int, default=1, help="request slots; evaluation uses 4")
+    serve.add_argument("--no-draft", action="store_true", help="the release build, without drafting from the transcript")
     serve.set_defaults(handler=cmd_serve)
+
+    build_server = commands.add_parser("build-server", help="build llama-server with the transcript-draft patch (serving/)")
+    build_server.add_argument("--cpu", action="store_true", help="the CPU build, for `serve --cpu`")
+    build_server.set_defaults(handler=cmd_build_server)
 
     bench_parser = commands.add_parser("bench", help="time short and long dictations against llama-server")
     bench_parser.add_argument("server", nargs="?", help="OpenAI-compatible base URL")
@@ -267,6 +286,16 @@ def main() -> None:
     prefer_parser.add_argument("--server", help="llama-server serving the run's Q8_0, for the sampling step")
     prefer_parser.add_argument("--concurrency", type=int, default=4)
     prefer_parser.set_defaults(handler=cmd_prefer)
+
+    pairs_parser = commands.add_parser(
+        "code-pairs",
+        help="todo 114: DPO pairs made in code from train rows (the reference against one fact broken); "
+        "writes runs/<name>/pairs.jsonl for --set train_file",
+    )
+    pairs_parser.add_argument("name", help="output directory under runs/")
+    pairs_parser.add_argument("--count", type=int, default=8000)
+    pairs_parser.add_argument("--long-share", type=float, default=0.7, help="share of pairs from rows of 150+ words")
+    pairs_parser.set_defaults(handler=cmd_code_pairs)
 
     check = commands.add_parser(
         "judge-check",

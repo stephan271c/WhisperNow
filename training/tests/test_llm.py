@@ -32,9 +32,20 @@ def test_parse_json_reply_tolerates_fences_and_prose():
     assert parse_json_reply('Here you go: {"a": [1, 2]} done') == {"a": [1, 2]}
     assert parse_json_reply('Here: [{"a": 1}] done') == [{"a": 1}]
     # A long reply that dropped the closing brace still yields its items.
-    assert parse_json_reply('{"items": [{"input": "x"}, {"input": "y"}]') == [{"input": "x"}, {"input": "y"}]
+    assert parse_json_reply('{"items": [{"input": "x"}, {"input": "y"}]') == {"items": [{"input": "x"}, {"input": "y"}]}
     with pytest.raises(ValueError):
         parse_json_reply("no json here")
+
+
+def test_parse_json_reply_closes_brackets_a_reply_left_open():
+    # The judge's one-row replies sometimes stop before their last "]}".
+    reply = '{"results":[{"i":0,"faults":[{"kind":"dropped","fact":"\'a [b] \\"c\\" {d}\'"}],"note":""}'
+    assert parse_json_reply(reply) == {"results": [{"i": 0, "faults": [{"kind": "dropped", "fact": "'a [b] \"c\" {d}'"}], "note": ""}]}
+    # A reply cut off inside a string, or with a mismatched bracket, is not guessed at.
+    with pytest.raises(ValueError):
+        parse_json_reply('{"results": [{"i": 0, "note": "cut')
+    with pytest.raises(ValueError):
+        parse_json_reply('{"results": [{"i": 0}}')
 
 
 def test_strip_think_keeps_only_the_final_text():

@@ -16,7 +16,7 @@ from trl import DPOConfig, DPOTrainer, SFTConfig, SFTTrainer
 
 from ..datagen import epochs
 from ..datagen.paths import BUILD, TRAINING_ROOT
-from . import prompt
+from . import prompt, weighted
 from .config import TrainConfig
 
 # Validation loss is measured on a fixed slice of the val split to keep evaluation cheap,
@@ -203,6 +203,22 @@ def train(config: TrainConfig, out: Path) -> dict:
             peft_config=peft_config,
             callbacks=callbacks,
         )
+    elif config.fact_weight:
+        if config.liger:
+            raise ValueError("fact_weight needs the logits, which Liger's fused loss never makes")
+        # Rows arrive tokenized with their `loss_weights`, which the Trainer must not drop as unused.
+        args = SFTConfig(**common, completion_only_loss=True, train_sampling_strategy="group_by_length",
+                         remove_unused_columns=False)
+        trainer = weighted.WeightedSFTTrainer(
+            model=model,
+            args=args,
+            train_dataset=weighted.tokenize(train_rows, tokenizer, config.fact_weight, config.max_length),
+            eval_dataset=eval_rows,
+            processing_class=tokenizer,
+            peft_config=peft_config,
+            callbacks=callbacks,
+        )
+        trainer.data_collator = weighted.WeightedCollator(trainer.data_collator)
     else:
         args = SFTConfig(**common, completion_only_loss=True, train_sampling_strategy="group_by_length")
         trainer = SFTTrainer(

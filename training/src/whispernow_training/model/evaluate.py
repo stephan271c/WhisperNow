@@ -21,7 +21,7 @@ from pathlib import Path
 from ..datagen.audit import length_bucket
 from ..datagen.paths import BUILD, DATA, PROMPTS, TRAINING_ROOT
 from ..datagen.schema import Example, read_examples, read_jsonl
-from . import prompt
+from . import draft, prompt
 from .metrics import RowChecks, check, input_style
 
 JUDGE_CRITERIA = ("not_answered", "facts_kept", "nothing_invented")
@@ -144,6 +144,7 @@ async def generate_server(
             "temperature": prompt.TEMPERATURE,
             "repeat_penalty": repeat_penalty,
             "repeat_last_n": repeat_last_n,
+            "draft_text": draft.preclean(row.input),
         }
         async with semaphore:
             started = time.monotonic()
