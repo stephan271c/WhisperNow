@@ -8,10 +8,6 @@ authors.workspace = true
 repository.workspace = true
 publish = false
 
-[lib]
-name = "whispernow_desktop"
-crate-type = ["lib", "cdylib", "staticlib"]
-
 [build-dependencies]
 tauri-build.workspace = true
 

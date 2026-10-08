@@ -4,8 +4,6 @@
     all(target_os = "windows", target_arch = "x86_64")
 ))]
 
-mod common;
-
 use std::{
     fs,
     io::Write,
@@ -13,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use common::{FixtureServer, Response};
+use crate::common::{self, FixtureServer, Response};
 use flate2::{Compression, write::GzEncoder};
 use tar::{Builder as TarBuilder, EntryType, Header};
 use tempfile::{TempDir, tempdir};

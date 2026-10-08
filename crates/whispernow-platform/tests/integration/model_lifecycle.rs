@@ -1,5 +1,3 @@
-mod common;
-
 use std::{
     fs,
     sync::{Arc, Mutex, mpsc},
@@ -7,8 +5,8 @@ use std::{
     time::Duration,
 };
 
+use crate::common::{FixtureServer, Response, Resume, sha256};
 use bzip2::{Compression, write::BzEncoder};
-use common::{FixtureServer, Response, Resume, sha256};
 use tar::{Builder as TarBuilder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
 use whispernow_core::{CancellationToken, ResolvedModel};

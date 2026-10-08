@@ -1,7 +1,4 @@
 //! A local HTTP server and SHA-256 digests for the download tests.
-// Each test crate uses part of this module.
-#![allow(dead_code)]
-
 use std::{
     collections::HashMap,
     fmt::Write as _,

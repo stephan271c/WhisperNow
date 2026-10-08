@@ -85,9 +85,12 @@ unwrap_used = "deny"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 
+# Full DWARF for dependencies is ~80% of a ~550 MB debug binary; file:line backtraces need only line tables.
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
-codegen-units = 1
 strip = true
 
 [patch.crates-io]
