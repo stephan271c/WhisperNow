@@ -4,19 +4,17 @@
     all(target_os = "windows", target_arch = "x86_64")
 ))]
 
+mod common;
+
 use std::{
-    collections::HashMap,
-    fmt::Write as _,
     fs,
-    io::{Read, Write},
-    net::TcpListener,
+    io::Write,
     sync::{Arc, Mutex},
-    thread,
     time::Duration,
 };
 
+use common::{FixtureServer, Response};
 use flate2::{Compression, write::GzEncoder};
-use sha2::{Digest, Sha256};
 use tar::{Builder as TarBuilder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
 use whispernow_core::CancellationToken;
@@ -27,53 +25,8 @@ use whispernow_platform::{
 };
 use zip::write::SimpleFileOptions;
 
-/// Serves fixed bodies by path, one connection at a time, until dropped.
-struct Server {
-    base: String,
-}
-
-impl Server {
-    fn start(bodies: HashMap<String, Vec<u8>>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let base = format!("http://{}", listener.local_addr().expect("address"));
-        thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { return };
-                let mut request = Vec::new();
-                let mut buffer = [0_u8; 1024];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    match stream.read(&mut buffer) {
-                        Ok(0) | Err(_) => break,
-                        Ok(count) => request.extend_from_slice(&buffer[..count]),
-                    }
-                }
-                let request = String::from_utf8_lossy(&request);
-                let path = request.split_whitespace().nth(1).unwrap_or_default();
-                let response = match bodies.get(path) {
-                    Some(body) => {
-                        let mut response = format!(
-                            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
-                            body.len()
-                        )
-                        .into_bytes();
-                        response.extend_from_slice(body);
-                        response
-                    }
-                    None => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec(),
-                };
-                let _ = stream.write_all(&response);
-            }
-        });
-        Self { base }
-    }
-}
-
 fn sha256(bytes: &[u8]) -> &'static str {
-    let mut encoded = String::new();
-    for byte in Sha256::digest(bytes) {
-        let _ = write!(&mut encoded, "{byte:02x}");
-    }
-    encoded.leak()
+    common::sha256(bytes).leak()
 }
 
 fn contents(name: &str) -> Vec<u8> {
@@ -126,14 +79,14 @@ struct Fixture {
 
 /// A manager whose pack is the two fixture archives, the runtime's digest replaced when
 /// `runtime_sha256` is given.
-fn fixture(runtime_sha256: Option<&'static str>) -> (Fixture, Server, u64) {
+fn fixture(runtime_sha256: Option<&'static str>) -> (Fixture, FixtureServer, u64) {
     let libraries = CUDA_LIBRARIES.expect("this platform has a CUDA pack");
     let backend = backend_archive(libraries.backend);
     let runtime = runtime_archive(&libraries.runtime);
-    let server = Server::start(HashMap::from([
-        ("/backend.tar.gz".to_owned(), backend.clone()),
-        ("/runtime.zip".to_owned(), runtime.clone()),
-    ]));
+    let server = FixtureServer::start([
+        ("/backend.tar.gz", Response::ok(backend.clone())),
+        ("/runtime.zip", Response::ok(runtime.clone())),
+    ]);
     let backend_member: &'static str = format!("release/{}", libraries.backend).leak();
     let runtime_members: Vec<(&'static str, &'static str)> = libraries
         .runtime
@@ -142,14 +95,14 @@ fn fixture(runtime_sha256: Option<&'static str>) -> (Fixture, Server, u64) {
         .collect();
     let archives = vec![
         CudaPackArchive {
-            url: format!("{}/backend.tar.gz", server.base).leak(),
+            url: server.url("/backend.tar.gz").leak(),
             size_bytes: backend.len() as u64,
             sha256: sha256(&backend),
             format: CudaPackFormat::TarGz,
             members: vec![(backend_member, libraries.backend)].leak(),
         },
         CudaPackArchive {
-            url: format!("{}/runtime.zip", server.base).leak(),
+            url: server.url("/runtime.zip").leak(),
             size_bytes: runtime.len() as u64,
             sha256: runtime_sha256.unwrap_or_else(|| sha256(&runtime)),
             format: CudaPackFormat::Zip,

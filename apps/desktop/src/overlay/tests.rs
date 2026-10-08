@@ -1,9 +1,11 @@
 use std::sync::{Arc, Mutex};
 
 use whispernow_api::{
-    ActiveDownloadDto, ApiErrorDto, AppStateDto, ErrorCategoryDto, ModelId, ModelStateDto,
-    OverlayPosition, OverlayStyle, PhaseDto, RecordingMode, RecoveryActionDto,
+    ApiErrorDto, AppStateDto, ErrorCategoryDto, OverlayPosition, OverlayStyle, PhaseDto,
+    RecoveryActionDto,
 };
+
+use crate::tests::{recording, snapshot};
 
 use super::{
     MonitorArea, OverlayPresentation, OverlayWindow, PhysicalRect, RecordingOverlay,
@@ -39,24 +41,11 @@ impl OverlayWindow for FakeWindow {
     }
 }
 
-fn snapshot(phase: PhaseDto, style: OverlayStyle) -> AppStateDto {
+/// A snapshot in `phase` that shows the overlay in `style`.
+fn styled(phase: PhaseDto, style: OverlayStyle) -> AppStateDto {
     AppStateDto {
-        phase,
-        selected_model_id: ModelId::default(),
-        model_state: ModelStateDto::Ready,
-        last_transcript: None,
-        error: None,
-        active_downloads: Vec::<ActiveDownloadDto>::new(),
-        setup_test: None,
         overlay_style: style,
-        overlay_position: OverlayPosition::Bottom,
-    }
-}
-
-fn recording() -> PhaseDto {
-    PhaseDto::Recording {
-        mode: RecordingMode::Toggle,
-        session: 1,
+        ..snapshot(phase)
     }
 }
 
@@ -86,7 +75,7 @@ fn a_dictation_shows_the_window_once_until_it_ends() {
         PhaseDto::Processing { cleaning_up: true },
         PhaseDto::Idle,
     ] {
-        overlay.observe(&snapshot(phase, style));
+        overlay.observe(&styled(phase, style));
     }
     assert_eq!(window.calls(), ["show Bottom", "hide"]);
 }
@@ -95,21 +84,18 @@ fn a_dictation_shows_the_window_once_until_it_ends() {
 fn a_failure_stays_until_the_phase_leaves_it() {
     let (overlay, window) = overlay(true);
     let style = OverlayStyle::Minimal;
-    overlay.observe(&snapshot(recording(), style));
-    overlay.observe(&snapshot(failed(RecoveryActionDto::CopyManually), style));
+    overlay.observe(&styled(recording(), style));
+    overlay.observe(&styled(failed(RecoveryActionDto::CopyManually), style));
     assert_eq!(window.calls(), ["show Bottom"]);
-    overlay.observe(&snapshot(PhaseDto::Idle, style));
+    overlay.observe(&styled(PhaseDto::Idle, style));
     assert_eq!(window.calls(), ["show Bottom", "hide"]);
 }
 
 #[test]
 fn the_off_style_never_shows_the_window() {
     let (overlay, window) = overlay(true);
-    overlay.observe(&snapshot(recording(), OverlayStyle::Off));
-    overlay.observe(&snapshot(
-        failed(RecoveryActionDto::Retry),
-        OverlayStyle::Off,
-    ));
+    overlay.observe(&styled(recording(), OverlayStyle::Off));
+    overlay.observe(&styled(failed(RecoveryActionDto::Retry), OverlayStyle::Off));
     assert!(window.calls().is_empty());
 }
 
@@ -117,11 +103,11 @@ fn the_off_style_never_shows_the_window() {
 fn native_wayland_notifies_each_failure_once_instead_of_showing_a_window() {
     let (overlay, window) = overlay(false);
     let style = OverlayStyle::Minimal;
-    overlay.observe(&snapshot(recording(), style));
-    overlay.observe(&snapshot(failed(RecoveryActionDto::CopyManually), style));
-    overlay.observe(&snapshot(failed(RecoveryActionDto::CopyManually), style));
-    overlay.observe(&snapshot(PhaseDto::Idle, style));
-    overlay.observe(&snapshot(failed(RecoveryActionDto::Retry), style));
+    overlay.observe(&styled(recording(), style));
+    overlay.observe(&styled(failed(RecoveryActionDto::CopyManually), style));
+    overlay.observe(&styled(failed(RecoveryActionDto::CopyManually), style));
+    overlay.observe(&styled(PhaseDto::Idle, style));
+    overlay.observe(&styled(failed(RecoveryActionDto::Retry), style));
     assert_eq!(
         window.calls(),
         [

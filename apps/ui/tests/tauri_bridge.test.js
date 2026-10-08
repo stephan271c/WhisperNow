@@ -61,12 +61,12 @@ test("copy text reaches the production clipboard adapter", async () => {
   const invocations = [];
   installTauri(invocations);
 
-  await writeClipboardText("enhanced transcript");
+  await writeClipboardText("cleaned transcript");
 
   assert.deepEqual(invocations, [
     {
       command: "plugin:clipboard-manager|write_text",
-      payload: { text: "enhanced transcript" },
+      payload: { text: "cleaned transcript" },
     },
   ]);
 });

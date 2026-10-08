@@ -1,21 +1,8 @@
-use whispernow_api::{AppStateDto, ModelId, ModelStateDto, PhaseDto};
+use whispernow_api::PhaseDto;
 
 use super::{BlockedReason, UiOperation, blocked};
 use crate::ManagementState;
-
-fn snapshot(phase: PhaseDto) -> AppStateDto {
-    AppStateDto {
-        phase,
-        selected_model_id: ModelId::new("model").expect("fixture model id"),
-        model_state: ModelStateDto::Ready,
-        last_transcript: None,
-        error: None,
-        active_downloads: Vec::new(),
-        overlay_style: whispernow_api::OverlayStyle::default(),
-        overlay_position: whispernow_api::OverlayPosition::default(),
-        setup_test: None,
-    }
-}
+use crate::test_support::snapshot;
 
 fn loaded_history() -> ManagementState {
     let mut management = ManagementState::default();

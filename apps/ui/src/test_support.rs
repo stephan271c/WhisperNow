@@ -12,11 +12,15 @@ use dioxus_html::{
     HtmlEventConverter, MountedResult, RenderedElementBacking, SerializedFormData,
     SerializedHtmlEventConverter, SerializedKeyboardData, SerializedMouseData,
 };
-use whispernow_api::{EntryId, EntryStatus, HistoryEntry, PhaseDto, UtcMillis};
 #[cfg(not(target_arch = "wasm32"))]
 use whispernow_api::{
-    HistoryLimit, LlmProvider, ModelId, ProviderSettings, RecordingMode, Settings,
+    AppStateDto, EventPayload, HistoryLimit, LlmProvider, ModelId, ModelStateDto, ProviderSettings,
+    RecordingMode, Settings,
 };
+use whispernow_api::{EntryId, EntryStatus, HistoryEntry, PhaseDto, UtcMillis};
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{UiContext, client::fake, components::UiActions};
 
 /// Provides the window context over `state` and `management`, on Home.
 #[cfg(not(target_arch = "wasm32"))]
@@ -44,6 +48,282 @@ pub(crate) fn test_context(
         management: Signal::new(management),
         navigator: crate::Navigator::new(Signal::new(crate::Route::Home), Signal::new(0)),
     }
+}
+
+/// Hands a mounted surface's window context to the test after the first render.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Default)]
+pub(crate) struct Probe(Rc<RefCell<Option<UiContext>>>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PartialEq for Probe {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Probe {
+    /// Provides the window context over `state` and `management`, on Home, and keeps it for
+    /// the test.
+    pub(crate) fn provide(
+        &self,
+        state: Signal<crate::UiState>,
+        management: Signal<crate::ManagementState>,
+    ) -> UiContext {
+        let context = use_test_context(state, management);
+        *self.0.borrow_mut() = Some(context);
+        context
+    }
+
+    pub(crate) fn context(&self) -> UiContext {
+        (*self.0.borrow()).expect("surface rendered")
+    }
+}
+
+/// A mounted surface and every mutation it has rendered, so a control rendered earlier can
+/// still be found.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct Page {
+    pub(crate) dom: VirtualDom,
+    rendered: Mutations,
+    probe: Probe,
+    /// How many desktop calls [`Self::sent`] has already returned.
+    seen: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Page {
+    /// Mounts the surface `build` makes around a fresh [`Probe`], over a reset fake desktop.
+    pub(crate) fn new(build: impl FnOnce(Probe) -> VirtualDom) -> Self {
+        fake::reset();
+        let probe = Probe::default();
+        let mut dom = build(probe.clone());
+        let rendered = dom.rebuild_to_vec();
+        Self {
+            dom,
+            rendered,
+            probe,
+            seen: 0,
+        }
+    }
+
+    pub(crate) fn html(&self) -> String {
+        dioxus_ssr::render(&self.dom)
+    }
+
+    pub(crate) fn context(&self) -> UiContext {
+        self.probe.context()
+    }
+
+    fn keep(&mut self, mutations: Mutations) {
+        self.rendered.edits.extend(mutations.edits);
+    }
+
+    /// Runs the calls and timers that are ready and renders what they changed.
+    pub(crate) fn settle(&mut self) -> &mut Self {
+        for _ in 0..4 {
+            self.dom.process_events();
+            let mutations = self.dom.render_immediate_to_vec();
+            self.keep(mutations);
+        }
+        self
+    }
+
+    /// Clicks `id`, then runs the calls the click started and renders their result.
+    pub(crate) fn click(&mut self, id: &str) -> &mut Self {
+        let mutations = click_rendered(&mut self.dom, &self.rendered, id);
+        self.keep(mutations);
+        self.settle()
+    }
+
+    /// Fires a form event (`"input"`, `"change"` or `"submit"`) carrying `value` at `id`.
+    pub(crate) fn fire(&mut self, id: &str, name: &'static str, value: &str) -> &mut Self {
+        let mutations = form_event_rendered(&mut self.dom, &self.rendered, id, name, value);
+        self.keep(mutations);
+        self.settle()
+    }
+
+    pub(crate) fn input(&mut self, id: &str, value: &str) -> &mut Self {
+        self.fire(id, "input", value)
+    }
+
+    pub(crate) fn key(&mut self, id: &str, key: Key) -> &mut Self {
+        let mutations = key_rendered(&mut self.dom, &self.rendered, id, key);
+        self.keep(mutations);
+        self.settle()
+    }
+
+    /// Mounts `id` as the browser does, so taking focus is recorded.
+    pub(crate) fn mount(&mut self, id: &str) -> &mut Self {
+        let mutations = mount_rendered(&mut self.dom, &self.rendered, id);
+        self.keep(mutations);
+        self
+    }
+
+    /// Lets every waiting timer fire, then renders.
+    pub(crate) fn wait(&mut self) -> &mut Self {
+        fake::run_timers();
+        self.settle()
+    }
+
+    /// Answers the oldest waiting `command` and renders the result.
+    pub(crate) fn answer(
+        &mut self,
+        command: &str,
+        answer: Result<impl serde::Serialize, crate::client::ClientError>,
+    ) -> &mut Self {
+        fake::answer(command, answer);
+        self.settle()
+    }
+
+    /// The commands called since the last look.
+    pub(crate) fn sent(&mut self) -> Vec<&'static str> {
+        let commands = fake::commands();
+        let sent = commands[self.seen..].to_vec();
+        self.seen = commands.len();
+        sent
+    }
+
+    /// Runs `act` as a control of this page would, then renders.
+    pub(crate) fn act(&mut self, act: impl FnOnce(UiActions)) -> &mut Self {
+        let actions = UiActions::new(self.context());
+        self.dom.in_scope(ScopeId::ROOT, || act(actions));
+        self.settle()
+    }
+
+    /// Delivers a desktop event as the event listener does.
+    pub(crate) fn publish(&mut self, event: EventPayload) -> &mut Self {
+        self.act(|actions| actions.apply_event(event))
+    }
+}
+
+/// A snapshot in `phase` with the tiny Whisper model ready.
+pub(crate) fn snapshot(phase: PhaseDto) -> AppStateDto {
+    AppStateDto {
+        phase,
+        selected_model_id: ModelId::new("sherpa-onnx-whisper-tiny").expect("fixture model id"),
+        model_state: ModelStateDto::Ready,
+        last_transcript: None,
+        error: None,
+        active_downloads: Vec::new(),
+        overlay_style: whispernow_api::OverlayStyle::default(),
+        overlay_position: whispernow_api::OverlayPosition::default(),
+        setup_test: None,
+    }
+}
+
+/// The opening tag of the element rendered with `id`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn tag<'a>(html: &'a str, id: &str) -> Option<&'a str> {
+    let start = html.find(&format!("id=\"{id}\""))?;
+    let open = html[..start].rfind('<')?;
+    let end = start + html[start..].find('>')?;
+    Some(&html[open..=end])
+}
+
+/// The text inside the element rendered with `id`, without the markup of what it nests.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn text(html: &str, id: &str) -> String {
+    let opening = tag(html, id).unwrap_or_else(|| panic!("element {id}"));
+    let start = html.find(opening).expect("opening tag") + opening.len();
+    let name = opening[1..]
+        .split(|character: char| character.is_whitespace() || character == '>')
+        .next()
+        .expect("tag name");
+    let (open, close) = (format!("<{name}"), format!("</{name}>"));
+    let mut depth = 1;
+    let mut plain = String::new();
+    let mut in_tag = false;
+    for (index, character) in html[start..].char_indices() {
+        let rest = &html[start + index..];
+        if rest.starts_with(&close) {
+            depth -= 1;
+            if depth == 0 {
+                break;
+            }
+        } else if rest.starts_with(&open)
+            && rest[open.len()..].starts_with(|next: char| next.is_whitespace() || next == '>')
+        {
+            depth += 1;
+        }
+        match character {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => plain.push(character),
+            _ => {}
+        }
+    }
+    plain
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The accessible names of interactive elements that leave out the words they show.
+pub(crate) fn label_in_name_violations(html: &str) -> Vec<String> {
+    const INTERACTIVE: [&str; 5] = ["button", "a", "input", "textarea", "select"];
+    let normalize = |value: &str| {
+        value
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let mut violations = Vec::new();
+    let mut offset = 0;
+    while let Some(found) = html[offset..].find("aria-label=\"") {
+        let at = offset + found;
+        offset = at + 1;
+        let open = html[..at].rfind('<').expect("tag start");
+        let end = at + html[at..].find('>').expect("tag end");
+        let opening = &html[open..=end];
+        let name_start = at + "aria-label=\"".len();
+        let name = &html[name_start..name_start + html[name_start..].find('"').expect("quote")];
+        let tag_name = opening[1..]
+            .split(|character: char| character.is_whitespace() || character == '>')
+            .next()
+            .expect("tag name");
+        if !INTERACTIVE.contains(&tag_name) {
+            continue;
+        }
+        let visible = if matches!(tag_name, "input" | "textarea" | "select") {
+            // A form control shows the text of the label that points at it.
+            let Some(id) = opening
+                .split("id=\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+            else {
+                continue;
+            };
+            let Some(label) = html.find(&format!("for=\"{id}\"")) else {
+                continue;
+            };
+            let start = label + html[label..].find('>').expect("label end") + 1;
+            let stop = start + html[start..].find("</label>").expect("label close");
+            html[start..stop].to_owned()
+        } else {
+            let start = end + 1;
+            let stop = start
+                + html[start..]
+                    .find(&format!("</{tag_name}>"))
+                    .expect("closing tag");
+            let mut plain = String::new();
+            let mut in_tag = false;
+            for character in html[start..stop].chars() {
+                match character {
+                    '<' => in_tag = true,
+                    '>' => in_tag = false,
+                    _ if !in_tag => plain.push(character),
+                    _ => {}
+                }
+            }
+            plain
+        };
+        let visible = normalize(&visible);
+        if !visible.is_empty() && !normalize(name).contains(&visible) {
+            violations.push(format!("{name:?} hides {visible:?} in {opening}"));
+        }
+    }
+    violations
 }
 
 /// A toggle recording, the phase of most tests that need one.

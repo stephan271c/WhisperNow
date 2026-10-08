@@ -190,46 +190,9 @@ pub enum AppPathError {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::path::Path;
 
     use super::AppPaths;
-
-    #[test]
-    fn settings_backup_files_lists_only_moved_aside_settings() {
-        let root = tempfile::tempdir().expect("temporary directory");
-        let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
-        assert!(
-            paths
-                .settings_backup_files()
-                .expect("missing config directory")
-                .is_empty()
-        );
-
-        fs::create_dir_all(paths.config_dir()).expect("config directory");
-        let later = paths.unreadable_settings_file("20260926T120000Z");
-        let earlier = paths.unreadable_settings_file("20260925T120000Z");
-        for path in [
-            &later,
-            &earlier,
-            &paths.python_settings_file(),
-            &paths.settings_file(),
-            &paths.config_dir().join("settings.json.bak"),
-            &paths.config_dir().join("other.json.bad-1"),
-        ] {
-            fs::write(path, b"{").expect("fixture");
-        }
-
-        assert_eq!(
-            later,
-            paths
-                .config_dir()
-                .join("settings.json.bad-20260926T120000Z")
-        );
-        assert_eq!(
-            paths.settings_backup_files().expect("list copies"),
-            vec![earlier, later, paths.python_settings_file()]
-        );
-    }
 
     #[test]
     fn explicit_roots_preserve_python_compatible_layout() {

@@ -1,16 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use whispernow_api::{
-    AppStateDto, COMMAND_NAMES, EVENT_NAMES, EventPayload, ModelStateDto, PhaseDto,
-};
+use whispernow_api::{AppStateDto, COMMAND_NAMES, ModelStateDto, PhaseDto, RecordingMode};
 
 use crate::{RECORDING_BAR_WINDOW, REGISTERED_COMMANDS, SETTINGS_WINDOW};
 
-fn state(phase: PhaseDto) -> AppStateDto {
+/// A snapshot in `phase` with the default model ready.
+pub(crate) fn snapshot(phase: PhaseDto) -> AppStateDto {
     AppStateDto {
         phase,
-        selected_model_id: whispernow_domain::ModelId::new("test-model").expect("fixture model id"),
+        selected_model_id: whispernow_domain::ModelId::default(),
         model_state: ModelStateDto::Ready,
         last_transcript: None,
         error: None,
@@ -21,18 +20,11 @@ fn state(phase: PhaseDto) -> AppStateDto {
     }
 }
 
-#[test]
-fn state_changed_event_carries_the_authoritative_snapshot_directly() {
-    let expected = state(PhaseDto::Processing { cleaning_up: true });
-    let event = EventPayload::StateChanged {
-        state: expected.clone(),
-    };
-
-    assert_eq!(event.event_name(), EVENT_NAMES[0]);
-    let EventPayload::StateChanged { state: actual } = event else {
-        panic!("state event must contain an application state");
-    };
-    assert_eq!(actual, expected);
+pub(crate) const fn recording() -> PhaseDto {
+    PhaseDto::Recording {
+        mode: RecordingMode::Toggle,
+        session: 1,
+    }
 }
 
 /// The app commands each window's capabilities allow, by window label.

@@ -432,7 +432,7 @@
   font-size: var(--font-size-sm);
 }
 
-/* Kbd, HotkeyLabel -------------------------------------------------------- */
+/* Kbd, ShortcutLabel ------------------------------------------------------ */
 
 .shortcut-label {
   display: inline-flex;

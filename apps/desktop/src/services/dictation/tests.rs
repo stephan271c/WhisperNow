@@ -21,17 +21,15 @@ use whispernow_core::{
         AudioInputError, AudioSink, StartCaptureRequest,
     },
     llm::{LlmError, LlmFinishReason, LlmFuture, LlmProvider, LlmRequest, LlmResponse, LlmService},
-    workflow::{PipelineFailureKind, VoiceActivity, VoiceActivitySource},
+    workflow::{VoiceActivity, VoiceActivitySource},
 };
 use whispernow_domain::{
-    EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, ModelId, ModelRegistry, Settings,
+    CLEAN_UP_PROMPT_ID, EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, ModelId,
+    ModelRegistry, Settings,
 };
 use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore, SettingsStore};
 
-use super::{
-    AiCleanup, Dictation, DictationParts,
-    outcome::{delivery_error, pipeline_error, text_output_status},
-};
+use super::{AiCleanup, Dictation, DictationParts};
 use crate::services::{
     Events, RecordingTrigger,
     history::HistoryStore,
@@ -161,15 +159,12 @@ impl VoiceActivity for Loudness {
 #[derive(Default)]
 struct FakeProvider {
     reply: Mutex<Option<&'static str>>,
-    models: Mutex<Vec<String>>,
+    requests: Mutex<Vec<LlmRequest>>,
 }
 
 impl LlmService for FakeProvider {
     fn complete(&self, request: LlmRequest) -> LlmFuture<'_> {
-        self.models
-            .lock()
-            .expect("models")
-            .push(request.config.model);
+        self.requests.lock().expect("requests").push(request);
         let reply = *self.reply.lock().expect("reply");
         Box::pin(async move {
             reply
@@ -557,6 +552,14 @@ impl Fixture {
         saved.provider_settings_mut(LlmProvider::OpenAi).model = "gpt-test".to_owned();
         transaction.save(&saved).expect("save settings");
     }
+
+    fn cleanup_models(&self) -> Vec<String> {
+        let requests = self.provider.requests.lock().expect("requests");
+        requests
+            .iter()
+            .map(|request| request.config.model.clone())
+            .collect()
+    }
 }
 
 #[test]
@@ -569,10 +572,7 @@ fn a_cleaned_dictation_pastes_and_saves_the_cleaned_text() {
 
     assert_eq!(fixture.settled(), Phase::Idle);
     assert_eq!(fixture.pasted(), ["Cleaned words."]);
-    assert_eq!(
-        *fixture.provider.models.lock().expect("models"),
-        ["gpt-test"]
-    );
+    assert_eq!(fixture.cleanup_models(), ["gpt-test"]);
     let state = fixture.state.lock();
     let transcript = state.last_transcript.as_ref().expect("last transcript");
     assert_eq!(transcript.raw_text, TRANSCRIPT);
@@ -585,6 +585,41 @@ fn a_cleaned_dictation_pastes_and_saves_the_cleaned_text() {
     assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
     assert_eq!(history[0].cleaned_text.as_deref(), Some("Cleaned words."));
     assert_eq!(history[0].llm_model.as_deref(), Some("gpt-test"));
+}
+
+#[test]
+fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
+    let fixture = Fixture::new();
+    let saved = {
+        let transaction = fixture.settings.transaction();
+        let mut saved = transaction.load().expect("load settings");
+        saved.active_prompt_id = Some(CLEAN_UP_PROMPT_ID.to_owned());
+        saved.llm_provider = LlmProvider::LocalCleanup;
+        transaction.save(&saved).expect("save settings");
+        saved
+    };
+    *fixture.provider.reply.lock().expect("reply") = Some("Hello from the worker.");
+    fixture.start();
+    fixture.dictation.stop().expect("stop");
+
+    assert_eq!(fixture.settled(), Phase::Idle);
+    assert_eq!(fixture.pasted(), ["Hello from the worker."]);
+    let requests = fixture.provider.requests.lock().expect("requests");
+    assert_eq!(requests[0].config.provider, LlmProvider::LocalCleanup);
+    assert!(
+        requests[0].decoding.draft.is_some(),
+        "the local model drafts from the transcript"
+    );
+    drop(requests);
+    let history = fixture.history();
+    assert_eq!(
+        history[0].cleaned_text.as_deref(),
+        Some("Hello from the worker.")
+    );
+    assert_eq!(
+        history[0].llm_model.as_deref(),
+        Some(saved.cleanup_model_id())
+    );
 }
 
 #[test]
@@ -702,21 +737,38 @@ fn closing_during_processing_keeps_the_audio_and_stops_the_worker() {
 }
 
 #[test]
-fn delivery_and_pipeline_failures_have_their_public_errors() {
-    let denied = delivery_error(OutputNotice::PermissionDenied).expect("permission error");
-    assert_eq!(denied.category, ErrorCategoryDto::Permission);
-    assert_eq!(denied.recovery, Some(RecoveryActionDto::OpenSettings));
-    assert_eq!(
-        text_output_status(OutputNotice::PermissionDenied),
-        TextOutputStatusDto::PasteFailed
-    );
-    assert!(delivery_error(OutputNotice::Cancelled).is_none());
+fn a_recording_without_speech_pastes_and_saves_nothing() {
+    for (audio, code) in [(0.005, "no_speech"), (0.0, "no_microphone_audio")] {
+        let fixture = Fixture::with_audio(vec![audio; 16_000]);
+        fixture.start();
+        fixture.dictation.stop().expect("stop");
 
-    assert!(pipeline_error(PipelineFailureKind::Cancelled).is_none());
-    let no_audio = pipeline_error(PipelineFailureKind::NoAudio).expect("no-audio error");
-    assert_eq!(no_audio.code, "no_microphone_audio");
-    assert_eq!(no_audio.recovery, Some(RecoveryActionDto::Retry));
-    let no_speech = pipeline_error(PipelineFailureKind::NoSpeech).expect("no-speech error");
-    assert_eq!(no_speech.code, "no_speech");
-    assert_eq!(no_speech.category, ErrorCategoryDto::Recognition);
+        let phase = fixture.settled();
+        assert_eq!(error_code(&phase), code);
+        assert!(fixture.pasted().is_empty(), "{code}");
+        assert!(fixture.history().is_empty(), "{code}");
+        assert_eq!(fixture.script.decodes.load(Ordering::SeqCst), 0, "{code}");
+    }
+}
+
+#[test]
+fn a_paste_without_permission_points_to_the_settings() {
+    let fixture = Fixture::with_output(OutputNotice::PermissionDenied);
+    fixture.start();
+    fixture.dictation.stop().expect("stop");
+
+    let Phase::Error(error) = fixture.settled() else {
+        panic!("a refused paste is an error")
+    };
+    assert_eq!(error.category, ErrorCategoryDto::Permission);
+    assert_eq!(error.recovery, Some(RecoveryActionDto::OpenSettings));
+    assert_eq!(
+        fixture
+            .state
+            .lock()
+            .last_transcript
+            .as_ref()
+            .and_then(|transcript| transcript.text_output_status),
+        Some(TextOutputStatusDto::PasteFailed)
+    );
 }

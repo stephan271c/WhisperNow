@@ -1,15 +1,14 @@
+mod common;
+
 use std::{
-    fmt::Write as FmtWrite,
     fs,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
     sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
 
 use bzip2::{Compression, write::BzEncoder};
-use sha2::{Digest, Sha256};
+use common::{FixtureServer, Response, Resume, sha256};
 use tar::{Builder as TarBuilder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
 use whispernow_core::{CancellationToken, ResolvedModel};
@@ -26,145 +25,18 @@ const OTHER_MODEL_ID: &str = "fixture-other";
 /// Bound for store operations that must not wait on an in-flight download.
 const PROMPT: Duration = Duration::from_secs(5);
 const ARTIFACTS: [&str; 3] = ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"];
+const MODEL_PATH: &str = "/model.tar.bz2";
 
-#[derive(Clone)]
-struct ResponsePlan {
-    status: u16,
-    body: Vec<u8>,
-    declared_length: Option<u64>,
-    split_at: Option<usize>,
-    split_delay: Duration,
+/// Serves `response` as the fixture model.
+fn serve(response: Response) -> FixtureServer {
+    FixtureServer::start([(MODEL_PATH, response)])
 }
 
-struct FixtureServer {
-    url: String,
-    worker: Option<thread::JoinHandle<()>>,
-}
-
-impl FixtureServer {
-    fn start(plan: ResponsePlan) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture server bind");
-        let address = listener.local_addr().expect("fixture server address");
-        let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("fixture request");
-            read_request(&mut stream);
-            let reason = if plan.status == 200 {
-                "OK"
-            } else {
-                "Fixture Error"
-            };
-            let mut headers = format!(
-                "HTTP/1.1 {} {}\r\nConnection: close\r\n",
-                plan.status, reason
-            );
-            if let Some(length) = plan.declared_length {
-                let _infallible_for_string = write!(&mut headers, "Content-Length: {length}\r\n");
-            }
-            headers.push_str("\r\n");
-            let _ = stream.write_all(headers.as_bytes());
-            if let Some(split_at) = plan.split_at {
-                let split_at = split_at.min(plan.body.len());
-                let _ = stream.write_all(&plan.body[..split_at]);
-                let _ = stream.flush();
-                thread::sleep(plan.split_delay);
-                let _ = stream.write_all(&plan.body[split_at..]);
-            } else {
-                let _ = stream.write_all(&plan.body);
-            }
-            let _ = stream.flush();
-        });
-        Self {
-            url: format!("http://{address}/model.tar.bz2"),
-            worker: Some(worker),
-        }
-    }
-}
-
-impl Drop for FixtureServer {
-    fn drop(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("fixture server join");
-        }
-    }
-}
-
-/// How a [`HeldServer`] ends a response after the test releases it.
-#[derive(Clone, Copy)]
-enum HeldEnding {
-    FinishBody,
-    /// Closes with the request left unread, which makes the OS send a TCP
-    /// reset instead of a clean end-of-stream.
-    ResetConnection,
-}
-
-/// Serves a full-length `Content-Length` response that stops after `split_at`
-/// body bytes until the test releases it.
-struct HeldServer {
-    url: String,
-    release: Option<mpsc::Sender<()>>,
-    worker: Option<thread::JoinHandle<()>>,
-}
-
-impl HeldServer {
-    fn start(body: Vec<u8>, split_at: usize, ending: HeldEnding) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("held server bind");
-        let address = listener.local_addr().expect("held server address");
-        let (release, released) = mpsc::channel::<()>();
-        let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("held request");
-            match ending {
-                HeldEnding::FinishBody => read_request(&mut stream),
-                HeldEnding::ResetConnection => {
-                    let mut request_start = [0_u8; 1];
-                    stream.peek(&mut request_start).expect("peek held request");
-                }
-            }
-            let headers = format!(
-                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
-                body.len()
-            );
-            let _ = stream.write_all(headers.as_bytes());
-            let _ = stream.write_all(&body[..split_at]);
-            let _ = stream.flush();
-            // A dropped sender (test failure) also releases the response.
-            let _ = released.recv();
-            if matches!(ending, HeldEnding::FinishBody) {
-                let _ = stream.write_all(&body[split_at..]);
-                let _ = stream.flush();
-            }
-        });
-        Self {
-            url: format!("http://{address}/model.tar.bz2"),
-            release: Some(release),
-            worker: Some(worker),
-        }
-    }
-
-    fn release(&self) {
-        if let Some(release) = &self.release {
-            let _ = release.send(());
-        }
-    }
-}
-
-impl Drop for HeldServer {
-    fn drop(&mut self) {
-        self.release.take();
-        if let Some(worker) = self.worker.take() {
-            worker.join().expect("held server join");
-        }
-    }
-}
-
-fn read_request(stream: &mut TcpStream) {
-    let mut request = Vec::new();
-    let mut buffer = [0_u8; 1024];
-    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-        let count = stream.read(&mut buffer).expect("read fixture request");
-        if count == 0 {
-            break;
-        }
-        request.extend_from_slice(&buffer[..count]);
+/// `body` stopping after `at` bytes until `resume`.
+fn paused(body: Vec<u8>, at: usize, resume: Resume) -> Response {
+    Response {
+        pause: Some((at, resume)),
+        ..Response::ok(body)
     }
 }
 
@@ -220,15 +92,6 @@ fn archive_with_link(entry_type: EntryType) -> Vec<u8> {
     encoder.finish().expect("finish bzip2 archive")
 }
 
-fn sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut encoded = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        let _infallible_for_string = write!(&mut encoded, "{byte:02x}");
-    }
-    encoded
-}
-
 fn definition(url: String, archive: &[u8]) -> ModelDefinition {
     ModelDefinition {
         id: ModelId::new(MODEL_ID).expect("fixture ID"),
@@ -256,7 +119,7 @@ fn make_manager(
     server: &FixtureServer,
     archive: &[u8],
 ) -> (tempfile::TempDir, ModelStore, ModelId) {
-    make_manager_for_url(&server.url, archive)
+    make_manager_for_url(&server.url(MODEL_PATH), archive)
 }
 
 fn make_manager_for_url(url: &str, archive: &[u8]) -> (tempfile::TempDir, ModelStore, ModelId) {
@@ -296,13 +159,11 @@ fn make_manager_for_definition(
 #[test]
 fn local_streaming_download_reports_monotonic_progress_and_installs_atomically() {
     let archive = valid_archive();
-    let server = FixtureServer::start(ResponsePlan {
-        status: 200,
-        body: archive.clone(),
-        declared_length: Some(archive.len() as u64),
-        split_at: Some(archive.len() / 2),
-        split_delay: Duration::from_millis(30),
-    });
+    let server = serve(paused(
+        archive.clone(),
+        archive.len() / 2,
+        Resume::After(Duration::from_millis(30)),
+    ));
     let (_root, manager, id) = make_manager(&server, &archive);
     let progress = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&progress);
@@ -336,14 +197,8 @@ fn local_streaming_download_reports_monotonic_progress_and_installs_atomically()
 #[test]
 fn a_single_file_model_is_downloaded_verified_installed_and_removed_as_is() {
     let gguf = b"GGUF fixture weights".repeat(64);
-    let server = FixtureServer::start(ResponsePlan {
-        status: 200,
-        body: gguf.clone(),
-        declared_length: Some(gguf.len() as u64),
-        split_at: None,
-        split_delay: Duration::ZERO,
-    });
-    let (_root, manager, id) = make_single_file_manager(&server.url, &gguf);
+    let server = serve(Response::ok(gguf.clone()));
+    let (_root, manager, id) = make_single_file_manager(&server.url(MODEL_PATH), &gguf);
 
     let resolved = manager
         .download(&id, &CancellationToken::default(), &|_| {})
@@ -367,14 +222,8 @@ fn a_single_file_model_with_the_wrong_digest_is_not_installed() {
     let gguf = b"GGUF fixture weights".repeat(64);
     let mut tampered = gguf.clone();
     tampered[0] ^= 1;
-    let server = FixtureServer::start(ResponsePlan {
-        status: 200,
-        body: tampered,
-        declared_length: Some(gguf.len() as u64),
-        split_at: None,
-        split_delay: Duration::ZERO,
-    });
-    let (_root, manager, id) = make_single_file_manager(&server.url, &gguf);
+    let server = serve(Response::ok(tampered));
+    let (_root, manager, id) = make_single_file_manager(&server.url(MODEL_PATH), &gguf);
 
     assert!(
         manager
@@ -390,12 +239,9 @@ fn a_single_file_model_with_the_wrong_digest_is_not_installed() {
 #[test]
 fn download_succeeds_without_content_length_by_enforcing_registry_size() {
     let archive = valid_archive();
-    let server = FixtureServer::start(ResponsePlan {
-        status: 200,
-        body: archive.clone(),
+    let server = serve(Response {
         declared_length: None,
-        split_at: None,
-        split_delay: Duration::ZERO,
+        ..Response::ok(archive.clone())
     });
     let (_root, manager, id) = make_manager(&server, &archive);
 
@@ -409,13 +255,11 @@ fn download_succeeds_without_content_length_by_enforcing_registry_size() {
 #[test]
 fn cancellation_cleans_staging_and_does_not_install() {
     let archive = valid_archive();
-    let server = FixtureServer::start(ResponsePlan {
-        status: 200,
-        body: archive.clone(),
-        declared_length: Some(archive.len() as u64),
-        split_at: Some(1),
-        split_delay: Duration::from_millis(30),
-    });
+    let server = serve(paused(
+        archive.clone(),
+        1,
+        Resume::After(Duration::from_millis(30)),
+    ));
     let (root, manager, id) = make_manager(&server, &archive);
     let cancellation = CancellationToken::default();
     let cancel_from_observer = cancellation.clone();
@@ -439,62 +283,60 @@ fn cancellation_cleans_staging_and_does_not_install() {
 }
 
 #[test]
-fn truncated_and_http_failure_responses_are_actionable() {
+fn failed_downloads_report_why() {
     let archive = valid_archive();
-    let truncated = archive[..archive.len() / 2].to_vec();
-    let server = FixtureServer::start(ResponsePlan {
-        status: 200,
-        body: truncated,
-        declared_length: Some(archive.len() as u64),
-        split_at: None,
-        split_delay: Duration::ZERO,
-    });
-    let (_root, manager, id) = make_manager(&server, &archive);
-    let error = manager
-        .download(&id, &CancellationToken::default(), &|_| {})
-        .expect_err("truncated response");
-    assert!(matches!(error, ModelStoreError::ResponseLength { .. }));
-
-    let server = FixtureServer::start(ResponsePlan {
-        status: 503,
-        body: Vec::new(),
-        declared_length: Some(0),
-        split_at: None,
-        split_delay: Duration::ZERO,
-    });
-    let (_root, manager, id) = make_manager(&server, &archive);
-    assert_eq!(
-        manager
-            .download(&id, &CancellationToken::default(), &|_| {})
-            .expect_err("HTTP failure"),
-        ModelStoreError::HttpStatus { status: 503 }
-    );
-}
-
-#[test]
-fn connection_reset_mid_body_is_a_transport_error() {
-    let archive = valid_archive();
-    let server = HeldServer::start(
-        archive.clone(),
-        archive.len() / 2,
-        HeldEnding::ResetConnection,
-    );
-    let (_root, manager, id) = make_manager_for_url(&server.url, &archive);
-    let release = server.release.clone().expect("held server release");
-
-    let error = manager
-        .download(
-            &id,
-            &CancellationToken::default(),
-            &move |event: DownloadProgress| {
-                if event.downloaded_bytes > 0 {
-                    let _ = release.send(());
-                }
+    let mut corrupted = archive.clone();
+    let last = corrupted.len() - 1;
+    corrupted[last] ^= 0x01;
+    for (case, response, expected) in [
+        (
+            "truncated",
+            Response {
+                declared_length: Some(archive.len() as u64),
+                ..Response::ok(archive[..archive.len() / 2].to_vec())
             },
-        )
-        .expect_err("reset connection");
-
-    assert_eq!(error, ModelStoreError::Transport);
+            ModelStoreError::ResponseLength {
+                expected: archive.len() as u64,
+                actual: (archive.len() / 2) as u64,
+            },
+        ),
+        (
+            "HTTP failure",
+            Response::status(503),
+            ModelStoreError::HttpStatus { status: 503 },
+        ),
+        (
+            "connection reset",
+            paused(archive.clone(), archive.len() / 2, Resume::ResetOnRelease),
+            ModelStoreError::Transport,
+        ),
+        (
+            // Longer than the two-second body timeout.
+            "stalled",
+            paused(archive.clone(), 1, Resume::After(Duration::from_secs(3))),
+            ModelStoreError::Timeout,
+        ),
+        (
+            "same length, wrong checksum",
+            Response::ok(corrupted.clone()),
+            ModelStoreError::ChecksumMismatch,
+        ),
+    ] {
+        let server = serve(response);
+        let (_root, manager, id) = make_manager(&server, &archive);
+        let error = manager
+            .download(
+                &id,
+                &CancellationToken::default(),
+                &|event: DownloadProgress| {
+                    if event.downloaded_bytes > 0 {
+                        server.release();
+                    }
+                },
+            )
+            .expect_err(case);
+        assert_eq!(error, expected, "{case}");
+    }
 }
 
 /// A download of [`MODEL_ID`] held mid-transfer beside an installed
@@ -504,7 +346,7 @@ struct BlockedDownload {
     downloading: ModelId,
     other: ModelId,
     other_root: std::path::PathBuf,
-    server: HeldServer,
+    server: FixtureServer,
     worker: Option<thread::JoinHandle<Result<ResolvedModel, ModelStoreError>>>,
     _root: TempDir,
 }
@@ -512,10 +354,14 @@ struct BlockedDownload {
 impl BlockedDownload {
     fn start() -> Self {
         let archive = valid_archive();
-        let server = HeldServer::start(archive.clone(), archive.len() / 2, HeldEnding::FinishBody);
+        let server = serve(paused(
+            archive.clone(),
+            archive.len() / 2,
+            Resume::OnRelease,
+        ));
         let root = tempdir().expect("temporary root");
         let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
-        let downloading = definition(server.url.clone(), &archive);
+        let downloading = definition(server.url(MODEL_PATH), &archive);
         let mut other = downloading.clone();
         other.id = ModelId::new(OTHER_MODEL_ID).expect("other fixture ID");
         let other_root = root
@@ -634,47 +480,6 @@ fn blocked_download_does_not_stall_resolving_listing_or_removing_other_models() 
 }
 
 #[test]
-fn stalled_response_hits_the_configured_body_timeout() {
-    let archive = valid_archive();
-    let server = FixtureServer::start(ResponsePlan {
-        status: 200,
-        body: archive.clone(),
-        declared_length: Some(archive.len() as u64),
-        split_at: Some(1),
-        split_delay: Duration::from_secs(3),
-    });
-    let (_root, manager, id) = make_manager(&server, &archive);
-
-    let error = manager
-        .download(&id, &CancellationToken::default(), &|_| {})
-        .expect_err("stalled response");
-
-    assert_eq!(error, ModelStoreError::Timeout);
-}
-
-#[test]
-fn same_length_archive_with_wrong_checksum_is_rejected() {
-    let archive = valid_archive();
-    let mut corrupted = archive.clone();
-    let last = corrupted.len() - 1;
-    corrupted[last] ^= 0x01;
-    let server = FixtureServer::start(ResponsePlan {
-        status: 200,
-        body: corrupted,
-        declared_length: Some(archive.len() as u64),
-        split_at: None,
-        split_delay: Duration::ZERO,
-    });
-    let (_root, manager, id) = make_manager(&server, &archive);
-
-    let error = manager
-        .download(&id, &CancellationToken::default(), &|_| {})
-        .expect_err("checksum mismatch");
-
-    assert_eq!(error, ModelStoreError::ChecksumMismatch);
-}
-
-#[test]
 fn invalid_archives_missing_artifacts_and_links_are_rejected() {
     // Links are not taken as artifacts.
     let mut artifacts = ARTIFACTS.map(str::to_owned).to_vec();
@@ -694,13 +499,7 @@ fn invalid_archives_missing_artifacts_and_links_are_rejected() {
         (archive_with_symlink(), missing_all.clone()),
         (archive_with_hardlink(), missing_all),
     ] {
-        let server = FixtureServer::start(ResponsePlan {
-            status: 200,
-            body: archive.clone(),
-            declared_length: Some(archive.len() as u64),
-            split_at: None,
-            split_delay: Duration::ZERO,
-        });
+        let server = serve(Response::ok(archive.clone()));
         let (_root, manager, id) = make_manager(&server, &archive);
         let error = manager
             .download(&id, &CancellationToken::default(), &|_| {})
@@ -713,13 +512,7 @@ fn invalid_archives_missing_artifacts_and_links_are_rejected() {
 fn interrupted_upgrade_preserves_existing_valid_model() {
     let valid = valid_archive();
     let bad = b"checksum does not match".to_vec();
-    let server = FixtureServer::start(ResponsePlan {
-        status: 200,
-        body: bad.clone(),
-        declared_length: Some(bad.len() as u64),
-        split_at: None,
-        split_delay: Duration::ZERO,
-    });
+    let server = serve(Response::ok(bad.clone()));
     let (root, manager, id) = make_manager(&server, &valid);
     let installed = root
         .path()
@@ -754,13 +547,7 @@ fn successful_download_replaces_an_existing_installation() {
         (ARTIFACTS[1], b"new-decoder"),
         (ARTIFACTS[2], b"new-tokens"),
     ]);
-    let server = FixtureServer::start(ResponsePlan {
-        status: 200,
-        body: archive.clone(),
-        declared_length: Some(archive.len() as u64),
-        split_at: None,
-        split_delay: Duration::ZERO,
-    });
+    let server = serve(Response::ok(archive.clone()));
     let (root, manager, id) = make_manager(&server, &archive);
     let installed = root
         .path()

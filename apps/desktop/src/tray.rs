@@ -463,31 +463,10 @@ fn dot(x: f32, y: f32, center_x: f32, center_y: f32, radius: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use whispernow_api::{RecordingMode, TranscriptResponse};
+    use whispernow_api::TranscriptResponse;
 
     use super::*;
-
-    fn snapshot(phase: PhaseDto) -> AppStateDto {
-        AppStateDto {
-            phase,
-            selected_model_id: whispernow_domain::ModelId::new("fixture")
-                .expect("fixture model id"),
-            model_state: ModelStateDto::Ready,
-            last_transcript: None,
-            error: None,
-            active_downloads: Vec::new(),
-            setup_test: None,
-            overlay_style: whispernow_api::OverlayStyle::default(),
-            overlay_position: whispernow_api::OverlayPosition::default(),
-        }
-    }
-
-    const fn recording() -> PhaseDto {
-        PhaseDto::Recording {
-            mode: RecordingMode::Toggle,
-            session: 1,
-        }
-    }
+    use crate::tests::{recording, snapshot};
 
     fn transcription_failed() -> whispernow_api::ApiErrorDto {
         whispernow_api::ApiErrorDto {

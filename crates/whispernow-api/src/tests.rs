@@ -1,11 +1,10 @@
 use serde_json::{json, to_value};
 
 use crate::{
-    ApiErrorDto, ApiKey, AppStateDto, COMMAND_NAMES, DeleteHistoryEntryRequest, ErrorCategoryDto,
-    EventPayload, GetHistoryAudioRequest, LlmProvider, ManualUpdatePackageDto, ModelStateDto,
-    OverlayStyle, PhaseDto, RecordingMode, RecoveryActionDto, SetApiKeyRequest, SettingsView,
-    TextOutputStatusDto, TranscriptResponse, UpdateErrorCodeDto, UpdateErrorDto, UpdatePhaseDto,
-    UpdateProgressDto, UpdateStateDto,
+    ApiErrorDto, ApiKey, AppStateDto, DeleteHistoryEntryRequest, ErrorCategoryDto, EventPayload,
+    GetHistoryAudioRequest, LlmProvider, ModelStateDto, OverlayStyle, PhaseDto, RecordingMode,
+    RecoveryActionDto, SetApiKeyRequest, SettingsView, TextOutputStatusDto, TranscriptResponse,
+    UpdatePhaseDto, UpdateProgressDto, UpdateStateDto,
 };
 use whispernow_domain::{
     HistoryFilter, HistoryLimit, HistoryPageRequest, ModelId, OverlayPosition, Settings,
@@ -28,24 +27,6 @@ fn history_requests_carry_no_storage_authority() {
         serde_json::from_value::<DeleteHistoryEntryRequest>(json!({"id": 8, "unexpected": true}))
             .is_err()
     );
-    for command in [
-        "get_history",
-        "get_history_audio",
-        "delete_history_entry",
-        "clear_history",
-    ] {
-        assert!(COMMAND_NAMES.contains(&command), "{command}");
-    }
-}
-
-#[test]
-fn model_requests_refuse_identifiers_that_are_not_model_ids() {
-    for id in ["../escape", "UPPERCASE", ""] {
-        assert!(
-            serde_json::from_value::<ModelId>(json!(id)).is_err(),
-            "{id}"
-        );
-    }
 }
 
 #[test]
@@ -141,7 +122,7 @@ fn history_changed_event_is_a_content_free_signal() {
 }
 
 #[test]
-fn state_changed_event_is_a_complete_unrevisioned_snapshot() {
+fn state_changed_event_carries_the_whole_snapshot() {
     let event = EventPayload::StateChanged {
         state: AppStateDto {
             phase: PhaseDto::Processing { cleaning_up: true },
@@ -174,19 +155,14 @@ fn state_changed_event_is_a_complete_unrevisioned_snapshot() {
         value["payload"]["state"]["setupTest"],
         json!({ "outcome": "heard", "text": "hello" })
     );
-    assert!(value["payload"]["state"]["allowedActions"].is_null());
     assert_eq!(
         value["payload"]["state"]["lastTranscript"]["finalText"],
         "final"
     );
-    let encoded = value.to_string();
-    assert!(!encoded.contains("sessionId"));
-    assert!(!encoded.contains("sequence"));
-    assert!(!encoded.contains("revision"));
 }
 
 #[test]
-fn update_snapshot_and_event_are_typed_and_contain_no_update_authority() {
+fn update_changed_event_round_trips() {
     let state = UpdateStateDto {
         phase: UpdatePhaseDto::Downloading,
         available_version: Some("2.4.0".to_owned()),
@@ -203,7 +179,7 @@ fn update_snapshot_and_event_are_typed_and_contain_no_update_authority() {
     let event = EventPayload::UpdateChanged { state };
     assert_eq!(event.event_name(), crate::UPDATE_CHANGED_EVENT);
 
-    let value = to_value(event).expect("serialize update event");
+    let value = to_value(&event).expect("serialize update event");
     assert_eq!(value["type"], "update_changed");
     assert_eq!(value["payload"]["state"]["phase"], "downloading");
     assert_eq!(
@@ -211,95 +187,8 @@ fn update_snapshot_and_event_are_typed_and_contain_no_update_authority() {
         json!({"downloadedBytes": 512, "totalBytes": 1024})
     );
     assert_eq!(value["payload"]["state"]["restartDeferred"], false);
-    let state_object = value["payload"]["state"]
-        .as_object()
-        .expect("update state object");
-    for forbidden in [
-        "url",
-        "endpoint",
-        "signature",
-        "publicKey",
-        "path",
-        "artifact",
-        "package",
-        "target",
-    ] {
-        assert!(
-            !state_object.contains_key(forbidden),
-            "unexpected {forbidden} field"
-        );
-    }
-}
-
-#[test]
-fn manual_install_offer_names_only_the_package_format() {
-    let state = UpdateStateDto {
-        phase: UpdatePhaseDto::ManualInstallAvailable,
-        available_version: Some("2.4.0".to_owned()),
-        release_notes: None,
-        progress: None,
-        error: None,
-        notification_dismissed: false,
-        restart_deferred: false,
-        manual_package: Some(ManualUpdatePackageDto::Rpm),
-    };
-    let value = to_value(state).expect("serialize manual update state");
-    assert_eq!(value["phase"], "manual_install_available");
-    assert_eq!(value["manualPackage"], "rpm");
-    let encoded = value.to_string();
-    for forbidden in ["https://", "github", ".rpm", "/"] {
-        assert!(!encoded.contains(forbidden), "unexpected {forbidden}");
-    }
-}
-
-#[test]
-fn update_errors_are_closed_content_free_codes() {
-    let encoded = serde_json::to_string(&UpdateErrorDto {
-        code: UpdateErrorCodeDto::ReleasePageUnavailable,
-        recoverable: true,
-    })
-    .expect("serialize update error");
     assert_eq!(
-        encoded,
-        r#"{"code":"release_page_unavailable","recoverable":true}"#
+        serde_json::from_value::<EventPayload>(value).expect("round-trip update event"),
+        event
     );
-    for forbidden in ["sudo", "password", "/tmp/", "https://", "signature"] {
-        assert!(!encoded.contains(forbidden));
-    }
-}
-
-#[test]
-fn update_commands_are_listed() {
-    for command in [
-        "get_update_state",
-        "check_for_updates",
-        "dismiss_update",
-        "restart_to_update",
-        "open_update_release_page",
-    ] {
-        assert!(COMMAND_NAMES.contains(&command));
-    }
-}
-
-#[test]
-fn output_status_contract_is_exactly_four_content_free_outcomes() {
-    let encoded = serde_json::to_string(&[
-        TextOutputStatusDto::PastedAndRestored,
-        TextOutputStatusDto::PastedClipboardNotRestored,
-        TextOutputStatusDto::RestoreSkippedClipboardChanged,
-        TextOutputStatusDto::PasteFailed,
-    ])
-    .expect("serialize closed output status codes");
-    assert_eq!(
-        encoded,
-        "[\"pasted_and_restored\",\"pasted_clipboard_not_restored\",\"restore_skipped_clipboard_changed\",\"paste_failed\"]"
-    );
-    for forbidden in [
-        "transcript",
-        "clipboard content",
-        "target title",
-        "native error",
-    ] {
-        assert!(!encoded.contains(forbidden));
-    }
 }

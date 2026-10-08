@@ -2,10 +2,10 @@ use dioxus::prelude::*;
 use whispernow_api::{
     ActiveDownloadDto, ApiErrorDto, AppStateDto, AudioDeviceDto, ClearDataCategory,
     ClearDataResult, ClearDataResultItemDto, DownloadPhase, EntryId, ErrorCategoryDto,
-    EventPayload, HistoryCursor, HistoryEntry, HistoryFilter, HistoryLimit, HistoryPage,
+    EventPayload, HistoryCursor, HistoryEntry, HistoryFilter, HistoryPage,
     ListAudioDevicesResponse, ListModelsResponse, LlmProvider, ManualUpdatePackageDto,
-    ModelAvailability, ModelDto, ModelStateDto, PhaseDto, ProviderSettings, RecoveryActionDto,
-    Settings, SettingsView, SetupCheckpoint, SetupStateView, SetupStep, Shortcut, ShortcutKey,
+    ModelAvailability, ModelDto, ModelStateDto, PhaseDto, RecoveryActionDto, Settings,
+    SettingsView, SetupCheckpoint, SetupStateView, SetupStep, Shortcut, ShortcutKey,
     ShortcutModifier, TextOutputStatusDto, TranscriptResponse, UpdateErrorCodeDto, UpdateErrorDto,
     UpdatePhaseDto, UpdateProgressDto, UpdateStateDto, UtcMillis,
 };
@@ -13,7 +13,7 @@ use whispernow_api::{
 use crate::client::fake;
 use crate::components::UiActions;
 use crate::components::cleanup_recipient;
-use crate::test_support::{test_context, use_test_context};
+use crate::test_support::{editable_settings, snapshot, test_context, use_test_context};
 use crate::{
     AppShell, EventStreamHealth, HomeStatus, HomeStatusKind, ManagementState, SaveStatus,
     SettingKey, UiState,
@@ -27,21 +27,6 @@ fn TestSurface(initial_state: UiState) -> Element {
     rsx! { AppShell {} }
 }
 
-fn app_state(phase: PhaseDto) -> AppStateDto {
-    AppStateDto {
-        phase,
-        selected_model_id: whispernow_api::ModelId::new("sherpa-onnx-whisper-tiny")
-            .expect("fixture model id"),
-        model_state: ModelStateDto::Ready,
-        last_transcript: None,
-        error: None,
-        active_downloads: Vec::new(),
-        overlay_style: whispernow_api::OverlayStyle::default(),
-        overlay_position: whispernow_api::OverlayPosition::default(),
-        setup_test: None,
-    }
-}
-
 fn state_event(state: AppStateDto) -> EventPayload {
     EventPayload::StateChanged { state }
 }
@@ -52,7 +37,7 @@ fn history_event() -> EventPayload {
 
 fn ui_state(phase: PhaseDto) -> UiState {
     let mut state = UiState::default();
-    state.hydrate(app_state(phase));
+    state.hydrate(snapshot(phase));
     state.mark_event_stream_listening();
     state
 }
@@ -78,29 +63,14 @@ fn settings_html(update: UpdateStateDto) -> String {
     })
 }
 
-fn editable_settings(active_provider: LlmProvider, api_base: Option<&str>) -> Settings {
-    Settings {
-        model_id: model_id("model"),
-        overlay_style: whispernow_api::OverlayStyle::WithLiveText,
-        overlay_position: whispernow_api::OverlayPosition::Bottom,
-        first_run_complete: true,
-        history_limit: HistoryLimit::Last20,
-        llm_provider: active_provider,
-        prompts: Vec::new(),
-        llm_provider_settings: [(
-            active_provider,
-            ProviderSettings {
-                model: "model".to_owned(),
-                api_base: api_base.map(|api_base| {
-                    whispernow_api::ProviderEndpoint::parse(api_base).expect("a safe endpoint")
-                }),
-                ..ProviderSettings::default()
-            },
-        )]
-        .into(),
-        llm_timeout_seconds: 20,
-        ..Settings::default()
-    }
+/// Editable settings whose AI cleanup goes to `provider`, at `api_base` when given.
+fn cleanup_to(provider: LlmProvider, api_base: Option<&str>) -> Settings {
+    let mut settings = editable_settings();
+    settings.llm_provider = provider;
+    settings.provider_settings_mut(provider).api_base = api_base.map(|api_base| {
+        whispernow_api::ProviderEndpoint::parse(api_base).expect("a safe endpoint")
+    });
+    settings
 }
 
 fn model_id(id: &str) -> whispernow_api::ModelId {
@@ -248,7 +218,7 @@ fn failed_refresh_keeps_loaded_rows_but_unavailable_storage_degrades() {
 fn history_unavailability_preserves_independently_loaded_management_sections() {
     let mut management = ManagementState::default();
     management.install_settings(SettingsView {
-        settings: editable_settings(LlmProvider::OpenAi, None),
+        settings: editable_settings(),
         warnings: Vec::new(),
     });
     management.install_setup(SetupStateView {
@@ -321,10 +291,10 @@ fn state_events_do_not_refresh_history_but_history_events_do() {
     dom.rebuild_in_place();
     let actions = dom.in_scope(ScopeId::ROOT, || {
         let mut management = ManagementState::default();
-        management.install_snapshot(&app_state(crate::test_support::PROCESSING));
+        management.install_snapshot(&snapshot(crate::test_support::PROCESSING));
         UiActions::new(test_context(UiState::default(), management))
     });
-    let mut idle = app_state(PhaseDto::Idle);
+    let mut idle = snapshot(PhaseDto::Idle);
     idle.last_transcript = Some(TranscriptResponse {
         raw_text: "new recording".to_owned(),
         final_text: "new recording".to_owned(),
@@ -409,7 +379,7 @@ fn is_failed(status: &SaveStatus) -> bool {
 
 #[test]
 fn a_change_shows_at_once_and_changes_made_during_a_save_go_out_together_after_it() {
-    let mut management = loaded_management(editable_settings(LlmProvider::OpenAi, None));
+    let mut management = loaded_management(editable_settings());
     assert!(management.change_setting(SettingKey::StartMinimized, start_minimized));
     let first = management.next_settings_update().expect("first change");
     assert!(first.settings.start_minimized);
@@ -458,7 +428,7 @@ fn a_change_shows_at_once_and_changes_made_during_a_save_go_out_together_after_i
 
 #[test]
 fn a_refused_change_rolls_back_and_keeps_its_error_beside_the_control() {
-    let mut management = loaded_management(editable_settings(LlmProvider::OpenAi, None));
+    let mut management = loaded_management(editable_settings());
     assert!(management.change_setting(SettingKey::StartOnLogin, start_on_login));
     assert!(management.next_settings_update().is_some());
     management.finish_settings_update(Err("refused".to_owned()));
@@ -498,7 +468,7 @@ fn add_prompt(title: &str, prompt: &str) -> Edit {
 
 #[test]
 fn new_prompts_get_distinct_generated_identifiers() {
-    let mut management = loaded_management(editable_settings(LlmProvider::OpenAi, None));
+    let mut management = loaded_management(editable_settings());
     for title in ["Email", "Email"] {
         assert!(management.change_setting(SettingKey::Prompts, add_prompt(title, "Tidy the text")));
     }
@@ -510,7 +480,7 @@ fn new_prompts_get_distinct_generated_identifiers() {
 
 #[test]
 fn a_prompt_test_needs_sample_text() {
-    let mut management = loaded_management(editable_settings(LlmProvider::OpenAi, None));
+    let mut management = loaded_management(editable_settings());
     assert!(management.begin_prompt_test("clean", "   ").is_none());
     assert!(
         management
@@ -539,7 +509,7 @@ fn a_prompt_test_needs_sample_text() {
 
 #[test]
 fn cleanup_disclosure_names_the_configured_provider() {
-    let settings = editable_settings(LlmProvider::Anthropic, None);
+    let settings = cleanup_to(LlmProvider::Anthropic, None);
     assert_eq!(
         cleanup_recipient(&settings),
         "the configured Anthropic provider"
@@ -548,7 +518,7 @@ fn cleanup_disclosure_names_the_configured_provider() {
 
 #[test]
 fn named_provider_disclosure_identifies_a_custom_recipient_without_claiming_direct_delivery() {
-    let settings = editable_settings(
+    let settings = cleanup_to(
         LlmProvider::Anthropic,
         Some("https://gateway.example:8443/private-looking-path/v1"),
     );
@@ -563,7 +533,7 @@ fn named_provider_disclosure_identifies_a_custom_recipient_without_claiming_dire
 
 #[test]
 fn custom_provider_disclosure_identifies_its_safe_endpoint_without_path_details() {
-    let settings = editable_settings(
+    let settings = cleanup_to(
         LlmProvider::Custom,
         Some("https://compatible.provider.example:8443/private-looking-path/v1"),
     );
@@ -577,7 +547,7 @@ fn custom_provider_disclosure_identifies_its_safe_endpoint_without_path_details(
 
 #[test]
 fn one_snapshot_reconstructs_phase_and_last_transcript_after_reload() {
-    let mut snapshot = app_state(PhaseDto::Idle);
+    let mut snapshot = snapshot(PhaseDto::Idle);
     snapshot.last_transcript = Some(TranscriptResponse {
         raw_text: "raw dictation".to_owned(),
         final_text: "Finished dictation".to_owned(),
@@ -603,13 +573,13 @@ fn one_snapshot_reconstructs_phase_and_last_transcript_after_reload() {
 #[test]
 fn state_changed_replaces_the_entire_workflow_projection_without_reconciliation() {
     let mut state = ui_state(crate::test_support::RECORDING);
-    state.apply_event(state_event(app_state(crate::test_support::PROCESSING)));
+    state.apply_event(state_event(snapshot(crate::test_support::PROCESSING)));
     assert_eq!(
         state.snapshot.as_ref().map(|snapshot| &snapshot.phase),
         Some(&crate::test_support::PROCESSING)
     );
 
-    state.apply_event(state_event(app_state(PhaseDto::Idle)));
+    state.apply_event(state_event(snapshot(PhaseDto::Idle)));
     assert_eq!(
         state.snapshot.as_ref().map(|snapshot| &snapshot.phase),
         Some(&PhaseDto::Idle)
@@ -626,7 +596,7 @@ fn audio_level_is_scoped_by_the_single_recording_phase_and_clamped() {
     });
     assert!(state.audio_rms.abs() < f32::EPSILON);
 
-    state.apply_event(state_event(app_state(crate::test_support::RECORDING)));
+    state.apply_event(state_event(snapshot(crate::test_support::RECORDING)));
     state.apply_event(EventPayload::AudioLevel {
         rms: 2.0,
         peak: 2.0,
@@ -645,7 +615,7 @@ fn audio_level_is_scoped_by_the_single_recording_phase_and_clamped() {
         peak: 0.8,
         elapsed_ms: 0,
     });
-    state.apply_event(state_event(app_state(crate::test_support::PROCESSING)));
+    state.apply_event(state_event(snapshot(crate::test_support::PROCESSING)));
     assert!(state.audio_rms.abs() < f32::EPSILON);
 }
 
@@ -708,7 +678,10 @@ fn dismissed_ready_update_keeps_a_secondary_restart_affordance() {
     update.notification_dismissed = true;
 
     let html = settings_html(update);
-    assert!(html.contains("update-secondary"));
+    assert!(
+        !html.contains("Dismiss"),
+        "a dismissed offer stays dismissed"
+    );
     assert!(html.contains("Update v0.3.0 is ready"));
     assert!(html.contains("Restart to update"));
     assert!(!html.contains("The verified update is ready"));
@@ -732,7 +705,14 @@ fn manual_install_offer_names_the_package_and_links_the_release_page_without_res
 
         update.notification_dismissed = true;
         let dismissed = settings_html(update);
-        assert!(dismissed.contains("update-secondary"));
+        assert!(
+            !dismissed.contains("Dismiss"),
+            "a dismissed offer stays dismissed"
+        );
+        assert!(
+            !dismissed.contains(format),
+            "only the version and the link stay"
+        );
         assert!(dismissed.contains("Open release page"));
     }
 }
@@ -770,7 +750,7 @@ fn three_app_phases_drive_the_home_status() {
 
 #[test]
 fn ordinary_state_error_drives_the_home_problem() {
-    let mut snapshot = app_state(PhaseDto::Idle);
+    let mut snapshot = snapshot(PhaseDto::Idle);
     snapshot.error = Some(ApiErrorDto {
         category: ErrorCategoryDto::Audio,
         code: "microphone_unavailable".to_owned(),
@@ -803,7 +783,7 @@ fn idle_no_audio_and_no_speech_outcomes_preserve_exact_retry_messages() {
     ];
 
     for (code, category, summary) in OUTCOMES {
-        let mut snapshot = app_state(PhaseDto::Idle);
+        let mut snapshot = snapshot(PhaseDto::Idle);
         snapshot.error = Some(ApiErrorDto {
             category,
             code: code.to_owned(),
@@ -836,7 +816,7 @@ fn idle_no_audio_and_no_speech_outcomes_preserve_exact_retry_messages() {
 
 #[test]
 fn model_loading_still_takes_priority_over_idle() {
-    let mut snapshot = app_state(PhaseDto::Idle);
+    let mut snapshot = snapshot(PhaseDto::Idle);
     snapshot.model_state = ModelStateDto::Loading;
     let mut state = UiState::default();
     state.hydrate(snapshot);
@@ -847,7 +827,7 @@ fn model_loading_still_takes_priority_over_idle() {
 #[test]
 fn state_snapshot_is_sufficient_for_download_management() {
     let model_id = whispernow_api::ModelId::new("parakeet-tdt-0.6b-v3").expect("fixture model id");
-    let mut snapshot = app_state(PhaseDto::Idle);
+    let mut snapshot = snapshot(PhaseDto::Idle);
     snapshot.active_downloads.push(ActiveDownloadDto {
         model_id: model_id.clone(),
         phase: DownloadPhase::Downloading,
@@ -884,7 +864,7 @@ fn dashboard_status_never_claims_ready_when_workflow_is_unavailable() {
         (PhaseDto::Paused, HomeStatusKind::Paused),
         (PhaseDto::Updating, HomeStatusKind::Waiting),
     ] {
-        let snapshot = app_state(phase);
+        let snapshot = snapshot(phase);
         let mut state = UiState::default();
         state.hydrate(snapshot);
         let status = HomeStatus::from_state(&state);
@@ -895,7 +875,7 @@ fn dashboard_status_never_claims_ready_when_workflow_is_unavailable() {
 
 #[test]
 fn a_saved_settings_warning_is_shown_beside_the_installed_settings() {
-    let mut management = loaded_management(editable_settings(LlmProvider::OpenAi, None));
+    let mut management = loaded_management(editable_settings());
     assert!(
         management.change_setting(SettingKey::HoldShortcut, |settings| {
             settings.hold_shortcut = Shortcut {
@@ -938,7 +918,7 @@ fn theme_attribute_follows_a_theme_change_at_once_and_its_rollback() {
     let mut management = ManagementState::default();
     assert_eq!(management.theme_attribute(), None);
 
-    let mut settings = editable_settings(LlmProvider::OpenAi, None);
+    let mut settings = editable_settings();
     settings.theme = whispernow_api::ThemePreference::Dark;
     management.install_settings(SettingsView {
         settings,

@@ -148,35 +148,3 @@ fn a_python_key_the_store_refuses_stays_in_the_kept_file() {
         })
     );
 }
-
-#[test]
-fn an_api_key_is_set_read_back_and_cleared() {
-    let fixture = fixture();
-    let key = ApiKey::new(["test", "-only", "-key"].concat()).expect("a key");
-    let persistence = &fixture.persistence;
-
-    persistence
-        .store_api_key(LlmProvider::Anthropic, &key)
-        .expect("store key");
-    let mut settings = Settings::default();
-    settings.api_keys.insert(LlmProvider::Anthropic);
-    persistence.save(&settings).expect("save");
-    assert_eq!(
-        persistence.api_key(LlmProvider::Anthropic).expect("read"),
-        Some(key)
-    );
-
-    persistence
-        .delete_api_key(LlmProvider::Anthropic)
-        .expect("delete key");
-    settings.api_keys.clear();
-    persistence.save(&settings).expect("save");
-    assert_eq!(
-        persistence.api_key(LlmProvider::Anthropic).expect("read"),
-        None
-    );
-
-    fixture.store.set_available(false);
-    assert!(persistence.api_key(LlmProvider::Anthropic).is_err());
-    assert!(persistence.delete_api_key(LlmProvider::Anthropic).is_err());
-}

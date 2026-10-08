@@ -7,7 +7,7 @@ use std::sync::Arc;
 use whispernow_api::PermissionStatusDto;
 use whispernow_core::{
     CancellationToken,
-    text_output::{PasteDelays, PasteOutcome, PasteQueue},
+    text_output::{PasteDelays, PasteOutcome, PastePlatform, PasteQueue},
 };
 use whispernow_platform::{NativePasteError, NativePastePlatform};
 
@@ -213,11 +213,14 @@ const fn native_notice(outcome: PasteOutcome<NativePasteError>) -> OutputNotice 
 /// The notice assumes the restore succeeds: one skipped because the user copied
 /// something within that delay is only logged.
 #[cfg(target_os = "linux")]
-fn helper_output(
-    queue: &Arc<PasteQueue<HelperPastePlatform>>,
+fn helper_output<P>(
+    queue: &Arc<PasteQueue<P>>,
     text: &str,
     cancellation: &CancellationToken,
-) -> OutputNotice {
+) -> OutputNotice
+where
+    P: PastePlatform<Error = NativePasteError> + Send + 'static,
+{
     enum Progress {
         Sent { restoring: bool },
         Finished(PasteOutcome<NativePasteError>),
@@ -498,6 +501,65 @@ mod tests {
             ),
         ] {
             assert_eq!(native_notice(outcome), expected, "{outcome:?}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_helper_paste_answers_once_sent_and_then_restores_the_clipboard() {
+        use std::{
+            sync::{Arc, Mutex},
+            time::{Duration, Instant},
+        };
+
+        use whispernow_core::{
+            CancellationToken,
+            text_output::{KeystrokeOutcome, PasteDelays, PastePlatform, PasteQueue},
+        };
+
+        /// A clipboard the test reads while the paste thread restores it.
+        struct Desktop(Arc<Mutex<Option<String>>>);
+
+        impl PastePlatform for Desktop {
+            type Snapshot = String;
+            type Error = NativePasteError;
+
+            fn snapshot_clipboard(&mut self) -> Result<Option<String>, NativePasteError> {
+                Ok(self.0.lock().expect("clipboard").clone())
+            }
+
+            fn write_transcript(&mut self, text: &str) -> Result<(), NativePasteError> {
+                *self.0.lock().expect("clipboard") = Some(text.to_owned());
+                Ok(())
+            }
+
+            fn clipboard_holds(&mut self, text: &str) -> Result<bool, NativePasteError> {
+                Ok(self.0.lock().expect("clipboard").as_deref() == Some(text))
+            }
+
+            fn restore_clipboard(&mut self, snapshot: String) -> Result<(), NativePasteError> {
+                *self.0.lock().expect("clipboard") = Some(snapshot);
+                Ok(())
+            }
+
+            fn send_paste_shortcut(&mut self) -> KeystrokeOutcome<NativePasteError> {
+                KeystrokeOutcome::Sent
+            }
+        }
+
+        let clipboard = Arc::new(Mutex::new(Some("copied earlier".to_owned())));
+        let queue = Arc::new(PasteQueue::new(
+            Desktop(Arc::clone(&clipboard)),
+            PasteDelays::default(),
+        ));
+        assert_eq!(
+            super::helper_output(&queue, "dictated words", &CancellationToken::default()),
+            OutputNotice::PastedAndRestored
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while clipboard.lock().expect("clipboard").as_deref() != Some("copied earlier") {
+            assert!(Instant::now() < deadline, "the clipboard was not restored");
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 

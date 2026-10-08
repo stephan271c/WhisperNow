@@ -299,12 +299,16 @@ mod tests {
     fn settings_moved_aside_are_listed_and_deleted_with_settings() {
         let fixture = Fixture::separate_roots();
         create_file(&fixture.paths.settings_file());
-        let first = fixture.paths.unreadable_settings_file("20260925T120000Z");
-        let second = fixture.paths.python_settings_file();
-        create_file(&first);
-        create_file(&second);
-        let unrelated = fixture.paths.config_dir().join("settings.json.bak");
-        create_file(&unrelated);
+        let later = fixture.paths.unreadable_settings_file("20260926T120000Z");
+        let earlier = fixture.paths.unreadable_settings_file("20260925T120000Z");
+        let python = fixture.paths.python_settings_file();
+        let unrelated = [
+            fixture.paths.config_dir().join("settings.json.bak"),
+            fixture.paths.config_dir().join("other.json.bad-1"),
+        ];
+        for path in [&later, &earlier, &python, &unrelated[0], &unrelated[1]] {
+            create_file(path);
+        }
         let manager = DataCleaner::new(fixture.paths.clone());
 
         let settings_paths = manager
@@ -316,13 +320,18 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             settings_paths,
-            vec![fixture.paths.settings_file(), first.clone(), second.clone()]
+            vec![
+                fixture.paths.settings_file(),
+                earlier.clone(),
+                later.clone(),
+                python.clone()
+            ]
         );
         manager.clear(&EVERYTHING).expect("clear");
-        assert!(!first.exists());
-        assert!(!second.exists());
-        assert!(!fixture.paths.settings_file().exists());
-        assert!(unrelated.exists());
+        for removed in [&earlier, &later, &python, &fixture.paths.settings_file()] {
+            assert!(!removed.exists(), "{removed:?}");
+        }
+        assert!(unrelated.iter().all(|path| path.exists()));
     }
 
     #[cfg(unix)]

@@ -1,42 +1,18 @@
-use std::{cell::RefCell, rc::Rc};
-
-use dioxus::dioxus_core::Mutations;
 use dioxus::prelude::*;
 use whispernow_api::{
     AppStateDto, DeleteHistoryEntryRequest, EntryId, EntryStatus, HistoryCursor, HistoryEntry,
-    HistoryFilter, HistoryPage, HistoryPageRequest, ModelStateDto, PhaseDto, SettingsView,
-    UtcMillis,
+    HistoryFilter, HistoryPage, HistoryPageRequest, PhaseDto, SettingsView, UtcMillis,
 };
 
 use super::format::group_by_day;
 use super::{HistoryScreen, LocalClock};
 use crate::client::fake;
-use crate::test_support::{click_rendered, form_event_rendered, use_test_context};
-use crate::{HistoryCopied, ManagementState, Route, SettingsRoute, UiContext, UiState};
+use crate::test_support::{Page, Probe, snapshot, tag, text};
+use crate::{HistoryCopied, ManagementState, Route, SettingsRoute, UiState};
 
 /// 2026-09-27 10:30 UTC.
 const NOW: UtcMillis = UtcMillis(1_790_505_000_000);
 const HOUR: i64 = 3_600_000;
-
-/// Hands the page's context to the test after the first render.
-#[derive(Clone, Default)]
-struct Probe(Rc<RefCell<Option<UiContext>>>);
-
-impl PartialEq for Probe {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Probe {
-    fn context(&self) -> UiContext {
-        self.0.borrow().expect("page rendered")
-    }
-
-    fn management(&self) -> Signal<ManagementState> {
-        self.context().management
-    }
-}
 
 /// The page with a fixed clock, wired to the fake desktop.
 #[component]
@@ -47,131 +23,23 @@ fn Surface(management_state: ManagementState, snapshot: AppStateDto, probe: Prob
         state
     });
     let management = use_signal(move || management_state);
-    *probe.0.borrow_mut() = Some(use_test_context(state, management));
+    probe.provide(state, management);
     use_context_provider(|| LocalClock::fixed(NOW, 0));
     rsx! { HistoryScreen {} }
 }
 
-/// A mounted page and every mutation it has rendered, so earlier elements stay findable.
-struct Page {
-    dom: VirtualDom,
-    rendered: Mutations,
-    probe: Probe,
-}
-
-impl Page {
-    fn new(management: ManagementState) -> Self {
-        fake::reset();
-        let probe = Probe::default();
-        let mut dom = VirtualDom::new_with_props(
+/// The history page over `management`.
+fn history_page(management_state: ManagementState) -> Page {
+    Page::new(|probe| {
+        VirtualDom::new_with_props(
             Surface,
             SurfaceProps {
-                management_state: management,
-                snapshot: snapshot(),
-                probe: probe.clone(),
+                management_state,
+                snapshot: snapshot(PhaseDto::Idle),
+                probe,
             },
-        );
-        let rendered = dom.rebuild_to_vec();
-        Self {
-            dom,
-            rendered,
-            probe,
-        }
-    }
-
-    fn keep(&mut self, mutations: Mutations) {
-        self.rendered.edits.extend(mutations.edits);
-    }
-
-    fn click(&mut self, id: &str) -> &mut Self {
-        let mutations = click_rendered(&mut self.dom, &self.rendered, id);
-        self.keep(mutations);
-        self
-    }
-
-    fn input(&mut self, id: &str, value: &str) -> &mut Self {
-        let mutations = form_event_rendered(&mut self.dom, &self.rendered, id, "input", value);
-        self.keep(mutations);
-        self
-    }
-
-    /// Runs the calls and timers that are ready and renders the result.
-    fn render(&mut self) -> &mut Self {
-        self.dom.process_events();
-        let mutations = self.dom.render_immediate_to_vec();
-        self.keep(mutations);
-        self
-    }
-
-    /// Lets every waiting timer fire, then renders.
-    fn wait(&mut self) -> &mut Self {
-        fake::run_timers();
-        self.render()
-    }
-
-    fn html(&self) -> String {
-        dioxus_ssr::render(&self.dom)
-    }
-
-    fn management(&self) -> Signal<ManagementState> {
-        self.probe.management()
-    }
-}
-
-/// The opening tag of the element rendered with `id`.
-fn tag<'a>(html: &'a str, id: &str) -> Option<&'a str> {
-    let start = html.find(&format!("id=\"{id}\""))?;
-    let open = html[..start].rfind('<')?;
-    let end = start + html[start..].find('>')?;
-    Some(&html[open..=end])
-}
-
-/// The text inside the element rendered with `id`, without nested markup.
-fn text(html: &str, id: &str) -> String {
-    let opening = tag(html, id).unwrap_or_else(|| panic!("element {id}"));
-    let start = html.find(opening).expect("opening tag") + opening.len();
-    let name = opening[1..]
-        .split(|character: char| character.is_whitespace() || character == '>')
-        .next()
-        .expect("tag name");
-    let (open, close) = (format!("<{name}"), format!("</{name}>"));
-    let mut depth = 1;
-    let mut plain = String::new();
-    let mut in_tag = false;
-    for (index, character) in html[start..].char_indices() {
-        let rest = &html[start + index..];
-        if rest.starts_with(&close) {
-            depth -= 1;
-            if depth == 0 {
-                break;
-            }
-        } else if rest.starts_with(&open)
-            && rest[open.len()..].starts_with(|next: char| next.is_whitespace() || next == '>')
-        {
-            depth += 1;
-        }
-        match character {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => plain.push(character),
-            _ => {}
-        }
-    }
-    plain
-}
-
-fn snapshot() -> AppStateDto {
-    AppStateDto {
-        phase: PhaseDto::Idle,
-        selected_model_id: whispernow_api::ModelId::new("current-model").expect("fixture model id"),
-        model_state: ModelStateDto::Ready,
-        last_transcript: None,
-        error: None,
-        active_downloads: Vec::new(),
-        overlay_style: whispernow_api::OverlayStyle::default(),
-        overlay_position: whispernow_api::OverlayPosition::default(),
-        setup_test: None,
-    }
+        )
+    })
 }
 
 /// A pasted dictation of 1:15 with kept audio, cleaned up from its transcript.
@@ -261,7 +129,7 @@ fn rows_group_by_the_viewers_local_day() {
         ])
     );
 
-    let page = Page::new(management(entries));
+    let page = history_page(management(entries));
     let html = page.html();
     let today = html.find(">Today<").expect("today heading");
     let yesterday = html.find(">Yesterday<").expect("yesterday heading");
@@ -279,7 +147,7 @@ fn rows_show_local_time_the_pasted_text_the_duration_and_a_problem_status() {
     not_pasted.error = Some("Pasting failed".to_owned());
     let mut raw = entry(9, UtcMillis(NOW.0 - 3 * HOUR));
     raw.cleaned_text = None;
-    let page = Page::new(management(vec![
+    let page = history_page(management(vec![
         not_pasted,
         raw,
         entry(7, UtcMillis(NOW.0 - 4 * HOUR)),
@@ -306,7 +174,7 @@ fn a_failed_entry_shows_its_error_and_its_audio_can_be_played() {
     failed.error = Some("The speech model could not turn this recording into text.".to_owned());
     let mut without_audio = entry(8, UtcMillis(NOW.0 - 2 * HOUR));
     without_audio.has_audio = false;
-    let page = Page::new(management(vec![failed, without_audio]));
+    let page = history_page(management(vec![failed, without_audio]));
     let html = page.html();
 
     let row = text(&html, "history-entry-7");
@@ -324,40 +192,40 @@ fn search_is_debounced_and_paged_within_the_search() {
         created_at: NOW,
         id: EntryId(7),
     });
-    let mut page = Page::new(management);
+    let mut page = history_page(management);
     page.input("history-search", "inv")
         .input("history-search", "invoice")
-        .render();
+        .settle();
     assert!(
         fake::commands().is_empty(),
         "typing reads nothing until it pauses"
     );
-    assert_eq!(page.management().read().history_search, "invoice");
+    assert_eq!(page.context().management.read().history_search, "invoice");
 
     // The pause after the first keystroke was cut short; only the latest text is searched.
     page.wait();
     assert_eq!(history_reads(), ["invoice"]);
-    assert_eq!(page.management().read().history_window_pages(), 1);
+    assert_eq!(page.context().management.read().history_window_pages(), 1);
 
     page.click("history-load-more");
     assert_eq!(history_reads(), ["invoice", "invoice"]);
-    assert_eq!(page.management().read().history_window_pages(), 2);
+    assert_eq!(page.context().management.read().history_window_pages(), 2);
 }
 
 #[test]
 fn the_failed_filter_and_an_empty_search_offer_a_way_back() {
-    let mut page = Page::new(one_entry());
+    let mut page = history_page(one_entry());
     assert!(
         tag(&page.html(), "history-failed-filter")
             .is_some_and(|tag| tag.contains("aria-pressed=\"false\""))
     );
     page.click("history-failed-filter");
-    assert!(page.management().read().history_filter.failed_only);
+    assert!(page.context().management.read().history_filter.failed_only);
     assert_eq!(fake::commands(), ["get_history"]);
 
     let mut filtered = management(Vec::new());
     filtered.show_failed_history_only(true);
-    let mut page = Page::new(filtered);
+    let mut page = history_page(filtered);
     let html = page.html();
     assert!(
         tag(&html, "history-failed-filter")
@@ -366,7 +234,7 @@ fn the_failed_filter_and_an_empty_search_offer_a_way_back() {
     assert!(!html.contains("to dictate"));
     page.click("history-clear-filter");
     assert_eq!(
-        page.management().read().history_filter,
+        page.context().management.read().history_filter,
         HistoryFilter::default()
     );
     assert_eq!(fake::commands(), ["get_history"]);
@@ -374,23 +242,30 @@ fn the_failed_filter_and_an_empty_search_offer_a_way_back() {
 
 #[test]
 fn the_empty_list_shows_the_actual_shortcut() {
-    let page = Page::new(management(Vec::new()));
+    let page = history_page(management(Vec::new()));
     let html = page.html();
     assert!(html.contains("Hold "));
-    assert!(html.contains("<kbd class=\"kbd\">Ctrl</kbd><kbd class=\"kbd\">Space</kbd>"));
+    let keys: Vec<&str> = html
+        .split("<kbd")
+        .skip(1)
+        .map(|rest| {
+            &rest[rest.find('>').expect("kbd tag end") + 1..rest.find("</kbd>").expect("kbd end")]
+        })
+        .collect();
+    assert_eq!(keys, ["Ctrl", "Space"]);
     assert!(tag(&html, "history-clear").is_none(), "nothing to clear");
 }
 
 #[test]
 fn the_header_summarizes_retention_and_links_to_privacy() {
-    let mut page = Page::new(one_entry());
+    let mut page = history_page(one_entry());
     assert!(page.html().contains(
         "Keeping the last 20 transcripts and audio only for failed and cancelled dictations"
     ));
     page.click("history-retention-settings")
         .click("history-open-folder");
     assert_eq!(
-        page.probe.context().navigator.route(),
+        page.context().navigator.route(),
         Route::Settings(SettingsRoute::PrivacyData)
     );
     assert_eq!(fake::commands(), ["open_recordings_folder"]);
@@ -398,7 +273,7 @@ fn the_header_summarizes_retention_and_links_to_privacy() {
 
 #[test]
 fn deleting_an_entry_or_the_history_requires_confirmation() {
-    let mut page = Page::new(one_entry());
+    let mut page = history_page(one_entry());
     page.click("history-delete-7");
     assert!(fake::commands().is_empty(), "Delete only asks");
     page.click("history-delete-7-confirm");
@@ -408,7 +283,7 @@ fn deleting_an_entry_or_the_history_requires_confirmation() {
         [DeleteHistoryEntryRequest { id: EntryId(7) }]
     );
     fake::answer("delete_history_entry", Ok(()));
-    page.render();
+    page.settle();
 
     page.click("history-clear");
     assert_eq!(
@@ -422,10 +297,10 @@ fn deleting_an_entry_or_the_history_requires_confirmation() {
 
 #[test]
 fn history_changes_wait_for_the_change_in_flight() {
-    let mut page = Page::new(one_entry());
+    let mut page = history_page(one_entry());
     page.click("history-delete-7")
         .click("history-delete-7-confirm");
-    page.render();
+    page.settle();
     let html = page.html();
     assert!(tag(&html, "history-delete-7").is_some_and(|tag| tag.contains("disabled")));
     assert!(tag(&html, "history-clear").is_some_and(|tag| tag.contains("disabled")));
@@ -437,16 +312,16 @@ fn history_changes_wait_for_the_change_in_flight() {
 fn copy_confirms_on_the_button_that_was_pressed() {
     let mut state = one_entry();
     state.history.push(entry(8, UtcMillis(NOW.0 - 2 * HOUR)));
-    let mut page = Page::new(state);
+    let mut page = history_page(state);
     page.click("history-copy-7");
     assert_eq!(fake::requests::<String>("write_clipboard"), ["cleaned 7"]);
     fake::answer("write_clipboard", Ok(()));
-    page.render();
+    page.settle();
     let html = page.html();
     assert_eq!(text(&html, "history-copy-7").trim(), "Copied");
     assert_eq!(text(&html, "history-copy-8").trim(), "Copy");
     assert!(
-        page.management().read().notice.is_none(),
+        page.context().management.read().notice.is_none(),
         "no page-wide notice"
     );
 
@@ -462,7 +337,7 @@ fn copy_confirms_on_the_button_that_was_pressed() {
         entry: EntryId(7),
         succeeded: false,
     });
-    let page = Page::new(failed);
+    let page = history_page(failed);
     assert_eq!(text(&page.html(), "history-copy-7").trim(), "Copy failed");
 }
 
@@ -478,7 +353,7 @@ fn storage_unavailability_replaces_the_list_with_a_reload() {
             recovery: None,
         }),
     );
-    let mut page = Page::new(management);
+    let mut page = history_page(management);
     let html = page.html();
     assert!(html.contains("History storage is unavailable") && html.contains("role=\"alert\""));
     for absent in ["history-search", "history-clear", "history-load-more"] {
@@ -508,7 +383,7 @@ fn a_search_that_cannot_run_explains_itself_in_place_of_stale_rows() {
     );
     assert!(management.notice.is_none(), "no page-wide notice");
 
-    let page = Page::new(management.clone());
+    let page = history_page(management.clone());
     let html = page.html();
     assert!(
         tag(&html, "history-entry-7").is_none(),
@@ -531,7 +406,7 @@ fn a_search_that_cannot_run_explains_itself_in_place_of_stale_rows() {
             next_cursor: None,
         },
     );
-    let page = Page::new(management);
+    let page = history_page(management);
     let html = page.html();
     assert!(tag(&html, "history-search-error").is_none());
     assert!(tag(&html, "history-entry-7").is_some());
@@ -550,7 +425,7 @@ fn production_controls_send_typed_commands() {
         id: EntryId(7),
     });
     let sent = |ids: &[&str]| {
-        let mut page = Page::new(state.clone());
+        let mut page = history_page(state.clone());
         for id in ids {
             page.click(id);
         }

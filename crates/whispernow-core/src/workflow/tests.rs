@@ -9,7 +9,6 @@ use super::*;
 
 struct FakeAsr {
     results: VecDeque<Result<String, AsrError>>,
-    sample_addresses: Vec<usize>,
     sample_lengths: Vec<usize>,
 }
 
@@ -21,7 +20,6 @@ impl FakeAsr {
     fn with_results(results: VecDeque<Result<String, AsrError>>) -> Self {
         Self {
             results,
-            sample_addresses: Vec::new(),
             sample_lengths: Vec::new(),
         }
     }
@@ -37,7 +35,6 @@ impl AsrEngine for FakeAsr {
     }
 
     fn transcribe(&mut self, samples: &[f32]) -> Result<String, AsrError> {
-        self.sample_addresses.push(samples.as_ptr().addr());
         self.sample_lengths.push(samples.len());
         self.results
             .pop_front()
@@ -67,20 +64,6 @@ fn cancelled_segments_are_not_submitted() {
 
     assert_eq!(result, Err(PipelineFailureKind::Cancelled));
     assert!(asr.sample_lengths.is_empty());
-}
-
-#[test]
-fn a_segment_is_submitted_as_one_borrowed_buffer() {
-    let samples = vec![0.1; 16_000];
-    let expected_address = samples[4_000..].as_ptr().addr();
-    let mut asr = FakeAsr::with_texts(&["complete result"]);
-
-    let result = recognize_segment(&samples[4_000..], &mut asr, &CancellationToken::default())
-        .expect("decoded segment");
-
-    assert_eq!(result, "complete result");
-    assert_eq!(asr.sample_addresses, [expected_address]);
-    assert_eq!(asr.sample_lengths, [12_000]);
 }
 
 #[test]

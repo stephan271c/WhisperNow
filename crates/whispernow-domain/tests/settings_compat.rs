@@ -14,7 +14,7 @@ fn parse_json<T: DeserializeOwned>(document: &str) -> T {
 }
 
 #[test]
-fn rust_defaults_prefer_native_48khz_capture() {
+fn fresh_settings_take_the_defaults() {
     let settings = Settings::default();
 
     assert_eq!(settings.input_device, None);
