@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
-use whispernow_api::{MicrophoneTestResponse, SetupStep, Shortcut};
+use whispernow_api::{MicrophoneTestResponse, RecordingMode, SetupStep, Shortcut};
 
 use super::actions::{DisabledReason, use_actions};
+use super::labels;
 use super::ui::{
     Banner, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconName, ShortcutLabel, Tone,
 };
@@ -38,14 +39,9 @@ pub(super) fn HomePage() -> Element {
         .as_ref()
         .filter(|setup| !setup.first_run_complete)
         .map(|setup| setup.checkpoint.step);
-    let shortcuts = management.settings.as_ref().map(|view| {
+    let shortcut = management.settings.as_ref().map(|view| {
         let settings = &view.settings;
-        (
-            settings
-                .hold_shortcut_enabled
-                .then(|| settings.hold_shortcut.clone()),
-            settings.toggle_shortcut.clone(),
-        )
+        (settings.recording_mode, settings.recording_shortcut.clone())
     });
     let test = management.microphone_test.clone();
     drop(management);
@@ -55,7 +51,7 @@ pub(super) fn HomePage() -> Element {
         }
         UpdateStatus {}
         StatusCard { status }
-        ShortcutsCard { shortcuts }
+        ShortcutsCard { shortcut }
         MicrophoneCard { test }
         LatestTranscript { transcript }
     } }
@@ -133,22 +129,16 @@ fn StatusCard(status: HomeStatus) -> Element {
 }
 
 #[component]
-fn ShortcutsCard(shortcuts: Option<(Option<Shortcut>, Option<Shortcut>)>) -> Element {
+fn ShortcutsCard(shortcut: Option<(RecordingMode, Shortcut)>) -> Element {
     let navigator = use_navigator();
     rsx! {
         article { class: "card home-card", aria_labelledby: "home-shortcuts-title",
             h2 { id: "home-shortcuts-title", "Shortcuts" }
-            match shortcuts {
+            match shortcut {
                 None => rsx! { p { class: "status-detail", "Loading your shortcuts…" } },
-                Some((None, None)) => rsx! { p { class: "status-detail", "No recording shortcut is set." } },
-                Some((hold, toggle)) => rsx! {
+                Some((mode, shortcut)) => rsx! {
                     dl { class: "shortcut-list",
-                        if let Some(shortcut) = hold {
-                            div { dt { "Hold to record" } dd { ShortcutLabel { shortcut } } }
-                        }
-                        if let Some(shortcut) = toggle {
-                            div { dt { "Press to start and stop" } dd { ShortcutLabel { shortcut } } }
-                        }
+                        div { dt { "{labels::recording_mode(mode)}" } dd { ShortcutLabel { shortcut } } }
                     }
                 },
             }
@@ -171,7 +161,7 @@ fn MicrophoneCard(test: Option<MicrophoneTestResponse>) -> Element {
     rsx! {
         article { class: "card home-card", aria_labelledby: "home-microphone-title",
             h2 { id: "home-microphone-title", "Microphone" }
-            p { "Check that WhisperNow can hear you. The test listens for three seconds and keeps nothing." }
+            p { "Listens for three seconds. Nothing is kept." }
             div { class: "microphone-test",
                 Button {
                     id: "test-microphone",

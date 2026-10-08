@@ -61,3 +61,17 @@ fn provider_names_round_trip_and_accept_the_google_alias() {
     );
     assert_eq!(LlmProvider::from_name("future-provider"), None);
 }
+
+#[test]
+fn only_a_loopback_host_is_on_this_computer() {
+    for (url, local) in [
+        ("https://localhost:8443/v1", true),
+        ("http://127.0.0.1:11434/v1", true),
+        ("http://[::1]:11434/v1", true),
+        ("https://api.example.com/v1", false),
+        ("https://localhost.example.com/v1", false),
+    ] {
+        let endpoint = ProviderEndpoint::parse(url).expect("a valid endpoint");
+        assert_eq!(endpoint.is_on_this_computer(), local, "{url}");
+    }
+}

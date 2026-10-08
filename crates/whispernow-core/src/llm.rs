@@ -1,9 +1,9 @@
 //! Captured text and credentials are redacted from `Debug` output.
 
-use std::{fmt, future::Future, pin::Pin, time::Duration};
+use std::{fmt, future::Future, pin::Pin};
 
 use thiserror::Error;
-use whispernow_domain::{ApiKey, CleanupPrompt};
+use whispernow_domain::ApiKey;
 pub use whispernow_domain::{LlmProvider, ProviderEndpoint};
 
 use crate::CancellationToken;
@@ -14,7 +14,7 @@ pub mod local;
 mod prompt;
 
 use prompt::EMPTY_TRANSCRIPT_SENTINEL;
-pub use prompt::{LlmPrompt, PromptKind, build_cleanup_prompt, build_local_cleanup_prompt};
+pub use prompt::{LlmPrompt, build_cleanup_prompt, build_local_cleanup_prompt};
 
 const TRANSIENT_RETRIES: u32 = 2;
 
@@ -131,8 +131,6 @@ impl fmt::Debug for LlmResponse {
 pub enum LlmError {
     #[error("LLM request was cancelled")]
     Cancelled,
-    #[error("LLM request timed out")]
-    Timeout,
     #[error("LLM provider transport failed")]
     Transport,
     #[error("LLM provider rate limit was reached")]
@@ -148,8 +146,6 @@ pub enum LlmError {
 }
 
 impl LlmError {
-    /// Failures worth another attempt within the same deadline. A timeout is
-    /// not one: the deadline covers every attempt, so nothing is left to retry.
     #[must_use]
     pub const fn is_retryable(self) -> bool {
         matches!(
@@ -162,8 +158,7 @@ impl LlmError {
 pub type LlmFuture<'service> =
     Pin<Box<dyn Future<Output = Result<LlmResponse, LlmError>> + Send + 'service>>;
 
-/// One provider call. [`clean_up`] enforces the deadline and cancellation by dropping the
-/// future.
+/// One provider call. [`clean_up`] cancels it by dropping the future.
 pub trait LlmService: Send + Sync {
     fn complete(&self, request: LlmRequest) -> LlmFuture<'_>;
 }
@@ -219,8 +214,6 @@ fn accept_response(response: &LlmResponse) -> Result<String, CleanupFallback> {
 #[derive(Clone, Copy)]
 pub struct CleanupRequest<'input> {
     pub deterministic_text: &'input str,
-    pub prompt: &'input CleanupPrompt,
-    pub mode: PromptKind,
     pub config: &'input LlmProviderConfig,
 }
 
@@ -228,7 +221,6 @@ impl fmt::Debug for CleanupRequest<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CleanupRequest")
-            .field("mode", &self.mode)
             .field(
                 "deterministic_character_count",
                 &self.deterministic_text.chars().count(),
@@ -250,16 +242,13 @@ pub enum CleanupFallback {
     ContentFiltered,
 }
 
-/// Asks `service` to edit the transcript and returns the reply. One `timeout` covers every
-/// attempt, and cancellation drops the call in flight.
+/// Asks `service` to edit the transcript and returns the reply. It waits as long as the
+/// provider takes; cancellation drops the call in flight.
 pub async fn clean_up(
     service: &dyn LlmService,
     input: CleanupRequest<'_>,
-    timeout: Duration,
     cancellation: &CancellationToken,
 ) -> Result<String, CleanupFallback> {
-    // Settings validation keeps every prompt but Clean Up & Format off the local
-    // cleanup model, which knows only that one edit.
     let (prompt, decoding) = if input.config.provider == LlmProvider::LocalCleanup {
         (
             build_local_cleanup_prompt(input.deterministic_text),
@@ -267,7 +256,7 @@ pub async fn clean_up(
         )
     } else {
         (
-            build_cleanup_prompt(input.deterministic_text, input.prompt, input.mode),
+            build_cleanup_prompt(input.deterministic_text),
             LlmDecoding::default(),
         )
     };
@@ -279,9 +268,7 @@ pub async fn clean_up(
     let result = tokio::select! {
         biased;
         () = cancellation.cancelled() => Err(LlmError::Cancelled),
-        result = tokio::time::timeout(timeout, call_with_retries(service, &request)) => {
-            result.unwrap_or(Err(LlmError::Timeout))
-        }
+        result = call_with_retries(service, &request) => result,
     };
     match result {
         Ok(response) => accept_response(&response),
@@ -291,7 +278,7 @@ pub async fn clean_up(
 }
 
 /// Retries a transient failure. Text streamed before the failure is discarded, so a
-/// retry is safe; the caller's deadline bounds them all.
+/// retry is safe.
 async fn call_with_retries(
     service: &dyn LlmService,
     request: &LlmRequest,

@@ -5,7 +5,7 @@ def test_prompt_copies_match_the_rust_source():
     assert teacher.SYSTEM_FILE.read_text(encoding="utf-8") == teacher.rust_system_contract(), (
         "run `uv run datagen sync-teacher`"
     )
-    assert teacher.EDIT_REQUEST_FILE.read_text(encoding="utf-8") == teacher.rust_fix_grammar_prompt(), (
+    assert teacher.EDIT_REQUEST_FILE.read_text(encoding="utf-8") == teacher.rust_cleanup_prompt(), (
         "run `uv run datagen sync-teacher`"
     )
 

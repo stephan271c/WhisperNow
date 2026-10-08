@@ -32,28 +32,6 @@ impl UiActions {
         });
     }
 
-    /// Sample text that cannot be sent is explained beside the test's result instead.
-    pub(crate) fn test_prompt(self, prompt_id: &str, sample_text: &str) {
-        let request = self
-            .management()
-            .write()
-            .begin_prompt_test(prompt_id, sample_text);
-        let Some(request) = request else {
-            return;
-        };
-        let sent = request.clone();
-        self.run(
-            UiOperation::TestPrompt,
-            async move { client::test_prompt(&sent).await },
-            move |actions, answer| {
-                actions
-                    .management()
-                    .write()
-                    .finish_prompt_test(&request, answer.map_err(|error| error.summary()));
-            },
-        );
-    }
-
     pub(crate) fn set_credential(self, provider: LlmProvider, key: ApiKey) {
         let request = SetApiKeyRequest { provider, key };
         self.run(

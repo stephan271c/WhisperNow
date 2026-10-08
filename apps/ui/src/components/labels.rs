@@ -1,4 +1,11 @@
-use whispernow_api::{ClearDataCategory, DownloadPhase, ModelStateDto, SetupStep};
+use whispernow_api::{ClearDataCategory, DownloadPhase, ModelStateDto, RecordingMode, SetupStep};
+
+pub(crate) const fn recording_mode(mode: RecordingMode) -> &'static str {
+    match mode {
+        RecordingMode::Hold => "Hold to record",
+        RecordingMode::Toggle => "Press to start and stop",
+    }
+}
 
 pub(crate) const fn model_state(state: ModelStateDto) -> &'static str {
     match state {

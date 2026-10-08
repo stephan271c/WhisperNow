@@ -5,7 +5,7 @@ use std::{
 
 use whispernow_api::{
     ActiveDownloadDto, ApiErrorDto, AppStateDto, ErrorCategoryDto, EventPayload, ModelStateDto,
-    OverlayPosition, OverlayStyle, PhaseDto, RecordingMode, SetupTestResultDto, TranscriptResponse,
+    PhaseDto, RecordingMode, SetupTestResultDto, TranscriptResponse,
 };
 use whispernow_core::CancellationToken;
 use whispernow_domain::ModelId;
@@ -146,8 +146,6 @@ pub(crate) struct State {
     pub(crate) active_downloads: BTreeMap<ModelId, ActiveDownload>,
     pub(crate) download_failures: usize,
     pub(crate) setup_complete: bool,
-    pub(crate) overlay_style: OverlayStyle,
-    pub(crate) overlay_position: OverlayPosition,
     /// Set with `cancellation` when the dictation in flight is asked to end early.
     pub(crate) cancel: Option<CancelReason>,
     /// The dictation in flight's cancellation; the worker replaces it for each recording.
@@ -166,8 +164,6 @@ impl State {
             active_downloads: BTreeMap::new(),
             download_failures: 0,
             setup_complete,
-            overlay_style: OverlayStyle::default(),
-            overlay_position: OverlayPosition::default(),
             cancel: None,
             cancellation: CancellationToken::default(),
         }
@@ -203,8 +199,6 @@ impl State {
                 .map(|download| download.progress.clone())
                 .collect(),
             setup_test: self.setup_test.clone(),
-            overlay_style: self.overlay_style,
-            overlay_position: self.overlay_position,
         }
     }
 }

@@ -12,8 +12,8 @@ use crate::{
     autostart::{self, AutostartError},
     services::PersistedShortcuts,
     shortcuts::{
-        ShortcutBinding, ShortcutBindings, ShortcutRegistrationError, cancel_binding,
-        recording_bindings,
+        RecordingBinding, ShortcutBinding, ShortcutRegistrationError, cancel_binding,
+        recording_binding,
     },
 };
 
@@ -111,15 +111,13 @@ impl Gateway {
             .saved_settings("complete_setup", Failure::Published)
             .await?;
         let mut chosen = saved.clone();
-        chosen.hold_shortcut.clone_from(&checkpoint.hold_shortcut);
-        chosen.hold_shortcut_enabled = checkpoint.hold_shortcut_enabled;
         chosen
-            .toggle_shortcut
-            .clone_from(&checkpoint.toggle_shortcut);
+            .recording_shortcut
+            .clone_from(&checkpoint.recording_shortcut);
+        chosen.recording_mode = checkpoint.recording_mode;
         let (refused, registered) = self.register_shortcuts(&saved, &mut chosen).await;
-        checkpoint.hold_shortcut = chosen.hold_shortcut;
-        checkpoint.hold_shortcut_enabled = chosen.hold_shortcut_enabled;
-        checkpoint.toggle_shortcut = chosen.toggle_shortcut;
+        checkpoint.recording_shortcut = chosen.recording_shortcut;
+        checkpoint.recording_mode = chosen.recording_mode;
         let completing = self
             .run_command("complete_setup", Failure::Published, move |services, _| {
                 services.complete_setup(&checkpoint)
@@ -153,11 +151,11 @@ impl Gateway {
         .await
     }
 
-    /// Registers the recording shortcuts `chosen` names in place of `saved`'s, before
-    /// `chosen` is saved. A refusal leaves `saved`'s registered and writes them into
-    /// `chosen`. Shortcuts that break a rule are left to the save, which refuses them unless
-    /// `saved` broke the rule too; either way they register nothing. Returns the refusal, and
-    /// whether `chosen`'s shortcuts replaced `saved`'s.
+    /// Registers the recording shortcut `chosen` names in place of `saved`'s, before `chosen`
+    /// is saved. A refusal leaves `saved`'s registered and writes it into `chosen`. Shortcuts
+    /// that break a rule are left to the save, which refuses them unless `saved` broke the
+    /// rule too; either way they register nothing. Returns the refusal, and whether
+    /// `chosen`'s shortcut replaced `saved`'s.
     async fn register_shortcuts(
         &self,
         saved: &Settings,
@@ -167,10 +165,10 @@ impl Gateway {
         if previous == PersistedShortcuts::of(chosen) {
             return (None, false);
         }
-        let Ok(bindings) = recording_bindings(chosen) else {
+        let Ok(recording) = recording_binding(chosen) else {
             return (None, false);
         };
-        match self.apply_shortcuts(Ok(bindings)).await {
+        match self.apply_shortcuts(Ok(recording)).await {
             None => (None, true),
             Some(mut refused) => {
                 previous.apply_to(chosen);
@@ -222,9 +220,9 @@ impl Gateway {
         None
     }
 
-    /// Registers `saved`'s shortcuts again after a save that registered others failed.
+    /// Registers `saved`'s shortcut again after a save that registered another failed.
     async fn restore_shortcuts(&self, saved: &Settings) {
-        if let Some(error) = self.apply_shortcuts(recording_bindings(saved)).await {
+        if let Some(error) = self.apply_shortcuts(recording_binding(saved)).await {
             tracing::warn!(
                 code = error.code,
                 "the saved shortcuts could not be registered again"
@@ -232,13 +230,14 @@ impl Gateway {
         }
     }
 
-    /// Registers `bindings` in place of the current ones, which stay registered on a refusal.
+    /// Registers `recording` in place of the current shortcut, which stays registered on a
+    /// refusal.
     async fn apply_shortcuts(
         &self,
-        bindings: Result<ShortcutBindings, ShortcutRegistrationError>,
+        recording: Result<RecordingBinding, ShortcutRegistrationError>,
     ) -> Option<ApiErrorDto> {
         let shortcuts = Arc::clone(&self.shortcuts);
-        match run_blocking(move || shortcuts.apply_update(bindings)).await {
+        match run_blocking(move || shortcuts.apply_update(recording)).await {
             Ok(Ok(())) => None,
             Ok(Err(error)) => Some(shortcut_error(error)),
             Err(error) => Some(error),

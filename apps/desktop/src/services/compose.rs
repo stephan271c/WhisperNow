@@ -65,9 +65,7 @@ impl NativeServices {
         let llama_dir = llama_dir(&resource_dir);
         let voice_activity =
             SileroVoiceActivitySource::from_model_path(silero_vad_model_path(resource_dir));
-        let mut initial = State::new(persisted.model_id.clone(), persisted.first_run_complete);
-        initial.overlay_style = persisted.overlay_style;
-        initial.overlay_position = persisted.overlay_position;
+        let initial = State::new(persisted.model_id.clone(), persisted.first_run_complete);
         let state = Arc::new(StateCell::new(initial, events));
         if let Some(warning) = startup_history_warning {
             state.publish_error(warning);
@@ -84,9 +82,7 @@ impl NativeServices {
             installed_cleanup_model(Arc::clone(&store)),
             installed_cuda_pack(Arc::clone(&store)),
         ));
-        if persisted.llm_provider == LlmProvider::LocalCleanup
-            && persisted.active_prompt_id.is_some()
-        {
+        if persisted.llm_provider == LlmProvider::LocalCleanup && persisted.cleanup_enabled {
             local_cleanup.preload(persisted.cleanup_model_id());
         }
         let models = Arc::new(ModelCoordinator::new(
@@ -109,7 +105,7 @@ impl NativeServices {
             audio: Arc::clone(&audio),
             models: store,
             voice_activity: Arc::new(voice_activity),
-            llm: Arc::clone(&llm),
+            llm,
             output: output.clone(),
             engine: Box::new(|| Box::new(SherpaAsrEngine::new())),
             max_recording_samples: DictationParts::MAX_RECORDING_SAMPLES,
@@ -121,7 +117,6 @@ impl NativeServices {
             models,
             state,
             dictation,
-            llm,
             clear_data,
             output,
             paste_helper_setup_dir,

@@ -24,8 +24,7 @@ use gateway::{
         get_settings, get_setup_state, get_state, list_audio_devices, list_models,
         open_main_window, open_permission_settings, open_recordings_folder, request_permission,
         restart_setup, resume_shortcuts, save_setup_checkpoint, select_model, set_api_key,
-        start_test_dictation, stop_recording, suspend_shortcuts, test_microphone, test_prompt,
-        update_settings,
+        start_test_dictation, stop_recording, suspend_shortcuts, test_microphone, update_settings,
     },
     forward_events,
 };
@@ -37,7 +36,7 @@ use whispernow_domain::WindowGeometry;
 
 use crate::shortcuts::{
     KeyTransition, ShortcutCoordinator, ShortcutEvent, ShortcutId, ShortcutRegistrar,
-    TauriShortcutRegistrar, cancel_binding, recording_bindings,
+    TauriShortcutRegistrar, cancel_binding, recording_binding,
 };
 use crate::{
     activation::ActivationGate,
@@ -69,7 +68,6 @@ registered_commands![
     update_settings,
     set_api_key,
     clear_api_key,
-    test_prompt,
     list_audio_devices,
     test_microphone,
     list_models,
@@ -213,7 +211,7 @@ pub fn run() {
             {
                 tracing::warn!("settings window decorations could not be removed");
             }
-            let persisted_bindings = recording_bindings(&settings.settings);
+            let persisted_binding = recording_binding(&settings.settings);
             let registrar = shortcut_registrar(
                 app.handle().clone(),
                 native_wayland,
@@ -224,7 +222,7 @@ pub fn run() {
             let probe_app = app.handle().clone();
             let shortcuts = Arc::new(ShortcutCoordinator::new(
                 registrar,
-                persisted_bindings,
+                persisted_binding,
                 Arc::new(move || {
                     probe_app
                         .try_state::<Gateway>()

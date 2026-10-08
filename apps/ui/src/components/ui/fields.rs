@@ -247,6 +247,42 @@ pub(crate) fn Select(
     }
 }
 
+/// A choice between a few options shown side by side, one pressed. Inside a `Field` or
+/// `SettingRow` the group takes the frame's id and label, and each option's id is `{id}-{value}`;
+/// outside one it needs a `label`.
+#[component]
+pub(crate) fn Segmented(
+    value: &'static str,
+    options: Vec<(&'static str, &'static str)>,
+    onchange: EventHandler<&'static str>,
+    label: Option<String>,
+    #[props(default)] disabled: bool,
+) -> Element {
+    let wiring = current_wiring();
+    let id = wiring.as_ref().map(|wiring| wiring.id.clone());
+    rsx! {
+        div {
+            class: "segmented",
+            id: id.clone(),
+            role: "group",
+            aria_label: label,
+            aria_labelledby: wiring.as_ref().map(FieldWiring::label_id),
+            aria_describedby: wiring.as_ref().and_then(|wiring| wiring.described_by.clone()),
+            for (option, label) in options {
+                button {
+                    r#type: "button",
+                    class: "segmented-option",
+                    id: id.as_ref().map(|id| format!("{id}-{option}")),
+                    aria_pressed: if option == value { "true" } else { "false" },
+                    disabled,
+                    onclick: move |_| if option != value { onchange.call(option) },
+                    "{label}"
+                }
+            }
+        }
+    }
+}
+
 /// An on/off switch. Outside a `Field` or `SettingRow` it needs a `label`.
 #[component]
 pub(crate) fn Toggle(

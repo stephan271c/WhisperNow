@@ -172,8 +172,6 @@ fn idle_snapshot() -> AppStateDto {
         last_transcript: None,
         error: None,
         active_downloads: Vec::new(),
-        overlay_style: whispernow_api::OverlayStyle::default(),
-        overlay_position: whispernow_api::OverlayPosition::default(),
         setup_test: None,
     }
 }

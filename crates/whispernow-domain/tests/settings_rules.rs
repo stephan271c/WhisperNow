@@ -1,7 +1,7 @@
 use whispernow_domain::{
-    ApiKey, CLEAN_UP_PROMPT_ID, CleanupPrompt, DEFAULT_CLEANUP_MODEL_ID, InvalidApiKey,
-    LlmProvider, MINICPM_CLEANUP_MODEL_ID, Settings, SettingsError, SetupCheckpoint, Shortcut,
-    ShortcutKey, ShortcutModifier, VocabularyReplacement,
+    ApiKey, DEFAULT_CLEANUP_MODEL_ID, InvalidApiKey, LlmProvider, MINICPM_CLEANUP_MODEL_ID,
+    Settings, SettingsError, SetupCheckpoint, Shortcut, ShortcutKey, ShortcutModifier,
+    VocabularyReplacement,
 };
 
 fn shortcut(modifiers: &[ShortcutModifier], key: &str) -> Shortcut {
@@ -17,36 +17,12 @@ fn default_settings_break_no_rule() {
 }
 
 #[test]
-fn recording_shortcuts_need_one_on_each_valid_and_distinct() {
-    let mut settings = Settings {
-        hold_shortcut_enabled: false,
-        toggle_shortcut: None,
+fn the_recording_shortcut_needs_a_modifier() {
+    let settings = Settings {
+        recording_shortcut: shortcut(&[], "f9"),
         ..Settings::default()
     };
-    assert_eq!(settings.validate(), Err(SettingsError::NoRecordingShortcut));
-
-    settings.toggle_shortcut = Some(shortcut(&[], "f9"));
-    assert_eq!(settings.validate(), Err(SettingsError::ToggleShortcut));
-
-    settings.hold_shortcut_enabled = true;
-    settings.toggle_shortcut = Some(settings.hold_shortcut.clone());
-    assert_eq!(
-        settings.validate(),
-        Err(SettingsError::SameRecordingShortcuts)
-    );
-    settings.hold_shortcut_enabled = false;
-    assert_eq!(
-        settings.validate(),
-        Ok(()),
-        "a hold shortcut that is off may share the toggle's combination"
-    );
-
-    settings.hold_shortcut = shortcut(&[], "space");
-    assert_eq!(
-        settings.validate(),
-        Err(SettingsError::HoldShortcut),
-        "a hold shortcut that is off is kept valid for turning it back on"
-    );
+    assert_eq!(settings.validate(), Err(SettingsError::RecordingShortcut));
 }
 
 #[test]
@@ -62,24 +38,13 @@ fn the_cancel_shortcut_is_a_lone_non_typing_key_or_a_combination_and_never_a_rec
     }
     settings.cancel_shortcut = Some(shortcut(&[], "q"));
     assert_eq!(settings.validate(), Err(SettingsError::CancelShortcut));
-    settings.cancel_shortcut = Some(settings.hold_shortcut.clone());
+    settings.cancel_shortcut = Some(settings.recording_shortcut.clone());
     assert_eq!(
         settings.validate(),
         Err(SettingsError::CancelIsRecordingShortcut)
     );
     settings.cancel_shortcut = None;
     assert_eq!(settings.validate(), Ok(()));
-}
-
-#[test]
-fn numbers_stay_in_their_ranges() {
-    let mut settings = Settings {
-        llm_timeout_seconds: 4,
-        ..Settings::default()
-    };
-    assert_eq!(settings.validate(), Err(SettingsError::LlmTimeout));
-    settings.llm_timeout_seconds = 121;
-    assert_eq!(settings.validate(), Err(SettingsError::LlmTimeout));
 }
 
 #[test]
@@ -126,40 +91,6 @@ fn an_api_key_is_one_trimmed_line() {
 }
 
 #[test]
-fn prompts_need_a_title_text_and_their_own_id_and_the_chosen_one_must_exist() {
-    let prompt = |id: &str, title: &str, text: &str| CleanupPrompt {
-        id: id.to_owned(),
-        title: title.to_owned(),
-        prompt: text.to_owned(),
-        default_hash: None,
-    };
-    let mut settings = Settings {
-        prompts: vec![prompt("a", "", "text")],
-        ..Settings::default()
-    };
-    assert_eq!(
-        settings.validate(),
-        Err(SettingsError::PromptTitle { id: "a".to_owned() })
-    );
-    settings.prompts = vec![prompt("a", "Title", " ")];
-    assert_eq!(
-        settings.validate(),
-        Err(SettingsError::PromptText { id: "a".to_owned() })
-    );
-    settings.prompts = vec![prompt("a", "One", "text"), prompt("a", "Two", "text")];
-    assert_eq!(settings.validate(), Err(SettingsError::PromptId));
-
-    settings.prompts = vec![prompt("a", "One", "text")];
-    settings.active_prompt_id = Some("missing".to_owned());
-    assert_eq!(settings.validate(), Err(SettingsError::UnknownActivePrompt));
-
-    settings.active_prompt_id = Some("a".to_owned());
-    settings.delete_prompt("a");
-    assert_eq!(settings.active_prompt_id, None);
-    assert_eq!(settings.next_prompt_id(), "prompt-1");
-}
-
-#[test]
 fn a_vocabulary_rule_needs_text_to_replace() {
     let settings = Settings {
         vocabulary_replacements: vec![VocabularyReplacement {
@@ -175,13 +106,12 @@ fn a_vocabulary_rule_needs_text_to_replace() {
 fn ai_cleanup_needs_a_usable_provider_only_while_it_is_on() {
     let mut settings = Settings {
         llm_provider: LlmProvider::Custom,
-        active_prompt_id: None,
         ..Settings::default()
     };
     settings.provider_settings_mut(LlmProvider::Custom).model = String::new();
     assert_eq!(settings.validate(), Ok(()));
 
-    settings.active_prompt_id = Some(settings.prompts[0].id.clone());
+    settings.cleanup_enabled = true;
     assert_eq!(
         settings.validate().expect_err("refused").to_string(),
         "AI cleanup needs a model for Custom provider; enter one, or turn AI cleanup off"
@@ -194,34 +124,6 @@ fn ai_cleanup_needs_a_usable_provider_only_while_it_is_on() {
             missing: "an API endpoint"
         })
     );
-}
-
-#[test]
-fn the_local_cleanup_model_takes_only_clean_up() {
-    let mut settings = Settings {
-        llm_provider: LlmProvider::LocalCleanup,
-        active_prompt_id: Some(CLEAN_UP_PROMPT_ID.to_owned()),
-        ..Settings::default()
-    };
-    settings
-        .provider_settings_mut(LlmProvider::LocalCleanup)
-        .model = "cleanup".to_owned();
-    assert_eq!(settings.validate(), Ok(()));
-
-    settings.active_prompt_id = Some("professional".to_owned());
-    assert_eq!(settings.validate(), Err(SettingsError::LocalCleanupPrompt));
-    assert!(
-        settings
-            .validate()
-            .expect_err("refused")
-            .to_string()
-            .starts_with("The local cleanup model only does Clean Up & Format")
-    );
-
-    settings.llm_provider = LlmProvider::Ollama;
-    settings.provider_settings_mut(LlmProvider::Ollama).model = "local".to_owned();
-    settings.active_prompt_id = Some("professional".to_owned());
-    assert_eq!(settings.validate(), Ok(()));
 }
 
 #[test]
@@ -247,7 +149,7 @@ fn the_cleanup_model_is_the_one_saved_for_its_provider_else_the_default() {
 #[test]
 fn an_update_is_refused_only_for_a_rule_it_breaks() {
     let before = Settings {
-        llm_timeout_seconds: 1,
+        vocabulary_replacements: vec![VocabularyReplacement::new(" ", "x")],
         ..Settings::default()
     };
     let mut edited = Settings {
@@ -259,24 +161,17 @@ fn an_update_is_refused_only_for_a_rule_it_breaks() {
         Ok(()),
         "a rule broken before the edit does not block other changes"
     );
-    edited.toggle_shortcut = Some(edited.hold_shortcut.clone());
+    edited.cancel_shortcut = Some(edited.recording_shortcut.clone());
     assert_eq!(
         edited.validate_update(&before),
-        Err(SettingsError::SameRecordingShortcuts)
+        Err(SettingsError::CancelIsRecordingShortcut)
     );
 }
 
 #[test]
-fn setup_shortcuts_are_ready_when_one_is_on_each_is_valid_and_they_differ() {
+fn setup_shortcuts_are_ready_when_the_recording_shortcut_is_valid() {
     let mut checkpoint = SetupCheckpoint::default();
     assert!(checkpoint.shortcuts_ready());
-    checkpoint.toggle_shortcut = Some(checkpoint.hold_shortcut.clone());
-    assert!(!checkpoint.shortcuts_ready());
-    checkpoint.hold_shortcut_enabled = false;
-    assert!(checkpoint.shortcuts_ready());
-    checkpoint.toggle_shortcut = None;
-    assert!(!checkpoint.shortcuts_ready());
-    checkpoint.hold_shortcut_enabled = true;
-    checkpoint.hold_shortcut = shortcut(&[], "space");
+    checkpoint.recording_shortcut = shortcut(&[], "space");
     assert!(!checkpoint.shortcuts_ready());
 }

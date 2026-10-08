@@ -203,7 +203,37 @@ small {
   padding-left: 26px;
 }
 
-.setup-model .model-actions {
+.setup-model .model-ratings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.rating {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.rating-bars {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.rating-bar {
+  width: 14px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--color-border-subtle);
+}
+
+.rating-bar.filled {
+  background: var(--color-text-secondary);
+}
+
+.model-actions {
   grid-column: 2;
   grid-row: 1 / span 2;
   justify-content: flex-end;
@@ -676,10 +706,13 @@ small {
   margin-top: var(--space-3);
 }
 
-.section-prose {
+.section-body {
   display: grid;
   gap: var(--space-3);
-  max-width: 68ch;
+}
+
+.section-body > .btn {
+  justify-self: start;
 }
 
 .inline-form {

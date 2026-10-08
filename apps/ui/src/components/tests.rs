@@ -1,12 +1,11 @@
 use dioxus::prelude::*;
 use whispernow_api::{
-    ApiErrorDto, AppStateDto, CleanupPrompt, ClearDataCategory, ClearDataRequest, ClearDataResult,
+    ApiErrorDto, AppStateDto, ClearDataCategory, ClearDataRequest, ClearDataResult,
     ClearDataResultItemDto, DataLocationDto, ErrorCategoryDto, HistoryLimit, ListModelsResponse,
     LlmProvider, MicrophoneTestResponse, ModelAvailability, ModelDto, ModelId, ModelStateDto,
-    OverlayPosition, OverlayStyle, PhaseDto, ProviderSettings, RelativeRating,
-    SaveSettingsResponse, Settings, SettingsView, SetupCheckpoint, SetupStateView, SetupStep,
-    Shortcut, ShortcutKey, ShortcutModifier, TranscriptResponse, UpdateSettingsRequest,
-    VocabularyReplacement,
+    PhaseDto, ProviderSettings, RecordingMode, RelativeRating, SaveSettingsResponse, Settings,
+    SettingsView, SetupCheckpoint, SetupStateView, SetupStep, Shortcut, ShortcutKey,
+    ShortcutModifier, TranscriptResponse, UpdateSettingsRequest, VocabularyReplacement,
 };
 
 use crate::client::{ClientError, fake};
@@ -49,12 +48,9 @@ pub(super) fn shortcut() -> Shortcut {
 fn settings() -> Settings {
     Settings {
         model_id: ModelId::new("sherpa-onnx-whisper-tiny").expect("fixture model id"),
-        hold_shortcut: shortcut(),
-        overlay_style: OverlayStyle::WithLiveText,
-        overlay_position: OverlayPosition::Bottom,
+        recording_shortcut: shortcut(),
         first_run_complete: true,
         history_limit: HistoryLimit::Last20,
-        prompts: Vec::new(),
         llm_provider_settings: [(
             LlmProvider::OpenAi,
             ProviderSettings {
@@ -63,7 +59,6 @@ fn settings() -> Settings {
             },
         )]
         .into(),
-        llm_timeout_seconds: 20,
         ..Settings::default()
     }
 }
@@ -85,9 +80,8 @@ fn unfinished_setup() -> ManagementState {
             step: SetupStep::Model,
             model_id: ModelId::new("sherpa-onnx-whisper-tiny").expect("fixture model id"),
             input_device: None,
-            hold_shortcut: shortcut(),
-            hold_shortcut_enabled: true,
-            toggle_shortcut: None,
+            recording_shortcut: shortcut(),
+            recording_mode: RecordingMode::Hold,
         },
     });
     management
@@ -384,22 +378,11 @@ pub(super) fn model(id: &str, name: &str, availability: ModelAvailability) -> Mo
     }
 }
 
-/// Settings with every section populated: both shortcuts, AI cleanup with a prompt, a saved
-/// provider model, a vocabulary rule, kept audio, and three models.
+/// Settings with every section populated: AI cleanup on, a saved provider model, a vocabulary
+/// rule, kept audio, and three models.
 fn configured() -> ManagementState {
     let mut settings = settings();
-    settings.toggle_shortcut = Some(Shortcut {
-        modifiers: [ShortcutModifier::Alt].into(),
-        key: ShortcutKey::T,
-    });
-    // An edited built-in prompt, so a newer default is offered.
-    settings.active_prompt_id = Some("fix_grammar".to_owned());
-    settings.prompts = vec![CleanupPrompt {
-        id: "fix_grammar".to_owned(),
-        title: "Clean up".to_owned(),
-        prompt: "Fix punctuation".to_owned(),
-        default_hash: None,
-    }];
+    settings.cleanup_enabled = true;
     settings
         .provider_settings_mut(LlmProvider::OpenAi)
         .saved_models = vec!["gpt-5-mini".to_owned()];
@@ -511,30 +494,6 @@ fn text_fields_save_when_committed_not_on_each_keystroke() {
         sent[0].provider_settings(LlmProvider::OpenAi).model,
         "gpt-4o"
     );
-
-    // Instructions are multi-line and save the same way, queued behind the model.
-    let management = page.context().management;
-    for typed in ["F", "Fi", "Fix"] {
-        page.fire("prompt-0-instructions", "input", typed);
-    }
-    let prompt = || {
-        management
-            .read()
-            .shown_settings()
-            .cloned()
-            .expect("loaded")
-            .prompts[0]
-            .prompt
-            .clone()
-    };
-    assert_eq!(prompt(), "Fix punctuation", "typing changes nothing yet");
-    page.fire("prompt-0-instructions", "change", "Fix");
-    assert_eq!(prompt(), "Fix");
-    assert_eq!(
-        sent_settings().len(),
-        1,
-        "one change at a time goes to the desktop"
-    );
 }
 
 #[test]
@@ -638,12 +597,15 @@ fn typed_text_survives_a_refused_or_failed_save_until_the_user_reverts() {
     let management = page.context().management;
 
     // Refused before it is sent.
-    page.fire("llm-timeout", "input", "soon");
-    page.fire("llm-timeout", "change", "soon");
+    page.fire("provider-endpoint", "input", "http://api.example.com");
+    page.fire("provider-endpoint", "change", "http://api.example.com");
     assert!(sent_settings().is_empty());
     let html = page.html();
-    let field = tag(&html, "llm-timeout").expect("time limit field");
-    assert!(field.contains("value=\"soon\""), "{field}");
+    let field = tag(&html, "provider-endpoint").expect("endpoint field");
+    assert!(
+        field.contains("value=\"http://api.example.com\""),
+        "{field}"
+    );
     assert!(field.contains("aria-invalid=\"true\""), "{field}");
 
     // Taken, then refused by the desktop.
@@ -750,20 +712,26 @@ fn a_refused_provider_keeps_its_fields_shown_and_is_asked_for_again_once_edited(
     assert!(tag(&html, "provider-name-error").is_none());
 }
 
-#[test]
-fn the_local_cleanup_provider_offers_each_cleanup_model_and_saves_the_choice() {
-    const SMALL: &str = "whispernow-cleanup-lfm2.5-350m-q8_0";
-    const LARGE: &str = "whispernow-cleanup-minicpm5-1b-q8_0";
-    let cleanup = |id: &str, name: &str, availability| ModelDto {
+fn cleanup_model(id: &str, name: &str, availability: ModelAvailability) -> ModelDto {
+    ModelDto {
         family: whispernow_api::ModelFamily::Cleanup,
         languages: Vec::new(),
         recommended: false,
         ..model(id, name, availability)
-    };
+    }
+}
+
+/// Configured settings that clean up with the app's own models, two of them listed with the
+/// CUDA pack.
+fn local_cleanup(small: &str, large: &str, pack: &str) -> ManagementState {
     let mut management = configured();
     let mut settings = management.shown_settings().cloned().expect("loaded");
     settings.llm_provider = LlmProvider::LocalCleanup;
-    settings.active_prompt_id = None;
+    small.clone_into(
+        &mut settings
+            .provider_settings_mut(LlmProvider::LocalCleanup)
+            .model,
+    );
     management.install_settings(SettingsView {
         settings,
         warnings: Vec::new(),
@@ -775,79 +743,45 @@ fn the_local_cleanup_provider_offers_each_cleanup_model_and_saves_the_choice() {
                 "Base",
                 ModelAvailability::Downloaded,
             ),
-            cleanup(
-                SMALL,
+            cleanup_model(
+                small,
                 "Local cleanup model (LFM2.5 350M)",
                 ModelAvailability::Downloaded,
             ),
-            cleanup(
-                LARGE,
+            cleanup_model(
+                large,
                 "Local cleanup model (MiniCPM5 1B)",
-                ModelAvailability::NotInstalled,
+                ModelAvailability::Downloaded,
             ),
+            ModelDto {
+                family: whispernow_api::ModelFamily::CudaPack,
+                ..cleanup_model(
+                    pack,
+                    "NVIDIA CUDA for cleanup models",
+                    ModelAvailability::NotInstalled,
+                )
+            },
         ],
     });
-    let mut page = shell(snapshot(PhaseDto::Idle), management);
-    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
-    let html = page.html();
-    let choice = tag(&html, "provider-cleanup-model-choice").expect("the cleanup model picker");
-    assert!(choice.contains(&format!("value=\"{SMALL}\"")), "{choice}");
-    assert!(
-        html.contains("Local cleanup model (MiniCPM5 1B)"),
-        "both are offered"
-    );
-    assert!(
-        tag(&html, "provider-cleanup-model-download").is_none(),
-        "the default is installed"
-    );
-
-    page.fire("provider-cleanup-model-choice", "change", LARGE);
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 1);
-    assert_eq!(
-        sent[0].provider_settings(LlmProvider::LocalCleanup).model,
-        LARGE
-    );
-    assert_eq!(sent[0].cleanup_model_id(), LARGE);
-    page.settle();
-    let html = page.html();
-    assert!(
-        tag(&html, "provider-cleanup-model-download").is_some(),
-        "the larger model offers its download"
-    );
+    management
 }
 
 #[test]
-fn the_cuda_pack_is_offered_in_its_own_section_and_never_as_a_speech_model() {
+fn speech_models_show_speed_and_accuracy_as_bars() {
+    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    open(&mut page, &["nav-settings", "nav-settings-models"]);
+    let html = page.html();
+    assert!(html.contains("aria-label=\"Speed: 3 of 3\""), "{html}");
+    assert!(html.contains("aria-label=\"Accuracy: 2 of 3\""));
+    assert!(!html.contains("English"), "the languages are not listed");
+}
+
+#[test]
+fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() {
+    const SMALL: &str = "whispernow-cleanup-lfm2.5-350m-q8_0";
+    const LARGE: &str = "whispernow-cleanup-minicpm5-1b-q8_0";
     const PACK: &str = "llama-cuda-13.4";
-    let listed = |id: &str, name: &str, family, availability| ModelDto {
-        family,
-        languages: Vec::new(),
-        recommended: false,
-        ..model(id, name, availability)
-    };
-    let mut management = configured();
-    management.install_models(ListModelsResponse {
-        models: vec![
-            model(
-                "sherpa-onnx-whisper-base",
-                "Base",
-                ModelAvailability::Downloaded,
-            ),
-            listed(
-                "whispernow-cleanup-lfm2.5-350m-q8_0",
-                "Local cleanup model (LFM2.5 350M)",
-                whispernow_api::ModelFamily::Cleanup,
-                ModelAvailability::Downloaded,
-            ),
-            listed(
-                PACK,
-                "NVIDIA CUDA for cleanup models",
-                whispernow_api::ModelFamily::CudaPack,
-                ModelAvailability::NotInstalled,
-            ),
-        ],
-    });
+    let management = local_cleanup(SMALL, LARGE, PACK);
     assert!(
         management
             .speech_models()
@@ -856,6 +790,23 @@ fn the_cuda_pack_is_offered_in_its_own_section_and_never_as_a_speech_model() {
     let mut page = shell(snapshot(PhaseDto::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
+    assert!(
+        tag(&html, "model-whispernow-cleanup-lfm2-5-350m-q8_0-name").is_none(),
+        "cleanup models are not speech models"
+    );
+    assert!(tag(&html, "cuda-pack-title").is_none());
+
+    open(&mut page, &["nav-settings-ai-cleanup"]);
+    let html = page.html();
+    assert!(
+        tag(&html, "cleanup-source-whispernow")
+            .expect("the source choice")
+            .contains("aria-pressed=\"true\"")
+    );
+    assert!(
+        tag(&html, "model-whispernow-cleanup-lfm2-5-350m-q8_0-use").is_none(),
+        "the chosen model is in use"
+    );
     let section = html
         .find("id=\"cuda-pack-title\"")
         .expect("the CUDA section");
@@ -865,6 +816,58 @@ fn the_cuda_pack_is_offered_in_its_own_section_and_never_as_a_speech_model() {
     assert!(row > section, "listed under its own section");
     assert!(tag(&html, "model-llama-cuda-13-4-download").is_some());
     assert!(tag(&html, "model-llama-cuda-13-4-use").is_none());
+
+    open(
+        &mut page,
+        &["model-whispernow-cleanup-minicpm5-1b-q8_0-use"],
+    );
+    let sent = sent_settings();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].cleanup_model_id(), LARGE);
+}
+
+#[test]
+fn choosing_a_cleanup_source_picks_its_first_provider_and_shows_its_fields() {
+    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+    let html = page.html();
+    assert!(
+        tag(&html, "cleanup-source-api")
+            .expect("the source choice")
+            .contains("aria-pressed=\"true\"")
+    );
+    assert!(tag(&html, "provider-credential").is_some());
+
+    open(&mut page, &["cleanup-source-local"]);
+    let sent = sent_settings();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].llm_provider, LlmProvider::Ollama);
+    let html = page.html();
+    assert!(tag(&html, "provider-model").is_some());
+    assert!(
+        tag(&html, "provider-credential").is_none(),
+        "Ollama needs no key"
+    );
+}
+
+#[test]
+fn the_recording_shortcut_switches_between_hold_and_toggle() {
+    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    open(&mut page, &["nav-settings", "nav-settings-general"]);
+    let html = page.html();
+    assert!(
+        tag(&html, "recording-mode-hold")
+            .expect("hold")
+            .contains("aria-pressed=\"true\"")
+    );
+    assert!(tag(&html, "hold-to-record").is_none());
+    assert!(tag(&html, "overlay-style").is_none());
+
+    open(&mut page, &["recording-mode-toggle"]);
+    let sent = sent_settings();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].recording_mode, RecordingMode::Toggle);
+    assert_eq!(sent[0].recording_shortcut, shortcut(), "the keys stay");
 }
 
 #[test]
@@ -902,23 +905,6 @@ fn deleting_a_rule_names_it_and_moves_focus_to_its_neighbour() {
         Some("vocabulary-add-form"),
         "with no rule left, focus goes to the form that adds one"
     );
-}
-
-#[test]
-fn prompt_fields_name_the_prompt_they_edit() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
-    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
-    let html = page.html();
-    for id in ["prompt-0-name", "prompt-0-instructions"] {
-        let field = tag(&html, id).expect("prompt field");
-        let name = field
-            .split("aria-label=\"")
-            .nth(1)
-            .and_then(|rest| rest.split('"').next())
-            .unwrap_or_else(|| panic!("{id} has an accessible name: {field}"));
-        assert!(name.contains("Clean up"), "{id} names its prompt: {name}");
-    }
-    assert!(label_in_name_violations(&html).is_empty());
 }
 
 #[test]

@@ -12,7 +12,7 @@ use whispernow_api::{
 
 use crate::client::fake;
 use crate::components::UiActions;
-use crate::components::cleanup_recipient;
+use crate::components::cleanup_destination;
 use crate::test_support::{
     editable_settings, show_history, snapshot, test_context, use_test_context,
 };
@@ -69,6 +69,7 @@ fn settings_html(update: UpdateStateDto) -> String {
 fn cleanup_to(provider: LlmProvider, api_base: Option<&str>) -> Settings {
     let mut settings = editable_settings();
     settings.llm_provider = provider;
+    settings.cleanup_enabled = true;
     settings.provider_settings_mut(provider).api_base = api_base.map(|api_base| {
         whispernow_api::ProviderEndpoint::parse(api_base).expect("a safe endpoint")
     });
@@ -224,12 +225,11 @@ fn history_unavailability_preserves_independently_loaded_management_sections() {
             step: SetupStep::TryIt,
             model_id: model_id("model"),
             input_device: Some("microphone".to_owned()),
-            hold_shortcut: Shortcut {
+            recording_shortcut: Shortcut {
                 modifiers: [ShortcutModifier::Control].into(),
                 key: ShortcutKey::Space,
             },
-            hold_shortcut_enabled: true,
-            toggle_shortcut: None,
+            recording_mode: whispernow_api::RecordingMode::Hold,
         },
     });
     management.install_devices(ListAudioDevicesResponse {
@@ -449,97 +449,41 @@ fn a_refused_change_rolls_back_and_keeps_its_error_beside_the_control() {
     );
 }
 
-type Edit = Box<dyn Fn(&mut Settings)>;
-
-fn add_prompt(title: &str, prompt: &str) -> Edit {
-    let (title, prompt) = (title.to_owned(), prompt.to_owned());
-    Box::new(move |settings| {
-        settings.prompts.push(whispernow_api::CleanupPrompt {
-            id: settings.next_prompt_id(),
-            title: title.clone(),
-            prompt: prompt.clone(),
-            default_hash: None,
-        });
-    })
-}
-
-#[test]
-fn new_prompts_get_distinct_generated_identifiers() {
-    let mut management = loaded_management(editable_settings());
-    for title in ["Email", "Email"] {
-        assert!(management.change_setting(SettingKey::Prompts, add_prompt(title, "Tidy the text")));
-    }
-    let prompts = management.shown_settings().expect("loaded").prompts.clone();
-    assert_eq!(prompts.len(), 2);
-    assert!(prompts.iter().all(|prompt| !prompt.id.is_empty()));
-    assert_ne!(prompts[0].id, prompts[1].id);
-}
-
-#[test]
-fn a_prompt_test_needs_sample_text() {
-    let mut management = loaded_management(editable_settings());
-    assert!(management.begin_prompt_test("clean", "   ").is_none());
-    assert!(
-        management
-            .prompt_test
-            .as_ref()
-            .is_some_and(|test| matches!(test.outcome, Some(Err(_))))
-    );
-    let request = management
-        .begin_prompt_test("clean", "hello there")
-        .expect("sample text is enough");
-    assert_eq!(
-        management.prompt_test.as_ref().map(|test| &test.outcome),
-        Some(&None)
-    );
-    management.finish_prompt_test(
-        &request,
-        Ok(whispernow_api::TestPromptResponse {
-            text: "Hello there.".to_owned(),
-        }),
-    );
-    assert_eq!(
-        management.prompt_test.and_then(|test| test.outcome),
-        Some(Ok("Hello there.".to_owned()))
-    );
-}
-
 #[test]
 fn cleanup_disclosure_names_the_configured_provider() {
     let settings = cleanup_to(LlmProvider::Anthropic, None);
-    assert_eq!(
-        cleanup_recipient(&settings),
-        "the configured Anthropic provider"
-    );
+    assert_eq!(cleanup_destination(&settings).as_deref(), Some("Anthropic"));
 }
 
 #[test]
-fn named_provider_disclosure_identifies_a_custom_recipient_without_claiming_direct_delivery() {
+fn cleanup_disclosure_names_a_custom_endpoint_by_its_origin_without_its_path() {
     let settings = cleanup_to(
         LlmProvider::Anthropic,
         Some("https://gateway.example:8443/private-looking-path/v1"),
     );
-    let recipient = cleanup_recipient(&settings);
     assert_eq!(
-        recipient,
-        "the configured API endpoint at https://gateway.example:8443"
+        cleanup_destination(&settings).as_deref(),
+        Some("https://gateway.example:8443")
     );
-    assert!(!recipient.contains("configured Anthropic provider"));
-    assert!(!recipient.contains("private-looking-path"));
 }
 
 #[test]
-fn custom_provider_disclosure_identifies_its_safe_endpoint_without_path_details() {
-    let settings = cleanup_to(
-        LlmProvider::Custom,
-        Some("https://compatible.provider.example:8443/private-looking-path/v1"),
-    );
-    let recipient = cleanup_recipient(&settings);
-    assert_eq!(
-        recipient,
-        "the custom OpenAI-compatible provider at https://compatible.provider.example:8443"
-    );
-    assert!(!recipient.contains("private-looking-path"));
+fn nothing_is_disclosed_when_cleanup_is_off_or_runs_on_this_computer() {
+    let mut off = cleanup_to(LlmProvider::OpenAi, None);
+    off.cleanup_enabled = false;
+    for settings in [
+        off,
+        cleanup_to(LlmProvider::LocalCleanup, None),
+        cleanup_to(LlmProvider::Ollama, None),
+        cleanup_to(LlmProvider::Custom, Some("http://127.0.0.1:8080/v1")),
+    ] {
+        assert_eq!(
+            cleanup_destination(&settings),
+            None,
+            "{:?}",
+            settings.llm_provider
+        );
+    }
 }
 
 #[test]
@@ -874,8 +818,8 @@ fn dashboard_status_never_claims_ready_when_workflow_is_unavailable() {
 fn a_saved_settings_warning_is_shown_beside_the_installed_settings() {
     let mut management = loaded_management(editable_settings());
     assert!(
-        management.change_setting(SettingKey::HoldShortcut, |settings| {
-            settings.hold_shortcut = Shortcut {
+        management.change_setting(SettingKey::RecordingShortcut, |settings| {
+            settings.recording_shortcut = Shortcut {
                 modifiers: [ShortcutModifier::Alt].into(),
                 key: ShortcutKey::R,
             };
@@ -903,7 +847,7 @@ fn a_saved_settings_warning_is_shown_beside_the_installed_settings() {
         management
             .settings
             .as_ref()
-            .map(|settings| settings.settings.hold_shortcut.key),
+            .map(|settings| settings.settings.recording_shortcut.key),
         Some(ShortcutKey::R),
         "the save committed even though a side effect failed"
     );

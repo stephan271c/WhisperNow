@@ -1,9 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use whispernow_api::{
-    ApiErrorDto, AppStateDto, ErrorCategoryDto, OverlayPosition, OverlayStyle, PhaseDto,
-    RecoveryActionDto,
-};
+use whispernow_api::{ApiErrorDto, ErrorCategoryDto, PhaseDto, RecoveryActionDto};
 
 use crate::tests::{recording, snapshot};
 
@@ -22,11 +19,8 @@ impl FakeWindow {
 }
 
 impl OverlayWindow for FakeWindow {
-    fn show(&self, position: OverlayPosition) {
-        self.0
-            .lock()
-            .expect("window log")
-            .push(format!("show {position:?}"));
+    fn show(&self) {
+        self.0.lock().expect("window log").push("show".to_owned());
     }
 
     fn hide(&self) {
@@ -38,14 +32,6 @@ impl OverlayWindow for FakeWindow {
             .lock()
             .expect("window log")
             .push(format!("notify {message}"));
-    }
-}
-
-/// A snapshot in `phase` that shows the overlay in `style`.
-fn styled(phase: PhaseDto, style: OverlayStyle) -> AppStateDto {
-    AppStateDto {
-        overlay_style: style,
-        ..snapshot(phase)
     }
 }
 
@@ -68,46 +54,35 @@ fn overlay(can_float: bool) -> (RecordingOverlay, Arc<FakeWindow>) {
 #[test]
 fn a_dictation_shows_the_window_once_until_it_ends() {
     let (overlay, window) = overlay(true);
-    let style = OverlayStyle::Minimal;
     for phase in [
         recording(),
         PhaseDto::Processing { cleaning_up: false },
         PhaseDto::Processing { cleaning_up: true },
         PhaseDto::Idle,
     ] {
-        overlay.observe(&styled(phase, style));
+        overlay.observe(&snapshot(phase));
     }
-    assert_eq!(window.calls(), ["show Bottom", "hide"]);
+    assert_eq!(window.calls(), ["show", "hide"]);
 }
 
 #[test]
 fn a_failure_stays_until_the_phase_leaves_it() {
     let (overlay, window) = overlay(true);
-    let style = OverlayStyle::Minimal;
-    overlay.observe(&styled(recording(), style));
-    overlay.observe(&styled(failed(RecoveryActionDto::CopyManually), style));
-    assert_eq!(window.calls(), ["show Bottom"]);
-    overlay.observe(&styled(PhaseDto::Idle, style));
-    assert_eq!(window.calls(), ["show Bottom", "hide"]);
-}
-
-#[test]
-fn the_off_style_never_shows_the_window() {
-    let (overlay, window) = overlay(true);
-    overlay.observe(&styled(recording(), OverlayStyle::Off));
-    overlay.observe(&styled(failed(RecoveryActionDto::Retry), OverlayStyle::Off));
-    assert!(window.calls().is_empty());
+    overlay.observe(&snapshot(recording()));
+    overlay.observe(&snapshot(failed(RecoveryActionDto::CopyManually)));
+    assert_eq!(window.calls(), ["show"]);
+    overlay.observe(&snapshot(PhaseDto::Idle));
+    assert_eq!(window.calls(), ["show", "hide"]);
 }
 
 #[test]
 fn native_wayland_notifies_each_failure_once_instead_of_showing_a_window() {
     let (overlay, window) = overlay(false);
-    let style = OverlayStyle::Minimal;
-    overlay.observe(&styled(recording(), style));
-    overlay.observe(&styled(failed(RecoveryActionDto::CopyManually), style));
-    overlay.observe(&styled(failed(RecoveryActionDto::CopyManually), style));
-    overlay.observe(&styled(PhaseDto::Idle, style));
-    overlay.observe(&styled(failed(RecoveryActionDto::Retry), style));
+    overlay.observe(&snapshot(recording()));
+    overlay.observe(&snapshot(failed(RecoveryActionDto::CopyManually)));
+    overlay.observe(&snapshot(failed(RecoveryActionDto::CopyManually)));
+    overlay.observe(&snapshot(PhaseDto::Idle));
+    overlay.observe(&snapshot(failed(RecoveryActionDto::Retry)));
     assert_eq!(
         window.calls(),
         [
@@ -151,18 +126,8 @@ fn visibility_policy_covers_every_phase() {
             OverlayPresentation::Notification,
         ),
     ] {
-        assert_eq!(
-            overlay_presentation(OverlayStyle::WithLiveText, &phase, true),
-            window
-        );
-        assert_eq!(
-            overlay_presentation(OverlayStyle::WithLiveText, &phase, false),
-            wayland
-        );
-        assert_eq!(
-            overlay_presentation(OverlayStyle::Off, &phase, true),
-            OverlayPresentation::None
-        );
+        assert_eq!(overlay_presentation(&phase, true), window);
+        assert_eq!(overlay_presentation(&phase, false), wayland);
     }
 }
 
@@ -206,19 +171,15 @@ fn the_overlay_uses_the_monitor_under_the_cursor_or_the_primary_monitor() {
 }
 
 #[test]
-fn placement_is_centred_on_the_chosen_edge_at_the_monitor_scale() {
+fn placement_is_centred_on_the_bottom_edge_at_the_monitor_scale() {
     let size = (360.0, 132.0);
     assert_eq!(
-        overlay_origin(&monitor(0, 1_920, 1.0), OverlayPosition::Bottom, size),
+        overlay_origin(&monitor(0, 1_920, 1.0), size),
         (780, 1_040 - 132 - 48)
-    );
-    assert_eq!(
-        overlay_origin(&monitor(0, 1_920, 1.0), OverlayPosition::Top, size),
-        (780, 48)
     );
     // A 200% monitor to the right of the primary one: physical sizes double.
     assert_eq!(
-        overlay_origin(&monitor(1_920, 3_840, 2.0), OverlayPosition::Bottom, size),
+        overlay_origin(&monitor(1_920, 3_840, 2.0), size),
         (1_920 + (3_840 - 720) / 2, 1_040 - 264 - 96)
     );
 }

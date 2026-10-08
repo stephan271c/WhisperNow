@@ -49,16 +49,11 @@ pub fn app() -> Element {
     use_future(move || async move {
         let recording_bar = window_label() == "recording-bar";
         let mut event_state = state;
-        let event_names: &[&str] = if recording_bar {
-            &whispernow_api::RECORDING_BAR_EVENT_NAMES
-        } else {
-            &whispernow_api::EVENT_NAMES
-        };
         // Tauri calls the listener from JavaScript with no Dioxus scope on the stack, so the
         // callback re-enters this component's scope before `spawn` looks it up.
         let runtime = dioxus::core::Runtime::current();
         let scope = dioxus::core::current_scope_id();
-        match client::listen_all(event_names, move |event| {
+        match client::listen_all(&whispernow_api::EVENT_NAMES, move |event| {
             runtime.in_scope(scope, || {
                 if recording_bar {
                     event_state.write().apply_event(event);

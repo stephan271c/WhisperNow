@@ -8,20 +8,15 @@ use whispernow_api::{
     ApiErrorDto, AudioDeviceDto, DeleteHistoryEntryRequest, ErrorCategoryDto, EventPayload,
     HistoryFilter, HistoryPage, HistoryPageRequest, ListAudioDevicesResponse,
     MicrophoneTestResponse, PermissionKindDto, PermissionStatusDto, PermissionsResponse,
-    SaveSettingsResponse, Settings, SettingsView, SetupCheckpoint, SetupStep, TestPromptRequest,
-    TestPromptResponse,
+    SaveSettingsResponse, Settings, SettingsView, SetupCheckpoint, SetupStep,
 };
-use whispernow_core::{
-    CancellationToken,
-    audio::{AudioDeviceChoice, AudioInput, AudioInputError},
-};
+use whispernow_core::audio::{AudioDeviceChoice, AudioInput, AudioInputError};
 use whispernow_domain::LlmProvider;
 use whispernow_platform::{
     DataCleaner, LocalCleanupService, PrivacySettingsPage, open_in_file_manager,
     open_privacy_settings,
 };
 
-use dictation::AiCleanup;
 pub(crate) use dictation::Dictation;
 use history::HistoryStore;
 use models::ModelCoordinator;
@@ -51,7 +46,6 @@ pub(crate) struct NativeServices {
     pub(crate) models: Arc<ModelCoordinator>,
     pub(crate) state: Arc<StateCell>,
     pub(crate) dictation: Dictation,
-    llm: Arc<AiCleanup>,
     clear_data: DataCleaner,
     output: Arc<OutputCoordinator>,
     paste_helper_setup_dir: PathBuf,
@@ -104,25 +98,11 @@ impl NativeServices {
     /// Loads the chosen local cleanup model in the background when AI cleanup uses it, and
     /// frees it otherwise.
     fn follow_cleanup_provider(&self, settings: &Settings) {
-        if settings.llm_provider == LlmProvider::LocalCleanup && settings.active_prompt_id.is_some()
-        {
+        if settings.llm_provider == LlmProvider::LocalCleanup && settings.cleanup_enabled {
             self.local_cleanup.preload(settings.cleanup_model_id());
         } else {
             self.local_cleanup.unload();
         }
-    }
-
-    pub(crate) fn test_prompt(
-        &self,
-        request: &TestPromptRequest,
-        shutdown: &CancellationToken,
-    ) -> Result<TestPromptResponse, ApiErrorDto> {
-        self.state.refuse_while_updating()?;
-        let (plan, timeout) = self.settings.prompt_test_plan(&request.prompt_id)?;
-        let text = self
-            .llm
-            .run_prompt(&plan, &request.sample_text, timeout, shutdown)?;
-        Ok(TestPromptResponse { text })
     }
 
     /// Whether [`Self::copy_last_transcript`] can work in this session; native Wayland output
@@ -307,11 +287,8 @@ impl NativeServices {
         let before = settings.clone();
         settings.model_id = checkpoint.model_id.clone();
         settings.input_device.clone_from(&checkpoint.input_device);
-        settings.hold_shortcut = checkpoint.hold_shortcut.clone();
-        settings.hold_shortcut_enabled = checkpoint.hold_shortcut_enabled;
-        settings
-            .toggle_shortcut
-            .clone_from(&checkpoint.toggle_shortcut);
+        settings.recording_shortcut = checkpoint.recording_shortcut.clone();
+        settings.recording_mode = checkpoint.recording_mode;
         settings.first_run_complete = true;
         settings.setup = None;
         settings

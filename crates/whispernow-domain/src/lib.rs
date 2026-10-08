@@ -1,7 +1,6 @@
 mod data;
 mod history;
 mod models;
-mod prompts;
 mod provider;
 mod settings;
 mod shortcut;
@@ -21,11 +20,9 @@ pub use models::{
     ModelDefinition, ModelFamily, ModelId, ModelLayout, ModelProfile, ModelRegistry, ModelSource,
     RelativeRating,
 };
-pub use prompts::{CLEAN_UP_PROMPT_ID, CleanupPrompt, default_prompts};
 pub use provider::{EndpointError, LlmProvider, ProviderEndpoint};
 pub use settings::{
-    ApiKey, DEFAULT_LLM_TIMEOUT_SECONDS, InvalidApiKey, LLM_TIMEOUT_SECONDS_RANGE, OverlayPosition,
-    OverlayStyle, ProviderSettings, PythonSettings, Settings, SetupCheckpoint, SetupStep,
+    ApiKey, InvalidApiKey, ProviderSettings, PythonSettings, Settings, SetupCheckpoint, SetupStep,
     ThemePreference, VocabularyReplacement, WindowGeometry,
 };
 pub use shortcut::{RecordingMode, Shortcut, ShortcutKey, ShortcutModifier};

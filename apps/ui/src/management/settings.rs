@@ -3,8 +3,8 @@
 //! it answers. A refused edit drops out again while its control shows why.
 
 use whispernow_api::{
-    ApiErrorDto, SaveSettingsResponse, Settings, SettingsView, TestPromptRequest,
-    TestPromptResponse, ThemePreference, UpdateSettingsRequest,
+    ApiErrorDto, SaveSettingsResponse, Settings, SettingsView, ThemePreference,
+    UpdateSettingsRequest,
 };
 
 use super::ManagementState;
@@ -14,27 +14,18 @@ use crate::components::ui::Tone;
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SettingKey {
     InputDevice,
-    HoldShortcut,
-    ToggleShortcut,
+    /// The recording shortcut's keys and mode.
+    RecordingShortcut,
     CancelShortcut,
     StartMinimized,
     StartOnLogin,
     Theme,
-    OverlayStyle,
-    OverlayPosition,
     HistoryLimit,
     KeepAudio,
     ActiveProvider,
     ProviderModel,
     ProviderApiBase,
-    LlmTimeout,
-    /// Whether AI cleanup is on, and with which prompt.
-    ActivePrompt,
-    /// Adding and deleting prompts.
-    Prompts,
-    PromptTitle(String),
-    /// A prompt's instructions, including choosing between them and a newer default.
-    PromptText(String),
+    CleanupEnabled,
     Vocabulary,
 }
 
@@ -46,13 +37,6 @@ pub enum SaveStatus {
     Saved,
     /// The change was not saved; the control shows the saved value again.
     Failed(String),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PromptTest {
-    pub prompt_id: String,
-    /// `None` while the provider is working.
-    pub outcome: Option<Result<String, String>>,
 }
 
 impl ManagementState {
@@ -167,41 +151,6 @@ impl ManagementState {
 
     pub fn finish_credential_mutation(&mut self, response: SettingsView) {
         self.settings = Some(response);
-    }
-
-    pub fn begin_prompt_test(
-        &mut self,
-        prompt_id: &str,
-        sample_text: &str,
-    ) -> Option<TestPromptRequest> {
-        let request = TestPromptRequest {
-            prompt_id: prompt_id.to_owned(),
-            sample_text: sample_text.trim().to_owned(),
-        };
-        if request.sample_text.is_empty() {
-            self.prompt_test = Some(PromptTest {
-                prompt_id: prompt_id.to_owned(),
-                outcome: Some(Err("Enter some sample text to test the prompt".to_owned())),
-            });
-            return None;
-        }
-        self.prompt_test = Some(PromptTest {
-            prompt_id: prompt_id.to_owned(),
-            outcome: None,
-        });
-        Some(request)
-    }
-
-    pub fn finish_prompt_test(
-        &mut self,
-        request: &TestPromptRequest,
-        outcome: Result<TestPromptResponse, String>,
-    ) {
-        if let Some(test) = &mut self.prompt_test
-            && test.prompt_id == request.prompt_id
-        {
-            test.outcome = Some(outcome.map(|response| response.text));
-        }
     }
 }
 

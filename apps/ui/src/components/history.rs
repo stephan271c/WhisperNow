@@ -4,7 +4,7 @@ mod row;
 
 use dioxus::core::Task;
 use dioxus::prelude::*;
-use whispernow_api::HistoryFilter;
+use whispernow_api::{HistoryFilter, RecordingMode};
 
 pub(crate) use format::LocalClock;
 use format::{group_by_day, retention_summary};
@@ -131,10 +131,15 @@ pub(super) fn HistoryScreen() -> Element {
                 }
             } else if entries.is_empty() {
                 EmptyState { icon: IconName::History, title: "No transcripts yet",
-                    if let Some(settings) = settings.as_ref().filter(|settings| settings.hold_shortcut_enabled) {
-                        p { "Hold " ShortcutLabel { shortcut: settings.hold_shortcut.clone() } " to dictate. Your words will be waiting here." }
-                    } else {
-                        p { "Dictate from the recording bar. Your words will be waiting here." }
+                    if let Some(settings) = settings.as_ref() {
+                        p {
+                            match settings.recording_mode {
+                                RecordingMode::Hold => "Hold ",
+                                RecordingMode::Toggle => "Press ",
+                            }
+                            ShortcutLabel { shortcut: settings.recording_shortcut.clone() }
+                            " to dictate. Your words will be waiting here."
+                        }
                     }
                 }
             }

@@ -28,8 +28,7 @@ use whispernow_core::{
     },
     workflow::{
         AudioSegment, PipelineFailureKind, PreparedTranscription, SpeechSegmenter,
-        VoiceActivitySource, apply_vocabulary_replacements, has_microphone_audio,
-        join_segment_texts, prepare_segmented, recognize_segment,
+        VoiceActivitySource, has_microphone_audio, prepare_segmented, recognize_segment,
     },
 };
 use whispernow_domain::{
@@ -66,8 +65,6 @@ pub(crate) struct DictationSettings {
     pub(crate) model_id: ModelId,
     pub(crate) vocabulary: Vec<VocabularyReplacement>,
     pub(crate) cleanup: Option<CleanupPlan>,
-    /// Total time one AI cleanup may take, including any retries.
-    pub(crate) llm_timeout: Duration,
     pub(crate) history_limit: HistoryLimit,
     /// Whether a successful dictation keeps its audio in history.
     pub(crate) keep_audio: bool,
@@ -653,7 +650,6 @@ impl Worker {
         let llm_model = self.parts.llm.apply(
             &mut prepared,
             settings.cleanup.as_ref(),
-            settings.llm_timeout,
             &recording.cancellation,
         );
         if recording.cancellation.is_cancelled() {
@@ -731,8 +727,7 @@ impl Worker {
             .publish(EventPayload::HistoryChanged);
     }
 
-    /// Decodes the segments a pause ended while capture continues, and publishes the text so
-    /// far to the recording bar.
+    /// Decodes the segments a pause ended while capture continues.
     fn decode_live(&mut self, session: u64) {
         let Some(mut recording) = self.recording.take() else {
             return;
@@ -747,26 +742,9 @@ impl Worker {
                     break;
                 };
                 recording.decoded.push(text);
-                self.publish_partial(&recording);
             }
         }
         self.recording = Some(recording);
-    }
-
-    /// Publishes the text committed so far. The event carries transcript text, so the desktop
-    /// delivers it only to the recording bar.
-    fn publish_partial(&self, recording: &Recording) {
-        let joined = join_segment_texts(recording.decoded.iter().map(String::as_str));
-        self.parts
-            .state
-            .events()
-            .publish(EventPayload::PartialTranscript {
-                session: recording.session,
-                committed_text: apply_vocabulary_replacements(
-                    &joined,
-                    &recording.settings.vocabulary,
-                ),
-            });
     }
 
     /// Decodes the segments the live decoder has not reached yet.

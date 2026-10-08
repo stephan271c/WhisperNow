@@ -6,7 +6,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    ApiKey, HistoryLimit, LlmProvider, ProviderEndpoint, ProviderSettings, Settings, Shortcut,
+    ApiKey, HistoryLimit, LlmProvider, ProviderEndpoint, ProviderSettings, RecordingMode, Settings,
+    Shortcut,
 };
 
 /// Settings read from the Python release's `settings.json`, and the API keys it held in
@@ -24,11 +25,6 @@ impl PythonSettings {
     pub fn import(document: &Value) -> Self {
         let mut settings = Settings::default();
         pick(document, "input_device", &mut settings.input_device);
-        pick(
-            document,
-            "hotkey_enabled",
-            &mut settings.hold_shortcut_enabled,
-        );
         pick(document, "model_id", &mut settings.model_id);
         pick(document, "start_minimized", &mut settings.start_minimized);
         pick(
@@ -41,11 +37,9 @@ impl PythonSettings {
             "first_run_complete",
             &mut settings.first_run_complete,
         );
-        pick(
-            document,
-            "active_enhancement_id",
-            &mut settings.active_prompt_id,
-        );
+        settings.cleanup_enabled = document
+            .get("active_enhancement_id")
+            .is_some_and(Value::is_string);
         pick(document, "llm_provider", &mut settings.llm_provider);
         pick(
             document,
@@ -53,12 +47,9 @@ impl PythonSettings {
             &mut settings.vocabulary_replacements,
         );
         pick(document, "window_geometry", &mut settings.window_geometry);
-        if let Some(Value::Array(_)) = document.get("enhancements") {
-            pick(document, "enhancements", &mut settings.prompts);
-        }
         // A stored shortcut missing its modifiers or key takes the default's.
         if let Some(Value::Object(stored)) = document.get("hotkey") {
-            let mut shortcut = serde_json::to_value(&settings.hold_shortcut)
+            let mut shortcut = serde_json::to_value(&settings.recording_shortcut)
                 .ok()
                 .and_then(|value| value.as_object().cloned())
                 .unwrap_or_default();
@@ -66,16 +57,18 @@ impl PythonSettings {
             if let Ok(shortcut) = serde_json::from_value::<Shortcut>(Value::Object(shortcut))
                 && shortcut.is_recording_shortcut()
             {
-                settings.hold_shortcut = shortcut;
+                settings.recording_shortcut = shortcut;
             }
         }
-        pick(document, "toggle_hotkey", &mut settings.toggle_shortcut);
-        if settings
-            .toggle_shortcut
-            .as_ref()
-            .is_some_and(|toggle| !toggle.is_recording_shortcut())
-        {
-            settings.toggle_shortcut = None;
+        // The Python release could run hold and toggle shortcuts side by side; hold wins
+        // unless it was turned off.
+        let mut hold_enabled = true;
+        pick(document, "hotkey_enabled", &mut hold_enabled);
+        let mut toggle = None::<Shortcut>;
+        pick(document, "toggle_hotkey", &mut toggle);
+        if !hold_enabled && let Some(toggle) = toggle.filter(Shortcut::is_recording_shortcut) {
+            settings.recording_shortcut = toggle;
+            settings.recording_mode = RecordingMode::Toggle;
         }
         if let Some(max_entries) = document
             .get("text_retention")

@@ -2,13 +2,11 @@ use serde_json::{json, to_value};
 
 use crate::{
     ApiErrorDto, ApiKey, AppStateDto, DeleteHistoryEntryRequest, ErrorCategoryDto, EventPayload,
-    GetHistoryAudioRequest, LlmProvider, ModelStateDto, OverlayStyle, PhaseDto, RecordingMode,
-    RecoveryActionDto, SetApiKeyRequest, SettingsView, TextOutputStatusDto, TranscriptResponse,
-    UpdatePhaseDto, UpdateProgressDto, UpdateStateDto,
+    GetHistoryAudioRequest, LlmProvider, ModelStateDto, PhaseDto, RecordingMode, RecoveryActionDto,
+    SetApiKeyRequest, SettingsView, TextOutputStatusDto, TranscriptResponse, UpdatePhaseDto,
+    UpdateProgressDto, UpdateStateDto,
 };
-use whispernow_domain::{
-    HistoryFilter, HistoryLimit, HistoryPageRequest, ModelId, OverlayPosition, Settings,
-};
+use whispernow_domain::{HistoryFilter, HistoryLimit, HistoryPageRequest, ModelId, Settings};
 
 #[test]
 fn history_requests_carry_no_storage_authority() {
@@ -50,34 +48,6 @@ fn credential_mutation_is_write_only_and_debug_redacted() {
     let encoded = serde_json::to_value(&request).expect("serialize credential mutation");
     assert_eq!(encoded["key"], "write-only-secret");
     assert!(!format!("{request:?}").contains("write-only-secret"));
-}
-
-#[test]
-fn partial_transcript_event_round_trips_and_is_not_broadcast() {
-    let event = EventPayload::PartialTranscript {
-        session: 4,
-        committed_text: "so far so good".to_owned(),
-    };
-    assert_eq!(event.event_name(), crate::PARTIAL_TRANSCRIPT_EVENT);
-    let value = to_value(&event).expect("serialize partial transcript event");
-    assert_eq!(
-        value,
-        json!({
-            "type": "partial_transcript",
-            "payload": {"session": 4, "committedText": "so far so good"}
-        })
-    );
-    assert_eq!(
-        serde_json::from_value::<EventPayload>(value).expect("deserialize partial transcript"),
-        event
-    );
-    assert!(!crate::EVENT_NAMES.contains(&crate::PARTIAL_TRANSCRIPT_EVENT));
-    assert!(crate::RECORDING_BAR_EVENT_NAMES.contains(&crate::PARTIAL_TRANSCRIPT_EVENT));
-    assert!(
-        crate::EVENT_NAMES
-            .iter()
-            .all(|name| crate::RECORDING_BAR_EVENT_NAMES.contains(name))
-    );
 }
 
 #[test]
@@ -140,8 +110,6 @@ fn state_changed_event_carries_the_whole_snapshot() {
             setup_test: Some(crate::SetupTestResultDto::Heard {
                 text: "hello".to_owned(),
             }),
-            overlay_style: OverlayStyle::WithLiveText,
-            overlay_position: OverlayPosition::Bottom,
         },
     };
     let value = to_value(event).expect("serialize event");
@@ -150,7 +118,6 @@ fn state_changed_event_carries_the_whole_snapshot() {
         value["payload"]["state"]["phase"],
         json!({ "phase": "processing", "cleaningUp": true })
     );
-    assert_eq!(value["payload"]["state"]["overlayStyle"], "with_live_text");
     assert_eq!(
         value["payload"]["state"]["setupTest"],
         json!({ "outcome": "heard", "text": "hello" })

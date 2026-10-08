@@ -1,5 +1,4 @@
 use tauri::Manager as _;
-use whispernow_api::OverlayPosition;
 
 use super::{
     MonitorArea, OVERLAY_LOGICAL_SIZE, OverlayWindow, PhysicalRect, monitor_under_cursor,
@@ -18,11 +17,11 @@ impl TauriOverlayWindow {
 }
 
 impl OverlayWindow for TauriOverlayWindow {
-    fn show(&self, position: OverlayPosition) {
+    fn show(&self) {
         let app = self.app.clone();
         if self
             .app
-            .run_on_main_thread(move || place_and_show(&app, position))
+            .run_on_main_thread(move || place_and_show(&app))
             .is_err()
         {
             tracing::warn!("recording overlay show could not be scheduled");
@@ -60,7 +59,7 @@ impl OverlayWindow for TauriOverlayWindow {
 }
 
 /// Runs on the event-loop thread.
-fn place_and_show(app: &tauri::AppHandle, position: OverlayPosition) {
+fn place_and_show(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window(RECORDING_BAR_WINDOW) else {
         return;
     };
@@ -82,7 +81,7 @@ fn place_and_show(app: &tauri::AppHandle, position: OverlayPosition) {
         .ok()
         .map(|cursor| (cursor.x, cursor.y));
     if let Some(monitor) = monitor_under_cursor(cursor, &monitors) {
-        let (x, y) = overlay_origin(monitor, position, OVERLAY_LOGICAL_SIZE);
+        let (x, y) = overlay_origin(monitor, OVERLAY_LOGICAL_SIZE);
         // Move first so the logical size is applied at the destination monitor's scale.
         let placed = window
             .set_position(tauri::PhysicalPosition::new(x, y))

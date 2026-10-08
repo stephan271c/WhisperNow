@@ -138,7 +138,10 @@ impl Route {
             NoticeScope::History => matches!(self, Self::History),
             NoticeScope::Setup => matches!(self, Self::Setup),
             NoticeScope::Settings => matches!(self, Self::Settings(_)),
-            NoticeScope::Models => matches!(self, Self::Settings(SettingsRoute::SpeechModels)),
+            NoticeScope::Models => matches!(
+                self,
+                Self::Settings(SettingsRoute::SpeechModels | SettingsRoute::AiCleanup)
+            ),
             NoticeScope::Data => matches!(self, Self::Settings(SettingsRoute::PrivacyData)),
             NoticeScope::Updates => matches!(self, Self::Settings(SettingsRoute::AboutUpdates)),
         }

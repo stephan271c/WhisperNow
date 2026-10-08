@@ -3,8 +3,7 @@ use whispernow_api::{
     DataLocationDto, DeleteHistoryEntryRequest, GetHistoryAudioRequest, HistoryPage,
     HistoryPageRequest, ListAudioDevicesResponse, ListModelsResponse, MicrophoneTestResponse,
     ModelId, OpenMainWindowRequest, PermissionRequest, PermissionsResponse, SaveSettingsResponse,
-    SetApiKeyRequest, SettingsView, SetupCheckpoint, SetupStateView, TestPromptRequest,
-    TestPromptResponse, UpdateSettingsRequest,
+    SetApiKeyRequest, SettingsView, SetupCheckpoint, SetupStateView, UpdateSettingsRequest,
 };
 
 use super::{Failure, Gateway, run_blocking};
@@ -23,18 +22,6 @@ pub(crate) async fn update_settings(
     state: tauri::State<'_, Gateway>,
 ) -> Result<SaveSettingsResponse, ApiErrorDto> {
     state.update_settings(request).await
-}
-
-#[tauri::command]
-pub(crate) async fn test_prompt(
-    request: TestPromptRequest,
-    state: tauri::State<'_, Gateway>,
-) -> Result<TestPromptResponse, ApiErrorDto> {
-    state
-        .run_command("test_prompt", Failure::Local, move |services, shutdown| {
-            services.test_prompt(&request, &shutdown)
-        })
-        .await
 }
 
 #[tauri::command]

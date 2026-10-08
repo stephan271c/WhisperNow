@@ -195,8 +195,6 @@ pub(crate) fn snapshot(phase: PhaseDto) -> AppStateDto {
         last_transcript: None,
         error: None,
         active_downloads: Vec::new(),
-        overlay_style: whispernow_api::OverlayStyle::default(),
-        overlay_position: whispernow_api::OverlayPosition::default(),
         setup_test: None,
     }
 }
@@ -339,7 +337,6 @@ pub(crate) fn editable_settings() -> Settings {
     Settings {
         model_id: ModelId::new("model").expect("test model id"),
         first_run_complete: true,
-        prompts: Vec::new(),
         history_limit: HistoryLimit::Last20,
         llm_provider: LlmProvider::OpenAi,
         llm_provider_settings: [(

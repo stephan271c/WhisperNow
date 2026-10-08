@@ -71,10 +71,6 @@ impl UiState {
                 self.overlay.apply_level(rms, elapsed_ms);
             }
             EventPayload::UpdateChanged { state } => self.apply_update_state(state),
-            EventPayload::PartialTranscript {
-                session,
-                committed_text,
-            } => self.overlay.apply_partial(session, committed_text),
             // The main window's listener follows navigation requests.
             EventPayload::NavigationRequested { .. } | EventPayload::HistoryChanged => {}
         }

@@ -1,9 +1,9 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use whispernow_domain::{
-    ApiKey, CleanupPrompt, DEFAULT_LLM_TIMEOUT_SECONDS, HistoryLimit, LlmProvider,
-    ProviderEndpoint, ProviderSettings, PythonSettings, Settings, SetupCheckpoint, SetupStep,
-    Shortcut, ShortcutKey, ShortcutModifier, VocabularyReplacement, default_prompts,
+    ApiKey, HistoryLimit, LlmProvider, ProviderEndpoint, ProviderSettings, PythonSettings,
+    RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
+    VocabularyReplacement,
 };
 
 fn parse_json<T: DeserializeOwned>(document: &str) -> T {
@@ -19,12 +19,11 @@ fn fresh_settings_take_the_defaults() {
 
     assert_eq!(settings.input_device, None);
     assert_eq!(
-        settings.hold_shortcut.modifiers,
+        settings.recording_shortcut.modifiers,
         [ShortcutModifier::Control].into()
     );
-    assert_eq!(settings.hold_shortcut.key, ShortcutKey::Space);
-    assert!(settings.hold_shortcut_enabled);
-    assert_eq!(settings.toggle_shortcut, None);
+    assert_eq!(settings.recording_shortcut.key, ShortcutKey::Space);
+    assert_eq!(settings.recording_mode, RecordingMode::Hold);
     assert_eq!(settings.cancel_shortcut, Some(Shortcut::default_cancel()));
     assert_eq!(
         settings.model_id.as_str(),
@@ -32,8 +31,7 @@ fn fresh_settings_take_the_defaults() {
     );
     assert!(!settings.first_run_complete);
     assert_eq!(settings.setup, None);
-    assert_eq!(settings.prompts, default_prompts());
-    assert_eq!(settings.llm_timeout_seconds, DEFAULT_LLM_TIMEOUT_SECONDS);
+    assert!(!settings.cleanup_enabled);
     assert_eq!(settings.llm_provider, LlmProvider::OpenAi);
     assert!(settings.llm_provider_settings.is_empty());
     assert!(settings.api_keys.is_empty());
@@ -44,11 +42,12 @@ fn fresh_settings_take_the_defaults() {
 #[test]
 fn settings_round_trip_and_missing_fields_take_defaults() {
     let mut settings = Settings {
-        hold_shortcut_enabled: false,
-        toggle_shortcut: Some(Shortcut {
+        recording_mode: RecordingMode::Toggle,
+        recording_shortcut: Shortcut {
             modifiers: [ShortcutModifier::Shift, ShortcutModifier::Meta].into(),
             key: ShortcutKey::F8,
-        }),
+        },
+        cleanup_enabled: true,
         history_limit: HistoryLimit::Last1000,
         keep_audio: true,
         setup: Some(SetupCheckpoint {
@@ -83,35 +82,6 @@ fn settings_round_trip_and_missing_fields_take_defaults() {
 }
 
 #[test]
-fn unedited_shipped_prompts_upgrade_and_edited_ones_report_the_newer_default() {
-    let shipped: Vec<CleanupPrompt> = parse_json(include_str!("fixtures/default_prompts.json"));
-    let loaded: Settings = parse_json(&json!({ "enhancements": shipped }).to_string());
-    // The retired "concise" prompt is no longer built in, so it stays as the user's own.
-    assert_eq!(loaded.prompts[..2], default_prompts()[..]);
-    assert_eq!(loaded.prompts[2], shipped[2]);
-    assert!(
-        loaded
-            .prompts
-            .iter()
-            .all(|prompt| prompt.newer_default().is_none())
-    );
-
-    let mut edited = shipped;
-    edited[0].prompt.push_str(" Keep British spelling.");
-    let expected_text = edited[0].prompt.clone();
-    let loaded: Settings = parse_json(&json!({ "enhancements": edited }).to_string());
-    let fix_grammar = &loaded.prompts[0];
-    assert_eq!(fix_grammar.prompt, expected_text);
-    assert_eq!(
-        fix_grammar.newer_default(),
-        Some(default_prompts()[0].prompt.as_str())
-    );
-
-    let emptied: Settings = parse_json(r#"{"enhancements":[]}"#);
-    assert_eq!(emptied.prompts, default_prompts());
-}
-
-#[test]
 fn python_settings_import_picks_known_fields() {
     let document: Value = parse_json(include_str!("fixtures/current_settings.json"));
     let imported = PythonSettings::import(&document);
@@ -119,17 +89,20 @@ fn python_settings_import_picks_known_fields() {
     assert!(imported.api_keys.is_empty());
     assert_eq!(settings.input_device.as_deref(), Some("Studio Microphone"));
     assert_eq!(
-        settings.hold_shortcut,
+        settings.recording_shortcut,
         Shortcut {
             modifiers: [ShortcutModifier::Control, ShortcutModifier::Shift].into(),
             key: ShortcutKey::R,
         }
     );
+    assert_eq!(settings.recording_mode, RecordingMode::Hold);
     assert_eq!(settings.model_id.as_str(), "sherpa-onnx-whisper-small");
     assert!(settings.start_minimized && settings.auto_start_on_login);
     assert!(settings.first_run_complete);
-    assert_eq!(settings.prompts.len(), 1);
-    assert_eq!(settings.active_prompt_id.as_deref(), Some("notes"));
+    assert!(
+        settings.cleanup_enabled,
+        "any chosen prompt turns cleanup on"
+    );
     assert_eq!(settings.llm_provider, LlmProvider::Ollama);
     assert_eq!(
         settings.provider_settings(LlmProvider::Ollama),
@@ -181,23 +154,21 @@ fn python_settings_import_moves_keys_out_and_reads_the_older_layouts() {
         "audio_retention": { "enabled": true, "max_recordings": 5 }
     }));
     let settings = &imported.settings;
-    assert!(
-        settings.hold_shortcut_enabled,
+    assert_eq!(
+        settings.recording_mode,
+        RecordingMode::Hold,
         "an unreadable value is default"
     );
     assert_eq!(
-        settings.hold_shortcut.modifiers,
+        settings.recording_shortcut.modifiers,
         [ShortcutModifier::Alt].into()
     );
     assert_eq!(
-        settings.hold_shortcut.key,
+        settings.recording_shortcut.key,
         ShortcutKey::Space,
         "a missing key takes the default's"
     );
-    assert_eq!(
-        settings.toggle_shortcut, None,
-        "a bare typing key is refused"
-    );
+    assert!(!settings.cleanup_enabled);
     assert_eq!(
         settings.provider_settings(LlmProvider::OpenAi).model,
         "gpt-test"
@@ -230,6 +201,33 @@ fn python_settings_import_moves_keys_out_and_reads_the_older_layouts() {
     );
     assert!(!format!("{imported:?}").contains(&secret));
 
+    let toggle_only = PythonSettings::import(&json!({
+        "hotkey_enabled": false,
+        "toggle_hotkey": { "modifiers": ["alt"], "key": "r" },
+    }));
+    assert_eq!(
+        (
+            toggle_only.settings.recording_mode,
+            toggle_only.settings.recording_shortcut
+        ),
+        (
+            RecordingMode::Toggle,
+            Shortcut {
+                modifiers: [ShortcutModifier::Alt].into(),
+                key: ShortcutKey::R,
+            }
+        )
+    );
+    let hold_off_without_toggle = PythonSettings::import(&json!({
+        "hotkey_enabled": false,
+        "toggle_hotkey": { "modifiers": [], "key": "r" },
+    }));
+    assert_eq!(
+        hold_off_without_toggle.settings.recording_mode,
+        RecordingMode::Hold,
+        "a bare typing key is refused, so hold stays"
+    );
+
     let unlimited = PythonSettings::import(&json!({ "text_retention": { "max_entries": null } }));
     assert_eq!(unlimited.settings.history_limit, HistoryLimit::Unlimited);
 }
@@ -253,57 +251,28 @@ fn saved_shortcuts_keep_their_key_names() {
 }
 
 #[test]
-fn settings_saved_under_the_old_key_names_load_and_save_under_them() {
-    let ctrl_r = json!({ "modifiers": ["ctrl"], "key": "r" });
-    let alt_t = json!({ "modifiers": ["alt"], "key": "t" });
+fn the_recording_shortcut_loads_and_saves_under_the_old_key_name() {
     let document = json!({
-        "hotkey": ctrl_r,
-        "hotkey_enabled": false,
-        "toggle_hotkey": alt_t,
+        "hotkey": { "modifiers": ["ctrl"], "key": "r" },
+        "recording_mode": "toggle",
         "cancel_hotkey": null,
-        "enhancements": [{ "id": "notes", "title": "Notes", "prompt": "Make notes." }],
-        "active_enhancement_id": "notes",
-        "setup": {
-            "step": "shortcuts",
-            "hotkey": alt_t,
-            "hotkey_enabled": false,
-            "toggle_hotkey": ctrl_r,
-        },
+        "setup": { "step": "shortcuts", "hotkey": { "modifiers": ["alt"], "key": "t" } },
     });
     let settings: Settings = parse_json(&document.to_string());
-    let ctrl_r = Shortcut {
-        modifiers: [ShortcutModifier::Control].into(),
-        key: ShortcutKey::R,
-    };
-    let alt_t = Shortcut {
-        modifiers: [ShortcutModifier::Alt].into(),
-        key: ShortcutKey::T,
-    };
-    assert_eq!(settings.hold_shortcut, ctrl_r);
-    assert!(!settings.hold_shortcut_enabled);
-    assert_eq!(settings.toggle_shortcut, Some(alt_t.clone()));
+    assert_eq!(
+        settings.recording_shortcut,
+        Shortcut {
+            modifiers: [ShortcutModifier::Control].into(),
+            key: ShortcutKey::R,
+        }
+    );
+    assert_eq!(settings.recording_mode, RecordingMode::Toggle);
     assert_eq!(settings.cancel_shortcut, None);
-    assert_eq!(settings.prompts.len(), 1);
-    assert_eq!(settings.prompts[0].prompt, "Make notes.");
-    assert_eq!(settings.active_prompt_id.as_deref(), Some("notes"));
     let setup = settings.setup.clone().expect("setup checkpoint");
     assert_eq!(setup.step, SetupStep::Shortcuts);
-    assert_eq!(setup.hold_shortcut, alt_t);
-    assert!(!setup.hold_shortcut_enabled);
-    assert_eq!(setup.toggle_shortcut, Some(ctrl_r));
+    assert_eq!(setup.recording_shortcut.key, ShortcutKey::T);
 
     let saved = serde_json::to_value(&settings).expect("serialize settings");
-    for key in [
-        "hotkey",
-        "hotkey_enabled",
-        "toggle_hotkey",
-        "cancel_hotkey",
-        "enhancements",
-        "active_enhancement_id",
-    ] {
-        assert!(saved.get(key).is_some(), "saved under {key}");
-    }
-    for key in ["hotkey", "hotkey_enabled", "toggle_hotkey"] {
-        assert!(saved["setup"].get(key).is_some(), "setup saved under {key}");
-    }
+    assert!(saved.get("hotkey").is_some() && saved.get("cancel_hotkey").is_some());
+    assert!(saved["setup"].get("hotkey").is_some());
 }

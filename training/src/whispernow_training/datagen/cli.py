@@ -30,7 +30,7 @@ def cmd_import_aawaaz(_args: argparse.Namespace) -> None:
 
 def cmd_sync_teacher(_args: argparse.Namespace) -> None:
     teacher.sync_from_rust()
-    print(f"copied the system contract and fix_grammar prompt into {teacher.TEACHER_DIR}")
+    print(f"copied the system contract and cleanup prompt into {teacher.TEACHER_DIR}")
 
 
 async def _judge_aawaaz(args: argparse.Namespace) -> None:

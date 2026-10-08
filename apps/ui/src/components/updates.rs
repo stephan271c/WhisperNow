@@ -24,11 +24,6 @@ pub(super) fn AboutPage() -> Element {
         Card { aria_labelledby: "about-title",
             h2 { id: "about-title", "WhisperNow" }
             p { id: "about-version", "Version {env!(\"CARGO_PKG_VERSION\")}" }
-            p { "Speech recognition runs on this computer. AI cleanup is optional and uses the provider you choose." }
-        }
-        Card { aria_labelledby: "updates-title",
-            h2 { id: "updates-title", "Updates" }
-            p { "WhisperNow downloads updates in the background and restarts only when you choose." }
             UpdateStatus {}
             NoticeRegion { scope: NoticeScope::Updates }
             Button {
@@ -42,14 +37,6 @@ pub(super) fn AboutPage() -> Element {
             if updates_disabled {
                 p { class: "status-detail", "Updates are not available in this build." }
             }
-        }
-        Card { aria_labelledby: "licences-title",
-            h2 { id: "licences-title", "Licences" }
-            p { "WhisperNow is free software under the MIT licence. The licence and the notices for the bundled speech libraries are installed in the app's licenses folder. Notices for every library WhisperNow is built from are published with each release on GitHub." }
-        }
-        Card { aria_labelledby: "logs-title",
-            h2 { id: "logs-title", "Logs" }
-            p { "WhisperNow keeps no log file. It writes diagnostic messages to the terminal it was started from, so start it from a terminal to capture them for a bug report." }
         }
     } }
 }

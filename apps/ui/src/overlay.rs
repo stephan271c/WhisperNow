@@ -1,10 +1,8 @@
 //! The desktop decides the phase and the window's visibility; this model only adds what
-//! arrives between snapshots: the smoothed level history, the elapsed time and the committed
-//! partial text of the current recording.
+//! arrives between snapshots: the smoothed level history and the elapsed time.
 
 use whispernow_api::{
-    ApiErrorDto, AppStateDto, ErrorCategoryDto, OverlayPosition, OverlayStyle, PhaseDto,
-    RecordingMode, RecoveryActionDto,
+    ApiErrorDto, AppStateDto, ErrorCategoryDto, PhaseDto, RecordingMode, RecoveryActionDto,
 };
 
 pub(crate) const LEVEL_BARS: usize = 9;
@@ -18,10 +16,6 @@ const CEILING_DB: f32 = -5.0;
 /// within about 100 ms, so words read as separate peaks.
 const ATTACK: f32 = 0.8;
 const RELEASE: f32 = 0.6;
-
-/// Characters of partial text kept for display, a little more than the two lines the pill
-/// shows; older text scrolls out under the fade.
-const LIVE_TEXT_CHARS: usize = 120;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum OverlayPhase {
@@ -73,16 +67,13 @@ impl OverlayAction {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OverlayView {
     pub phase: OverlayPhase,
-    pub position: OverlayPosition,
-    pub show_live_text: bool,
     /// Newest last; each value is in `0.0..=1.0`.
     pub levels: [f32; LEVEL_BARS],
     /// Whether real samples arrived for this recording; until then the bars are arming.
     pub levels_seen: bool,
     pub elapsed_ms: u64,
-    /// The recording the meter and partial text belong to.
+    /// The recording the meter belongs to.
     session: Option<u64>,
-    partial: Option<(u64, String)>,
     /// Why the last overlay action failed; cleared by the next phase.
     pub action_error: Option<String>,
 }
@@ -97,7 +88,6 @@ impl OverlayView {
                     self.levels = [0.0; LEVEL_BARS];
                     self.levels_seen = false;
                     self.elapsed_ms = 0;
-                    self.partial = self.partial.take().filter(|(of, _)| of >= session);
                 }
                 OverlayPhase::Listening { mode: *mode }
             }
@@ -112,8 +102,6 @@ impl OverlayView {
             self.action_error = None;
         }
         self.phase = phase;
-        self.position = snapshot.overlay_position;
-        self.show_live_text = snapshot.overlay_style == OverlayStyle::WithLiveText;
     }
 
     /// The phase the pill presents. A listening recording still reads as starting until the
@@ -139,47 +127,6 @@ impl OverlayView {
         self.levels[LEVEL_BARS - 1] = previous + (activity - previous) * weight;
         self.levels_seen = true;
         self.elapsed_ms = elapsed_ms;
-    }
-
-    pub fn apply_partial(&mut self, session: u64, committed_text: String) {
-        if self.session.is_some_and(|current| session < current)
-            || self
-                .partial
-                .as_ref()
-                .is_some_and(|(current, _)| session < *current)
-        {
-            return;
-        }
-        self.partial = Some((session, committed_text));
-    }
-
-    /// The tail of the committed text, when the style shows it and the user is still speaking.
-    #[must_use]
-    pub fn live_text(&self) -> Option<&str> {
-        if !self.show_live_text || !matches!(self.phase, OverlayPhase::Listening { .. }) {
-            return None;
-        }
-        let text = self
-            .partial
-            .as_ref()
-            .filter(|(session, _)| Some(*session) == self.session)?
-            .1
-            .trim();
-        if text.is_empty() {
-            return None;
-        }
-        let start = text
-            .char_indices()
-            .rev()
-            .nth(LIVE_TEXT_CHARS - 1)
-            .map_or(0, |(index, _)| index);
-        let tail = &text[start..];
-        // Start at a word boundary when the text was cut.
-        Some(if start == 0 {
-            tail
-        } else {
-            tail.split_once(' ').map_or(tail, |(_, rest)| rest)
-        })
     }
 
     pub fn report_action_failure(&mut self, summary: String) {

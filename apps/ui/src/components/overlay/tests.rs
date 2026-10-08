@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use whispernow_api::{
-    ApiErrorDto, AppStateDto, ErrorCategoryDto, EventPayload, MainWindowSectionDto,
-    OpenMainWindowRequest, OverlayStyle, PhaseDto, RecordingMode, RecoveryActionDto,
+    ApiErrorDto, ErrorCategoryDto, EventPayload, MainWindowSectionDto, OpenMainWindowRequest,
+    PhaseDto, RecordingMode, RecoveryActionDto,
 };
 
 use serde_json::Value;
@@ -35,13 +35,6 @@ fn level(rms: f32, peak: f32, elapsed_ms: u64) -> EventPayload {
         rms,
         peak,
         elapsed_ms,
-    }
-}
-
-fn partial(session: u64, text: &str) -> EventPayload {
-    EventPayload::PartialTranscript {
-        session,
-        committed_text: text.to_owned(),
     }
 }
 
@@ -361,49 +354,6 @@ fn a_late_hydration_never_replaces_a_newer_phase() {
     state.apply_event(phase_event(TRANSCRIBING));
     state.hydrate(snapshot(PhaseDto::Idle));
     assert_eq!(state.overlay.phase, OverlayPhase::Transcribing);
-}
-
-#[test]
-fn live_text_follows_the_style_and_resets_for_each_recording() {
-    let mut state = state_in(listening(RecordingMode::Toggle));
-    state.apply_event(partial(1, "first session words"));
-    assert_eq!(state.overlay.live_text(), Some("first session words"));
-    assert!(render(state.clone()).contains("first session words"));
-
-    let mut minimal = state.clone();
-    minimal.overlay.install(&AppStateDto {
-        overlay_style: OverlayStyle::Minimal,
-        ..snapshot(listening(RecordingMode::Toggle))
-    });
-    assert_eq!(
-        minimal.overlay.live_text(),
-        None,
-        "the minimal style hides it"
-    );
-
-    state.apply_event(phase_event(TRANSCRIBING));
-    assert_eq!(
-        state.overlay.live_text(),
-        None,
-        "shown only while listening"
-    );
-    state.apply_event(phase_event(PhaseDto::Idle));
-    state.apply_event(phase_event(PhaseDto::Recording {
-        mode: RecordingMode::Toggle,
-        session: 2,
-    }));
-    state.apply_event(partial(1, "a late partial of the previous recording"));
-    assert_eq!(state.overlay.live_text(), None);
-
-    let long = (0..100)
-        .map(|word| format!("word{word}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    state.apply_event(partial(2, &long));
-    let shown = state.overlay.live_text().expect("live text");
-    assert!(shown.len() <= 120, "only the last lines are kept");
-    assert!(shown.ends_with("word99"));
-    assert!(shown.starts_with("word"), "cut at a word boundary: {shown}");
 }
 
 fn mount_bar(state: UiState) -> Page {

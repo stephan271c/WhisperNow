@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Typed application commands for the settings webview, plus the window operations its titlebar runs; it subscribes only to content-free broadcast events",
+  "description": "Typed application commands for the settings webview, plus the window operations its titlebar runs",
   "windows": ["settings"],
   "permissions": [
     "core:event:allow-listen",
@@ -17,7 +17,6 @@
     "allow-update-settings",
     "allow-set-api-key",
     "allow-clear-api-key",
-    "allow-test-prompt",
     "allow-list-audio-devices",
     "allow-test-microphone",
     "allow-list-models",

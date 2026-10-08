@@ -7,17 +7,13 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use thiserror::Error;
 
 use crate::{
-    CLEANUP_MODEL_IDS, CleanupPrompt, DEFAULT_CLEANUP_MODEL_ID, HistoryLimit, LlmProvider, ModelId,
-    ProviderEndpoint, Shortcut, default_prompts, prompts::upgrade_unedited_defaults,
+    CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, HistoryLimit, LlmProvider, ModelId,
+    ProviderEndpoint, RecordingMode, Shortcut,
 };
 
 mod legacy;
 
 pub use legacy::PythonSettings;
-
-pub const DEFAULT_LLM_TIMEOUT_SECONDS: u32 = 20;
-
-pub const LLM_TIMEOUT_SECONDS_RANGE: std::ops::RangeInclusive<u32> = 5..=120;
 
 /// An unfinished setup keeps its step and choices in [`Settings::setup`] so an interrupted wizard
 /// resumes without claiming setup is complete.
@@ -52,25 +48,6 @@ pub enum ThemePreference {
     Dark,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OverlayStyle {
-    Off,
-    /// Show phases, level bars and outcomes without transcript text.
-    Minimal,
-    /// Also show the committed partial transcript while listening.
-    #[default]
-    WithLiveText,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OverlayPosition {
-    Top,
-    #[default]
-    Bottom,
-}
-
 /// Download operation identifiers are intentionally excluded because they are process-scoped. The
 /// saved settings stay in effect until setup finishes and commits these choices.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -80,11 +57,8 @@ pub struct SetupCheckpoint {
     pub model_id: ModelId,
     pub input_device: Option<String>,
     #[serde(rename = "hotkey")]
-    pub hold_shortcut: Shortcut,
-    #[serde(rename = "hotkey_enabled")]
-    pub hold_shortcut_enabled: bool,
-    #[serde(rename = "toggle_hotkey")]
-    pub toggle_shortcut: Option<Shortcut>,
+    pub recording_shortcut: Shortcut,
+    pub recording_mode: RecordingMode,
 }
 
 impl Default for SetupCheckpoint {
@@ -93,9 +67,8 @@ impl Default for SetupCheckpoint {
             step: SetupStep::Welcome,
             model_id: ModelId::default(),
             input_device: None,
-            hold_shortcut: Shortcut::default(),
-            hold_shortcut_enabled: true,
-            toggle_shortcut: None,
+            recording_shortcut: Shortcut::default(),
+            recording_mode: RecordingMode::default(),
         }
     }
 }
@@ -216,11 +189,8 @@ pub struct Settings {
     /// Selected input device name, or the host default.
     pub input_device: Option<String>,
     #[serde(rename = "hotkey")]
-    pub hold_shortcut: Shortcut,
-    #[serde(rename = "hotkey_enabled")]
-    pub hold_shortcut_enabled: bool,
-    #[serde(rename = "toggle_hotkey")]
-    pub toggle_shortcut: Option<Shortcut>,
+    pub recording_shortcut: Shortcut,
+    pub recording_mode: RecordingMode,
     /// Shortcut that cancels the active dictation; `None` turns it off. Documents from
     /// before this setting get the Escape default.
     #[serde(rename = "cancel_hotkey")]
@@ -229,24 +199,13 @@ pub struct Settings {
     pub start_minimized: bool,
     pub auto_start_on_login: bool,
     pub theme: ThemePreference,
-    pub overlay_style: OverlayStyle,
-    pub overlay_position: OverlayPosition,
     pub first_run_complete: bool,
     pub setup: Option<SetupCheckpoint>,
-    /// Unedited built-in prompts load as their current text, and an empty list loads as the
-    /// built-in prompts.
-    #[serde(rename = "enhancements", deserialize_with = "upgraded_prompts")]
-    pub prompts: Vec<CleanupPrompt>,
-    /// The prompt AI cleanup uses; `None` turns AI cleanup off.
-    #[serde(rename = "active_enhancement_id")]
-    pub active_prompt_id: Option<String>,
+    pub cleanup_enabled: bool,
     pub llm_provider: LlmProvider,
     pub llm_provider_settings: BTreeMap<LlmProvider, ProviderSettings>,
     /// Providers whose API key is saved in the OS credential store.
     pub api_keys: BTreeSet<LlmProvider>,
-    /// Total seconds AI cleanup may take before the deterministic
-    /// transcript is used instead.
-    pub llm_timeout_seconds: u32,
     /// Ordered literal replacements applied to transcripts.
     pub vocabulary_replacements: Vec<VocabularyReplacement>,
     pub window_geometry: Option<WindowGeometry>,
@@ -259,24 +218,19 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             input_device: None,
-            hold_shortcut: Shortcut::default(),
-            hold_shortcut_enabled: true,
-            toggle_shortcut: None,
+            recording_shortcut: Shortcut::default(),
+            recording_mode: RecordingMode::default(),
             cancel_shortcut: Some(Shortcut::default_cancel()),
             model_id: ModelId::default(),
             start_minimized: false,
             auto_start_on_login: false,
             theme: ThemePreference::System,
-            overlay_style: OverlayStyle::default(),
-            overlay_position: OverlayPosition::default(),
             first_run_complete: false,
             setup: None,
-            prompts: default_prompts(),
-            active_prompt_id: None,
+            cleanup_enabled: false,
             llm_provider: LlmProvider::OpenAi,
             llm_provider_settings: BTreeMap::new(),
             api_keys: BTreeSet::new(),
-            llm_timeout_seconds: DEFAULT_LLM_TIMEOUT_SECONDS,
             vocabulary_replacements: Vec::new(),
             window_geometry: None,
             history_limit: HistoryLimit::default(),
@@ -307,16 +261,4 @@ impl Settings {
     pub fn provider_settings_mut(&mut self, provider: LlmProvider) -> &mut ProviderSettings {
         self.llm_provider_settings.entry(provider).or_default()
     }
-}
-
-fn upgraded_prompts<'de, D>(deserializer: D) -> Result<Vec<CleanupPrompt>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let mut prompts = Vec::<CleanupPrompt>::deserialize(deserializer)?;
-    if prompts.is_empty() {
-        return Ok(default_prompts());
-    }
-    upgrade_unedited_defaults(&mut prompts);
-    Ok(prompts)
 }

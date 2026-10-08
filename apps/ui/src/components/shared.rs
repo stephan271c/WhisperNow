@@ -98,12 +98,7 @@ pub(super) fn ShortcutCapture(
     let help_id = format!("{id}-help");
     let keys_id = format!("{id}-keys");
     let guidance = match status() {
-        CaptureStatus::Idle if lone_keys => {
-            "Activate the control, then press Escape or a function key, or a modifier and a key."
-        }
-        CaptureStatus::Idle => {
-            "Activate the control, then hold at least one modifier and press a key."
-        }
+        CaptureStatus::Idle => "",
         CaptureStatus::Listening if lone_keys => {
             "Listening… Press Escape, F1–F24, or hold a modifier and press a key. Tab cancels."
         }

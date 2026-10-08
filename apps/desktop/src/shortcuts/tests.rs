@@ -82,32 +82,31 @@ fn escape() -> ShortcutBinding {
     binding(&Shortcut::default_cancel())
 }
 
-/// Ctrl+`hold` and Ctrl+`toggle`, as the coordinator receives them.
-fn bindings(hold: Option<&str>, toggle: Option<&str>) -> ShortcutBindings {
-    ShortcutBindings {
-        hold: hold.map(|key| binding(&control(key))),
-        toggle: toggle.map(|key| binding(&control(key))),
+/// Ctrl+`key` in `mode`, as the coordinator receives it.
+fn recording(key: &str, mode: RecordingMode) -> RecordingBinding {
+    RecordingBinding {
+        mode,
+        binding: binding(&control(key)),
     }
 }
 
-/// A coordinator with Ctrl+`hold` (and Ctrl+`toggle`) registered and a switch for whether
+fn hold(key: &str) -> RecordingBinding {
+    recording(key, RecordingMode::Hold)
+}
+
+/// A coordinator with Ctrl+`key` registered for hold-to-record and a switch for whether
 /// dictation is enabled.
 fn switchable_memory_coordinator(
-    hold: &str,
-    toggle: Option<&str>,
+    key: &str,
 ) -> (Arc<MemoryRegistrar>, Arc<AtomicBool>, ShortcutCoordinator) {
-    let bindings = Ok(bindings(Some(hold), toggle));
     let registrar = Arc::new(MemoryRegistrar::default());
     let (running, probe) = lifecycle_switch();
-    let coordinator = ShortcutCoordinator::new(registrar.clone(), bindings, probe);
+    let coordinator = ShortcutCoordinator::new(registrar.clone(), Ok(hold(key)), probe);
     (registrar, running, coordinator)
 }
 
-fn memory_coordinator(
-    hold: &str,
-    toggle: Option<&str>,
-) -> (Arc<MemoryRegistrar>, ShortcutCoordinator) {
-    let (registrar, _running, coordinator) = switchable_memory_coordinator(hold, toggle);
+fn memory_coordinator(key: &str) -> (Arc<MemoryRegistrar>, ShortcutCoordinator) {
+    let (registrar, _running, coordinator) = switchable_memory_coordinator(key);
     (registrar, coordinator)
 }
 
@@ -118,7 +117,7 @@ fn cancel_fixture() -> (
     ShortcutCoordinator,
     ShortcutBinding,
 ) {
-    let (registrar, running, coordinator) = switchable_memory_coordinator("F1", None);
+    let (registrar, running, coordinator) = switchable_memory_coordinator("F1");
     let cancel = escape();
     coordinator.set_cancel_binding(Some(cancel.clone()));
     (registrar, running, coordinator, cancel)
@@ -257,35 +256,34 @@ fn a_cancel_shortcut_that_could_not_be_released_is_released_by_the_next_sync() {
 }
 
 #[test]
-fn a_changed_shortcut_replaces_the_old_one_and_keeps_the_unchanged_one() {
-    let (registrar, coordinator) = memory_coordinator("F1", Some("F2"));
-    assert_eq!(
-        registrar.registered(),
-        BTreeSet::from([binding_id("F1").0, binding_id("F2").0])
-    );
+fn a_changed_mode_keeps_the_shortcut_registered_and_a_changed_key_replaces_it() {
+    let (registrar, coordinator) = memory_coordinator("F1");
+    assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F1").0]));
     // Registering the unchanged shortcut again would fail.
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F1").0);
 
     coordinator
-        .apply_update(Ok(bindings(Some("F1"), Some("F3"))))
-        .expect("replace the toggle");
+        .apply_update(Ok(recording("F1", RecordingMode::Toggle)))
+        .expect("switch to toggle");
+    assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F1").0]));
     assert_eq!(
-        registrar.registered(),
-        BTreeSet::from([binding_id("F1").0, binding_id("F3").0])
-    );
-    assert_eq!(coordinator.input(binding_id("F2"), KeyTransition::Pressed), None);
-    assert_eq!(
-        coordinator.input(binding_id("F3"), KeyTransition::Pressed),
+        coordinator.input(binding_id("F1"), KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Toggle))
     );
+
+    coordinator
+        .apply_update(Ok(recording("F3", RecordingMode::Toggle)))
+        .expect("replace the key");
+    assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F3").0]));
+    assert_eq!(coordinator.input(binding_id("F1"), KeyTransition::Pressed), None);
 }
 
 #[test]
-fn a_refused_shortcut_change_registers_the_previous_shortcuts_again() {
-    let (registrar, coordinator) = memory_coordinator("F1", None);
+fn a_refused_shortcut_change_registers_the_previous_shortcut_again() {
+    let (registrar, coordinator) = memory_coordinator("F1");
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F3").0);
     assert_eq!(
-        coordinator.apply_update(Ok(bindings(Some("F2"), Some("F3")))),
+        coordinator.apply_update(Ok(recording("F3", RecordingMode::Toggle))),
         Err(ShortcutRegistrationError::ConflictOrUnsupported)
     );
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F1").0]));
@@ -295,7 +293,7 @@ fn a_refused_shortcut_change_registers_the_previous_shortcuts_again() {
         coordinator.input(binding_id("F1"), KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
     );
-    assert_eq!(coordinator.input(binding_id("F2"), KeyTransition::Pressed), None);
+    assert_eq!(coordinator.input(binding_id("F3"), KeyTransition::Pressed), None);
 }
 
 #[test]
@@ -304,7 +302,7 @@ fn unavailable_shortcuts_are_reported_and_retried_without_restarting() {
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F1").0);
     let coordinator = ShortcutCoordinator::new(
         registrar.clone(),
-        Ok(bindings(Some("F1"), None)),
+        Ok(hold("F1")),
         always_running(),
     );
     assert!(!coordinator.registration_active());
@@ -332,13 +330,13 @@ fn unavailable_shortcuts_are_reported_and_retried_without_restarting() {
 
 #[test]
 fn paused_dictation_releases_the_shortcuts_and_resuming_restores_them() {
-    let (registrar, running, coordinator) = switchable_memory_coordinator("F1", None);
+    let (registrar, running, coordinator) = switchable_memory_coordinator("F1");
     running.store(false, Ordering::SeqCst);
     coordinator.sync_lifecycle().expect("pause");
     assert!(registrar.registered().is_empty());
 
     coordinator
-        .apply_update(Ok(bindings(Some("F2"), None)))
+        .apply_update(Ok(hold("F2")))
         .expect("a change while paused");
     assert!(registrar.registered().is_empty(), "nothing registers while paused");
     assert_eq!(coordinator.input(binding_id("F2"), KeyTransition::Pressed), None);
@@ -356,7 +354,7 @@ fn paused_dictation_releases_the_shortcuts_and_resuming_restores_them() {
 
 #[test]
 fn capture_suspension_ignores_presses_and_forgets_held_keys() {
-    let (registrar, running, coordinator) = switchable_memory_coordinator("F1", None);
+    let (registrar, running, coordinator) = switchable_memory_coordinator("F1");
     let hold = binding_id("F1");
     assert_eq!(
         coordinator.input(hold, KeyTransition::Pressed),
@@ -386,8 +384,8 @@ fn capture_suspension_ignores_presses_and_forgets_held_keys() {
 
 #[test]
 fn a_hold_press_and_release_each_reach_the_worker_once() {
-    let (_registrar, coordinator) = memory_coordinator("F1", Some("F2"));
-    let (hold, toggle) = (binding_id("F1"), binding_id("F2"));
+    let (_registrar, coordinator) = memory_coordinator("F1");
+    let hold = binding_id("F1");
     assert_eq!(
         coordinator.input(hold, KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
@@ -401,7 +399,15 @@ fn a_hold_press_and_release_each_reach_the_worker_once() {
         coordinator.input(hold, KeyTransition::Released),
         Some(ShortcutAction::HoldReleased)
     );
+}
 
+#[test]
+fn a_toggle_press_reaches_the_worker_once_and_its_release_asks_for_nothing() {
+    let (_registrar, coordinator) = memory_coordinator("F1");
+    coordinator
+        .apply_update(Ok(recording("F2", RecordingMode::Toggle)))
+        .expect("toggle shortcut");
+    let toggle = binding_id("F2");
     assert_eq!(
         coordinator.input(toggle, KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Toggle))
@@ -420,7 +426,7 @@ fn a_hold_press_and_release_each_reach_the_worker_once() {
 
 #[test]
 fn a_key_released_while_paused_presses_again_after_resuming() {
-    let (_registrar, running, coordinator) = switchable_memory_coordinator("F1", None);
+    let (_registrar, running, coordinator) = switchable_memory_coordinator("F1");
     let hold = binding_id("F1");
     let set_running = |value: bool| {
         running.store(value, Ordering::SeqCst);
@@ -441,7 +447,7 @@ fn a_key_released_while_paused_presses_again_after_resuming() {
 
 #[test]
 fn a_release_before_its_press_leaves_nothing_stuck() {
-    let (_registrar, coordinator) = memory_coordinator("F1", None);
+    let (_registrar, coordinator) = memory_coordinator("F1");
     let hold = binding_id("F1");
     assert_eq!(
         coordinator.input(hold, KeyTransition::Released),
@@ -455,7 +461,7 @@ fn a_release_before_its_press_leaves_nothing_stuck() {
 
 #[test]
 fn a_lost_shortcut_backend_unregisters_everything_and_forgets_held_keys() {
-    let (_registrar, coordinator) = memory_coordinator("F1", None);
+    let (_registrar, coordinator) = memory_coordinator("F1");
     coordinator.input(binding_id("F1"), KeyTransition::Pressed);
     coordinator.capability_lost(ShortcutRegistrationError::SessionClosed);
     assert!(!coordinator.registration_active());
@@ -515,7 +521,7 @@ fn native_registration_never_runs_under_the_input_locks() {
     let (running, probe) = lifecycle_switch();
     let coordinator = Arc::new(ShortcutCoordinator::new(
         registrar.clone(),
-        Ok(bindings(Some("F1"), None)),
+        Ok(hold("F1")),
         probe,
     ));
     assert!(
@@ -533,7 +539,7 @@ fn native_registration_never_runs_under_the_input_locks() {
     };
 
     coordinator
-        .apply_update(Ok(bindings(Some("F2"), None)))
+        .apply_update(Ok(hold("F2")))
         .expect("apply update");
     native_step("apply update");
     coordinator.observe_dictation(true);
@@ -572,13 +578,13 @@ fn every_shortcut_key_is_captured_and_registrable() {
 #[test]
 fn saved_shortcuts_that_break_a_rule_register_nothing() {
     let settings = Settings {
-        toggle_shortcut: Some(Settings::default().hold_shortcut),
+        cancel_shortcut: Some(Settings::default().recording_shortcut),
         ..Settings::default()
     };
     assert_eq!(
-        recording_bindings(&settings),
+        recording_binding(&settings),
         Err(ShortcutRegistrationError::ConflictOrUnsupported)
     );
     assert_eq!(cancel_binding(&settings), None);
-    assert!(recording_bindings(&Settings::default()).is_ok());
+    assert!(recording_binding(&Settings::default()).is_ok());
 }

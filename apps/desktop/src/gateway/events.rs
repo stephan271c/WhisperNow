@@ -1,7 +1,3 @@
-//! The partial transcript carries dictated text and is emitted only to the recording bar.
-//! Tauri still delivers a window-targeted event to a listener registered for any target, so
-//! the other windows must never subscribe to it.
-
 use std::sync::{Arc, mpsc};
 
 use tauri::{Emitter as _, Manager as _};
@@ -71,12 +67,7 @@ impl Followed {
 
 pub(crate) fn emit(app: &tauri::AppHandle, event: EventPayload) {
     let event_name = event.event_name();
-    let emitted = if matches!(event, EventPayload::PartialTranscript { .. }) {
-        app.emit_to(crate::RECORDING_BAR_WINDOW, event_name, event)
-    } else {
-        app.emit(event_name, event)
-    };
-    if emitted.is_err() {
+    if app.emit(event_name, event).is_err() {
         tracing::error!(event_name, "desktop event emission failed");
     }
 }

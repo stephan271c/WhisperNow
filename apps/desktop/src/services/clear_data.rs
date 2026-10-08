@@ -2,7 +2,7 @@ use whispernow_api::{
     ApiErrorDto, ClearDataCategory, ClearDataRequest, ClearDataResult, ClearDataResultItemDto,
     DataLocationDto, ErrorCategoryDto,
 };
-use whispernow_domain::{ModelId, OverlayPosition, OverlayStyle};
+use whispernow_domain::ModelId;
 use whispernow_platform::ClearDataError;
 
 use super::NativeServices;
@@ -87,10 +87,6 @@ impl NativeServices {
         self.state.apply(|state| {
             if restart_required {
                 state.selected_model_id = ModelId::default();
-            }
-            if clears_settings {
-                state.overlay_style = OverlayStyle::default();
-                state.overlay_position = OverlayPosition::default();
             }
             state.last_transcript = None;
             state.last_error = credential_warning;

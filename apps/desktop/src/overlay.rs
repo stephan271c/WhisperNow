@@ -3,9 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use whispernow_api::{
-    ApiErrorDto, AppStateDto, OverlayPosition, OverlayStyle, PhaseDto, RecoveryActionDto,
-};
+use whispernow_api::{ApiErrorDto, AppStateDto, PhaseDto, RecoveryActionDto};
 
 mod tauri_window;
 
@@ -32,7 +30,7 @@ pub(crate) enum OverlayPresentation {
 /// or a notification), so the overlay may call it under its own lock.
 pub(crate) trait OverlayWindow: Send + Sync {
     /// Places the window on the monitor under the cursor and shows it without focus.
-    fn show(&self, position: OverlayPosition);
+    fn show(&self);
     fn hide(&self);
     fn notify(&self, message: String);
 }
@@ -89,17 +87,13 @@ pub(crate) fn monitor_under_cursor(
 }
 
 /// Physical top-left corner that centres a window of `logical_size` horizontally in the work
-/// area, against its top or bottom edge. Converting with the target monitor's own scale factor
+/// area, against its bottom edge. Converting with the target monitor's own scale factor
 /// keeps placement correct on mixed-DPI setups.
 #[allow(
     clippy::cast_possible_truncation,
     reason = "rounded window dimensions and margins are far inside i32"
 )]
-pub(crate) fn overlay_origin(
-    monitor: &MonitorArea,
-    position: OverlayPosition,
-    logical_size: (f64, f64),
-) -> (i32, i32) {
+pub(crate) fn overlay_origin(monitor: &MonitorArea, logical_size: (f64, f64)) -> (i32, i32) {
     let scale = monitor.scale_factor;
     let width = (logical_size.0 * scale).round() as i32;
     let height = (logical_size.1 * scale).round() as i32;
@@ -108,28 +102,17 @@ pub(crate) fn overlay_origin(
     let work_width = i32::try_from(work.width).unwrap_or(i32::MAX);
     let work_height = i32::try_from(work.height).unwrap_or(i32::MAX);
     let x = work.x + (work_width - width) / 2;
-    let y = match position {
-        OverlayPosition::Top => work.y + margin,
-        OverlayPosition::Bottom => work.y + work_height - height - margin,
-    };
-    (x, y)
+    (x, work.y + work_height - height - margin)
 }
 
-/// Where a phase is presented under the chosen style, given whether the session can keep a
-/// window floating above others (not native Wayland).
-pub(crate) const fn overlay_presentation(
-    style: OverlayStyle,
-    phase: &PhaseDto,
-    can_float: bool,
-) -> OverlayPresentation {
-    match (style, phase, can_float) {
-        (OverlayStyle::Off, _, _)
-        | (_, PhaseDto::Idle | PhaseDto::Paused | PhaseDto::Updating, _) => {
-            OverlayPresentation::None
-        }
-        (_, _, true) => OverlayPresentation::Window,
-        (_, PhaseDto::Error { .. }, false) => OverlayPresentation::Notification,
-        (_, _, false) => OverlayPresentation::None,
+/// Where a phase is presented, given whether the session can keep a window floating above
+/// others (not native Wayland).
+pub(crate) const fn overlay_presentation(phase: &PhaseDto, can_float: bool) -> OverlayPresentation {
+    match (phase, can_float) {
+        (PhaseDto::Idle | PhaseDto::Paused | PhaseDto::Updating, _) => OverlayPresentation::None,
+        (_, true) => OverlayPresentation::Window,
+        (PhaseDto::Error { .. }, false) => OverlayPresentation::Notification,
+        (_, false) => OverlayPresentation::None,
     }
 }
 
@@ -165,12 +148,11 @@ impl RecordingOverlay {
     }
 
     pub(crate) fn observe(&self, snapshot: &AppStateDto) {
-        let presentation =
-            overlay_presentation(snapshot.overlay_style, &snapshot.phase, self.can_float);
+        let presentation = overlay_presentation(&snapshot.phase, self.can_float);
         let mut presented = self.presented.lock().expect("overlay lock poisoned");
         let show = presentation == OverlayPresentation::Window;
         if show && !presented.window_shown {
-            self.window.show(snapshot.overlay_position);
+            self.window.show();
         } else if !show && presented.window_shown {
             self.window.hide();
         }

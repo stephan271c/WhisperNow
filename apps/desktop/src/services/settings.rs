@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, Mutex, MutexGuard},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use whispernow_api::{
     ApiErrorDto, ClearApiKeyRequest, ErrorCategoryDto, LlmProvider, SetApiKeyRequest,
@@ -9,9 +6,11 @@ use whispernow_api::{
 };
 use whispernow_core::{
     audio::{AudioDeviceChoice, AudioDeviceId, AudioInput},
-    llm::{LlmProviderConfig, PromptKind},
+    llm::LlmProviderConfig,
 };
-use whispernow_domain::{ModelId, Settings, SetupCheckpoint, SetupStep, Shortcut, WindowGeometry};
+use whispernow_domain::{
+    ModelId, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, WindowGeometry,
+};
 use whispernow_platform::{ModelStore, SettingsNotice, SettingsStore};
 
 use super::{
@@ -43,32 +42,27 @@ impl SettingsTransaction<'_> {
             .save(settings)
             .map_err(|error| {
                 ApiErrorDto::new(ErrorCategoryDto::General, &error.code, &error.summary)
-            })?;
-        self.coordinator.follow_overlay(settings);
-        Ok(())
+            })
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PersistedShortcuts {
     shortcut: Shortcut,
-    hold_shortcut_enabled: bool,
-    toggle_shortcut: Option<Shortcut>,
+    mode: RecordingMode,
 }
 
 impl PersistedShortcuts {
     pub(crate) fn of(settings: &Settings) -> Self {
         Self {
-            shortcut: settings.hold_shortcut.clone(),
-            hold_shortcut_enabled: settings.hold_shortcut_enabled,
-            toggle_shortcut: settings.toggle_shortcut.clone(),
+            shortcut: settings.recording_shortcut.clone(),
+            mode: settings.recording_mode,
         }
     }
 
     pub(crate) fn apply_to(&self, settings: &mut Settings) {
-        settings.hold_shortcut.clone_from(&self.shortcut);
-        settings.hold_shortcut_enabled = self.hold_shortcut_enabled;
-        settings.toggle_shortcut.clone_from(&self.toggle_shortcut);
+        settings.recording_shortcut.clone_from(&self.shortcut);
+        settings.recording_mode = self.mode;
     }
 }
 
@@ -132,21 +126,6 @@ impl SettingsCoordinator {
         self.warn(code, &summary);
     }
 
-    /// The overlay follows the saved style and position through the state snapshot. A save
-    /// that leaves them unchanged publishes nothing.
-    fn follow_overlay(&self, settings: &Settings) {
-        let chosen = (settings.overlay_style, settings.overlay_position);
-        let current = {
-            let state = self.state.lock();
-            (state.overlay_style, state.overlay_position)
-        };
-        if current != chosen {
-            self.state.apply(|state| {
-                (state.overlay_style, state.overlay_position) = chosen;
-            });
-        }
-    }
-
     /// Publishes what happened to the settings file as it loaded, and warns when the saved
     /// settings break a rule, such as after a hand edit. They stay in effect, and an edit that
     /// leaves that rule alone still saves.
@@ -185,26 +164,6 @@ impl SettingsCoordinator {
             (checkpoint.model_id, checkpoint.input_device)
         };
         Ok(recording(settings, model_id, input_device, None))
-    }
-
-    /// The saved prompt `id` with the saved provider and LLM timeout, for a test run on
-    /// sample text. The provider configuration carries no API key, like a recording's.
-    pub(super) fn prompt_test_plan(
-        &self,
-        id: &str,
-    ) -> Result<(CleanupPlan, Duration), ApiErrorDto> {
-        let settings = self.transaction().load()?;
-        let plan = prompt_plan(&settings, id).ok_or_else(|| {
-            ApiErrorDto::new(
-                ErrorCategoryDto::NotFound,
-                "prompt_missing",
-                "This prompt is no longer saved",
-            )
-        })?;
-        Ok((
-            plan,
-            Duration::from_secs(u64::from(settings.llm_timeout_seconds)),
-        ))
     }
 
     pub(crate) fn get(&self) -> Result<SettingsView, ApiErrorDto> {
@@ -354,9 +313,8 @@ impl SettingsCoordinator {
             step: SetupStep::Welcome,
             model_id: settings.model_id.clone(),
             input_device: settings.input_device.clone(),
-            hold_shortcut: settings.hold_shortcut.clone(),
-            hold_shortcut_enabled: settings.hold_shortcut_enabled,
-            toggle_shortcut: settings.toggle_shortcut.clone(),
+            recording_shortcut: settings.recording_shortcut.clone(),
+            recording_mode: settings.recording_mode,
         };
         settings.setup = Some(checkpoint.clone());
         settings.first_run_complete = false;
@@ -378,7 +336,7 @@ pub(crate) fn settings_error(error: &SettingsError) -> ApiErrorDto {
     )
 }
 
-/// What a dictation records with: `settings`' vocabulary and LLM timeout, with the given
+/// What a dictation records with: `settings`' vocabulary and history rules, with the given
 /// model, microphone and cleanup.
 fn recording(
     settings: Settings,
@@ -392,7 +350,6 @@ fn recording(
             model_id,
             vocabulary: settings.vocabulary_replacements,
             cleanup,
-            llm_timeout: Duration::from_secs(u64::from(settings.llm_timeout_seconds)),
             history_limit: settings.history_limit,
             keep_audio: settings.keep_audio,
         },
@@ -434,27 +391,9 @@ pub(super) fn require_connected_device(
 }
 
 fn cleanup_plan(settings: &Settings) -> Option<CleanupPlan> {
-    prompt_plan(settings, settings.active_prompt_id.as_deref()?)
-}
-
-fn prompt_plan(settings: &Settings, id: &str) -> Option<CleanupPlan> {
-    let prompt = settings
-        .prompts
-        .iter()
-        .find(|prompt| prompt.id == id)?
-        .clone();
-    let config = provider_config(settings);
-    let mode = if prompt.rewrites() {
-        PromptKind::Rewrite
-    } else {
-        PromptKind::Cleanup
-    };
-    Some(CleanupPlan {
-        prompt,
+    settings.cleanup_enabled.then(|| CleanupPlan {
         key_saved: settings.api_keys.contains(&settings.llm_provider),
-        config,
-        mode,
-        vocabulary: settings.vocabulary_replacements.clone(),
+        config: provider_config(settings),
     })
 }
 
@@ -491,6 +430,7 @@ mod tests {
 
     use whispernow_api::{
         ApiKey, ClearApiKeyRequest, LlmProvider, SetApiKeyRequest, ThemePreference,
+        VocabularyReplacement,
     };
     use whispernow_platform::{AppPaths, MemoryCredentialStore, SettingsStore};
 
@@ -632,18 +572,19 @@ mod tests {
         let fixture = Fixture::start();
         fs::write(
             fixture.paths.settings_file(),
-            r#"{"settings_version": 2, "llm_timeout_seconds": 1}"#,
+            r#"{"settings_version": 2, "vocabulary_replacements": [[" ", "x"]]}"#,
         )
         .expect("hand-edited settings");
 
         let saved = fixture.settings.get().expect("settings load").settings;
-        assert_eq!(saved.llm_timeout_seconds, 1);
+        assert_eq!(saved.vocabulary_replacements[0].source, " ");
         fixture.settings.report_loaded(&saved);
         assert_eq!(
             fixture.warning_code().as_deref(),
             Some("settings_break_a_rule")
         );
 
+        let saved_rules = saved.vocabulary_replacements.clone();
         let mut edited = saved;
         edited.theme = ThemePreference::Dark;
         fixture
@@ -652,8 +593,8 @@ mod tests {
             .expect("an edit that leaves the broken rule alone saves");
         let reloaded = fixture.settings.get().expect("reload").settings;
         assert_eq!(
-            (reloaded.theme, reloaded.llm_timeout_seconds),
-            (ThemePreference::Dark, 1)
+            (reloaded.theme, reloaded.vocabulary_replacements),
+            (ThemePreference::Dark, saved_rules)
         );
     }
 
@@ -661,18 +602,15 @@ mod tests {
     fn an_update_that_breaks_a_rule_is_refused_and_nothing_is_saved() {
         let fixture = Fixture::start();
         let mut edited = fixture.settings.get().expect("settings view").settings;
-        edited.llm_timeout_seconds = 1;
+        edited.vocabulary_replacements = vec![VocabularyReplacement::new(" ", "x")];
 
         let error = fixture
             .settings
             .update(edited, &whispernow_platform::CpalAudioInput::new())
-            .expect_err("the time limit is out of range");
+            .expect_err("a replacement needs text to replace");
 
         assert_eq!(error.code, "invalid_settings");
-        assert_eq!(
-            error.summary,
-            "Enter a time limit between 5 and 120 seconds"
-        );
+        assert_eq!(error.summary, "Enter the text to replace");
         assert!(!fixture.paths.settings_file().exists());
     }
 

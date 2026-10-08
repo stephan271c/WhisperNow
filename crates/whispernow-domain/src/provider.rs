@@ -148,15 +148,23 @@ impl ProviderEndpoint {
         Url::parse(&self.url)
             .map_or_else(|_| String::new(), |url| url.origin().ascii_serialization())
     }
+
+    #[must_use]
+    pub fn is_on_this_computer(&self) -> bool {
+        Url::parse(&self.url).is_ok_and(|url| is_loopback(&url) == Some(true))
+    }
+}
+
+fn is_loopback(url: &Url) -> Option<bool> {
+    Some(match url.host()? {
+        Host::Domain(host) => host.eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(address) => address.is_loopback(),
+        Host::Ipv6(address) => address.is_loopback(),
+    })
 }
 
 fn require_secure_transport(url: &Url) -> Result<(), EndpointError> {
-    let loopback = match url.host() {
-        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        None => return Err(EndpointError::Invalid),
-    };
+    let loopback = is_loopback(url).ok_or(EndpointError::Invalid)?;
     match url.scheme() {
         "https" => Ok(()),
         "http" if loopback => Ok(()),

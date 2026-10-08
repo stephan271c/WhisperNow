@@ -18,7 +18,7 @@ use crate::{Notice, NoticeAction, NoticeScope, UiOperation};
 
 pub(crate) use draft::SetupEdit;
 pub(crate) use history::HistoryCopied;
-pub(crate) use settings::{PromptTest, SaveStatus, SettingKey};
+pub(crate) use settings::{SaveStatus, SettingKey};
 pub(crate) use setup::SetupTest;
 
 #[derive(Clone, Default, PartialEq)]
@@ -32,7 +32,6 @@ pub(crate) struct ManagementState {
     setting_errors: BTreeMap<SettingKey, String>,
     /// The controls whose edits the desktop saved last.
     saved_settings: Vec<SettingKey>,
-    pub prompt_test: Option<PromptTest>,
     pub setup: Option<SetupStateView>,
     pub devices: Vec<AudioDeviceDto>,
     pub devices_listed: bool,

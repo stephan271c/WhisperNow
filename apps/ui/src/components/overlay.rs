@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use whispernow_api::{OverlayPosition, RecordingMode};
+use whispernow_api::RecordingMode;
 
 use super::actions::UiActions;
 use super::ui::{Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
@@ -77,15 +77,10 @@ pub fn RecordingBar() -> Element {
     let state = context.state.read();
     let view = &state.overlay;
     let phase = view.presented_phase();
-    let position = match view.position {
-        OverlayPosition::Top => "overlay-top",
-        OverlayPosition::Bottom => "overlay-bottom",
-    };
     let status = view
         .action_error
         .clone()
         .unwrap_or_else(|| status_label(&phase).to_owned());
-    let live_text = view.live_text().map(str::to_owned);
     let elapsed = format_elapsed(view.elapsed_ms);
     let bars = meter_bars(view);
     let arming = if view.levels_seen {
@@ -95,11 +90,6 @@ pub fn RecordingBar() -> Element {
     };
     drop(state);
 
-    let expanded = if live_text.is_some() {
-        "overlay-expanded"
-    } else {
-        ""
-    };
     let in_flight = matches!(
         phase,
         OverlayPhase::Starting
@@ -135,11 +125,8 @@ pub fn RecordingBar() -> Element {
     };
 
     rsx! {
-        main { class: "wn-app overlay {position}",
-            section { class: "overlay-pill {phase_class(&phase)} {expanded}", aria_label: "Dictation",
-                if let Some(text) = live_text {
-                    p { class: "overlay-live-text", span { "{text}" } }
-                }
+        main { class: "wn-app overlay",
+            section { class: "overlay-pill {phase_class(&phase)}", aria_label: "Dictation",
                 div { class: "overlay-row",
                     span { class: "overlay-indicator", aria_hidden: "true",
                         {match &phase {

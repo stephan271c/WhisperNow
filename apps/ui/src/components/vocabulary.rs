@@ -82,7 +82,7 @@ pub(super) fn VocabularyPage() -> Element {
     rsx! { div { class: "settings-stack",
         SettingsBlockedReason {}
         Section { id: "vocabulary", title: "Vocabulary",
-            description: "Fix words the model often gets wrong. Rules run from top to bottom, so a later rule sees the text an earlier one produced.",
+            description: "Rules run from top to bottom.",
             form { id: ADD_FORM, class: "vocabulary-add", tabindex: "-1", aria_label: "Add a rule",
                 onmounted: move |event| add_form.set(Some(event.data())),
                 onsubmit: move |event: FormEvent| {
@@ -223,7 +223,7 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>) -> Element {
     .unwrap_or_default();
     rsx! {
         Section { id: "vocabulary-transfer", title: "Import and export",
-            description: "Rules move as JSON, a list of {{\"source\": …, \"replacement\": …}} pairs. JSON keeps commas, quotes and line breaks inside a rule intact, which a spreadsheet format would not.",
+            description: "A JSON list of {{\"source\": …, \"replacement\": …}} pairs.",
             div { class: "card-actions",
                 Button { id: "vocabulary-export", disabled: rules.is_empty(),
                     onclick: move |_| actions.copy_text(export.clone(), NoticeScope::Settings),
@@ -231,7 +231,7 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>) -> Element {
                 }
             }
             Field { id: "vocabulary-import", label: "Paste rules to import",
-                description: "A pasted rule for text that already has one replaces its replacement.",
+                description: "A rule for text that already has one replaces it.",
                 textarea { id: "vocabulary-import", class: "text-input", rows: "4",
                     aria_describedby: "vocabulary-import-description",
                     value: "{pasted}", oninput: move |event| pasted.set(event.value()) }

@@ -37,7 +37,6 @@ impl BlockedReason {
 pub enum UiOperation {
     /// Any settings control; changes queue behind one another rather than refusing.
     SaveSettings,
-    TestPrompt,
     CredentialMutation,
     DownloadModel,
     CancelDownload,
@@ -124,9 +123,7 @@ impl UiOperation {
 impl UiOperation {
     pub(crate) const fn notice_scope(self) -> NoticeScope {
         match self {
-            Self::SaveSettings | Self::TestPrompt | Self::CredentialMutation => {
-                NoticeScope::Settings
-            }
+            Self::SaveSettings | Self::CredentialMutation => NoticeScope::Settings,
             Self::DownloadModel | Self::CancelDownload | Self::ModelSwitch | Self::ModelDelete => {
                 NoticeScope::Models
             }
@@ -203,10 +200,6 @@ fn locally_blocked(operation: UiOperation, management: &ManagementState) -> Opti
                 .iter()
                 .any(|busy| busy.blocks_workflow_changes()),
         ),
-        // The test runs the saved prompt, so it waits for edits still saving.
-        UiOperation::TestPrompt => {
-            pending(management.settings_saving() || management.is_busy(UiOperation::TestPrompt))
-        }
         UiOperation::CredentialMutation
         | UiOperation::DownloadModel
         | UiOperation::CancelDownload

@@ -5,15 +5,16 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 use whispernow_api::{
     ModelAvailability, ModelDto, PermissionDto, PermissionKindDto, PermissionStatusDto,
-    RecordingMode, RecoveryActionDto, SetupCheckpoint, SetupStep, SetupTestResultDto, Shortcut,
-    ShortcutKey, ShortcutModifier,
+    RecoveryActionDto, SetupCheckpoint, SetupStep, SetupTestResultDto, Shortcut, ShortcutKey,
+    ShortcutModifier,
 };
 
 use super::actions::{DisabledReason, use_actions};
+use super::configuration::{RECORDING_MODES, choice_value, chosen};
 use super::home::percent;
 use super::labels::{self, format_bytes};
-use super::models::{DownloadProgress, languages};
-use super::ui::{Banner, Button, ButtonVariant, Icon, IconName, ShortcutLabel, Tone};
+use super::models::DownloadProgress;
+use super::ui::{Banner, Button, ButtonVariant, Icon, IconName, Segmented, ShortcutLabel, Tone};
 use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture, use_navigator};
 use crate::{
     BlockedReason, NoticeScope, Route, SettingsRoute, SetupEdit, SetupTest, UiContext, UiOperation,
@@ -442,7 +443,6 @@ fn ModelChoice(model: ModelDto, checked: bool) -> Element {
         }
         p { id: "setup-model-{slug}-facts", class: "model-facts",
             "{format_bytes(model.size_bytes)}"
-            if let Some(languages) = languages(&model) { " · {languages}" }
         }
         div { class: "model-actions",
             if let Some(download) = download {
@@ -488,53 +488,21 @@ fn shortcut_conflict(shortcut: &Shortcut) -> Option<&'static str> {
 #[component]
 fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
     let mut management = use_context::<UiContext>().management;
-    // Turning toggle-to-record on waits for a shortcut before the checkpoint has one.
-    let mut choosing_toggle = use_signal(|| false);
-    let toggle_on = checkpoint.toggle_shortcut.is_some() || choosing_toggle();
-    let hold_conflict = checkpoint
-        .hold_shortcut_enabled
-        .then(|| shortcut_conflict(&checkpoint.hold_shortcut))
-        .flatten();
-    let toggle_conflict = checkpoint
-        .toggle_shortcut
-        .as_ref()
-        .and_then(shortcut_conflict);
+    let conflict = shortcut_conflict(&checkpoint.recording_shortcut);
     rsx! { div { class: "setup-content",
-        p { class: "field-help", "Use one mode or both. Hold to record stops when you let go; toggle starts on one press and stops on the next." }
+        p { class: "field-help", "Hold records while you hold the keys; toggle starts on one press and stops on the next." }
         fieldset { class: "shortcut-settings",
-            legend { "Hold to record" }
-            label { class: "checkbox-row",
-                input { r#type: "checkbox", checked: checkpoint.hold_shortcut_enabled,
-                    onchange: move |event| management.write().edit_setup(SetupEdit::HoldEnabled(event.checked()))
-                }
-                "Turn on hold to record"
+            legend { "Recording shortcut" }
+            Segmented { label: "Recording mode",
+                value: choice_value(&RECORDING_MODES, &checkpoint.recording_mode),
+                options: RECORDING_MODES.iter().map(|(_, value, label)| (*value, *label)).collect::<Vec<_>>(),
+                onchange: move |value: &'static str| if let Some(mode) = chosen(&RECORDING_MODES, value) {
+                    management.write().edit_setup(SetupEdit::RecordingMode(mode));
+                },
             }
-            if checkpoint.hold_shortcut_enabled {
-                ShortcutCapture { id: "setup-hold-shortcut-capture", label: "hold-to-record shortcut", shortcut: Some(checkpoint.hold_shortcut.clone()),
-                    oncapture: move |shortcut| management.write().edit_setup(SetupEdit::Shortcut(RecordingMode::Hold, shortcut)) }
-            }
-            if let Some(conflict) = hold_conflict {
-                Banner { tone: Tone::Warning, p { "{conflict}" } }
-            }
-        }
-        fieldset { class: "shortcut-settings",
-            legend { "Toggle to record" }
-            label { class: "checkbox-row",
-                input { r#type: "checkbox", checked: toggle_on,
-                    onchange: move |event| {
-                        choosing_toggle.set(event.checked());
-                        if !event.checked() {
-                            management.write().edit_setup(SetupEdit::ToggleOff);
-                        }
-                    }
-                }
-                "Turn on toggle to record"
-            }
-            if toggle_on {
-                ShortcutCapture { id: "setup-toggle-shortcut-capture", label: "toggle-to-record shortcut", shortcut: checkpoint.toggle_shortcut.clone(),
-                    oncapture: move |shortcut| management.write().edit_setup(SetupEdit::Shortcut(RecordingMode::Toggle, shortcut)) }
-            }
-            if let Some(conflict) = toggle_conflict {
+            ShortcutCapture { id: "setup-recording-shortcut-capture", label: "recording shortcut", shortcut: Some(checkpoint.recording_shortcut.clone()),
+                oncapture: move |shortcut| management.write().edit_setup(SetupEdit::Shortcut(shortcut)) }
+            if let Some(conflict) = conflict {
                 Banner { tone: Tone::Warning, p { "{conflict}" } }
             }
         }
@@ -570,11 +538,8 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
         p { class: "field-help", "Say a sentence to check that everything works. The test shows the text here; nothing is pasted or saved." }
         dl { id: "setup-summary", class: "setup-summary",
             div { dt { "Speech model" } dd { "{model_name}" } }
-            div { dt { "Hold to record" }
-                dd { if checkpoint.hold_shortcut_enabled { ShortcutLabel { shortcut: checkpoint.hold_shortcut.clone() } } else { "Off" } }
-            }
-            div { dt { "Toggle to record" }
-                dd { if let Some(shortcut) = checkpoint.toggle_shortcut.clone() { ShortcutLabel { shortcut } } else { "Off" } }
+            div { dt { "{labels::recording_mode(checkpoint.recording_mode)}" }
+                dd { ShortcutLabel { shortcut: checkpoint.recording_shortcut.clone() } }
             }
         }
         div { class: "field",
@@ -683,36 +648,26 @@ fn DoneStep() -> Element {
     let navigator = use_navigator();
     let management = use_context::<UiContext>().management;
     // The saved settings, or the checkpoint setup finished with until they load.
-    let (hold, toggle) = {
+    let shortcut = {
         let management = management.read();
         if let Some(view) = management.settings.as_ref() {
             let settings = &view.settings;
-            (
-                settings
-                    .hold_shortcut_enabled
-                    .then(|| settings.hold_shortcut.clone()),
-                settings.toggle_shortcut.clone(),
-            )
-        } else if let Some(checkpoint) = management.setup_checkpoint() {
-            (
-                checkpoint
-                    .hold_shortcut_enabled
-                    .then(|| checkpoint.hold_shortcut.clone()),
-                checkpoint.toggle_shortcut.clone(),
-            )
+            Some((settings.recording_mode, settings.recording_shortcut.clone()))
         } else {
-            (None, None)
+            management.setup_checkpoint().map(|checkpoint| {
+                (
+                    checkpoint.recording_mode,
+                    checkpoint.recording_shortcut.clone(),
+                )
+            })
         }
     };
     rsx! { div { class: "setup-hero",
         div { class: "setup-hero-icon complete", Icon { name: IconName::CheckCircle } }
         p { "Use your shortcut in any app, speak, and your words appear where you are typing." }
         dl { id: "setup-done-shortcuts", class: "setup-summary",
-            if let Some(shortcut) = hold {
-                div { dt { "Hold to record" } dd { ShortcutLabel { shortcut } } }
-            }
-            if let Some(shortcut) = toggle {
-                div { dt { "Toggle to record" } dd { ShortcutLabel { shortcut } } }
+            if let Some((mode, shortcut)) = shortcut {
+                div { dt { "{labels::recording_mode(mode)}" } dd { ShortcutLabel { shortcut } } }
             }
         }
         p { class: "field-help", "Optional: AI cleanup can fix punctuation and remove filler words using a provider you choose." }

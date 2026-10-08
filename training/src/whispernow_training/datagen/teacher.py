@@ -17,9 +17,8 @@ SYSTEM_FILE = TEACHER_DIR / "system.txt"
 EDIT_REQUEST_FILE = TEACHER_DIR / "edit_request.txt"
 
 PROMPT_RS = REPO_ROOT / "crates/whispernow-core/src/llm/prompt.rs"
-PROMPTS_RS = REPO_ROOT / "crates/whispernow-domain/src/prompts.rs"
 
-# `build_cleanup_prompt` in llm/prompt.rs, for `PromptKind::Cleanup`.
+# `build_cleanup_prompt` in llm/prompt.rs.
 CLEANUP_EDIT_SCOPE = (
     "Edit type: light cleanup. Keep the speaker's wording; fix recognition errors, "
     "punctuation, capitalization, and filler words."
@@ -32,25 +31,25 @@ def _unescape_rust(literal: str) -> str:
     return re.sub(r"\\(.)", lambda m: {"n": "\n", "t": "\t"}.get(m.group(1), m.group(1)), literal)
 
 
-def rust_system_contract() -> str:
+def _rust_const(name: str) -> str:
     source = PROMPT_RS.read_text(encoding="utf-8")
-    match = re.search(r'pub(?:\(crate\))? const CLEANUP_SYSTEM_CONTRACT: &str = "(.*?)(?<!\\)";', source, re.DOTALL)
-    assert match, "CLEANUP_SYSTEM_CONTRACT not found in llm/prompt.rs"
+    match = re.search(rf'pub(?:\(crate\))? const {name}: &str = "(.*?)(?<!\\)";', source, re.DOTALL)
+    assert match, f"{name} not found in llm/prompt.rs"
     return _unescape_rust(match.group(1))
 
 
-def rust_fix_grammar_prompt() -> str:
-    source = PROMPTS_RS.read_text(encoding="utf-8")
-    # The id is written as the literal or as the `CLEAN_UP_PROMPT_ID` constant that holds it.
-    match = re.search(r'id: (?:"fix_grammar"|CLEAN_UP_PROMPT_ID),.*?prompt: "(.*?)(?<!\\)",\n', source, re.DOTALL)
-    assert match, "fix_grammar prompt not found in prompts.rs"
-    return _unescape_rust(match.group(1))
+def rust_system_contract() -> str:
+    return _rust_const("CLEANUP_SYSTEM_CONTRACT")
+
+
+def rust_cleanup_prompt() -> str:
+    return _rust_const("CLEANUP_PROMPT")
 
 
 def sync_from_rust() -> None:
     TEACHER_DIR.mkdir(parents=True, exist_ok=True)
     SYSTEM_FILE.write_text(rust_system_contract(), encoding="utf-8")
-    EDIT_REQUEST_FILE.write_text(rust_fix_grammar_prompt(), encoding="utf-8")
+    EDIT_REQUEST_FILE.write_text(rust_cleanup_prompt(), encoding="utf-8")
 
 
 def _opens_prompt_block(after_bracket: str) -> bool:
@@ -75,7 +74,7 @@ REVIEW_NOTE = (
 
 
 def teacher_messages(transcript: str, edit_request: str | None = None, note: str | None = None) -> list[dict[str, str]]:
-    """The system and user messages the app sends for `fix_grammar`; `note` adds a reviewer's note."""
+    """The system and user messages the app sends for cleanup; `note` adds a reviewer's note."""
     edit_request = EDIT_REQUEST_FILE.read_text(encoding="utf-8") if edit_request is None else edit_request
     user = (
         f"{CLEANUP_EDIT_SCOPE}\n\n<edit_request>\n{neutralize_prompt_delimiters(edit_request.strip())}\n"

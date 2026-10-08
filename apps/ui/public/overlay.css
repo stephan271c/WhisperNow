@@ -14,11 +14,6 @@
   padding: var(--space-2);
 }
 
-/* The window sits at the top edge, so the pill hugs the top and grows downward. */
-.overlay-top {
-  justify-content: flex-start;
-}
-
 .overlay-pill {
   --color-surface: var(--color-inverse-surface);
   --color-surface-raised: var(--color-inverse-surface-raised);
@@ -46,10 +41,6 @@
 /* Transparent rather than removed, so the status line stays in the accessibility tree. */
 .overlay-idle {
   opacity: 0;
-}
-
-.overlay-expanded {
-  border-radius: var(--radius-md);
 }
 
 .overlay-row {
@@ -178,19 +169,6 @@
   flex: none;
   align-items: center;
   gap: var(--space-1);
-}
-
-/* The newest committed text stays at the bottom; older lines fade out at the top. */
-.overlay-live-text {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  max-height: calc(2 * var(--line-height-normal) * var(--font-size-sm));
-  overflow: hidden;
-  padding-right: var(--space-2);
-  font-size: var(--font-size-sm);
-  -webkit-mask-image: linear-gradient(to bottom, transparent, black 45%);
-  mask-image: linear-gradient(to bottom, transparent, black 45%);
 }
 
 @keyframes overlay-pulse {

@@ -42,7 +42,7 @@ use updates::AboutPage;
 use vocabulary::VocabularyPage;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) use configuration::cleanup_recipient;
+pub(crate) use configuration::cleanup_destination;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;

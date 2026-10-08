@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use whispernow_domain::{
     ApiKey, ClearDataCategory, DownloadPhase, EntryId, LlmProvider, ModelAvailability, ModelFamily,
-    ModelId, OverlayPosition, OverlayStyle, RecordingMode, RelativeRating, Settings,
-    SetupCheckpoint,
+    ModelId, RecordingMode, RelativeRating, Settings, SetupCheckpoint,
 };
 
 /// No API key crosses: `settings.api_keys` only names the providers that have one.
@@ -30,20 +29,6 @@ impl SettingsView {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateSettingsRequest {
     pub settings: Settings,
-}
-
-/// Runs one saved prompt on sample text with the saved provider settings.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TestPromptRequest {
-    pub prompt_id: String,
-    pub sample_text: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TestPromptResponse {
-    pub text: String,
 }
 
 /// A warning never means the save failed: the settings file already holds `settings`.
@@ -361,8 +346,6 @@ pub struct AppStateDto {
     pub active_downloads: Vec<ActiveDownloadDto>,
     /// How setup's latest test dictation ended; cleared when the next test starts.
     pub setup_test: Option<SetupTestResultDto>,
-    pub overlay_style: OverlayStyle,
-    pub overlay_position: OverlayPosition,
 }
 
 /// Every surface derives its view from this one value.
@@ -532,11 +515,6 @@ pub enum EventPayload {
     },
     /// History may have changed; listeners re-fetch what they show.
     HistoryChanged,
-    /// Text of the recording's segments decoded so far.
-    PartialTranscript {
-        session: u64,
-        committed_text: String,
-    },
     NavigationRequested {
         section: MainWindowSectionDto,
     },
@@ -550,7 +528,6 @@ impl EventPayload {
             EventPayload::AudioLevel { .. } => crate::AUDIO_LEVEL_EVENT,
             EventPayload::UpdateChanged { .. } => crate::UPDATE_CHANGED_EVENT,
             EventPayload::HistoryChanged => crate::HISTORY_CHANGED_EVENT,
-            EventPayload::PartialTranscript { .. } => crate::PARTIAL_TRANSCRIPT_EVENT,
             EventPayload::NavigationRequested { .. } => crate::NAVIGATION_REQUESTED_EVENT,
         }
     }

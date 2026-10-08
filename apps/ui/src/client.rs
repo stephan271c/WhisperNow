@@ -11,8 +11,8 @@ use whispernow_api::{
     DataLocationDto, DeleteHistoryEntryRequest, HistoryFilter, HistoryPage, HistoryPageRequest,
     ListAudioDevicesResponse, ListModelsResponse, MicrophoneTestResponse, ModelId,
     OpenMainWindowRequest, PermissionRequest, PermissionsResponse, SaveSettingsResponse,
-    SetApiKeyRequest, SettingsView, SetupCheckpoint, SetupStateView, TestPromptRequest,
-    TestPromptResponse, UpdateSettingsRequest, UpdateStateDto,
+    SetApiKeyRequest, SettingsView, SetupCheckpoint, SetupStateView, UpdateSettingsRequest,
+    UpdateStateDto,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -87,10 +87,6 @@ pub(crate) async fn set_api_key(request: &SetApiKeyRequest) -> Answer<SettingsVi
 
 pub(crate) async fn clear_api_key(request: &ClearApiKeyRequest) -> Answer<SettingsView> {
     invoke("clear_api_key", Some(request)).await
-}
-
-pub(crate) async fn test_prompt(request: &TestPromptRequest) -> Answer<TestPromptResponse> {
-    invoke("test_prompt", Some(request)).await
 }
 
 pub(crate) async fn list_audio_devices() -> Answer<ListAudioDevicesResponse> {
@@ -364,7 +360,6 @@ mod wasm {
             .map_err(from_js)
     }
 
-    /// Only the recording bar may pass the partial transcript.
     pub async fn listen_all(
         event_names: &[&str],
         callback: impl FnMut(EventPayload) + 'static,

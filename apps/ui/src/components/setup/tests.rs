@@ -2,9 +2,9 @@ use dioxus::prelude::*;
 use whispernow_api::{
     ApiErrorDto, AppStateDto, ErrorCategoryDto, EventPayload, ListModelsResponse,
     ModelAvailability, PasteHelperSetupDto, PermissionDto, PermissionKindDto, PermissionRequest,
-    PermissionStatusDto, PermissionsResponse, PhaseDto, RecoveryActionDto, SetupCheckpoint,
-    SetupStateView, SetupStep, SetupTestResultDto, Shortcut, ShortcutKey, ShortcutModifier,
-    TranscriptResponse,
+    PermissionStatusDto, PermissionsResponse, PhaseDto, RecordingMode, RecoveryActionDto,
+    SetupCheckpoint, SetupStateView, SetupStep, SetupTestResultDto, Shortcut, ShortcutKey,
+    ShortcutModifier, TranscriptResponse,
 };
 
 use super::super::actions::PERMISSION_POLLS;
@@ -25,7 +25,7 @@ fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState
             step,
             model_id: whispernow_api::ModelId::new("base").expect("fixture model id"),
             input_device: None,
-            hold_shortcut: Shortcut {
+            recording_shortcut: Shortcut {
                 modifiers: [
                     ShortcutModifier::Meta,
                     ShortcutModifier::Shift,
@@ -34,11 +34,7 @@ fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState
                 .into(),
                 key: ShortcutKey::R,
             },
-            hold_shortcut_enabled: true,
-            toggle_shortcut: Some(Shortcut {
-                modifiers: [ShortcutModifier::Alt].into(),
-                key: ShortcutKey::F9,
-            }),
+            recording_mode: RecordingMode::Toggle,
         },
     });
     management
@@ -141,7 +137,7 @@ fn setup_resumes_at_the_step_saved_before_a_restart() {
     let html = setup.html();
     assert_eq!(current_step(&html), 4, "Shortcuts is the fourth step");
     assert_eq!(html.matches("aria-current=\"step\"").count(), 1);
-    assert!(tag(&html, "setup-hold-shortcut-capture").is_some());
+    assert!(tag(&html, "setup-recording-shortcut-capture").is_some());
     assert!(tag(&html, "setup-finish-later").is_some());
 }
 
@@ -323,7 +319,7 @@ fn a_new_step_moves_focus_to_its_heading() {
 }
 
 #[test]
-fn the_summary_shows_every_modifier_of_each_shortcut() {
+fn the_summary_shows_the_recording_mode_and_every_modifier() {
     let html = at(SetupStep::TryIt).html();
     let summary = &html[html.find("id=\"setup-summary\"").expect("summary")..];
     let summary = &summary[..summary.find("</dl>").expect("end of summary")];
@@ -335,7 +331,8 @@ fn the_summary_shows_every_modifier_of_each_shortcut() {
             key[..key.find("</kbd>").expect("kbd end")].to_owned()
         })
         .collect::<Vec<_>>();
-    assert_eq!(keys, ["Ctrl", "Shift", "Meta", "R", "Alt", "F9"]);
+    assert_eq!(keys, ["Ctrl", "Shift", "Meta", "R"]);
+    assert!(summary.contains("Press to start and stop"), "{summary}");
 }
 
 #[test]

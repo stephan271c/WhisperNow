@@ -42,36 +42,15 @@ pub(crate) enum KeyTransition {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RoleBinding {
-    pub(crate) role: RecordingMode,
+pub(crate) struct RecordingBinding {
+    pub(crate) mode: RecordingMode,
     pub(crate) binding: ShortcutBinding,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ShortcutBindings {
-    pub(crate) hold: Option<ShortcutBinding>,
-    pub(crate) toggle: Option<ShortcutBinding>,
-}
-
-impl ShortcutBindings {
-    fn entries(&self) -> impl Iterator<Item = RoleBinding> + '_ {
-        self.hold
-            .iter()
-            .cloned()
-            .map(|binding| RoleBinding {
-                role: RecordingMode::Hold,
-                binding,
-            })
-            .chain(self.toggle.iter().cloned().map(|binding| RoleBinding {
-                role: RecordingMode::Toggle,
-                binding,
-            }))
-    }
-
-    fn role_for(&self, id: ShortcutId) -> Option<RecordingMode> {
-        self.entries()
-            .find_map(|entry| (entry.binding.id == id).then_some(entry.role))
-    }
+fn mode_for(recording: Option<&RecordingBinding>, id: ShortcutId) -> Option<RecordingMode> {
+    recording
+        .filter(|recording| recording.binding.id == id)
+        .map(|recording| recording.mode)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -159,18 +138,16 @@ pub(crate) fn binding(shortcut: &Shortcut) -> ShortcutBinding {
     }
 }
 
-/// The recording shortcuts `settings` turn on; none while the shortcuts break a rule.
-pub(crate) fn recording_bindings(
+/// The recording shortcut `settings` turn on; none while the shortcuts break a rule.
+pub(crate) fn recording_binding(
     settings: &Settings,
-) -> Result<ShortcutBindings, ShortcutRegistrationError> {
+) -> Result<RecordingBinding, ShortcutRegistrationError> {
     if !settings.shortcut_problems().is_empty() {
         return Err(ShortcutRegistrationError::ConflictOrUnsupported);
     }
-    Ok(ShortcutBindings {
-        hold: settings
-            .hold_shortcut_enabled
-            .then(|| binding(&settings.hold_shortcut)),
-        toggle: settings.toggle_shortcut.as_ref().map(binding),
+    Ok(RecordingBinding {
+        mode: settings.recording_mode,
+        binding: binding(&settings.recording_shortcut),
     })
 }
 
@@ -191,9 +168,9 @@ pub(crate) type LifecycleProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 /// The native registrations, changed only while the `native` lock is held.
 #[derive(Default)]
 struct Native {
-    bindings: ShortcutBindings,
-    /// The recording shortcuts registered now: all of `bindings`, or none.
-    live: Vec<ShortcutBinding>,
+    recording: Option<RecordingBinding>,
+    /// The recording shortcut while it is registered.
+    live: Option<ShortcutBinding>,
     capturing: bool,
     cancel: CancelShortcut,
 }
@@ -201,8 +178,8 @@ struct Native {
 /// What input routes by and settings report, published after each native change.
 #[derive(Default)]
 struct Published {
-    /// The recording shortcuts, while they are registered.
-    routes: ShortcutBindings,
+    /// The recording shortcut, while it is registered.
+    route: Option<RecordingBinding>,
     cancel: Option<ShortcutId>,
     /// Whether the configured shortcuts are registered, or only held back for a capture.
     active: bool,
@@ -234,7 +211,7 @@ impl ShortcutCoordinator {
     /// not exist yet. Invalid configured shortcuts leave nothing registered and are reported.
     pub(crate) fn new(
         registrar: Arc<dyn ShortcutRegistrar>,
-        bindings: Result<ShortcutBindings, ShortcutRegistrationError>,
+        recording: Result<RecordingBinding, ShortcutRegistrationError>,
         enabled: LifecycleProbe,
     ) -> Self {
         let coordinator = Self {
@@ -245,10 +222,10 @@ impl ShortcutCoordinator {
             registrar,
             enabled,
         };
-        match bindings {
-            Ok(bindings) => {
+        match recording {
+            Ok(recording) => {
                 let mut native = coordinator.native();
-                native.bindings = bindings;
+                native.recording = Some(recording);
                 let _reported = coordinator.sync_locked(&mut native, true);
             }
             Err(error) => coordinator.published().failure = Some(error),
@@ -306,10 +283,11 @@ impl ShortcutCoordinator {
             return None;
         }
         let published = self.published();
-        if published.cancel == Some(id) && published.routes.role_for(id).is_none() {
+        let mode = mode_for(published.route.as_ref(), id);
+        if published.cancel == Some(id) && mode.is_none() {
             return new_press.then_some(ShortcutAction::CancelDictation);
         }
-        match (published.routes.role_for(id)?, transition) {
+        match (mode?, transition) {
             (RecordingMode::Hold, KeyTransition::Pressed) if new_press => {
                 Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
             }
@@ -351,10 +329,10 @@ impl ShortcutCoordinator {
     /// down, so no input routes afterwards.
     pub(crate) fn shutdown(&self) {
         let mut native = self.native();
-        for binding in native.live.drain(..) {
-            if let Err(error) = self.registrar.unregister(&binding) {
-                tracing::warn!(?error, "a shortcut could not be unregistered at shutdown");
-            }
+        if let Some(binding) = native.live.take()
+            && let Err(error) = self.registrar.unregister(&binding)
+        {
+            tracing::warn!(?error, "a shortcut could not be unregistered at shutdown");
         }
         native
             .cancel
@@ -367,11 +345,11 @@ impl ShortcutCoordinator {
     /// The shortcut backend stopped delivering events: nothing is registered any more.
     pub(crate) fn capability_lost(&self, error: ShortcutRegistrationError) {
         let mut native = self.native();
-        native.live.clear();
+        native.live = None;
         native.cancel.live = None;
         self.pressed().clear();
         let mut published = self.published();
-        published.routes = ShortcutBindings::default();
+        published.route = None;
         published.cancel = None;
         published.active = false;
         published.failure = Some(error);
@@ -399,19 +377,19 @@ impl ShortcutCoordinator {
         self.sync_locked(&mut native, (self.enabled)())
     }
 
-    /// Replaces the recording shortcuts. When the new ones cannot be registered, the previous
-    /// ones are registered again and the error is returned.
+    /// Replaces the recording shortcut. When the new one cannot be registered, the previous
+    /// one is registered again and the error is returned.
     pub(crate) fn apply_update(
         &self,
-        candidate: Result<ShortcutBindings, ShortcutRegistrationError>,
+        candidate: Result<RecordingBinding, ShortcutRegistrationError>,
     ) -> Result<(), ShortcutRegistrationError> {
         let candidate = candidate?;
         let mut native = self.native();
         let enabled = (self.enabled)();
-        let previous = std::mem::replace(&mut native.bindings, candidate);
+        let previous = native.recording.replace(candidate);
         let result = self.sync_locked(&mut native, enabled);
         if result.is_err() {
-            native.bindings = previous;
+            native.recording = previous;
             if let Err(error) = self.sync_locked(&mut native, enabled) {
                 tracing::warn!(
                     ?error,
@@ -422,65 +400,46 @@ impl ShortcutCoordinator {
         result
     }
 
-    /// Registers the configured shortcuts when `enabled` and no capture runs, and releases
-    /// them otherwise. Registration is all or nothing: after a failure nothing stays
-    /// registered. An unregistration failure is only logged.
+    /// Registers the configured shortcut when `enabled` and no capture runs, and releases it
+    /// otherwise. An unregistration failure is only logged.
     fn sync_locked(
         &self,
         native: &mut Native,
         enabled: bool,
     ) -> Result<(), ShortcutRegistrationError> {
-        let wanted: Vec<ShortcutBinding> = if enabled && !native.capturing {
-            native
-                .bindings
-                .entries()
-                .map(|entry| entry.binding)
-                .collect()
-        } else {
-            Vec::new()
-        };
-        native.live.retain(|live| {
-            if wanted.iter().any(|binding| binding.id == live.id) {
-                return true;
-            }
-            if let Err(error) = self.registrar.unregister(live) {
-                tracing::warn!(?error, "a shortcut could not be unregistered");
-            }
-            false
-        });
+        let wanted = native
+            .recording
+            .as_ref()
+            .filter(|_| enabled && !native.capturing)
+            .map(|recording| &recording.binding);
+        if let Some(live) = native
+            .live
+            .take_if(|live| wanted.is_none_or(|binding| binding.id != live.id))
+            && let Err(error) = self.registrar.unregister(&live)
+        {
+            tracing::warn!(?error, "a shortcut could not be unregistered");
+        }
         let mut result = Ok(());
-        for binding in wanted {
-            if native.live.iter().any(|live| live.id == binding.id) {
-                continue;
-            }
-            if let Err(error) = self.registrar.register(&binding) {
-                result = Err(error);
-                break;
-            }
-            native.live.push(binding);
-        }
-        if result.is_err() {
-            for live in native.live.drain(..) {
-                let _released = self.registrar.unregister(&live);
+        if let Some(binding) = wanted
+            && native.live.is_none()
+        {
+            match self.registrar.register(binding) {
+                Ok(()) => native.live = Some(binding.clone()),
+                Err(error) => result = Err(error),
             }
         }
-        let registered = !native.live.is_empty();
-        let routes = if registered {
-            native.bindings.clone()
-        } else {
-            ShortcutBindings::default()
-        };
+        let registered = native.live.is_some();
+        let route = native.recording.clone().filter(|_| registered);
         {
             let mut pressed = self.pressed();
             let mut published = self.published();
             // A key held while its registration changed may never report its release, and a
             // stale press would swallow the next real one.
-            if published.routes != routes {
+            if published.route != route {
                 pressed.clear();
             }
-            published.routes = routes;
-            published.active =
-                native.capturing || registered || native.bindings.entries().next().is_none();
+            published.route = route;
+            published.active = native.capturing || registered || native.recording.is_none();
             // A failure stays reported until registration is tried again.
             if enabled && !native.capturing {
                 published.failure = result.err();

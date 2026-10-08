@@ -15,8 +15,6 @@ pub(crate) fn snapshot(phase: PhaseDto) -> AppStateDto {
         error: None,
         active_downloads: Vec::new(),
         setup_test: None,
-        overlay_style: whispernow_api::OverlayStyle::default(),
-        overlay_position: whispernow_api::OverlayPosition::default(),
     }
 }
 

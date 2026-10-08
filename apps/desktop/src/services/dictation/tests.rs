@@ -21,8 +21,7 @@ use whispernow_core::{
     workflow::{VoiceActivity, VoiceActivitySource},
 };
 use whispernow_domain::{
-    CLEAN_UP_PROMPT_ID, EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, ModelId,
-    ModelRegistry, Settings,
+    EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, ModelId, ModelRegistry, Settings,
 };
 use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore, SettingsStore};
 
@@ -545,7 +544,7 @@ impl Fixture {
     fn enable_cleanup(&self) {
         let transaction = self.settings.transaction();
         let mut saved = transaction.load().expect("load settings");
-        saved.active_prompt_id = Some("fix_grammar".to_owned());
+        saved.cleanup_enabled = true;
         saved.provider_settings_mut(LlmProvider::OpenAi).model = "gpt-test".to_owned();
         transaction.save(&saved).expect("save settings");
     }
@@ -590,7 +589,7 @@ fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
     let saved = {
         let transaction = fixture.settings.transaction();
         let mut saved = transaction.load().expect("load settings");
-        saved.active_prompt_id = Some(CLEAN_UP_PROMPT_ID.to_owned());
+        saved.cleanup_enabled = true;
         saved.llm_provider = LlmProvider::LocalCleanup;
         transaction.save(&saved).expect("save settings");
         saved

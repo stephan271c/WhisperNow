@@ -260,9 +260,9 @@ mod tests {
     };
     use whispernow_core::llm::{
         LlmDecoding, LlmError, LlmFinishReason, LlmProvider, LlmProviderConfig, LlmRequest,
-        PromptKind, build_cleanup_prompt,
+        build_cleanup_prompt,
     };
-    use whispernow_domain::{ApiKey, CleanupPrompt};
+    use whispernow_domain::ApiKey;
 
     fn request(provider: LlmProvider, model: &str) -> LlmRequest {
         LlmRequest {
@@ -272,16 +272,7 @@ mod tests {
                 api_key: ApiKey::new("token").ok(),
                 endpoint: None,
             },
-            prompt: build_cleanup_prompt(
-                "  um so can you send me the report by friday \n",
-                &CleanupPrompt {
-                    id: "cleanup".to_owned(),
-                    title: "Cleanup".to_owned(),
-                    prompt: "Clean up".to_owned(),
-                    default_hash: None,
-                },
-                PromptKind::Cleanup,
-            ),
+            prompt: build_cleanup_prompt("  um so can you send me the report by friday \n"),
             decoding: LlmDecoding::default(),
         }
     }

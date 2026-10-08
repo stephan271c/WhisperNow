@@ -3,7 +3,7 @@ use whispernow_api::{
     TranscriptResponse,
 };
 use whispernow_core::{
-    llm::{CleanupFallback, LlmError},
+    llm::CleanupFallback,
     workflow::{
         BATCH_SAMPLE_RATE_HZ, PipelineFailureKind, PreparedTranscription, has_microphone_audio,
     },
@@ -249,10 +249,6 @@ pub(super) fn delivery_error(notice: OutputNotice) -> Option<ApiErrorDto> {
 pub(super) fn cleanup_fallback_warning(prepared: &PreparedTranscription) -> Option<ApiErrorDto> {
     let (code, summary) = match prepared.fallback? {
         CleanupFallback::Cancelled => return None,
-        CleanupFallback::ProviderFailed(LlmError::Timeout) => (
-            "cleanup_timed_out",
-            "AI cleanup took too long, so the transcript was kept as recognized",
-        ),
         CleanupFallback::ProviderFailed(_)
         | CleanupFallback::EmptyOutput
         | CleanupFallback::Truncated

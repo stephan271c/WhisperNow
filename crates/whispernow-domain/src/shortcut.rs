@@ -2,9 +2,10 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordingMode {
+    #[default]
     Hold,
     /// Stops on a second press or the stop button.
     Toggle,

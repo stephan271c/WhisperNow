@@ -10,7 +10,7 @@ use super::labels::{self, format_bytes};
 use super::ui::{
     Banner, Button, ButtonSize, ButtonVariant, ConfirmButton, ProgressBar, Section, Tone,
 };
-use crate::{NoticeScope, UiContext, UiOperation};
+use crate::{NoticeScope, SettingKey, UiContext, UiOperation};
 
 #[component]
 pub(super) fn ModelsPage() -> Element {
@@ -32,22 +32,6 @@ pub(super) fn ModelsPage() -> Element {
             .collect::<Vec<_>>(),
         active_id.as_ref(),
     );
-    let cleanup_models = management
-        .read()
-        .cleanup_models()
-        .cloned()
-        .collect::<Vec<_>>();
-    // Offered with the cleanup models it serves.
-    let cuda_pack = management
-        .read()
-        .cuda_pack()
-        .filter(|_| !cleanup_models.is_empty())
-        .cloned();
-    // The cleanup model AI cleanup uses, while its provider is the local cleanup model.
-    let cleanup_in_use = management.read().settings.as_ref().and_then(|view| {
-        (view.settings.llm_provider == LlmProvider::LocalCleanup)
-            .then(|| view.settings.cleanup_model_id())
-    });
     let loaded = management.read().models_loaded;
     let switch_blocked = actions.blocked(UiOperation::ModelSwitch);
     let download_blocked = actions.blocked(UiOperation::DownloadModel);
@@ -71,7 +55,7 @@ pub(super) fn ModelsPage() -> Element {
             }
         }
         Section { id: "speech-models", title: "Speech models",
-            description: "Models run on this computer, so your audio never leaves it. Larger models are usually more accurate but slower.",
+            description: "Run on this computer, so your audio never leaves it.",
             div { class: "section-note",
                 DisabledReason { id: "models-disabled-reason", reason }
             }
@@ -82,37 +66,10 @@ pub(super) fn ModelsPage() -> Element {
                 for model in models {
                     ModelRow {
                         key: "{model.id.as_str()}",
-                        kind: ModelRowKind::Speech { active: active_id.as_ref() == Some(&model.id) },
-                        active_state,
+                        kind: ModelRowKind::Speech {
+                            state: (active_id.as_ref() == Some(&model.id)).then_some(active_state),
+                        },
                         model,
-                    }
-                }
-            }
-        }
-        if !cleanup_models.is_empty() {
-            Section { id: "cleanup-model", title: "Cleanup models",
-                description: "Small models made for Clean Up & Format. One runs on this computer when AI cleanup uses the Local cleanup model provider, so your transcripts never leave it; choose which under AI cleanup. Fine-tunes of Liquid AI's LFM2.5-350M, under the LFM Open License v1.0, and of OpenBMB's MiniCPM5-1B, under Apache-2.0.",
-                ul { class: "model-list",
-                    for model in cleanup_models {
-                        ModelRow {
-                            key: "{model.id.as_str()}",
-                            kind: ModelRowKind::Cleanup { in_use: cleanup_in_use == Some(model.id.as_str()) },
-                            active_state,
-                            model,
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(pack) = cuda_pack {
-            Section { id: "cuda-pack", title: "NVIDIA CUDA",
-                description: "For NVIDIA graphics cards from the GeForce RTX 20 and GTX 16 series on, with a recent driver: the cleanup models run with CUDA, which is faster than Vulkan, which they use otherwise. Downloads llama.cpp's CUDA backend and NVIDIA's CUDA runtime, under NVIDIA's license, from llama.cpp's release on GitHub. Where CUDA cannot run, cleanup keeps using Vulkan or the processor. Deleting the download takes effect when WhisperNow restarts.",
-                ul { class: "model-list",
-                    ModelRow {
-                        key: "{pack.id.as_str()}",
-                        kind: ModelRowKind::Runtime,
-                        active_state,
-                        model: pack,
                     }
                 }
             }
@@ -128,28 +85,28 @@ fn ordered_models(models: &[ModelDto], active_id: Option<&ModelId>) -> Vec<Model
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum ModelRowKind {
-    Speech {
-        active: bool,
-    },
-    /// A cleanup model: installed and removed here, but chosen under AI cleanup; `in_use`
-    /// marks the one AI cleanup uses.
-    Cleanup {
-        in_use: bool,
-    },
+pub(super) enum ModelRowKind {
+    /// `state` is the load state of the model in use; `None` for the others.
+    Speech { state: Option<ModelStateDto> },
+    /// `chosen` marks the model the local cleanup provider runs.
+    Cleanup { chosen: bool },
     /// The CUDA pack, which has no speed or accuracy of its own.
     Runtime,
 }
 
 #[component]
-fn ModelRow(model: ModelDto, kind: ModelRowKind, active_state: ModelStateDto) -> Element {
+pub(super) fn ModelRow(model: ModelDto, kind: ModelRowKind) -> Element {
     let actions = use_actions();
     let management = use_context::<UiContext>().management;
     let id = model.id.clone();
     let slug = id.as_str().replace('.', "-");
     let name = model.display_name.clone();
     let download = management.read().download(&id).cloned();
-    let active = kind == ModelRowKind::Speech { active: true };
+    let active_state = match kind {
+        ModelRowKind::Speech { state } => state,
+        _ => None,
+    };
+    let active = active_state.is_some();
     let switch_blocked = actions.blocked(UiOperation::ModelSwitch);
     let download_blocked = actions.blocked(UiOperation::DownloadModel);
     let delete_blocked = actions.blocked(UiOperation::ModelDelete);
@@ -160,25 +117,21 @@ fn ModelRow(model: ModelDto, kind: ModelRowKind, active_state: ModelStateDto) ->
             div { class: "model-summary",
                 p { class: "model-name",
                     strong { id: "model-{slug}-name", "{name}" }
-                    if active {
-                        span { class: "pill pill-accent", "In use · {labels::model_state(active_state)}" }
+                    if let Some(state) = active_state {
+                        span { class: "pill pill-accent", "In use · {labels::model_state(state)}" }
                     }
-                    if kind == (ModelRowKind::Cleanup { in_use: true }) {
-                        span { class: "pill pill-accent", "Used by AI cleanup" }
+                    if kind == (ModelRowKind::Cleanup { chosen: true }) {
+                        span { class: "pill pill-accent", "Selected" }
                     }
                     if model.recommended {
                         span { class: "pill", "Recommended" }
                     }
                 }
-                p { class: "model-facts",
-                    "{format_bytes(model.size_bytes)} download"
-                    if let Some(languages) = languages(&model) {
-                        " · {languages}"
-                    }
-                }
+                p { class: "model-facts", "{format_bytes(model.size_bytes)} download" }
                 if kind != ModelRowKind::Runtime {
-                    p { class: "model-facts",
-                        "Speed: {rating(model.speed)} · Accuracy: {rating(model.accuracy)}"
+                    div { class: "model-ratings",
+                        Rating { label: "Speed", value: model.speed }
+                        Rating { label: "Accuracy", value: model.accuracy }
                     }
                 }
             }
@@ -194,7 +147,7 @@ fn ModelRow(model: ModelDto, kind: ModelRowKind, active_state: ModelStateDto) ->
                         onclick: { let id = id.clone(); move |_| actions.download_model(id.clone()) },
                         "Download"
                     }
-                } else if kind == (ModelRowKind::Speech { active: false }) {
+                } else if kind == (ModelRowKind::Speech { state: None }) {
                     Button {
                         id: "model-{slug}-use",
                         variant: ButtonVariant::Primary,
@@ -202,6 +155,19 @@ fn ModelRow(model: ModelDto, kind: ModelRowKind, active_state: ModelStateDto) ->
                         disabled: switch_blocked.is_some(),
                         aria_describedby: describe(switch_blocked),
                         onclick: { let id = id.clone(); move |_| actions.switch_model(id.clone()) },
+                        "Use"
+                    }
+                } else if kind == (ModelRowKind::Cleanup { chosen: false }) {
+                    Button {
+                        id: "model-{slug}-use",
+                        variant: ButtonVariant::Primary,
+                        aria_label: "Use {name}",
+                        onclick: { let id = id.clone(); move |_| {
+                            let model = id.as_str().to_owned();
+                            actions.change_setting(SettingKey::ProviderModel, move |settings| {
+                                settings.provider_settings_mut(LlmProvider::LocalCleanup).model.clone_from(&model);
+                            });
+                        } },
                         "Use"
                     }
                 }
@@ -258,29 +224,27 @@ pub(super) fn DownloadProgress(download: ActiveDownloadDto, name: String) -> Ele
     }
 }
 
-/// The languages a model declares, in words; `None` when it declares none.
-pub(super) fn languages(model: &ModelDto) -> Option<String> {
-    let named = model
-        .languages
-        .iter()
-        .map(|code| match code.as_str() {
-            "en" => "English".to_owned(),
-            other => other.to_uppercase(),
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    match (named.is_empty(), model.automatic_language_detection) {
-        (true, false) => None,
-        (true, true) => Some("Detects the spoken language".to_owned()),
-        (false, false) => Some(named),
-        (false, true) => Some(format!("{named}; detects the spoken language")),
+const RATING_STEPS: u8 = 3;
+
+const fn rating_steps(value: RelativeRating) -> u8 {
+    match value {
+        RelativeRating::Low => 1,
+        RelativeRating::Medium => 2,
+        RelativeRating::High => 3,
     }
 }
 
-const fn rating(value: RelativeRating) -> &'static str {
-    match value {
-        RelativeRating::Low => "lower",
-        RelativeRating::Medium => "medium",
-        RelativeRating::High => "higher",
+#[component]
+fn Rating(label: &'static str, value: RelativeRating) -> Element {
+    let filled = rating_steps(value);
+    rsx! {
+        span { class: "rating", role: "img", aria_label: "{label}: {filled} of {RATING_STEPS}",
+            span { aria_hidden: "true", "{label}" }
+            span { class: "rating-bars", aria_hidden: "true",
+                for step in 1..=RATING_STEPS {
+                    span { class: if step <= filled { "rating-bar filled" } else { "rating-bar" } }
+                }
+            }
+        }
     }
 }
