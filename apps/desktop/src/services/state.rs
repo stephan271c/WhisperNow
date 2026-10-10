@@ -85,6 +85,18 @@ impl State {
         }
     }
 
+    pub(crate) fn require_no_downloads(&self) -> Result<(), AppError> {
+        if self.active_downloads.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::new(
+                whispernow_domain::ErrorCategory::General,
+                "model_transition_busy",
+                "Wait for model downloads to finish",
+            ))
+        }
+    }
+
     fn model_state(&self) -> ModelState {
         if !self.active_downloads.is_empty() {
             return ModelState::Downloading;

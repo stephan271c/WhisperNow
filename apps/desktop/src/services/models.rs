@@ -57,13 +57,6 @@ impl ModelCoordinator {
         lock(&self.transition)
     }
 
-    pub(super) fn resolve(
-        &self,
-        model_id: &ModelId,
-    ) -> Result<Option<ResolvedModel>, ModelStoreError> {
-        self.store.resolve(model_id)
-    }
-
     pub(crate) fn list(&self) -> Result<Vec<ModelSummary>, AppError> {
         let models = self
             .store
@@ -195,30 +188,9 @@ impl ModelCoordinator {
         {
             let state = self.state.lock();
             state.phase.require_idle()?;
-            if !state.active_downloads.is_empty() {
-                return Err(AppError::new(
-                    ErrorCategory::General,
-                    "model_transition_busy",
-                    "Wait for active model downloads to finish",
-                ));
-            }
+            state.require_no_downloads()?;
         }
-        let resolved = self
-            .resolve(&model_id)
-            .map_err(|_| {
-                AppError::new(
-                    ErrorCategory::Model,
-                    "model_resolve",
-                    "The model could not be inspected",
-                )
-            })?
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCategory::Model,
-                    "model_not_installed",
-                    "Install the model before selecting it",
-                )
-            })?;
+        let resolved = installed(&self.store, &model_id)?;
         if !resolved.definition.family().is_speech() {
             return Err(AppError::new(
                 ErrorCategory::Model,
@@ -249,13 +221,7 @@ impl ModelCoordinator {
                 "Switch models before deleting the active model",
             ));
         }
-        if !state.active_downloads.is_empty() {
-            return Err(AppError::new(
-                ErrorCategory::General,
-                "model_transition_busy",
-                "A model operation is already in progress",
-            ));
-        }
+        state.require_no_downloads()?;
         drop(state);
         let models = self.store.list().map_err(model_list_error)?;
         let target = models
@@ -327,20 +293,13 @@ impl ModelCoordinator {
                 "The model could not be deleted",
             )
         })?;
-        self.state.publish();
         Ok(())
     }
 
     /// Removes the CUDA pack. Once loaded it stays in use until the app restarts, so it is
     /// then only marked, and deleted at the next start.
     fn delete_cuda_pack(&self) -> Result<(), AppError> {
-        if !self.state.lock().active_downloads.is_empty() {
-            return Err(AppError::new(
-                ErrorCategory::General,
-                "model_transition_busy",
-                "A model operation is already in progress",
-            ));
-        }
+        self.state.lock().require_no_downloads()?;
         self.store
             .remove_cuda_pack(Llama::cuda_loaded())
             .map_err(|_| {
@@ -350,7 +309,6 @@ impl ModelCoordinator {
                     "The CUDA download could not be deleted",
                 )
             })?;
-        self.state.publish();
         Ok(())
     }
 
@@ -368,6 +326,25 @@ impl ModelCoordinator {
             let _worker_result = worker.join();
         }
     }
+}
+
+pub(super) fn installed(store: &ModelStore, id: &ModelId) -> Result<ResolvedModel, AppError> {
+    store
+        .resolve(id)
+        .map_err(|_| {
+            AppError::new(
+                ErrorCategory::Model,
+                "model_resolve",
+                "The model could not be inspected",
+            )
+        })?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Model,
+                "model_not_installed",
+                "Install the model before using it",
+            )
+        })
 }
 
 pub(super) fn model_list_error<E>(_error: E) -> AppError {
@@ -413,23 +390,22 @@ fn run_model_download(
             .download(&model_id, &cancellation, &observer)
             .map(drop)
     };
-    let (failed, cancelled) = download_completion(&result);
-    let completion_error = failed.then(|| {
-        AppError::new(
+    let completion_error = match result {
+        Ok(()) => None,
+        Err(ModelStoreError::Cancelled) => {
+            tracing::info!(model_id = %model_id, "model download cancelled");
+            None
+        }
+        Err(_) => Some(AppError::new(
             ErrorCategory::Model,
             "model_download",
             "The model could not be installed",
-        )
-    });
-    if cancelled {
-        tracing::info!(model_id = %model_id, "model download cancelled");
-    }
+        )),
+    };
     state.apply(|current| {
         current.active_downloads.remove(&model_id);
-        if failed {
-            current.download_failures = current.download_failures.saturating_add(1);
-        }
         if let Some(error) = completion_error {
+            current.download_failures = current.download_failures.saturating_add(1);
             current.last_error = Some(error);
         }
     });
@@ -445,14 +421,6 @@ fn transfer_rate(bytes: u64, elapsed: Duration) -> Option<u64> {
         let rate = u128::from(bytes) * 1_000 / elapsed.as_millis();
         u64::try_from(rate).unwrap_or(u64::MAX)
     })
-}
-
-fn download_completion(result: &Result<(), ModelStoreError>) -> (bool, bool) {
-    match result {
-        Ok(()) => (false, false),
-        Err(ModelStoreError::Cancelled) => (false, true),
-        Err(_) => (true, false),
-    }
 }
 
 #[cfg(test)]

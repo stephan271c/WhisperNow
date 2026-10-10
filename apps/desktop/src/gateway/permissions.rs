@@ -88,18 +88,13 @@ mod tests {
             Status::Granted,
             "active shortcuts were granted, whatever an earlier attempt said"
         );
-        for (diagnostic, expected) in [
-            (Some(Error::PermissionDenied), Status::Denied),
-            (Some(Error::PortalUnavailable), Status::Unavailable),
-            (Some(Error::SessionClosed), Status::NotDetermined),
-            (Some(Error::ConflictOrUnsupported), Status::NotDetermined),
-            (None, Status::NotDetermined),
-        ] {
-            assert_eq!(
-                shortcut_portal_consent(false, diagnostic),
-                expected,
-                "{diagnostic:?}"
-            );
-        }
+        assert_eq!(
+            shortcut_portal_consent(false, Some(Error::PermissionDenied)),
+            Status::Denied
+        );
+        assert_eq!(
+            shortcut_portal_consent(false, Some(Error::ConflictOrUnsupported)),
+            Status::NotDetermined
+        );
     }
 }

@@ -1,14 +1,14 @@
 use dioxus::prelude::*;
-use whispernow_domain::ipc::{PermissionKind, Phase};
+use whispernow_domain::ipc::PermissionKind;
 use whispernow_domain::{
     HistoryLimit, LlmProvider, RecordingMode, Settings, Shortcut, ThemePreference,
 };
 
-use super::actions::{DisabledReason, use_actions};
+use super::actions::DisabledReason;
 use super::home::LevelMeter;
 use super::ui::{Button, Section, Segmented, Select, SettingRow, Toggle};
-use super::{MicrophonePermissionNotice, PasteHelperNotice, ShortcutCapture, use_navigator};
-use crate::{BlockedReason, NoticeScope, Route, SaveStatus, SettingKey, UiContext, UiOperation};
+use super::{MicrophonePermissionNotice, PasteHelperNotice, ShortcutCapture};
+use crate::{NoticeScope, Route, SaveStatus, SettingKey, UiContext, UiOperation};
 
 /// Theme choices as (setting, select value, label).
 const THEMES: [(ThemePreference, &str, &str); 3] = [
@@ -71,22 +71,6 @@ pub(super) fn AutosaveRow(
     }
 }
 
-pub(super) fn use_settings_blocked() -> Option<BlockedReason> {
-    let state = use_context::<UiContext>().state;
-    match state
-        .read()
-        .snapshot
-        .as_ref()
-        .map(|snapshot| &snapshot.phase)
-    {
-        None => Some(BlockedReason::Connecting),
-        Some(phase) if phase.is_busy() => Some(BlockedReason::Dictating),
-        Some(Phase::Paused) => Some(BlockedReason::Paused),
-        Some(Phase::Updating) => Some(BlockedReason::UpdateInstalling),
-        Some(_) => None,
-    }
-}
-
 #[component]
 pub(super) fn SettingsLoading() -> Element {
     rsx! { p { role: "status", "Loading settings…" } }
@@ -94,15 +78,17 @@ pub(super) fn SettingsLoading() -> Element {
 
 #[component]
 pub(super) fn GeneralPage() -> Element {
-    let actions = use_actions();
-    let settings_blocked = use_settings_blocked();
+    let actions = use_context::<UiContext>();
+    let settings_blocked = actions.phase_blocked();
     let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
-    let navigator = use_navigator();
+    let navigator = use_context::<UiContext>().navigator;
     let Some(settings) = management.read().shown_settings().cloned() else {
         return rsx! { SettingsLoading {} };
     };
-    let restart_blocked = actions.blocked(UiOperation::RestartSetup);
+    let restart_blocked = actions
+        .blocked(UiOperation::RestartSetup)
+        .or(actions.phase_blocked());
     use_effect(move || actions.load_permissions());
     let paste_helper_setup = management
         .read()
@@ -184,7 +170,7 @@ pub(super) fn GeneralPage() -> Element {
                 PasteHelperNotice { setup, scope: NoticeScope::Settings }
             }
         }
-        if settings.first_run_complete {
+        if management.read().setup.as_ref().is_some_and(|setup| setup.first_run_complete) {
             Section { id: "setup", title: "Setup",
                 SettingRow { id: "run-setup-again", title: "Run setup again",
                     description: "Your settings are kept.",
@@ -207,8 +193,8 @@ pub(super) fn GeneralPage() -> Element {
 
 #[component]
 pub(super) fn AudioPage() -> Element {
-    let actions = use_actions();
-    let settings_blocked = use_settings_blocked();
+    let actions = use_context::<UiContext>();
+    let settings_blocked = actions.phase_blocked();
     let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let Some(settings) = management.read().shown_settings().cloned() else {
@@ -219,8 +205,10 @@ pub(super) fn AudioPage() -> Element {
         .read()
         .permission_status(PermissionKind::Microphone);
     let test = management.read().microphone_test.clone();
-    let test_blocked = actions.blocked(UiOperation::TestMicrophone);
-    let testing = test_blocked == Some(BlockedReason::CommandPending);
+    let test_blocked = actions
+        .blocked(UiOperation::TestMicrophone)
+        .or(actions.phase_blocked());
+    let testing = management.read().is_busy(UiOperation::TestMicrophone);
     rsx! { div { class: "settings-stack",
         DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
         Section { id: "microphone", title: "Microphone",
@@ -263,8 +251,8 @@ pub(super) fn AudioPage() -> Element {
 
 #[component]
 pub(super) fn PrivacyPage() -> Element {
-    let actions = use_actions();
-    let settings_blocked = use_settings_blocked();
+    let actions = use_context::<UiContext>();
+    let settings_blocked = actions.phase_blocked();
     let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let Some(settings) = management.read().shown_settings().cloned() else {

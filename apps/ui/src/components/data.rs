@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use super::actions::{DisabledReason, use_actions};
+use super::actions::DisabledReason;
 use super::ui::{Banner, Button, ConfirmButton, Section, Tone};
 use super::{NoticeRegion, labels};
 use crate::{NoticeScope, UiContext, UiOperation};
@@ -8,11 +8,13 @@ use crate::{NoticeScope, UiContext, UiOperation};
 #[component]
 pub(super) fn ClearDataCard() -> Element {
     let context = use_context::<UiContext>();
-    let actions = use_actions();
+    let actions = context;
     let locations = context.management.read().data_locations.clone();
     let result = context.management.read().clear_result.clone();
     let review_blocked = actions.blocked(UiOperation::ListDataLocations);
-    let clear_blocked = actions.blocked(UiOperation::ClearData);
+    let clear_blocked = actions
+        .blocked(UiOperation::ClearData)
+        .or(actions.phase_blocked());
     rsx! {
         Section { id: "clear-data", title: "Application data",
             description: "Settings, history, downloaded models and logs.",

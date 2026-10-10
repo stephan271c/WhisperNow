@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use super::{ButtonSize, Icon, IconButton, IconName};
+use super::{Icon, IconName};
 
 /// Severity of a banner or toast. Warnings and errors are announced assertively.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12,7 +12,7 @@ pub(crate) enum Tone {
 }
 
 impl Tone {
-    const fn class(self) -> &'static str {
+    pub(crate) const fn class(self) -> &'static str {
         match self {
             Self::Info => "tone-info",
             Self::Success => "tone-success",
@@ -21,7 +21,7 @@ impl Tone {
         }
     }
 
-    const fn icon(self) -> IconName {
+    pub(crate) const fn icon(self) -> IconName {
         match self {
             Self::Info => IconName::Info,
             Self::Success => IconName::CheckCircle,
@@ -30,7 +30,7 @@ impl Tone {
         }
     }
 
-    const fn role(self) -> &'static str {
+    pub(crate) const fn role(self) -> &'static str {
         match self {
             Self::Info | Self::Success => "status",
             Self::Warning | Self::Error => "alert",
@@ -56,40 +56,6 @@ pub(crate) fn Banner(tone: Tone, title: Option<String>, children: Element) -> El
 #[component]
 pub(crate) fn ToastRegion(children: Element) -> Element {
     rsx! { section { class: "toast-region", aria_label: "Notifications", {children} } }
-}
-
-/// A dismissible message: transient in the `ToastRegion`, or inline beside the control it is
-/// about when `placement` says so. `action` renders between the message and the close button.
-#[component]
-pub(crate) fn Toast(
-    tone: Tone,
-    message: String,
-    on_dismiss: EventHandler<()>,
-    id: Option<String>,
-    placement: Option<String>,
-    action: Option<Element>,
-) -> Element {
-    let dismiss_id = id.as_ref().map(|id| format!("{id}-dismiss"));
-    let class = placement.map_or_else(
-        || format!("toast {}", tone.class()),
-        |placement| format!("toast {} {placement}", tone.class()),
-    );
-    rsx! {
-        div { id, class, role: tone.role(),
-            span { class: "toast-icon", Icon { name: tone.icon() } }
-            p { class: "toast-message", "{message}" }
-            if let Some(action) = action {
-                {action}
-            }
-            IconButton {
-                id: dismiss_id,
-                icon: IconName::Close,
-                label: "Dismiss notification",
-                size: ButtonSize::Sm,
-                onclick: move |_| on_dismiss.call(()),
-            }
-        }
-    }
 }
 
 /// A determinate progress bar. `label` is required so the bar always has an accessible name.

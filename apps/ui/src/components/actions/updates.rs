@@ -3,47 +3,50 @@ use whispernow_domain::AppError;
 
 use whispernow_domain::ipc::UpdateState;
 
-use super::UiActions;
+use crate::UiContext;
 use crate::UiOperation;
 use crate::client;
 
 use dioxus::prelude::*;
 
-impl UiActions {
+impl UiContext {
     /// Runs an update command; its answer is the new update state.
     fn update_command(
         self,
         operation: UiOperation,
         call: impl Future<Output = Result<UpdateState, AppError>> + 'static,
     ) {
-        self.run(operation, call, |actions, answer| match answer {
-            Ok(update) => actions.state().write().hydrate_update(update),
+        self.run(operation, call, |mut actions, answer| match answer {
+            Ok(update) => actions.state.write().hydrate_update(update),
             Err(error) => actions
-                .state()
+                .state
                 .write()
                 .report_update_command_failure(error.summary),
         });
     }
 
     pub(crate) fn check_for_updates(self) {
-        self.update_command(UiOperation::CheckForUpdates, client::check_for_updates());
+        self.update_command(
+            UiOperation::CheckForUpdates,
+            client::call("check_for_updates"),
+        );
     }
 
     pub(crate) fn dismiss_update(self) {
-        self.update_command(UiOperation::DismissUpdate, client::dismiss_update());
+        self.update_command(UiOperation::DismissUpdate, client::call("dismiss_update"));
     }
 
     pub(crate) fn open_update_release_page(self) {
         self.update_command(
             UiOperation::OpenUpdateReleasePage,
-            client::open_update_release_page(),
+            client::call("open_update_release_page"),
         );
     }
 
     pub(crate) fn restart_to_update(self) {
         self.update_command(
             UiOperation::UpdateInstallRestart,
-            client::restart_to_update(),
+            client::call("restart_to_update"),
         );
     }
 }

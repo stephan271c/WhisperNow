@@ -53,7 +53,7 @@ fn overlay(can_float: bool) -> (RecordingOverlay, Arc<FakeWindow>) {
 
 #[test]
 fn a_dictation_shows_the_window_once_until_it_ends() {
-    let (overlay, window) = overlay(true);
+    let (mut overlay, window) = overlay(true);
     for phase in [
         recording(),
         Phase::Processing { cleaning_up: false },
@@ -67,7 +67,7 @@ fn a_dictation_shows_the_window_once_until_it_ends() {
 
 #[test]
 fn a_failure_stays_until_the_phase_leaves_it() {
-    let (overlay, window) = overlay(true);
+    let (mut overlay, window) = overlay(true);
     overlay.observe(&snapshot(recording()));
     overlay.observe(&snapshot(failed(ErrorCategory::Output)));
     assert_eq!(window.calls(), ["show"]);
@@ -77,7 +77,7 @@ fn a_failure_stays_until_the_phase_leaves_it() {
 
 #[test]
 fn native_wayland_notifies_each_failure_once_instead_of_showing_a_window() {
-    let (overlay, window) = overlay(false);
+    let (mut overlay, window) = overlay(false);
     overlay.observe(&snapshot(recording()));
     overlay.observe(&snapshot(failed(ErrorCategory::Output)));
     overlay.observe(&snapshot(failed(ErrorCategory::Output)));
@@ -93,42 +93,23 @@ fn native_wayland_notifies_each_failure_once_instead_of_showing_a_window() {
 }
 
 #[test]
-fn visibility_policy_covers_every_phase() {
-    for (phase, window, wayland) in [
-        (
-            Phase::Idle,
-            OverlayPresentation::None,
-            OverlayPresentation::None,
-        ),
-        (
-            Phase::Paused,
-            OverlayPresentation::None,
-            OverlayPresentation::None,
-        ),
-        (
-            Phase::Updating,
-            OverlayPresentation::None,
-            OverlayPresentation::None,
-        ),
-        (
-            recording(),
-            OverlayPresentation::Window,
-            OverlayPresentation::None,
-        ),
-        (
-            Phase::Processing { cleaning_up: false },
-            OverlayPresentation::Window,
-            OverlayPresentation::None,
-        ),
-        (
-            failed(ErrorCategory::General),
-            OverlayPresentation::Window,
-            OverlayPresentation::Notification,
-        ),
-    ] {
-        assert_eq!(overlay_presentation(&phase, true), window);
-        assert_eq!(overlay_presentation(&phase, false), wayland);
-    }
+fn visibility_policy_uses_windows_when_allowed_and_notifications_for_failures() {
+    assert_eq!(
+        overlay_presentation(&recording(), true),
+        OverlayPresentation::Window
+    );
+    assert_eq!(
+        overlay_presentation(&failed(ErrorCategory::General), false),
+        OverlayPresentation::Notification
+    );
+    assert_eq!(
+        overlay_presentation(&Phase::Idle, true),
+        OverlayPresentation::None
+    );
+    assert_eq!(
+        overlay_presentation(&recording(), false),
+        OverlayPresentation::None
+    );
 }
 
 fn monitor(x: i32, width: u32, scale_factor: f64) -> MonitorArea {

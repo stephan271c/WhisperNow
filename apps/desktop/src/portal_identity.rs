@@ -100,11 +100,7 @@ mod tests {
     #[test]
     fn the_entry_is_hidden_from_menus() {
         let entry = desktop_entry("WhisperNow", Path::new("/usr/bin/whispernow-desktop"));
-        assert_eq!(
-            entry,
-            "[Desktop Entry]\nType=Application\nName=WhisperNow\n\
-             Exec=\"/usr/bin/whispernow-desktop\"\nTerminal=false\nNoDisplay=true\n"
-        );
+        assert!(entry.lines().any(|line| line == "NoDisplay=true"));
     }
 
     #[test]

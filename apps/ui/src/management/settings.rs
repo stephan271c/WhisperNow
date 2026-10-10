@@ -73,18 +73,16 @@ impl ManagementState {
         }
     }
 
-    /// Applies the edit of control `key` to the shown settings; `false` before the settings
-    /// have loaded. The desktop checks it, and a refusal shows beside the control.
-    pub fn change_setting(&mut self, key: SettingKey, edit: impl FnOnce(&mut Settings)) -> bool {
-        let Some(mut settings) = self.shown_settings().cloned() else {
-            return false;
-        };
+    pub fn change_setting(&mut self, key: SettingKey, edit: impl FnOnce(&mut Settings)) {
+        let mut settings = self
+            .shown_settings()
+            .cloned()
+            .expect("settings controls render after loading");
         edit(&mut settings);
         self.edited = Some(settings);
         self.setting_errors.remove(&key);
         self.saved_settings.clear();
         self.unsent.push(key);
-        true
     }
 
     /// Shows why a value typed into a control cannot be saved; nothing is sent.
@@ -100,11 +98,6 @@ impl ManagementState {
         }
         self.sending = std::mem::take(&mut self.unsent);
         self.edited.clone()
-    }
-
-    #[must_use]
-    pub fn settings_saving(&self) -> bool {
-        !self.sending.is_empty() || !self.unsent.is_empty()
     }
 
     #[must_use]
@@ -127,8 +120,28 @@ impl ManagementState {
         let sent = std::mem::take(&mut self.sending);
         match answer {
             Ok(SaveSettingsResponse { settings, warnings }) => {
+                let resolved_cleanup_warning = settings
+                    .settings
+                    .cleanup_warning()
+                    .is_none()
+                    .then(|| {
+                        self.settings
+                            .as_ref()
+                            .and_then(|view| view.settings.cleanup_warning())
+                    })
+                    .flatten();
                 self.settings = Some(settings);
                 if warnings.is_empty() {
+                    if let Some(warning) = resolved_cleanup_warning
+                        && let Some(notice) = &self.notice
+                        && notice.scope == NoticeScope::Settings
+                        && notice.tone == Tone::Warning
+                        && (notice.message == warning
+                            || notice.message
+                                == format!("Saved, but not everything took effect. {warning}"))
+                    {
+                        self.dismiss_notice(notice.id);
+                    }
                     self.saved_settings = sent;
                 } else {
                     self.notify_saved(NoticeScope::Settings, "Saved", &warnings);
@@ -144,17 +157,4 @@ impl ManagementState {
             self.edited = None;
         }
     }
-
-    pub fn finish_credential_mutation(&mut self, response: SettingsView) {
-        self.settings = Some(response);
-    }
-}
-
-/// A save confirmation that names every side effect the desktop could not apply.
-pub(super) fn saved_notice(saved: &str, warnings: &[String]) -> String {
-    if warnings.is_empty() {
-        return saved.to_owned();
-    }
-    let summaries = warnings.join(" ");
-    format!("{saved}, but not everything took effect. {summaries}")
 }

@@ -328,7 +328,10 @@ impl ShortcutRegistrar for WaylandShortcutRegistrar {
     }
 
     fn diagnostic(&self) -> Option<ShortcutRegistrationError> {
-        self.diagnostic.lock().ok().and_then(|value| *value)
+        *self
+            .diagnostic
+            .lock()
+            .expect("shortcut diagnostic lock poisoned")
     }
 
     /// Each registration opens a portal session the compositor may ask the user
@@ -339,9 +342,7 @@ impl ShortcutRegistrar for WaylandShortcutRegistrar {
     }
 
     fn shutdown(&self) {
-        let Ok(mut worker) = self.worker.lock() else {
-            return;
-        };
+        let mut worker = self.worker.lock().expect("shortcut worker lock poisoned");
         let Some(worker) = worker.take() else {
             return;
         };
@@ -628,9 +629,9 @@ fn set_diagnostic(
     diagnostic: &Mutex<Option<ShortcutRegistrationError>>,
     value: Option<ShortcutRegistrationError>,
 ) {
-    if let Ok(mut diagnostic) = diagnostic.lock() {
-        *diagnostic = value;
-    }
+    *diagnostic
+        .lock()
+        .expect("shortcut diagnostic lock poisoned") = value;
 }
 
 fn portal_id(id: ShortcutId) -> String {
@@ -654,9 +655,6 @@ fn map_portal_error(error: AshpdError) -> ShortcutRegistrationError {
         AshpdError::Response(_)
         | AshpdError::Portal(PortalError::NotAllowed(_) | PortalError::Cancelled(_)) => {
             ShortcutRegistrationError::PermissionDenied
-        }
-        AshpdError::PortalNotFound(_) | AshpdError::RequiresVersion(_, _) => {
-            ShortcutRegistrationError::PortalUnavailable
         }
         _ => ShortcutRegistrationError::PortalUnavailable,
     }

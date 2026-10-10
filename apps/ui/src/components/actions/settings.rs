@@ -1,32 +1,26 @@
-use whispernow_domain::AppError;
-use whispernow_domain::ipc::{SetApiKeyRequest, SettingsView};
+use whispernow_domain::ipc::SetApiKeyRequest;
 use whispernow_domain::{ApiKey, LlmProvider, Settings};
 
-use super::UiActions;
+use crate::UiContext;
 use crate::client;
 
 use crate::{SettingKey, UiOperation};
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 
-impl UiActions {
-    /// Shows one control's change at once and saves it; `false` means it was refused and the
-    /// control keeps the shown value.
-    pub(crate) fn change_setting(self, key: SettingKey, edit: impl FnOnce(&mut Settings)) -> bool {
-        if !self.management().write().change_setting(key, edit) {
-            return false;
-        }
+impl UiContext {
+    pub(crate) fn change_setting(mut self, key: SettingKey, edit: impl FnOnce(&mut Settings)) {
+        self.management.write().change_setting(key, edit);
         self.send_settings_changes();
-        true
     }
 
-    fn send_settings_changes(self) {
-        let Some(request) = self.management().write().next_settings_update() else {
+    fn send_settings_changes(mut self) {
+        let Some(request) = self.management.write().next_settings_update() else {
             return;
         };
         spawn_forever(async move {
-            let answer = client::update_settings(&request).await;
-            self.management()
+            let answer = client::invoke("update_settings", Some(&request)).await;
+            self.management
                 .write()
                 .finish_settings_update(answer.map_err(|error| error.summary.clone()));
             self.send_settings_changes();
@@ -37,26 +31,22 @@ impl UiActions {
         let request = SetApiKeyRequest { provider, key };
         self.run(
             UiOperation::CredentialMutation,
-            async move { client::set_api_key(&request).await },
-            Self::finish_credential_mutation,
+            async move { client::invoke("set_api_key", Some(&request)).await },
+            |mut actions, answer| match answer {
+                Ok(settings) => actions.management.write().settings = Some(settings),
+                Err(error) => actions.report(UiOperation::CredentialMutation, &error),
+            },
         );
     }
 
     pub(crate) fn clear_credential(self, provider: LlmProvider) {
         self.run(
             UiOperation::CredentialMutation,
-            async move { client::clear_api_key(&provider).await },
-            Self::finish_credential_mutation,
+            async move { client::invoke("clear_api_key", Some(&provider)).await },
+            |mut actions, answer| match answer {
+                Ok(settings) => actions.management.write().settings = Some(settings),
+                Err(error) => actions.report(UiOperation::CredentialMutation, &error),
+            },
         );
-    }
-
-    fn finish_credential_mutation(self, answer: Result<SettingsView, AppError>) {
-        match answer {
-            Ok(settings) => self
-                .management()
-                .write()
-                .finish_credential_mutation(settings),
-            Err(error) => self.report(UiOperation::CredentialMutation, &error),
-        }
     }
 }

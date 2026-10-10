@@ -6,17 +6,7 @@ use super::{
     Banner, ConfirmButton, Field, IconButton, IconName, ProgressBar, SettingRow, TextInput, Toggle,
     Tone,
 };
-use crate::test_support::{click_rendered, focused, mount_rendered};
-
-/// The opening tag of the element carrying `attribute` (for example `id="x"`).
-fn element_with<'a>(html: &'a str, attribute: &str) -> &'a str {
-    let at = html
-        .find(attribute)
-        .unwrap_or_else(|| panic!("no element with {attribute} in {html}"));
-    let start = html[..=at].rfind('<').expect("tag start");
-    let end = at + html[at..].find('>').expect("tag end");
-    &html[start..=end]
-}
+use crate::test_support::{click_rendered, element, focused, mount_rendered, tag};
 
 /// Renders `app` inside a runtime so its event handlers can be created.
 fn render(app: fn() -> Element) -> String {
@@ -34,13 +24,19 @@ fn field_describes_its_control_with_the_description_and_error() {
             }
         }
     });
-    assert!(element_with(&html, "for=\"endpoint\"").starts_with("<label"));
-    let input = element_with(&html, "id=\"endpoint\"");
+    let label = tag(&html, "endpoint-label").expect("label");
+    assert!(label.starts_with("<label"));
+    assert!(label.contains("for=\"endpoint\""));
+    let input = tag(&html, "endpoint").expect("element");
     assert!(input.starts_with("<input"));
     assert!(input.contains("aria-describedby=\"endpoint-description endpoint-error\""));
     assert!(input.contains("aria-invalid=\"true\""));
     assert!(html.contains("id=\"endpoint-description\""));
-    assert!(element_with(&html, "id=\"endpoint-error\"").contains("role=\"alert\""));
+    assert!(
+        tag(&html, "endpoint-error")
+            .expect("element")
+            .contains("role=\"alert\"")
+    );
 
     let valid = render(|| {
         rsx! {
@@ -49,7 +45,7 @@ fn field_describes_its_control_with_the_description_and_error() {
             }
         }
     });
-    let input = element_with(&valid, "id=\"name\"");
+    let input = tag(&valid, "name").expect("element");
     assert!(!input.contains("aria-describedby"));
     assert!(!input.contains("aria-invalid"));
     assert!(!valid.contains("role=\"alert\""));
@@ -64,20 +60,24 @@ fn setting_row_toggle_is_a_labelled_switch() {
             }
         }
     });
-    let switch = element_with(&html, "role=\"switch\"");
+    let switch = element(&html, "role=\"switch\"").expect("element");
     assert!(switch.starts_with("<button"));
     assert!(switch.contains("id=\"start-login\""));
     assert!(switch.contains("aria-checked=\"true\""));
     assert!(switch.contains("aria-labelledby=\"start-login-label\""));
     assert!(switch.contains("aria-describedby=\"start-login-description\""));
-    assert!(element_with(&html, "id=\"start-login-label\"").contains("for=\"start-login\""));
+    assert!(
+        tag(&html, "start-login-label")
+            .expect("element")
+            .contains("for=\"start-login\"")
+    );
 
     let standalone = render(|| {
         rsx! {
             Toggle { checked: false, label: "Mute", disabled: true, onchange: |_| {} }
         }
     });
-    let switch = element_with(&standalone, "role=\"switch\"");
+    let switch = element(&standalone, "role=\"switch\"").expect("element");
     assert!(switch.contains("aria-checked=\"false\""));
     assert!(switch.contains("aria-label=\"Mute\""));
     assert!(switch.contains("disabled"));
@@ -89,7 +89,7 @@ fn progress_bar_always_has_a_name_and_a_clamped_value() {
         let html = dioxus_ssr::render_element(
             rsx! { ProgressBar { label: "Model download", value, max } },
         );
-        let bar = element_with(&html, "role=\"progressbar\"");
+        let bar = element(&html, "role=\"progressbar\"").expect("element");
         assert!(bar.contains("aria-label=\"Model download\""));
         assert!(bar.contains(&format!("aria-valuenow=\"{expected}\"")));
         assert!(bar.contains("aria-valuemax=\"100\""));
@@ -112,10 +112,14 @@ fn banners_announce_warnings_and_errors_assertively() {
 #[test]
 fn icon_buttons_are_named_by_their_label() {
     let html = render(|| rsx! { IconButton { icon: IconName::Close, label: "Dismiss" } });
-    let button = element_with(&html, "<button");
+    let button = element(&html, "<button").expect("element");
     assert!(button.contains("aria-label=\"Dismiss\""));
     assert!(button.contains("type=\"button\""));
-    assert!(element_with(&html, "<svg").contains("aria-hidden=\"true\""));
+    assert!(
+        element(&html, "<svg")
+            .expect("element")
+            .contains("aria-hidden=\"true\"")
+    );
 }
 
 #[derive(Clone, Default)]

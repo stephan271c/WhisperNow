@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    AppState, ErrorCategory, EventPayload, PasteHelperSetup, Permission, PermissionKind,
-    PermissionStatus, PermissionsResponse, Phase, SetupStateView, SetupTestResult,
+    ErrorCategory, PasteHelperSetup, Permission, PermissionKind, PermissionStatus,
+    PermissionsResponse, Phase, SetupStateView, SetupTestResult,
 };
 use whispernow_domain::{
     ModelAvailability, RecordingMode, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
@@ -11,15 +11,15 @@ use whispernow_domain::{
 
 use super::super::actions::PERMISSION_POLLS;
 use super::super::tests::{loaded, model, shell};
+use crate::ManagementState;
 use crate::client::fake;
-use crate::test_support::{Page, focused, snapshot, tag, text};
-use crate::{ManagementState, SetupTest};
+use crate::test_support::{Page, focused, snapshot, state_event, tag, text};
 
 /// Setup saved at `step`, with its model in `availability`.
 fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState {
     let mut management = loaded();
     management.install_models(vec![model("base", "Base", availability)]);
-    management.install_setup(SetupStateView {
+    management.setup = Some(SetupStateView {
         first_run_complete: false,
         checkpoint: SetupCheckpoint {
             step,
@@ -55,26 +55,12 @@ fn at(step: SetupStep) -> Page {
     opened(setup_at(step, ModelAvailability::Downloaded))
 }
 
-/// Lets the permission watch's timer fire; `false` once the watch is over.
-fn poll(page: &mut Page) -> bool {
-    page.wait();
-    page.context().management.read().permission_watch.is_some()
-}
-
 /// The desktop's answer to a checkpoint save that moved setup to `step`.
 fn saved_at(page: &Page, step: SetupStep) -> SetupStateView {
     let management = page.context().management;
     let mut setup = management.read().setup.clone().expect("setup loaded");
     setup.checkpoint.step = step;
     setup
-}
-
-fn outcome(page: &Page) -> Option<SetupTestResult> {
-    let management = page.context().management;
-    match management.read().setup_test.clone() {
-        Some(SetupTest::Finished(outcome)) => Some(outcome),
-        _ => None,
-    }
 }
 
 fn start_test(page: &mut Page) {
@@ -112,13 +98,6 @@ fn current_step(html: &str) -> usize {
         .find("aria-current=\"step\"")
         .expect("one current step");
     stepper[..current].matches("<li").count()
-}
-
-fn state_event(phase: Phase, change: impl FnOnce(&mut AppState)) -> EventPayload {
-    let mut state = snapshot(Phase::Idle);
-    state.phase = phase;
-    change(&mut state);
-    EventPayload::StateChanged { state }
 }
 
 fn error(code: &str, summary: &str, category: ErrorCategory) -> AppError {
@@ -179,13 +158,15 @@ fn granted_permissions_move_setup_on_after_a_request() {
         "with the microphone granted, the user may move on"
     );
 
-    assert!(poll(&mut setup));
-    assert!(poll(&mut setup));
+    setup.wait();
+    assert_eq!(fake::count("get_permissions"), 2, "the watch polls again");
+    setup.wait();
     assert_eq!(
-        setup.sent(),
-        ["get_permissions"],
+        fake::count("get_permissions"),
+        2,
         "an unanswered poll is not repeated"
     );
+    setup.sent();
     setup.answer(
         "get_permissions",
         Ok(cards(PermissionStatus::Granted, PermissionStatus::Granted)),
@@ -196,9 +177,11 @@ fn granted_permissions_move_setup_on_after_a_request() {
         "setup moves on by itself"
     );
     assert_eq!(saved_step(), SetupStep::Model);
-    assert!(
-        !poll(&mut setup),
-        "the watch ends once everything is granted"
+    setup.wait();
+    assert_eq!(
+        fake::count("get_permissions"),
+        2,
+        "granting everything ends the watch"
     );
 
     let saved = saved_at(&setup, SetupStep::Model);
@@ -211,9 +194,7 @@ fn granted_permissions_move_setup_on_after_a_request() {
     );
 }
 
-/// Setup on the permission step after the microphone was requested and answered with
-/// `answer`; returns the harness and the answer's follow-up commands.
-fn requested(answer: PermissionsResponse) -> (Page, Vec<&'static str>) {
+fn requested(answer: PermissionsResponse) -> Page {
     let mut setup = at(SetupStep::Permissions);
     setup.answer(
         "get_permissions",
@@ -225,52 +206,62 @@ fn requested(answer: PermissionsResponse) -> (Page, Vec<&'static str>) {
     setup.click("permission-microphone-grant");
     setup.sent();
     setup.answer("request_permission", Ok(answer));
-    let follow_up = setup.sent();
-    (setup, follow_up)
+    setup
 }
 
 #[test]
 fn a_card_this_session_cannot_provide_does_not_hold_setup_back() {
-    let (mut setup, follow_up) = requested(cards(
+    let mut setup = requested(cards(
         PermissionStatus::Granted,
         PermissionStatus::Unavailable,
     ));
     assert_eq!(
-        follow_up,
-        ["save_setup_checkpoint"],
+        fake::count("save_setup_checkpoint"),
+        1,
         "setup moves on without the card nobody can grant"
     );
     assert_eq!(saved_step(), SetupStep::Model);
-    assert!(!poll(&mut setup));
+    setup.wait();
+    assert_eq!(fake::count("get_permissions"), 1);
 }
 
 #[test]
 fn a_final_denial_ends_the_watch_without_moving_on() {
     let mut denied = cards(PermissionStatus::Denied, PermissionStatus::Granted);
     denied.permissions[0].can_request = false;
-    let (mut setup, follow_up) = requested(denied);
-    assert!(
-        follow_up.is_empty(),
+    let mut setup = requested(denied);
+    assert_eq!(
+        fake::count("save_setup_checkpoint"),
+        0,
         "the denied microphone keeps setup here"
     );
-    assert!(
-        !poll(&mut setup),
-        "no card can change any more, so nothing is read again"
+    setup.wait();
+    assert_eq!(
+        fake::count("get_permissions"),
+        1,
+        "a final denial ends the watch"
     );
-    assert!(setup.sent().is_empty());
 }
 
 #[test]
-fn an_unanswered_permission_watch_gives_up_after_its_polls() {
-    let (mut setup, _) = requested(cards(
+fn a_permission_watch_stops_reading_after_its_poll_limit() {
+    let pending = cards(
         PermissionStatus::NotDetermined,
         PermissionStatus::NotDetermined,
-    ));
-    for _ in 1..PERMISSION_POLLS {
-        assert!(poll(&mut setup));
+    );
+    let mut setup = requested(pending.clone());
+    for poll in 1..=PERMISSION_POLLS {
+        setup.wait();
+        assert_eq!(fake::count("get_permissions"), 1 + poll as usize);
+        setup.answer("get_permissions", Ok(pending.clone()));
     }
-    assert!(!poll(&mut setup));
-    assert!(!poll(&mut setup), "a spent watch stays over");
+    setup.wait().wait();
+    assert_eq!(
+        fake::count("get_permissions"),
+        1 + PERMISSION_POLLS as usize,
+        "a spent watch stays over"
+    );
+    assert_eq!(fake::count("save_setup_checkpoint"), 0);
 }
 
 #[test]
@@ -346,12 +337,6 @@ fn try_it_shows_what_the_test_dictation_heard() {
             text: "Hello world.".to_owned(),
         });
     }));
-    assert_eq!(
-        outcome(&setup),
-        Some(SetupTestResult::Heard {
-            text: "Hello world.".to_owned()
-        })
-    );
     let html = setup.html();
     assert!(text(&html, "setup-test-result").contains("Hello world."));
     assert!(
@@ -373,8 +358,7 @@ fn try_it_reports_no_speech_when_the_stop_heard_nothing() {
     setup.publish(state_event(Phase::Idle, |state| {
         state.setup_test = Some(SetupTestResult::NoSpeech);
     }));
-    assert_eq!(outcome(&setup), Some(SetupTestResult::NoSpeech));
-    assert!(!text(&setup.html(), "setup-test-result").trim().is_empty());
+    assert!(text(&setup.html(), "setup-test-result").contains("No speech detected"));
 }
 
 #[test]
@@ -383,23 +367,26 @@ fn a_cancelled_test_reads_as_cancelled_not_as_no_speech() {
     start_test(&mut setup);
     setup.answer("start_test_dictation", Ok(()));
     setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
+    setup.click("setup-test-stop");
+    assert_eq!(fake::count("stop_recording"), 1);
     // An earlier dictation's transcript is still the last one; it is not the test's result.
     setup.publish(state_event(Phase::Idle, |state| {
         state.last_transcript = Some("Earlier.".to_owned());
         state.setup_test = Some(SetupTestResult::Cancelled);
     }));
-    assert_eq!(outcome(&setup), Some(SetupTestResult::Cancelled));
+    assert!(text(&setup.html(), "setup-test-result").contains("Test cancelled"));
     assert!(!text(&setup.html(), "setup-test-result").contains("Earlier."));
 
     // A stop sent as the test was cancelled fails; the reported result stands.
-    let mut management = setup.context().management;
-    management.write().fail_setup_test(&error(
-        "not_recording",
-        "Nothing is recording",
-        ErrorCategory::General,
-    ));
-    setup.settle();
-    assert_eq!(outcome(&setup), Some(SetupTestResult::Cancelled));
+    setup.answer(
+        "stop_recording",
+        Err::<(), _>(error(
+            "not_recording",
+            "Nothing is recording",
+            ErrorCategory::General,
+        )),
+    );
+    assert!(text(&setup.html(), "setup-test-result").contains("Test cancelled"));
     assert!(tag(&setup.html(), "setup-test-start").is_some());
 }
 
@@ -415,14 +402,10 @@ fn try_it_reports_a_failed_start() {
             ErrorCategory::Audio,
         )),
     );
-    let Some(SetupTestResult::Failed { error }) = outcome(&setup) else {
-        panic!("the test failed");
-    };
-    assert_eq!(error.summary, "The microphone could not be opened");
-    assert_eq!(error.category, ErrorCategory::Audio);
     assert!(
         text(&setup.html(), "setup-test-result").contains("The microphone could not be opened")
     );
+    assert!(text(&setup.html(), "setup-test-result").contains("Choose another microphone"));
 }
 
 #[test]
@@ -440,15 +423,6 @@ fn try_it_waits_for_the_model_download() {
 #[test]
 fn finish_later_keeps_the_progress_and_returns_home() {
     let mut setup = at(SetupStep::Shortcuts);
-    let html = setup.html();
-    let footer = &html[html.find("wizard-actions").expect("footer")..];
-    let footer = &footer[..footer.find("</div>").expect("end of footer")];
-    assert_eq!(
-        footer.matches("<button").count(),
-        3,
-        "Back, Finish later and Continue: {footer}"
-    );
-
     setup.click("setup-finish-later");
     assert_eq!(
         setup.sent(),
@@ -473,7 +447,7 @@ fn settings_runs_setup_again_after_it_finished() {
     let mut management = setup_at(SetupStep::TryIt, ModelAvailability::Downloaded);
     let mut finished = management.setup.clone().expect("setup");
     finished.first_run_complete = true;
-    management.install_setup(finished);
+    management.setup = Some(finished);
     let mut window = home(management);
     assert!(
         tag(&window.html(), "continue-setup").is_none(),
@@ -482,7 +456,7 @@ fn settings_runs_setup_again_after_it_finished() {
 
     window.click("nav-settings");
     window.click("run-setup-again");
-    assert_eq!(window.sent(), ["get_permissions", "restart_setup"]);
+    assert_eq!(fake::count("restart_setup"), 1);
     let management = window.context().management;
     let mut restarted = management.read().setup.clone().expect("setup");
     restarted.first_run_complete = false;
@@ -498,7 +472,7 @@ fn settings_explain_how_to_paste_without_the_portal_indicator() {
     let mut management = setup_at(SetupStep::TryIt, ModelAvailability::Downloaded);
     let mut finished = management.setup.clone().expect("setup");
     finished.first_run_complete = true;
-    management.install_setup(finished);
+    management.setup = Some(finished);
     let mut window = home(management);
     window.click("nav-settings");
     assert!(window.sent().contains(&"get_permissions"));

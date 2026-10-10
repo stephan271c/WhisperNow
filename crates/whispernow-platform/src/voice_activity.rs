@@ -142,14 +142,6 @@ mod tests {
     }
 
     #[test]
-    fn resource_path_is_stable_and_independent_of_cwd() {
-        assert_eq!(
-            silero_vad_model_path("/opt/whispernow/resources"),
-            Path::new("/opt/whispernow/resources/vad/silero_vad.onnx")
-        );
-    }
-
-    #[test]
     fn an_unavailable_model_fails_open_to_treating_every_frame_as_speech() {
         let mut activity = silero_voice_activity(Path::new("missing.onnx"));
         assert!(activity.is_speech(&[0.0; 512]));

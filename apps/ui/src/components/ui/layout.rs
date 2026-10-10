@@ -2,14 +2,6 @@ use dioxus::prelude::*;
 
 use super::{Icon, IconName};
 
-#[component]
-pub(crate) fn Card(
-    #[props(extends = GlobalAttributes)] attributes: Vec<Attribute>,
-    children: Element,
-) -> Element {
-    rsx! { div { class: "card", ..attributes, {children} } }
-}
-
 /// A titled group of settings rows on one card; the heading names the region.
 #[component]
 pub(crate) fn Section(

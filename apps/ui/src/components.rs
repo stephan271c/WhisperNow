@@ -25,9 +25,7 @@ pub(crate) mod ui;
 mod updates;
 mod vocabulary;
 
-#[cfg(any(test, target_arch = "wasm32"))]
-pub(crate) use actions::UiActions;
-use actions::{DisabledReason, use_actions};
+use actions::DisabledReason;
 use ai_cleanup::AiCleanupPage;
 use configuration::{AudioPage, GeneralPage, PrivacyPage};
 use data::ClearDataCard;
@@ -38,7 +36,7 @@ pub use overlay::RecordingBar;
 use setup::SetupScreen;
 use shared::{MicrophonePermissionNotice, PasteHelperNotice, ShortcutCapture};
 use titlebar::{TitleBar, use_window_chrome};
-use ui::{BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconName, Toast, ToastRegion};
+use ui::{BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName, ToastRegion};
 use updates::AboutPage;
 use vocabulary::VocabularyPage;
 
@@ -78,10 +76,6 @@ impl Navigator {
         self.route.set(route);
         self.focus_requests += 1;
     }
-}
-
-pub(crate) fn use_navigator() -> Navigator {
-    use_context::<UiContext>().navigator
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -156,7 +150,7 @@ fn nav_class(entry: &NavEntry, current: Route) -> &'static str {
 #[component]
 pub fn AppShell() -> Element {
     let context = use_context::<UiContext>();
-    let navigator = use_navigator();
+    let navigator = use_context::<UiContext>().navigator;
     let mut heading = use_signal(|| None::<Rc<MountedData>>);
     use_effect(move || {
         if (navigator.focus_requests)() == 0 {
@@ -224,7 +218,7 @@ pub fn AppShell() -> Element {
 
 #[component]
 fn Sidebar(route: Route) -> Element {
-    let navigator = use_navigator();
+    let navigator = use_context::<UiContext>().navigator;
     let entries = nav_entries(route);
     let count = entries.len();
     // Mounted links by id; kept outside the reactive graph because mounting is not a change.
@@ -278,8 +272,8 @@ fn Sidebar(route: Route) -> Element {
 #[component]
 fn SidebarFooter() -> Element {
     let context = use_context::<UiContext>();
-    let actions = use_actions();
-    let navigator = use_navigator();
+    let actions = context;
+    let navigator = use_context::<UiContext>().navigator;
     let state = context.state.read();
     let management = context.management.read();
     let selected = state.snapshot.as_ref().map(|snapshot| {
@@ -307,7 +301,9 @@ fn SidebarFooter() -> Element {
         _ => "status-dot waiting",
     };
     let state_label = model_state.map_or("Connecting", labels::model_state);
-    let switch_blocked = actions.blocked(UiOperation::ModelSwitch);
+    let switch_blocked = actions
+        .blocked(UiOperation::ModelSwitch)
+        .or(actions.phase_blocked());
     let update = update_summary(state.update_snapshot.as_ref().map(|update| update.phase));
     let selected_id = selected.map(|(id, _)| id).unwrap_or_default();
     rsx! {
@@ -397,7 +393,7 @@ fn SettingsPage(page: SettingsRoute) -> Element {
 #[component]
 pub(super) fn NoticeRegion(scope: NoticeScope) -> Element {
     let context = use_context::<UiContext>();
-    let navigator = use_navigator();
+    let navigator = use_context::<UiContext>().navigator;
     let notice = context
         .management
         .read()
@@ -416,7 +412,6 @@ pub(super) fn NoticeRegion(scope: NoticeScope) -> Element {
 #[component]
 fn NoticeView(notice: Notice, inline: bool) -> Element {
     let mut management = use_context::<UiContext>().management;
-    let navigator = use_navigator();
     let id = notice.id;
     let auto_dismisses = notice.auto_dismisses();
     use_effect(use_reactive!(|id, auto_dismisses| {
@@ -433,24 +428,16 @@ fn NoticeView(notice: Notice, inline: bool) -> Element {
         "notice-toast"
     };
     rsx! {
-        Toast {
-            id: "notice",
-            tone: notice.tone,
-            message: notice.message,
-            placement,
-            on_dismiss: move |()| management.write().dismiss_notice(id),
-            action: notice.action.map(|action| rsx! {
-                Button {
-                    id: "notice-action",
-                    variant: ButtonVariant::Ghost,
-                    size: ButtonSize::Sm,
-                    onclick: move |_| {
-                        management.write().dismiss_notice(id);
-                        navigator.go(action.route);
-                    },
-                    "{action.label}"
-                }
-            }),
+        div { id: "notice", class: "toast {notice.tone.class()} {placement}", role: notice.tone.role(),
+            span { class: "toast-icon", Icon { name: notice.tone.icon() } }
+            p { class: "toast-message", "{notice.message}" }
+            IconButton {
+                id: "notice-dismiss",
+                icon: IconName::Close,
+                label: "Dismiss notification",
+                size: ButtonSize::Sm,
+                onclick: move |_| management.write().dismiss_notice(id),
+            }
         }
     }
 }

@@ -5,14 +5,6 @@ use whispernow_domain::ipc::{AppState, EventPayload, ModelState, Phase, UpdateSt
 
 use crate::OverlayView;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum EventStreamHealth {
-    #[default]
-    Connecting,
-    Listening,
-    Failed,
-}
-
 #[derive(Clone, Default, PartialEq)]
 pub struct UiState {
     pub snapshot: Option<AppState>,
@@ -21,8 +13,9 @@ pub struct UiState {
     pub error: Option<AppError>,
     pub update_command_error: Option<String>,
     pub connection_failed: bool,
-    pub event_stream_health: EventStreamHealth,
+    pub event_stream_failed: bool,
     pub overlay: OverlayView,
+    pub recording_bar: bool,
 }
 
 impl fmt::Debug for UiState {
@@ -35,8 +28,9 @@ impl fmt::Debug for UiState {
             .field("error", &self.error)
             .field("update_command_error", &self.update_command_error)
             .field("connection_failed", &self.connection_failed)
-            .field("event_stream_health", &self.event_stream_health)
-            .field("overlay_phase", &self.overlay.phase)
+            .field("event_stream_failed", &self.event_stream_failed)
+            .field("overlay_levels_seen", &self.overlay.levels_seen)
+            .field("recording_bar", &self.recording_bar)
             .finish()
     }
 }
@@ -66,8 +60,10 @@ impl UiState {
                     .is_some_and(|state| matches!(state.phase, Phase::Recording { .. }))
                 {
                     self.audio_rms = rms.clamp(0.0, 1.0);
+                    if self.recording_bar {
+                        self.overlay.apply_level(rms, elapsed_ms);
+                    }
                 }
-                self.overlay.apply_level(rms, elapsed_ms);
             }
             EventPayload::UpdateChanged { state } => self.apply_update_state(state),
             // The main window's listener follows navigation requests.
@@ -81,7 +77,18 @@ impl UiState {
     }
 
     fn apply_state(&mut self, state: AppState) {
-        self.overlay.install(&state);
+        if self.recording_bar {
+            if self
+                .snapshot
+                .as_ref()
+                .is_none_or(|old| old.phase != state.phase)
+            {
+                self.overlay.action_error = None;
+            }
+            if let Phase::Recording { session, .. } = state.phase {
+                self.overlay.start_recording(session);
+            }
+        }
         if !matches!(state.phase, Phase::Recording { .. }) {
             self.audio_rms = 0.0;
         }
@@ -119,16 +126,8 @@ impl UiState {
         not(any(test, target_arch = "wasm32")),
         expect(dead_code, reason = "called by the browser's window root and by tests")
     )]
-    pub fn mark_event_stream_listening(&mut self) {
-        self.event_stream_health = EventStreamHealth::Listening;
-    }
-
-    #[cfg_attr(
-        not(any(test, target_arch = "wasm32")),
-        expect(dead_code, reason = "called by the browser's window root and by tests")
-    )]
     pub fn report_event_stream_failure(&mut self, error: AppError) {
-        self.event_stream_health = EventStreamHealth::Failed;
+        self.event_stream_failed = true;
         self.error = Some(error);
     }
 }

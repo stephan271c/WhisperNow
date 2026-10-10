@@ -87,25 +87,21 @@ fn post_command_v() -> NativePasteInjection {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
     fn command_v_is_one_balanced_down_up_sequence() {
-        assert_eq!(COMMAND_V.len(), 4);
-        assert_eq!(COMMAND_V[0].keycode, COMMAND_KEYCODE);
-        assert!(COMMAND_V[0].key_down);
-        assert_eq!(COMMAND_V[1].keycode, V_KEYCODE);
-        assert!(COMMAND_V[1].key_down);
-        assert_eq!(COMMAND_V[2].keycode, V_KEYCODE);
-        assert!(!COMMAND_V[2].key_down);
-        assert_eq!(COMMAND_V[3].keycode, COMMAND_KEYCODE);
-        assert!(!COMMAND_V[3].key_down);
-    }
-
-    #[test]
-    fn every_v_event_carries_command_and_final_release_clears_it() {
-        assert_eq!(COMMAND_V[1].flags, COMMAND_FLAG);
-        assert_eq!(COMMAND_V[2].flags, COMMAND_FLAG);
-        assert_eq!(COMMAND_V[3].flags, 0);
+        let mut held = HashSet::new();
+        for stroke in COMMAND_V {
+            assert!(if stroke.key_down {
+                held.insert(stroke.keycode)
+            } else {
+                held.remove(&stroke.keycode)
+            });
+        }
+        assert!(held.is_empty());
+        assert_eq!(COMMAND_V.last().expect("paste sequence").flags, 0);
     }
 }

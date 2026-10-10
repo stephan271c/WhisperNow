@@ -10,16 +10,14 @@ use whispernow_domain::{
     ModelAvailability, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
 };
 
-use super::actions::{DisabledReason, use_actions};
+use super::actions::DisabledReason;
 use super::configuration::{RECORDING_MODES, choice_value, chosen};
 use super::home::percent;
 use super::labels::{self, format_bytes};
 use super::models::{DownloadProgress, ModelLanguages};
 use super::ui::{Banner, Button, ButtonVariant, Icon, IconName, Segmented, ShortcutLabel, Tone};
-use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture, use_navigator};
-use crate::{
-    BlockedReason, NoticeScope, Route, SettingsRoute, SetupEdit, SetupTest, UiContext, UiOperation,
-};
+use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture};
+use crate::{BlockedReason, NoticeScope, Route, SettingsRoute, SetupTest, UiContext, UiOperation};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
@@ -133,19 +131,25 @@ fn SetupStepper(step: SetupStep) -> Element {
 
 #[component]
 fn SetupFooter(step: SetupStep) -> Element {
-    let actions = use_actions();
-    let navigator = use_navigator();
+    let actions = use_context::<UiContext>();
+    let navigator = use_context::<UiContext>().navigator;
     let management = use_context::<UiContext>().management;
-    let ready = management.read().setup_step_ready();
+    let model_downloading = management
+        .read()
+        .setup_checkpoint()
+        .is_some_and(|checkpoint| actions.download(&checkpoint.model_id).is_some());
+    let ready = management.read().setup_step_ready(model_downloading);
     let save_blocked = actions.blocked(UiOperation::SaveSetup);
-    let complete_blocked = actions.blocked(UiOperation::CompleteSetup);
+    let complete_blocked = actions
+        .blocked(UiOperation::CompleteSetup)
+        .or(actions.phase_blocked());
     let finishing = step == SetupStep::TryIt;
     let primary_blocked = if finishing {
         complete_blocked
     } else {
         save_blocked
     };
-    let hint = (!ready).then(|| step_hint(step));
+    let hint = (!ready).then(|| step_hint(step)).flatten();
     let describedby = match (primary_blocked.is_some(), hint.is_some()) {
         (true, _) => Some("setup-disabled-reason"),
         (false, true) => Some("setup-step-hint"),
@@ -196,15 +200,14 @@ fn SetupFooter(step: SetupStep) -> Element {
 }
 
 /// Why the step's action is not available yet.
-const fn step_hint(step: SetupStep) -> &'static str {
+const fn step_hint(step: SetupStep) -> Option<&'static str> {
     match step {
-        SetupStep::Welcome => "Press Get started to begin.",
-        SetupStep::Permissions => "Allow microphone access to continue.",
-        SetupStep::Model => "Download a model, or choose one that is installed.",
+        SetupStep::Welcome | SetupStep::TryIt => None,
+        SetupStep::Permissions => Some("Allow microphone access to continue."),
+        SetupStep::Model => Some("Download a model, or choose one that is installed."),
         SetupStep::Shortcuts => {
-            "Turn on at least one shortcut, complete it, and use different keys for each."
+            Some("Turn on at least one shortcut, complete it, and use different keys for each.")
         }
-        SetupStep::TryIt => "Finishing needs the speech model downloaded and a valid shortcut.",
     }
 }
 
@@ -220,13 +223,16 @@ fn WelcomeStep() -> Element {
 /// One card per permission this platform needs. Leaving the step stops the polling.
 #[component]
 fn PermissionsStep() -> Element {
-    let actions = use_actions();
+    let actions = use_context::<UiContext>();
     let management = use_context::<UiContext>().management;
     use_effect(move || actions.load_permissions());
     let permissions = management.read().permissions.clone();
     let reason = actions
-        .blocked(UiOperation::RequestPermission)
-        .filter(|reason| *reason != BlockedReason::CommandPending);
+        .state
+        .read()
+        .snapshot
+        .is_none()
+        .then_some(BlockedReason::Connecting);
     rsx! { div { class: "setup-content",
         p { class: "field-help", "WhisperNow needs these to hear you and to type the text where you are working. Nothing leaves this computer." }
         match permissions {
@@ -251,7 +257,7 @@ fn PermissionsStep() -> Element {
 
 #[component]
 fn PermissionCard(permission: Permission, blocked: bool) -> Element {
-    let actions = use_actions();
+    let actions = use_context::<UiContext>();
     let kind = permission.kind;
     let slug = permission_slug(kind);
     let (title, purpose) = permission_text(kind);
@@ -375,7 +381,7 @@ const fn permission_help(kind: PermissionKind, status: PermissionStatus) -> Opti
 fn ModelStep(selected: String) -> Element {
     let management = use_context::<UiContext>().management;
     let mut show_all = use_signal(|| false);
-    let download_blocked = use_actions().blocked(UiOperation::DownloadModel);
+    let download_blocked = use_context::<UiContext>().blocked(UiOperation::DownloadModel);
     let models = management
         .read()
         .speech_models()
@@ -421,18 +427,18 @@ fn ModelStep(selected: String) -> Element {
 
 #[component]
 fn ModelChoice(model: ModelSummary, checked: bool) -> Element {
-    let actions = use_actions();
+    let actions = use_context::<UiContext>();
     let mut management = use_context::<UiContext>().management;
     let id = model.id.clone();
     let slug = id.as_str().replace('.', "-");
     let name = model.display_name.clone();
-    let download = management.read().download(&id).cloned();
+    let download = actions.download(&id);
     let download_blocked = actions.blocked(UiOperation::DownloadModel);
     rsx! { div { class: "choice-row setup-model",
         label { class: "setup-model-choice",
             input { r#type: "radio", name: "setup-model", value: model.id.as_str(), checked,
                 aria_describedby: "setup-model-{slug}-facts",
-                onchange: { let model_id = model.id.clone(); move |_| management.write().edit_setup(SetupEdit::Model(model_id.clone())) }
+                onchange: { let model_id = model.id.clone(); move |_| management.write().edit_setup(|setup| setup.model_id = model_id.clone()) }
             }
             span { class: "model-name",
                 strong { "{name}" }
@@ -453,7 +459,7 @@ fn ModelChoice(model: ModelSummary, checked: bool) -> Element {
                     disabled: download_blocked.is_some(),
                     aria_describedby: download_blocked.map(|_| "setup-models-disabled-reason"),
                     onclick: move |_| {
-                        management.write().edit_setup(SetupEdit::Model(id.clone()));
+                        management.write().edit_setup(|setup| setup.model_id = id.clone());
                         actions.download_model(id.clone());
                     },
                     "Download"
@@ -496,11 +502,11 @@ fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
                 value: choice_value(&RECORDING_MODES, &checkpoint.recording_mode),
                 options: RECORDING_MODES.iter().map(|(_, value, label)| (*value, *label)).collect::<Vec<_>>(),
                 onchange: move |value: &'static str| if let Some(mode) = chosen(&RECORDING_MODES, value) {
-                    management.write().edit_setup(SetupEdit::RecordingMode(mode));
+                    management.write().edit_setup(|setup| setup.recording_mode = mode);
                 },
             }
             ShortcutCapture { id: "setup-recording-shortcut-capture", label: "recording shortcut", shortcut: Some(checkpoint.recording_shortcut.clone()),
-                oncapture: move |shortcut| management.write().edit_setup(SetupEdit::Shortcut(shortcut)) }
+                oncapture: move |shortcut| management.write().edit_setup(|setup| setup.recording_shortcut = shortcut) }
             if let Some(conflict) = conflict {
                 Banner { tone: Tone::Warning, p { "{conflict}" } }
             }
@@ -518,19 +524,21 @@ fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
 
 #[component]
 fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
-    let actions = use_actions();
     let context = use_context::<UiContext>();
+    let actions = context;
     let management = context.management;
     let model_name = management
         .read()
         .model_display_name(checkpoint.model_id.as_str());
     let model_ready = management.read().setup_model_ready();
-    let download = management.read().download(&checkpoint.model_id).cloned();
+    let download = actions.download(&checkpoint.model_id);
     let devices = management.read().devices.clone();
     let test = management.read().setup_test.clone();
     let running = matches!(test, Some(SetupTest::Running { .. }));
     let level = percent(context.state.read().audio_rms);
-    let start_blocked = actions.blocked(UiOperation::StartSetupTest);
+    let start_blocked = actions
+        .blocked(UiOperation::StartSetupTest)
+        .or(actions.phase_blocked());
     let stop_blocked = actions.blocked(UiOperation::StopSetupTest);
     let selected = checkpoint.input_device.clone().unwrap_or_default();
     rsx! { div { class: "setup-content",
@@ -546,7 +554,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
             select { id: "setup-microphone", value: "{selected}", disabled: running,
                 onchange: move |event| {
                     let value = event.value();
-                    actions.save_setup_edit(SetupEdit::InputDevice((!value.is_empty()).then_some(value)));
+                    actions.save_setup_edit(|setup| setup.input_device = (!value.is_empty()).then_some(value));
                 },
                 option { value: "", "System default" }
                 for device in devices { option { value: "{device.id}", "{device.display_name}" } }
@@ -623,7 +631,7 @@ fn TestDictationResult(outcome: SetupTestResult) -> Element {
 
 fn setup_fix(category: whispernow_domain::ErrorCategory) -> &'static str {
     use whispernow_domain::ErrorCategory;
-    let fix = crate::presentation::category_fix(category);
+    let fix = crate::home_status::category_fix(category);
     match category {
         ErrorCategory::Audio => "Choose another microphone above, then test again.",
         ErrorCategory::Model | ErrorCategory::Recognition => {
@@ -641,7 +649,7 @@ fn setup_fix(category: whispernow_domain::ErrorCategory) -> &'static str {
 
 #[component]
 fn DoneStep() -> Element {
-    let navigator = use_navigator();
+    let navigator = use_context::<UiContext>().navigator;
     let management = use_context::<UiContext>().management;
     // The saved settings, or the checkpoint setup finished with until they load.
     let shortcut = {

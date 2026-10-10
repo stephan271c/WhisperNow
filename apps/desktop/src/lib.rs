@@ -169,10 +169,10 @@ pub fn run() {
         .setup(move |app| {
             let tray = Arc::new(TrayController::default());
             tray.build(app, handle_tray_action)?;
-            let overlay = Arc::new(RecordingOverlay::new(
+            let overlay = RecordingOverlay::new(
                 Arc::new(TauriOverlayWindow::new(app.handle().clone())),
                 floating_windows,
-            ));
+            );
             let (events, event_receiver) = services::Events::channel();
             let resource_dir = app.path().resource_dir()?;
             let services =
@@ -182,13 +182,10 @@ pub fn run() {
             if !services.can_copy_transcripts() {
                 tray.mark_copy_unavailable();
             }
-            let settings = services.settings.get();
-            let start_minimized = settings
-                .as_ref()
-                .is_ok_and(|settings| settings.settings.start_minimized);
-            let settings = settings.map_err(|error| {
+            let settings = services.settings.get().map_err(|error| {
                 io::Error::other(format!("settings unavailable ({})", error.code))
             })?;
+            let start_minimized = settings.settings.start_minimized;
             let autostart: Arc<dyn AutostartRegistration> =
                 Arc::new(TauriAutostart::new(app.handle().clone()));
             if let Err(error) =

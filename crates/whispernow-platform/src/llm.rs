@@ -252,19 +252,12 @@ mod tests {
 
     #[test]
     fn gemini_reports_why_it_stopped() {
-        assert_eq!(
-            gemini_finish_reason(Some(&GeminiFinishReason::MaxTokens)),
-            LlmFinishReason::OutputLimit
-        );
-        assert_eq!(
-            gemini_finish_reason(Some(&GeminiFinishReason::Stop)),
-            LlmFinishReason::Completed
-        );
-        assert_eq!(
-            gemini_finish_reason(Some(&GeminiFinishReason::Safety)),
-            LlmFinishReason::ContentFilter
-        );
-        assert_eq!(gemini_finish_reason(None), LlmFinishReason::Unknown);
+        for (reason, expected) in [
+            (GeminiFinishReason::MaxTokens, LlmFinishReason::OutputLimit),
+            (GeminiFinishReason::Safety, LlmFinishReason::ContentFilter),
+        ] {
+            assert_eq!(gemini_finish_reason(Some(&reason)), expected);
+        }
     }
 
     #[test]

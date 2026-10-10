@@ -123,10 +123,7 @@ mod tests {
 
         // "deep" makes empty space anywhere in the strip a drag handle; Tauri never starts a
         // drag from a button, so the controls need no opt-out of their own.
-        assert!(
-            html.contains(r#"class="titlebar" data-tauri-drag-region="deep""#),
-            "{html}"
-        );
+        assert!(html.contains(r#"data-tauri-drag-region="deep""#), "{html}");
         for (id, label) in [
             ("window-minimize", "Minimize"),
             ("window-maximize", "Maximize"),

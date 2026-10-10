@@ -1,5 +1,5 @@
-use whispernow_domain::ipc::{AppState, ModelSummary};
-use whispernow_domain::{ModelFamily, ModelId};
+use whispernow_domain::ModelFamily;
+use whispernow_domain::ipc::ModelSummary;
 
 use super::ManagementState;
 use crate::components::ui::Tone;
@@ -57,37 +57,5 @@ impl ManagementState {
     pub fn install_models(&mut self, models: Vec<ModelSummary>) {
         self.models = models;
         self.models_loaded = true;
-    }
-
-    /// Installs a process snapshot; returns whether a download has ended since the last one,
-    /// so the models must be read again.
-    pub fn install_snapshot(&mut self, snapshot: &AppState) -> bool {
-        self.observe_selected_model(&snapshot.selected_model_id);
-        let ended = self.downloads.iter().any(|download| {
-            !snapshot
-                .active_downloads
-                .iter()
-                .any(|active| active.model_id == download.model_id)
-        });
-        self.downloads.clone_from(&snapshot.active_downloads);
-        self.observe_setup_test(snapshot);
-        ended
-    }
-
-    #[must_use]
-    pub fn download(&self, model_id: &ModelId) -> Option<&whispernow_domain::ipc::ActiveDownload> {
-        self.downloads
-            .iter()
-            .find(|download| download.model_id == *model_id)
-    }
-
-    fn observe_selected_model(&mut self, model_id: &ModelId) {
-        if let Some(settings) = &mut self.settings {
-            settings.settings.model_id.clone_from(model_id);
-        }
-    }
-
-    pub fn finish_model_switch(&mut self, model_id: &ModelId) {
-        self.observe_selected_model(model_id);
     }
 }

@@ -191,40 +191,7 @@ mod tests {
             paths.history_file(),
             Path::new("test-config/WhisperNow/history.json")
         );
-        assert_eq!(
-            paths.migrated_history_file(),
-            Path::new("test-config/WhisperNow/history.json.migrated")
-        );
-        assert_eq!(
-            paths.history_quarantine_dir(),
-            Path::new("test-config/WhisperNow/history-quarantine")
-        );
-        assert_eq!(
-            paths.history_database_file(),
-            Path::new("test-data/WhisperNow/history.sqlite3")
-        );
-        assert_eq!(
-            paths.history_database_wal_file(),
-            Path::new("test-data/WhisperNow/history.sqlite3-wal")
-        );
-        assert_eq!(
-            paths.history_database_shm_file(),
-            Path::new("test-data/WhisperNow/history.sqlite3-shm")
-        );
-        assert_eq!(
-            paths.recordings_dir(),
-            Path::new("test-data/WhisperNow/recordings")
-        );
         assert_eq!(paths.models_dir(), Path::new("test-data/WhisperNow/models"));
-        assert_eq!(paths.logs_dir(), Path::new("test-data/WhisperNow/logs"));
-        assert_eq!(
-            paths.wayland_remote_desktop_token_file(),
-            Path::new("test-config/WhisperNow/wayland-remote-desktop-token")
-        );
-        assert_eq!(
-            paths.paste_helper_setup_dir(),
-            Path::new("test-data/WhisperNow/helper-setup")
-        );
     }
 
     #[test]

@@ -1,16 +1,16 @@
 use std::future::Future;
 use whispernow_domain::AppError;
 
-use whispernow_domain::ipc::MainWindowSection;
+use whispernow_domain::ipc::{MainWindowSection, Phase};
 
-use super::UiActions;
+use crate::UiContext;
 use crate::UiOperation;
 use crate::client;
 
 use crate::overlay::OverlayAction;
 use dioxus::prelude::*;
 
-impl UiActions {
+impl UiContext {
     /// Runs an overlay control; the overlay shows a failure in its own status line.
     fn overlay_command(
         self,
@@ -21,30 +21,34 @@ impl UiActions {
             let Err(error) = answer else {
                 return;
             };
-            let mut state = actions.state();
+            let mut state = actions.state;
             let mut state = state.write();
-            if operation == UiOperation::OverlayAction {
-                state.overlay.report_action_failure(error.summary.clone());
-            } else {
-                state
-                    .overlay
-                    .report_recording_command_failure(error.summary.clone());
+            if operation == UiOperation::OverlayAction
+                || state
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| matches!(snapshot.phase, Phase::Recording { .. }))
+            {
+                state.overlay.action_error = Some(error.summary);
             }
         });
     }
 
     pub(crate) fn stop_recording(self) {
-        self.overlay_command(UiOperation::StopRecording, client::stop_recording());
+        self.overlay_command(UiOperation::StopRecording, client::call("stop_recording"));
     }
 
     pub(crate) fn cancel_recording(self) {
-        self.overlay_command(UiOperation::CancelRecording, client::cancel_recording());
+        self.overlay_command(
+            UiOperation::CancelRecording,
+            client::call("cancel_recording"),
+        );
     }
 
     pub(crate) fn dismiss_overlay(self) {
         self.overlay_command(
             UiOperation::OverlayAction,
-            client::dismiss_recording_overlay(),
+            client::call("dismiss_recording_overlay"),
         );
     }
 
@@ -61,7 +65,7 @@ impl UiActions {
             _ => unreachable!("error fix must name an available main window section"),
         };
         self.overlay_command(UiOperation::OverlayAction, async move {
-            client::open_main_window(&section).await
+            client::invoke("open_main_window", Some(&section)).await
         });
     }
 }

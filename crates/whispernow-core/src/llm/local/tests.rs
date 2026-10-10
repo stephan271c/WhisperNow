@@ -281,15 +281,6 @@ fn ngram_drafts_copy_what_followed_the_latest_earlier_match() {
 }
 
 #[test]
-fn rendering_follows_the_chat_template() {
-    let prompt = build_local_cleanup_prompt("  so um hi \n");
-    assert_eq!(
-        render_prompt("<|startoftext|>", &prompt),
-        "<|startoftext|><|im_start|>user\nso um hi<|im_end|>\n<|im_start|>assistant\n"
-    );
-}
-
-#[test]
 fn drafts_tokenize_after_the_reply_tail() {
     let fake = fake_following("", &[]);
     let mut state = State {

@@ -1,7 +1,7 @@
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 
 use tauri::{Emitter as _, Manager as _};
-use whispernow_domain::ipc::{AppState, EventPayload, Phase};
+use whispernow_domain::ipc::{AppState, EventPayload};
 
 use super::Gateway;
 use crate::overlay::RecordingOverlay;
@@ -10,7 +10,7 @@ use crate::overlay::RecordingOverlay;
 /// the last event sender is dropped.
 pub(crate) fn forward_events(
     app: tauri::AppHandle,
-    overlay: Arc<RecordingOverlay>,
+    mut overlay: RecordingOverlay,
     receiver: mpsc::Receiver<EventPayload>,
 ) -> std::io::Result<()> {
     std::thread::Builder::new()
@@ -19,7 +19,7 @@ pub(crate) fn forward_events(
             let mut followed = Followed::default();
             for event in receiver {
                 if let EventPayload::StateChanged { state } = &event {
-                    followed.observe(&app, &overlay, state);
+                    followed.observe(&app, &mut overlay, state);
                 }
                 emit(&app, event);
             }
@@ -41,14 +41,19 @@ impl Default for Followed {
 }
 
 impl Followed {
-    fn observe(&mut self, app: &tauri::AppHandle, overlay: &RecordingOverlay, state: &AppState) {
+    fn observe(
+        &mut self,
+        app: &tauri::AppHandle,
+        overlay: &mut RecordingOverlay,
+        state: &AppState,
+    ) {
         overlay.observe(state);
         let Some(app_state) = app.try_state::<Gateway>() else {
             return;
         };
         app_state.tray.apply_snapshot(state);
         app_state.observe_dictation(state.phase.is_busy());
-        let shortcuts_enabled = !matches!(state.phase, Phase::Paused | Phase::Updating);
+        let shortcuts_enabled = state.phase.shortcuts_enabled();
         if shortcuts_enabled != self.shortcuts_enabled {
             self.shortcuts_enabled = shortcuts_enabled;
             let app = app.clone();

@@ -1,6 +1,6 @@
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::ErrorCategory;
-use whispernow_domain::{EntryId, HistoryEntry, HistoryFilter, HistoryPage};
+use whispernow_domain::{EntryId, HistoryEntry, HistoryFilter, HistoryPage, HistoryPageRequest};
 
 use super::ManagementState;
 use crate::NoticeScope;
@@ -14,13 +14,17 @@ pub struct HistoryCopied {
 }
 
 impl ManagementState {
-    /// The page count and filter a read of the whole loaded window asks for.
-    pub(crate) fn history_request(&self) -> (u32, HistoryFilter) {
-        (self.history_window_pages(), self.history_filter.clone())
+    pub(crate) fn history_request(&self) -> HistoryPageRequest {
+        HistoryPageRequest {
+            limit: self
+                .history_window_pages()
+                .saturating_mul(HistoryPageRequest::DEFAULT_PAGE_SIZE),
+            ..HistoryPageRequest::first_page(self.history_filter.clone())
+        }
     }
 
     /// Grows the window by one page and returns the read for it.
-    pub(crate) fn older_history_request(&mut self) -> (u32, HistoryFilter) {
+    pub(crate) fn older_history_request(&mut self) -> HistoryPageRequest {
         self.history_pages = self.history_window_pages().saturating_add(1);
         self.history_request()
     }
@@ -28,11 +32,6 @@ impl ManagementState {
     #[must_use]
     pub const fn history_loaded(&self) -> bool {
         self.history_rows_filter.is_some()
-    }
-
-    #[must_use]
-    pub(crate) const fn history_refresh_failed(&self) -> bool {
-        self.history_refresh_failed
     }
 
     #[must_use]
@@ -54,7 +53,6 @@ impl ManagementState {
         self.history_pages = self.history_pages.max(pages);
         self.history_unavailable = None;
         self.history_search_failed = None;
-        self.history_refresh_failed = false;
         self.history_rows_filter = Some(filter.clone());
         self.history = page.entries;
         self.history_next_cursor = page.next_cursor;
@@ -65,7 +63,6 @@ impl ManagementState {
         if *filter != self.history_filter {
             return;
         }
-        self.history_refresh_failed = true;
         let summary = error.summary.clone();
         let unreadable = error.category == ErrorCategory::HistoryUnavailable;
         if !self.history_loaded() || unreadable {

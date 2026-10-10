@@ -1,4 +1,3 @@
-mod draft;
 mod history;
 mod models;
 mod settings;
@@ -8,16 +7,14 @@ use std::collections::BTreeMap;
 
 use dioxus::core::Task;
 use whispernow_domain::ipc::{
-    ActiveDownload, AudioDevice, ClearDataResult, DataLocation, EventPayload,
-    MicrophoneTestResponse, ModelSummary, PermissionKind, PermissionsResponse, SettingsView,
-    SetupStateView,
+    AudioDevice, ClearDataResult, DataLocation, MicrophoneTestResponse, ModelSummary,
+    PermissionKind, PermissionsResponse, SettingsView, SetupStateView,
 };
 use whispernow_domain::{HistoryCursor, HistoryEntry, HistoryFilter, Settings};
 
 use crate::components::ui::Tone;
-use crate::{Notice, NoticeAction, NoticeScope, UiOperation};
+use crate::{Notice, NoticeScope, UiOperation};
 
-pub(crate) use draft::SetupEdit;
 pub(crate) use history::HistoryCopied;
 pub(crate) use settings::{SaveStatus, SettingKey};
 pub(crate) use setup::SetupTest;
@@ -38,7 +35,6 @@ pub(crate) struct ManagementState {
     pub devices_listed: bool,
     pub models: Vec<ModelSummary>,
     pub models_loaded: bool,
-    pub downloads: Vec<ActiveDownload>,
     pub history: Vec<HistoryEntry>,
     pub history_unavailable: Option<String>,
     pub history_next_cursor: Option<HistoryCursor>,
@@ -53,7 +49,6 @@ pub(crate) struct ManagementState {
     pub history_search: String,
     /// Pages in the loaded history window; "Load more" grows it by one.
     history_pages: u32,
-    history_refresh_failed: bool,
     pub history_copied: Option<HistoryCopied>,
     /// The latest history copy, which clears its outcome after a moment.
     pub(crate) history_copy: Option<Task>,
@@ -74,33 +69,24 @@ pub(crate) struct ManagementState {
 
 impl ManagementState {
     pub fn notify(&mut self, tone: Tone, scope: NoticeScope, message: impl Into<String>) {
-        self.notify_with_action(tone, scope, message, None);
-    }
-
-    pub fn notify_with_action(
-        &mut self,
-        tone: Tone,
-        scope: NoticeScope,
-        message: impl Into<String>,
-        action: Option<NoticeAction>,
-    ) {
         self.next_notice = self.next_notice.saturating_add(1);
         self.notice = Some(Notice {
             id: self.next_notice,
             tone,
             message: message.into(),
-            action,
             scope,
         });
     }
 
     pub(crate) fn notify_saved(&mut self, scope: NoticeScope, saved: &str, warnings: &[String]) {
-        let tone = if warnings.is_empty() {
-            Tone::Success
-        } else {
-            Tone::Warning
-        };
-        self.notify(tone, scope, settings::saved_notice(saved, warnings));
+        self.notify(
+            Tone::Warning,
+            scope,
+            format!(
+                "{saved}, but not everything took effect. {}",
+                warnings.join(" ")
+            ),
+        );
     }
 
     /// Dismisses the notice with `id`; a newer notice stays.
@@ -133,20 +119,6 @@ impl ManagementState {
     #[must_use]
     pub fn is_busy(&self, operation: UiOperation) -> bool {
         self.busy.contains(&operation)
-    }
-
-    pub fn install_devices(&mut self, devices: Vec<AudioDevice>) {
-        self.devices = devices;
-        self.devices_listed = true;
-    }
-
-    /// Returns whether a download ended, so the models must be read again. A history change
-    /// carries no rows; the window answers it by reading history again.
-    pub fn apply_event(&mut self, event: &EventPayload) -> bool {
-        match event {
-            EventPayload::StateChanged { state } => self.install_snapshot(state),
-            _ => false,
-        }
     }
 
     /// Shows what a clear removed; the window then reads everything again.

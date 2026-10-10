@@ -4,34 +4,34 @@ use whispernow_domain::AppError;
 use whispernow_domain::ipc::{PermissionKind, PermissionsResponse, SetupStateView};
 use whispernow_domain::{SetupCheckpoint, SetupStep};
 
-use super::UiActions;
+use crate::UiContext;
 use crate::client;
 
-use crate::{SetupEdit, UiOperation};
+use crate::{SetupTest, UiOperation};
 
 const PERMISSION_POLL_MS: u32 = 1_000;
 
 pub(crate) const PERMISSION_POLLS: u32 = 120;
 
-impl UiActions {
-    pub(crate) fn move_setup(self, step: SetupStep) {
-        let request = self.management().write().setup_move(step);
+impl UiContext {
+    pub(crate) fn move_setup(mut self, step: SetupStep) {
+        let request = self.management.write().setup_move(step);
         if let Some(request) = request {
             self.save_setup_checkpoint(request);
         }
     }
 
     fn save_setup_checkpoint(self, request: SetupCheckpoint) {
-        self.save_checkpoint(request, |actions, setup| {
-            actions.management().write().finish_setup_checkpoint(setup);
+        self.save_checkpoint(request, |mut actions, setup| {
+            actions.management.write().setup = Some(setup);
         });
     }
 
     pub(crate) fn finish_setup_later(self) {
-        let request = self.management().peek().finish_setup_later_request();
+        let request = self.management.peek().finish_setup_later_request();
         if let Some(request) = request {
-            self.save_checkpoint(request, |actions, setup| {
-                actions.management().write().finish_setup_later(setup);
+            self.save_checkpoint(request, |mut actions, setup| {
+                actions.management.write().finish_setup_later(setup);
             });
         }
     }
@@ -44,7 +44,7 @@ impl UiActions {
         let operation = UiOperation::SaveSetup;
         self.run(
             operation,
-            async move { client::save_setup_checkpoint(&request).await },
+            async move { client::invoke("save_setup_checkpoint", Some(&request)).await },
             move |actions, answer| match answer {
                 Ok(setup) => {
                     finish(actions, setup);
@@ -55,29 +55,27 @@ impl UiActions {
         );
     }
 
-    /// Applies `edit` and saves it at once, so the test dictation uses it.
-    pub(crate) fn save_setup_edit(self, edit: SetupEdit) {
-        self.management().write().edit_setup(edit);
-        let step = self
-            .management()
+    pub(crate) fn save_setup_edit(mut self, edit: impl FnOnce(&mut SetupCheckpoint)) {
+        self.management.write().edit_setup(edit);
+        let request = self
+            .management
             .peek()
             .setup_checkpoint()
-            .map(|checkpoint| checkpoint.step);
-        if let Some(step) = step {
-            self.move_setup(step);
-        }
+            .expect("setup is loaded")
+            .clone();
+        self.save_setup_checkpoint(request);
     }
 
     pub(crate) fn complete_setup(self) {
         let operation = UiOperation::CompleteSetup;
-        let Some(request) = self.management().peek().complete_setup_request() else {
+        let Some(request) = self.management.peek().complete_setup_request() else {
             return;
         };
         self.run(
             operation,
-            async move { client::complete_setup(&request).await },
-            move |actions, answer| match answer {
-                Ok(saved) => actions.management().write().finish_setup(saved),
+            async move { client::invoke("complete_setup", Some(&request)).await },
+            move |mut actions, answer| match answer {
+                Ok(saved) => actions.management.write().finish_setup(saved),
                 Err(error) => actions.report(operation, &error),
             },
         );
@@ -87,9 +85,9 @@ impl UiActions {
         let operation = UiOperation::RestartSetup;
         self.run(
             operation,
-            client::restart_setup(),
-            move |actions, answer| match answer {
-                Ok(setup) => actions.management().write().restart_setup(setup),
+            client::call("restart_setup"),
+            move |mut actions, answer| match answer {
+                Ok(setup) => actions.management.write().restart_setup(setup),
                 Err(error) => actions.report(operation, &error),
             },
         );
@@ -97,7 +95,7 @@ impl UiActions {
 
     pub(crate) fn list_devices_once_allowed(self) {
         let allowed = {
-            let management = self.management();
+            let management = self.management;
             let management = management.peek();
             management.may_list_devices() && !management.devices_listed
         };
@@ -108,14 +106,19 @@ impl UiActions {
 
     pub(super) fn list_devices(self) {
         let operation = UiOperation::ListDevices;
-        if self.management().peek().is_busy(operation) {
+        if self.management.peek().is_busy(operation) {
             return;
         }
         self.run(
             operation,
-            client::list_audio_devices(),
+            client::call("list_audio_devices"),
             move |actions, answer| match answer {
-                Ok(devices) => actions.management().write().install_devices(devices),
+                Ok(devices) => {
+                    let mut management = actions.management;
+                    let mut management = management.write();
+                    management.devices = devices;
+                    management.devices_listed = true;
+                }
                 Err(error) => actions.report(operation, &error),
             },
         );
@@ -125,33 +128,37 @@ impl UiActions {
     /// that fails is followed by the next poll.
     pub(crate) fn load_permissions(self) {
         let operation = UiOperation::LoadPermissions;
-        if self.management().peek().is_busy(operation) {
+        if self.management.peek().is_busy(operation) {
             return;
         }
-        self.run(operation, client::get_permissions(), |actions, answer| {
-            if let Ok(permissions) = answer {
-                actions.install_permissions(permissions);
-            }
-        });
+        self.run(
+            operation,
+            client::call("get_permissions"),
+            |actions, answer| {
+                if let Ok(permissions) = answer {
+                    actions.install_permissions(permissions);
+                }
+            },
+        );
     }
 
     /// Installs the cards; every card granted after a request moves setup on by itself.
-    pub(crate) fn install_permissions(self, permissions: PermissionsResponse) {
-        let request = self.management().write().install_permissions(permissions);
+    pub(crate) fn install_permissions(mut self, permissions: PermissionsResponse) {
+        let request = self.management.write().install_permissions(permissions);
         if let Some(request) = request {
             self.save_setup_checkpoint(request);
         }
     }
 
     /// Asks for `kind`, then watches the cards until none can change any more.
-    pub(crate) fn request_permission(self, kind: PermissionKind) {
+    pub(crate) fn request_permission(mut self, kind: PermissionKind) {
         let operation = UiOperation::RequestPermission;
-        self.management().write().requested_permission = Some(kind);
+        self.management.write().requested_permission = Some(kind);
         self.run(
             operation,
-            async move { client::request_permission(&kind).await },
-            move |actions, answer| {
-                actions.management().write().requested_permission = None;
+            async move { client::invoke("request_permission", Some(&kind)).await },
+            move |mut actions, answer| {
+                actions.management.write().requested_permission = None;
                 match answer {
                     Ok(permissions) => actions.install_permissions(permissions),
                     Err(error) => actions.report(operation, &error),
@@ -166,7 +173,7 @@ impl UiActions {
         let operation = UiOperation::OpenPermissionSettings;
         self.run(
             operation,
-            async move { client::open_permission_settings(&kind).await },
+            async move { client::invoke::<_, ()>("open_permission_settings", Some(&kind)).await },
             move |actions, answer| {
                 if let Err(error) = answer {
                     actions.report(operation, &error);
@@ -179,7 +186,7 @@ impl UiActions {
     /// Reads the cards about every [`PERMISSION_POLL_MS`] until a read finds none can change
     /// any more, for at most [`PERMISSION_POLLS`] reads; a hidden window reads nothing. A new
     /// watch replaces the last one.
-    fn watch_permissions(self) {
+    fn watch_permissions(mut self) {
         let watch = spawn_forever(async move {
             for _ in 0..PERMISSION_POLLS {
                 client::delay(PERMISSION_POLL_MS).await;
@@ -187,9 +194,9 @@ impl UiActions {
                     self.load_permissions();
                 }
             }
-            self.management().write().permission_watch = None;
+            self.management.write().permission_watch = None;
         });
-        let previous = self.management().write().permission_watch.replace(watch);
+        let previous = self.management.write().permission_watch.replace(watch);
         if let Some(previous) = previous {
             previous.cancel();
         }
@@ -197,11 +204,11 @@ impl UiActions {
 
     /// Starts setup's test dictation; the overlay's stop, a shortcut or [`Self::stop_setup_test`]
     /// ends it. The test's own result line explains why it did not run or finish.
-    pub(crate) fn start_setup_test(self) {
-        self.management().write().begin_setup_test();
+    pub(crate) fn start_setup_test(mut self) {
+        self.management.write().setup_test = Some(SetupTest::Running { active: false });
         self.run(
             UiOperation::StartSetupTest,
-            client::start_test_dictation(),
+            client::call("start_test_dictation"),
             Self::fail_setup_test,
         );
     }
@@ -209,14 +216,14 @@ impl UiActions {
     pub(crate) fn stop_setup_test(self) {
         self.run(
             UiOperation::StopSetupTest,
-            client::stop_recording(),
+            client::call("stop_recording"),
             Self::fail_setup_test,
         );
     }
 
-    fn fail_setup_test(self, answer: Result<(), AppError>) {
+    fn fail_setup_test(mut self, answer: Result<(), AppError>) {
         if let Err(error) = answer {
-            self.management().write().fail_setup_test(&error);
+            self.management.write().fail_setup_test(&error);
         }
     }
 }

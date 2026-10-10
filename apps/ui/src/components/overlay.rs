@@ -1,9 +1,8 @@
 use dioxus::prelude::*;
-use whispernow_domain::RecordingMode;
+use whispernow_domain::ipc::{Phase, RecordingTrigger};
 
-use super::actions::UiActions;
 use super::ui::{Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
-use crate::overlay::{LEVEL_BARS, OverlayPhase, format_elapsed};
+use crate::overlay::{LEVEL_BARS, OverlayAction, format_elapsed};
 use crate::{OverlayView, UiContext, UiOperation};
 
 /// Meter geometry in SVG units; bars are attributes because the CSP forbids inline styles.
@@ -13,29 +12,6 @@ const METER_HEIGHT: f32 = 20.0;
 #[allow(clippy::cast_precision_loss, reason = "LEVEL_BARS is small")]
 const METER_WIDTH: f32 = LEVEL_BARS as f32 * BAR_WIDTH + (LEVEL_BARS - 1) as f32 * BAR_GAP;
 const MIN_BAR_HEIGHT: f32 = 3.0;
-
-/// The status line, which is also what the polite live region announces.
-fn status_label(phase: &OverlayPhase) -> &str {
-    match phase {
-        OverlayPhase::Hidden => "",
-        OverlayPhase::Starting => "Starting…",
-        OverlayPhase::Listening { .. } => "Listening",
-        OverlayPhase::Transcribing => "Transcribing…",
-        OverlayPhase::CleaningUp => "Cleaning up…",
-        OverlayPhase::Failed { message, .. } => message,
-    }
-}
-
-const fn phase_class(phase: &OverlayPhase) -> &'static str {
-    match phase {
-        OverlayPhase::Hidden => "overlay-idle",
-        OverlayPhase::Starting => "overlay-starting",
-        OverlayPhase::Listening { .. } => "overlay-listening",
-        OverlayPhase::Transcribing => "overlay-transcribing",
-        OverlayPhase::CleaningUp => "overlay-cleaning-up",
-        OverlayPhase::Failed { .. } => "overlay-failed",
-    }
-}
 
 #[derive(Clone, Copy)]
 struct MeterBar {
@@ -68,11 +44,34 @@ pub fn RecordingBar() -> Element {
     let context = use_context::<UiContext>();
     let state = context.state.read();
     let view = &state.overlay;
-    let phase = view.presented_phase();
+    let phase = state
+        .snapshot
+        .as_ref()
+        .map_or(&Phase::Idle, |snapshot| &snapshot.phase);
+    let (phase_class, label, mode, action) = match phase {
+        Phase::Recording { trigger, .. } if view.levels_seen => {
+            ("overlay-listening", "Listening", Some(*trigger), None)
+        }
+        Phase::Recording { .. } => ("overlay-starting", "Starting…", None, None),
+        Phase::Processing { cleaning_up: false } => {
+            ("overlay-transcribing", "Transcribing…", None, None)
+        }
+        Phase::Processing { cleaning_up: true } => {
+            ("overlay-cleaning-up", "Cleaning up…", None, None)
+        }
+        Phase::Error { error } => (
+            "overlay-failed",
+            error.summary.as_str(),
+            None,
+            crate::home_status::category_fix(error.category)
+                .map(|(label, route)| OverlayAction { label, route }),
+        ),
+        Phase::Idle | Phase::Paused | Phase::Updating => ("overlay-idle", "", None, None),
+    };
     let status = view
         .action_error
         .clone()
-        .unwrap_or_else(|| status_label(&phase).to_owned());
+        .unwrap_or_else(|| label.to_owned());
     let elapsed = format_elapsed(view.elapsed_ms);
     let bars = meter_bars(view);
     let arming = if view.levels_seen {
@@ -80,28 +79,13 @@ pub fn RecordingBar() -> Element {
     } else {
         "overlay-bars-arming"
     };
+    let capturing = matches!(phase, Phase::Recording { .. });
+    let in_flight = phase.is_busy();
+    let failed = matches!(phase, Phase::Error { .. });
+    let visible = in_flight || failed;
     drop(state);
 
-    let in_flight = matches!(
-        phase,
-        OverlayPhase::Starting
-            | OverlayPhase::Listening { .. }
-            | OverlayPhase::Transcribing
-            | OverlayPhase::CleaningUp
-    );
-    let capturing = matches!(
-        phase,
-        OverlayPhase::Starting | OverlayPhase::Listening { .. }
-    );
-    let mode = match phase {
-        OverlayPhase::Listening { mode } => Some(mode),
-        _ => None,
-    };
-    let action = match phase {
-        OverlayPhase::Failed { action, .. } => action,
-        _ => None,
-    };
-    let actions = UiActions::new(context);
+    let actions = context;
     let blocked = |operation| actions.blocked(operation).is_some();
     let stop_blocked = blocked(UiOperation::StopRecording);
     let close_blocked = if in_flight {
@@ -118,19 +102,16 @@ pub fn RecordingBar() -> Element {
 
     rsx! {
         main { class: "wn-app overlay",
-            section { class: "overlay-pill {phase_class(&phase)}", aria_label: "Dictation",
+            section { class: "overlay-pill {phase_class}", aria_label: "Dictation",
                 div { class: "overlay-row",
                     span { class: "overlay-indicator", aria_hidden: "true",
-                        {match &phase {
-                            OverlayPhase::Hidden => rsx! {},
-                            OverlayPhase::Starting | OverlayPhase::Listening { .. } => rsx! {
-                                span { class: "overlay-dot" }
-                            },
-                            OverlayPhase::Transcribing | OverlayPhase::CleaningUp => rsx! {
-                                span { class: "overlay-spinner" }
-                            },
-                            OverlayPhase::Failed { .. } => rsx! { Icon { name: IconName::AlertCircle } },
-                        }}
+                        if capturing {
+                            span { class: "overlay-dot" }
+                        } else if in_flight {
+                            span { class: "overlay-spinner" }
+                        } else if failed {
+                            Icon { name: IconName::AlertCircle }
+                        }
                     }
                     // The one live region: it changes only with the phase, so each outcome is
                     // announced once while the meter and timer update silently.
@@ -152,7 +133,7 @@ pub fn RecordingBar() -> Element {
                             "{elapsed}"
                         }
                     }
-                    if phase != OverlayPhase::Hidden {
+                    if visible {
                         div { class: "overlay-actions",
                             if let Some(action) = action {
                                 Button { id: "overlay-action", variant: ButtonVariant::Secondary,
@@ -161,7 +142,7 @@ pub fn RecordingBar() -> Element {
                                     "{action.label}"
                                 }
                             }
-                            if mode == Some(RecordingMode::Toggle) {
+                            if matches!(mode, Some(RecordingTrigger::Toggle | RecordingTrigger::SetupTest)) {
                                 IconButton { id: "overlay-stop", icon: IconName::Stop,
                                     label: "Stop and transcribe", size: ButtonSize::Sm,
                                     disabled: stop_blocked,

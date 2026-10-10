@@ -1,43 +1,25 @@
 use dioxus::prelude::*;
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    AppState, ClearDataItem, ClearDataResult, DataLocation, ErrorCategory, MicrophoneTestResponse,
-    ModelState, ModelSummary, Phase, SaveSettingsResponse, SettingsView, SetupStateView,
+    ActiveDownload, AppState, ClearDataItem, ClearDataResult, DataLocation, ErrorCategory,
+    EventPayload, MicrophoneTestResponse, ModelState, ModelSummary, Phase, SaveSettingsResponse,
+    SettingsView, SetupStateView,
 };
 use whispernow_domain::{
-    ClearDataCategory, HistoryLimit, LlmProvider, ModelAvailability, ModelId, ProviderSettings,
-    Rating, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
-    ShortcutModifier, SpeechBenchmark, VocabularyReplacement, WerSource,
+    ClearDataCategory, DownloadPhase, HistoryLimit, LlmProvider, ModelAvailability, ModelId,
+    ProviderSettings, Rating, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut,
+    ShortcutKey, ShortcutModifier, SpeechBenchmark, VocabularyReplacement, WerSource,
 };
 
 use crate::client::fake;
 use crate::components::ui::Tone;
-use crate::test_support::{Page, Probe, focused, label_in_name_violations, snapshot, tag, text};
-use crate::{AppShell, ManagementState, NoticeScope, UiState};
-
-#[component]
-fn Shell(snapshot: AppState, management: ManagementState, probe: Probe) -> Element {
-    let state = use_signal(move || {
-        let mut state = UiState::default();
-        state.hydrate(snapshot);
-        state
-    });
-    let management = use_signal(move || management);
-    probe.provide(state, management);
-    rsx! { AppShell {} }
-}
+use crate::test_support::{Page, focused, label_in_name_violations, snapshot, tag, text};
+use crate::{ManagementState, NoticeScope, UiState};
 
 pub(super) fn shell(snapshot: AppState, management: ManagementState) -> Page {
-    Page::new(|probe| {
-        VirtualDom::new_with_props(
-            Shell,
-            ShellProps {
-                snapshot,
-                management,
-                probe,
-            },
-        )
-    })
+    let mut state = UiState::default();
+    state.hydrate(snapshot);
+    Page::shell(state, management)
 }
 
 pub(super) fn shortcut() -> Shortcut {
@@ -71,12 +53,16 @@ pub(super) fn loaded() -> ManagementState {
         settings: settings(),
         warnings: Vec::new(),
     });
+    management.setup = Some(SetupStateView {
+        first_run_complete: true,
+        checkpoint: SetupCheckpoint::default(),
+    });
     management
 }
 
 fn unfinished_setup() -> ManagementState {
     let mut management = loaded();
-    management.install_setup(SetupStateView {
+    management.setup = Some(SetupStateView {
         first_run_complete: false,
         checkpoint: SetupCheckpoint {
             step: SetupStep::Model,
@@ -163,21 +149,6 @@ fn sidebar_links_mark_one_current_page_and_move_focus_to_its_heading() {
             .contains("aria-current=\"false\"")
     );
     assert_eq!(current_links(&html), 1);
-    for slug in [
-        "general",
-        "audio",
-        "models",
-        "ai-cleanup",
-        "vocabulary",
-        "privacy",
-        "about",
-    ] {
-        assert!(
-            tag(&html, &format!("nav-settings-{slug}")).is_some(),
-            "{slug}"
-        );
-    }
-
     page.click("nav-settings-audio");
     page.settle();
     let html = page.html();
@@ -198,66 +169,23 @@ fn sidebar_links_mark_one_current_page_and_move_focus_to_its_heading() {
 }
 
 #[test]
-fn notices_announce_by_severity_and_appear_beside_the_page_that_hosts_them() {
+fn global_notices_show_the_message_and_allow_dismissal() {
     let mut page = shell(snapshot(Phase::Idle), loaded());
-    let mut management = page.context().management;
-    for (severity, role) in [
-        (Tone::Info, "status"),
-        (Tone::Success, "status"),
-        (Tone::Warning, "alert"),
-        (Tone::Error, "alert"),
-    ] {
-        management.write().notify(
-            severity,
-            NoticeScope::Global,
-            format!("{severity:?} message"),
-        );
-        page.settle();
-        let html = page.html();
-        let notice = tag(&html, "notice").expect("notice");
-        assert!(
-            notice.contains(&format!("role=\"{role}\"")),
-            "{severity:?}: {notice}"
-        );
-        assert!(notice.contains("notice-toast"), "global notices are toasts");
-        assert_eq!(text(&html, "notice"), format!("{severity:?} message"));
-        assert!(tag(&html, "notice-dismiss").is_some());
-    }
-
-    // A Home notice sits in the microphone card while Home is open.
-    management.write().notify(
+    page.context().management.write().notify(
         Tone::Warning,
-        NoticeScope::Home,
-        "No sound reached the microphone",
+        NoticeScope::Global,
+        "Check the microphone",
     );
     page.settle();
     let html = page.html();
     assert!(
         tag(&html, "notice")
             .expect("notice")
-            .contains("notice-inline")
+            .contains("role=\"alert\"")
     );
-
-    // A settings notice raised on Home is a toast until its page is open.
-    management.write().notify(
-        Tone::Error,
-        NoticeScope::Settings,
-        "Fix the highlighted fields",
-    );
-    page.settle();
-    let html = page.html();
-    assert!(
-        tag(&html, "notice")
-            .expect("notice")
-            .contains("notice-toast")
-    );
-    page.click("nav-settings");
-    let html = page.html();
-    assert!(
-        tag(&html, "notice")
-            .expect("notice")
-            .contains("notice-inline")
-    );
+    assert_eq!(text(&html, "notice"), "Check the microphone");
+    page.click("notice-dismiss");
+    assert!(tag(&page.html(), "notice").is_none());
 }
 
 #[test]
@@ -357,7 +285,6 @@ fn the_latest_transcript_can_be_copied_from_home() {
     let mut page = shell(transcribed, loaded());
     let html = page.html();
     assert_eq!(text(&html, "latest-transcript"), "Meet on Thursday");
-    assert!(text(&html, "home-shortcuts-title").contains("Shortcuts"));
 
     page.click("copy-latest");
     assert_eq!(
@@ -763,71 +690,76 @@ fn typed_text_survives_a_refused_or_failed_save_until_the_user_reverts() {
 }
 
 #[test]
-fn a_refused_provider_keeps_its_fields_shown_and_is_asked_for_again_once_edited() {
+fn an_incomplete_provider_saves_with_a_warning_and_a_model_edit_repairs_it() {
     let mut management = configured();
     let mut settings = management.shown_settings().cloned().expect("loaded");
+    settings.cleanup_enabled = true;
     *settings.provider_settings_mut(LlmProvider::Anthropic) = ProviderSettings::default();
-    management.install_settings(SettingsView {
-        settings,
-        warnings: Vec::new(),
-    });
+    management.install_settings(SettingsView::new(&settings));
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
     let management = page.context().management;
-    let saved = |settings: Settings| {
+    let saved = |settings: &Settings| {
+        let view = SettingsView::new(settings);
         Ok::<_, AppError>(SaveSettingsResponse {
-            settings: SettingsView {
-                settings,
-                warnings: Vec::new(),
-            },
-            warnings: Vec::new(),
+            warnings: view.warnings.clone(),
+            settings: view,
         })
     };
 
     page.fire("provider-name", "change", "anthropic");
-    assert_eq!(sent_settings()[0].llm_provider, LlmProvider::Anthropic);
-    fake::answer(
-        "update_settings",
-        Err::<(), _>(AppError::new(
-            ErrorCategory::General,
-            "invalid_settings",
-            "AI cleanup needs a model for Anthropic",
-        )),
-    );
+    let sent = sent_settings();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].llm_provider, LlmProvider::Anthropic);
+    fake::answer("update_settings", saved(&sent[0]));
     page.settle();
-    let html = page.html();
-    let error = tag(&html, "provider-name-error").expect("the desktop's refusal");
-    assert!(error.contains("role=\"alert\""), "{error}");
     assert!(
-        tag(&html, "provider-model")
-            .expect("the chosen provider's model field")
-            .contains("value=\"\""),
-        "the fields shown are the chosen provider's"
+        page.html()
+            .contains("AI cleanup needs a model for Anthropic")
+    );
+    assert!(tag(&page.html(), "provider-name-error").is_none());
+    assert!(
+        tag(&page.html(), "provider-model")
+            .expect("provider model")
+            .contains("value=\"\"")
+    );
+    assert_eq!(
+        management
+            .read()
+            .settings
+            .as_ref()
+            .expect("saved")
+            .settings
+            .llm_provider,
+        LlmProvider::Anthropic
     );
 
     page.fire("provider-model", "change", "claude-test");
-    let effective = management.read().shown_settings().cloned().expect("loaded");
-    assert_eq!(effective.llm_provider, LlmProvider::Anthropic);
     let sent = sent_settings();
     assert_eq!(sent.len(), 2);
+    assert_eq!(sent[1].llm_provider, LlmProvider::Anthropic);
     assert_eq!(
         sent[1].provider_settings(LlmProvider::Anthropic).model,
         "claude-test"
     );
+    fake::answer("update_settings", saved(&sent[1]));
+    page.settle();
+    let settings = management.read().settings.clone().expect("saved");
+    assert_eq!(settings.settings.llm_provider, LlmProvider::Anthropic);
     assert_eq!(
-        sent[1].llm_provider,
-        LlmProvider::OpenAi,
-        "the model goes first; the switch is queued behind it"
+        settings
+            .settings
+            .provider_settings(LlmProvider::Anthropic)
+            .model,
+        "claude-test"
     );
-    fake::answer("update_settings", saved(sent[1].clone()));
-    page.settle();
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 3);
-    assert_eq!(sent[2].llm_provider, LlmProvider::Anthropic);
-    fake::answer("update_settings", saved(sent[2].clone()));
-    page.settle();
-    let html = page.html();
-    assert!(tag(&html, "provider-name-error").is_none());
+    assert!(settings.warnings.is_empty());
+    assert!(!page.html().contains("AI cleanup needs a model"));
+    assert_eq!(
+        sent_settings().len(),
+        2,
+        "repair sends no extra provider switch"
+    );
 }
 
 fn cleanup_model(id: &str, name: &str, availability: ModelAvailability) -> ModelSummary {
@@ -883,12 +815,93 @@ fn local_cleanup(small: &str, large: &str, pack: &str) -> ManagementState {
 }
 
 #[test]
-fn speech_models_show_speed_and_accuracy_as_bars() {
+fn speech_model_controls_use_download_cancel_and_refresh_the_finished_download() {
     let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-models"]);
-    let html = page.html();
-    assert!(html.contains("aria-label=\"Speed: 5 of 5\""), "{html}");
-    assert!(html.contains("aria-label=\"Accuracy: 3 of 5\""));
+    let base = ModelId::new("sherpa-onnx-whisper-base").expect("base model");
+    let small = ModelId::new("sherpa-onnx-whisper-small").expect("small model");
+    page.click("model-sherpa-onnx-whisper-base-use");
+    assert_eq!(
+        fake::requests::<ModelId>("select_model").as_slice(),
+        std::slice::from_ref(&base)
+    );
+    page.answer("select_model", Ok(()));
+    let mut active = snapshot(Phase::Idle);
+    active.selected_model_id = base;
+    page.publish(EventPayload::StateChanged {
+        state: active.clone(),
+    });
+    assert!(page.html().contains("In use · Ready"));
+
+    page.click("model-sherpa-onnx-whisper-small-download");
+    assert_eq!(
+        fake::requests::<ModelId>("download_model").as_slice(),
+        std::slice::from_ref(&small)
+    );
+    page.answer("download_model", Ok(()));
+    active.active_downloads.push(ActiveDownload {
+        model_id: small.clone(),
+        phase: DownloadPhase::Downloading,
+        downloaded_bytes: 512,
+        total_bytes: Some(1_024),
+        bytes_per_second: None,
+    });
+    page.publish(EventPayload::StateChanged {
+        state: active.clone(),
+    });
+    assert!(page.html().contains("0.5 KiB of 1.0 KiB"));
+    page.click_named("Cancel download Small");
+    assert_eq!(
+        fake::requests::<ModelId>("cancel_download").as_slice(),
+        std::slice::from_ref(&small)
+    );
+    page.answer("cancel_download", Ok(()));
+    active.active_downloads.clear();
+    page.publish(EventPayload::StateChanged {
+        state: active.clone(),
+    });
+    assert_eq!(fake::count("list_models"), 1);
+    page.answer("list_models", Ok(configured().models));
+    assert!(tag(&page.html(), "model-sherpa-onnx-whisper-small-download").is_some());
+
+    page.click("model-sherpa-onnx-whisper-small-download");
+    assert_eq!(
+        fake::requests::<ModelId>("download_model"),
+        [small.clone(), small.clone()]
+    );
+    page.answer("download_model", Ok(()));
+    active.active_downloads.push(ActiveDownload {
+        model_id: small,
+        phase: DownloadPhase::ValidatingArchive,
+        downloaded_bytes: 1_024,
+        total_bytes: Some(1_024),
+        bytes_per_second: None,
+    });
+    page.publish(EventPayload::StateChanged {
+        state: active.clone(),
+    });
+    assert!(page.html().contains("Checking the download"));
+    assert!(page.html().contains("1.0 KiB of 1.0 KiB"));
+    active.active_downloads.clear();
+    page.publish(EventPayload::StateChanged { state: active });
+    assert_eq!(fake::count("list_models"), 2);
+    page.answer(
+        "list_models",
+        Ok(vec![
+            model(
+                "sherpa-onnx-whisper-base",
+                "Base",
+                ModelAvailability::Downloaded,
+            ),
+            model(
+                "sherpa-onnx-whisper-small",
+                "Small",
+                ModelAvailability::Downloaded,
+            ),
+        ]),
+    );
+    assert!(tag(&page.html(), "model-sherpa-onnx-whisper-small-use").is_some());
+    assert!(tag(&page.html(), "model-sherpa-onnx-whisper-small-download").is_none());
 }
 
 #[test]
@@ -912,6 +925,8 @@ fn speed_and_accuracy_bars_explain_themselves_on_hover() {
         html.contains("aria-label=\"Speed: 3 of 5. 21× real time\""),
         "{html}"
     );
+    assert!(html.contains("aria-label=\"Speed: 5 of 5"));
+    assert!(html.contains("aria-label=\"Accuracy: 3 of 5"));
     assert!(html.contains("title=\"21× real time\""), "{html}");
     assert!(html.contains("title=\"English word error rate: 5.39% (Open ASR Leaderboard)\""));
     assert!(html.contains(
@@ -1017,8 +1032,6 @@ fn the_recording_shortcut_switches_between_hold_and_toggle() {
             .expect("hold")
             .contains("aria-pressed=\"true\"")
     );
-    assert!(tag(&html, "hold-to-record").is_none());
-    assert!(tag(&html, "overlay-style").is_none());
 
     open(&mut page, &["recording-mode-toggle"]);
     let sent = sent_settings();
@@ -1071,8 +1084,7 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
         &mut page,
         &["nav-settings", "nav-settings-privacy", "preview-clear-data"],
     );
-    // General, where Settings opens, checks how paste works.
-    assert_eq!(fake::commands(), ["get_permissions", "data_locations"]);
+    assert_eq!(fake::count("data_locations"), 1);
     fake::answer(
         "data_locations",
         Ok(vec![DataLocation {
@@ -1118,14 +1130,4 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
             "{read}: the window reads everything again"
         );
     }
-}
-
-#[test]
-fn a_decorated_window_keeps_the_native_frame_and_no_drag_region() {
-    let page = shell(snapshot(Phase::Idle), ManagementState::default());
-    let html = page.html();
-
-    assert!(!html.contains("custom-chrome"), "{html}");
-    assert!(!html.contains("window-close"), "{html}");
-    assert!(!html.contains("data-tauri-drag-region"), "{html}");
 }

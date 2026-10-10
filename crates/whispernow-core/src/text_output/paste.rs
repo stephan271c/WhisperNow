@@ -376,15 +376,18 @@ mod tests {
     }
 
     #[test]
-    fn a_snapshot_error_still_pastes_and_leaves_the_transcript() {
-        let mut desktop = FakeDesktop {
-            snapshot_fails: true,
-            ..FakeDesktop::holding(Some("previous"))
-        };
-
-        assert_eq!(run(&mut desktop), PasteOutcome::PastedWithoutRestore);
-        assert!(desktop.events().contains(&pasted("transcript")));
-        assert_eq!(desktop.clipboard.as_deref(), Some("transcript"));
+    fn unreadable_or_uncapturable_clipboards_leave_the_transcript() {
+        for mut desktop in [
+            FakeDesktop {
+                snapshot_fails: true,
+                ..FakeDesktop::holding(Some("previous"))
+            },
+            FakeDesktop::holding(None),
+        ] {
+            assert_eq!(run(&mut desktop), PasteOutcome::PastedWithoutRestore);
+            assert!(desktop.events().contains(&pasted("transcript")));
+            assert_eq!(desktop.clipboard.as_deref(), Some("transcript"));
+        }
     }
 
     #[test]
@@ -446,15 +449,6 @@ mod tests {
             );
             assert_eq!(desktop.clipboard.as_deref(), Some("previous"));
         }
-    }
-
-    #[test]
-    fn nothing_capturable_is_never_cleared_and_reports_no_restore() {
-        let mut desktop = FakeDesktop::holding(None);
-
-        assert_eq!(run(&mut desktop), PasteOutcome::PastedWithoutRestore);
-        assert!(desktop.events().contains(&pasted("transcript")));
-        assert_eq!(desktop.clipboard.as_deref(), Some("transcript"));
     }
 
     #[test]

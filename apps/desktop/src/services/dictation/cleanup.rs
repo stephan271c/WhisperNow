@@ -9,7 +9,7 @@ use whispernow_platform::SettingsStore;
 
 #[derive(Clone)]
 pub(crate) struct CleanupPlan {
-    pub(crate) config: Option<LlmProviderConfig>,
+    pub(crate) config: LlmProviderConfig,
     /// Whether the credential store holds the provider's API key, so it is asked only then.
     pub(crate) key_saved: bool,
 }
@@ -21,8 +21,6 @@ pub(crate) struct AiCleanup {
 }
 
 impl AiCleanup {
-    /// Cleans up `prepared` with `plan`'s provider, and returns the model whose text was
-    /// used. Settings validation gives enabled cleanup a provider.
     pub(super) fn apply(
         &self,
         prepared: &mut PreparedTranscription,
@@ -30,7 +28,7 @@ impl AiCleanup {
         cancellation: &CancellationToken,
     ) -> Option<String> {
         let plan = plan?;
-        let config = plan.config.as_ref()?;
+        let config = &plan.config;
         let started = Instant::now();
         let result = self.run(plan, config, &prepared.deterministic_text, cancellation);
         tracing::info!(

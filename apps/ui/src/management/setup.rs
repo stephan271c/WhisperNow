@@ -32,8 +32,12 @@ fn permissions_settled(permissions: &PermissionsResponse) -> bool {
 }
 
 impl ManagementState {
-    pub fn install_setup(&mut self, setup: SetupStateView) {
-        self.setup = Some(setup);
+    pub fn edit_setup(&mut self, edit: impl FnOnce(&mut SetupCheckpoint)) {
+        let setup = self
+            .setup
+            .as_mut()
+            .expect("setup controls render after loading");
+        edit(&mut setup.checkpoint);
     }
 
     #[must_use]
@@ -61,7 +65,7 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn setup_step_ready(&self) -> bool {
+    pub fn setup_step_ready(&self, model_downloading: bool) -> bool {
         let Some(setup) = self.setup.as_ref() else {
             return false;
         };
@@ -73,7 +77,7 @@ impl ManagementState {
                     == Some(PermissionStatus::Granted)
             }
             // The download carries on in the background while setup moves on.
-            SetupStep::Model => self.setup_model_ready() || self.setup_model_downloading(),
+            SetupStep::Model => self.setup_model_ready() || model_downloading,
             SetupStep::Shortcuts => setup.checkpoint.shortcuts_ready(),
         }
     }
@@ -88,13 +92,6 @@ impl ManagementState {
         })
     }
 
-    #[must_use]
-    pub fn setup_model_downloading(&self) -> bool {
-        self.setup
-            .as_ref()
-            .is_some_and(|setup| self.download(&setup.checkpoint.model_id).is_some())
-    }
-
     /// The saved checkpoint with this window's unsaved choices, for "Finish later".
     #[must_use]
     pub fn finish_setup_later_request(&self) -> Option<SetupCheckpoint> {
@@ -103,7 +100,7 @@ impl ManagementState {
     }
 
     pub fn finish_setup_later(&mut self, response: SetupStateView) {
-        self.finish_setup_checkpoint(response);
+        self.setup = Some(response);
         self.notify(
             Tone::Info,
             NoticeScope::Setup,
@@ -111,19 +108,12 @@ impl ManagementState {
         );
     }
 
-    pub fn finish_setup_checkpoint(&mut self, response: SetupStateView) {
-        self.setup = Some(response);
-    }
-
     /// Installs the fresh checkpoint of setup started again from Settings.
     pub fn restart_setup(&mut self, response: SetupStateView) {
         self.permissions = None;
         self.end_permission_watch();
         self.setup_test = None;
-        if let Some(settings) = &mut self.settings {
-            settings.settings.first_run_complete = response.first_run_complete;
-        }
-        self.finish_setup_checkpoint(response);
+        self.setup = Some(response);
     }
 
     #[must_use]
@@ -194,19 +184,10 @@ impl ManagementState {
         })
     }
 
-    #[must_use]
-    pub fn setup_test_running(&self) -> bool {
-        matches!(self.setup_test, Some(SetupTest::Running { .. }))
-    }
-
-    pub fn begin_setup_test(&mut self) {
-        self.setup_test = Some(SetupTest::Running { active: false });
-    }
-
     /// The test could not start, or its stop failed: the failure is its result, unless a
     /// snapshot already reported how the test ended.
     pub fn fail_setup_test(&mut self, error: &AppError) {
-        if !self.setup_test_running() {
+        if !matches!(self.setup_test, Some(SetupTest::Running { .. })) {
             return;
         }
         self.setup_test = Some(SetupTest::Finished(SetupTestResult::Failed {
@@ -217,7 +198,7 @@ impl ManagementState {
     /// Follows the test dictation through the snapshots: once it has run and the workflow is
     /// idle again, the snapshot's setup-test result is its result, however it was stopped. A
     /// test that ended without one, such as one interrupted by shutdown, reads as cancelled.
-    pub(super) fn observe_setup_test(&mut self, snapshot: &AppState) {
+    pub(crate) fn observe_setup_test(&mut self, snapshot: &AppState) {
         let Some(SetupTest::Running { active }) = &mut self.setup_test else {
             return;
         };

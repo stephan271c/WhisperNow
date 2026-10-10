@@ -1,10 +1,10 @@
+use crate::UiContext;
 use std::collections::BTreeSet;
 
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{PasteHelperSetup, PermissionStatus};
 use whispernow_domain::{Shortcut, ShortcutKey, ShortcutModifier};
 
-use super::actions::use_actions;
 use super::ui::{Banner, Button, Kbd, Tone, shortcut_parts};
 use crate::NoticeScope;
 
@@ -51,7 +51,7 @@ pub(super) fn MicrophonePermissionNotice(status: Option<PermissionStatus>) -> El
 /// set the helper up.
 #[component]
 pub(super) fn PasteHelperNotice(setup: PasteHelperSetup, scope: NoticeScope) -> Element {
-    let actions = use_actions();
+    let actions = use_context::<UiContext>();
     rsx! { div { id: "paste-helper-notice",
         Banner { tone: Tone::Warning, title: "Your desktop shows a remote control indicator",
             p { "WhisperNow's paste helper is not set up, so your desktop presses the paste keys for it and shows its remote control indicator while WhisperNow runs." }

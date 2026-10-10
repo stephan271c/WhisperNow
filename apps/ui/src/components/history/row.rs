@@ -1,10 +1,10 @@
+use crate::UiContext;
 use dioxus::prelude::*;
 use whispernow_domain::{EntryStatus, HistoryEntry};
 
 use super::audio::AudioPlayer;
 use super::format::{LocalClock, duration_label, machine_time};
 use crate::HistoryCopied;
-use crate::components::actions::use_actions;
 use crate::components::ui::{Button, ButtonSize, ButtonVariant, ConfirmButton, Icon, IconName};
 
 /// The marker a row shows; a dictation that was pasted needs none.
@@ -21,10 +21,10 @@ pub(super) const fn status_badge(status: EntryStatus) -> Option<(&'static str, &
 pub(super) fn HistoryRow(
     entry: HistoryEntry,
     copied: Option<HistoryCopied>,
-    delete_blocked: Option<&'static str>,
+    delete_blocked: bool,
     clock: LocalClock,
 ) -> Element {
-    let actions = use_actions();
+    let actions = use_context::<UiContext>();
     let id = entry.id;
     let rid = id.0;
     let text = entry.text().map(str::to_owned);
@@ -70,7 +70,7 @@ pub(super) fn HistoryRow(
                 ConfirmButton { id: "history-delete-{rid}", size: ButtonSize::Sm,
                     label: "Delete", confirm_label: "Delete this dictation",
                     target: target.clone(),
-                    disabled: delete_blocked.is_some(),
+                    disabled: delete_blocked,
                     onconfirm: move |()| actions.delete_history_entry(id),
                 }
             }

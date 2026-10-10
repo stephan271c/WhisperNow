@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use super::{RecordingBar, meter_bars};
 use crate::client::fake;
-use crate::overlay::{OverlayPhase, format_elapsed};
-use crate::test_support::{Page, Probe, focused, snapshot, tag};
+use crate::overlay::format_elapsed;
+use crate::test_support::{Page, Probe, focused, snapshot, tag, text};
 use crate::{AppShell, ManagementState, UiState};
 
 #[component]
@@ -59,7 +59,10 @@ fn failed(category: ErrorCategory) -> Phase {
 
 /// The overlay in `phase`; a recording has delivered samples when `levels`.
 fn state_with(phase: Phase, levels: bool) -> UiState {
-    let mut state = UiState::default();
+    let mut state = UiState {
+        recording_bar: true,
+        ..UiState::default()
+    };
     let recording = matches!(phase, Phase::Recording { .. });
     state.hydrate(snapshot(phase));
     if recording && levels {
@@ -222,10 +225,6 @@ fn each_phase_renders_its_status_and_only_its_own_actions() {
             "{phase:?}"
         );
         assert!(
-            !html.contains(" hidden"),
-            "nothing is hidden from view: {html}"
-        );
-        assert!(
             !html.contains("style="),
             "the CSP forbids inline styles: {html}"
         );
@@ -252,21 +251,28 @@ fn a_failure_is_visible_and_meter_updates_do_not_reannounce_it() {
 }
 
 #[test]
-fn starting_arms_the_meter_until_the_first_samples_arrive() {
+fn the_overlay_becomes_live_when_the_first_samples_arrive() {
     let mut state = state_with(listening(RecordingMode::Toggle), false);
-    assert!(render(state.clone()).contains("overlay-bars-arming"));
-    assert!(!state.overlay.levels_seen);
+    let starting = render(state.clone());
+    assert_eq!(announcement(&starting), "Starting…");
+    assert!(!starting.contains("role=\"timer\""));
+    assert!(tag(&starting, "overlay-stop").is_none());
 
     state.apply_event(level(0.2, 0.4, 33));
-    assert!(state.overlay.levels_seen);
-    assert!(!render(state).contains("overlay-bars-arming"));
+    let live = render(state);
+    assert_eq!(announcement(&live), "Listening");
+    assert!(live.contains("role=\"timer\""));
+    assert!(tag(&live, "overlay-stop").is_some());
 }
 
 #[test]
 fn levels_jump_up_settle_down_and_stay_bounded_only_while_capturing() {
-    let mut state = UiState::default();
+    let mut state = UiState {
+        recording_bar: true,
+        ..UiState::default()
+    };
     state.apply_event(level(1.0, 1.0, 10));
-    assert!(!state.overlay.levels_seen, "no dictation is capturing");
+    assert!(!render(state.clone()).contains("role=\"timer\""));
 
     state.apply_event(phase_event(listening(RecordingMode::Hold)));
     state.apply_event(level(1.0, 1.0, 33));
@@ -334,10 +340,16 @@ fn ordinary_speech_scrolls_in_from_the_right_below_loud_speech() {
 
 #[test]
 fn a_late_hydration_never_replaces_a_newer_phase() {
-    let mut state = UiState::default();
+    let mut state = UiState {
+        recording_bar: true,
+        ..UiState::default()
+    };
     state.apply_event(phase_event(TRANSCRIBING));
     state.hydrate(snapshot(Phase::Idle));
-    assert_eq!(state.overlay.phase, OverlayPhase::Transcribing);
+    assert_eq!(
+        state.snapshot.as_ref().map(|snapshot| &snapshot.phase),
+        Some(&TRANSCRIBING)
+    );
 }
 
 fn mount_bar(state: UiState) -> Page {
@@ -516,30 +528,6 @@ fn a_late_stop_or_cancel_failure_never_replaces_the_published_outcome() {
 }
 
 #[test]
-fn listening_reads_as_starting_until_the_microphone_delivers_samples() {
-    let mut state = UiState::default();
-    state.apply_event(phase_event(listening(RecordingMode::Toggle)));
-    let armed = render(state.clone());
-    assert_eq!(announcement(&armed), "Starting…");
-    assert!(!armed.contains("role=\"timer\""));
-    assert!(tag(&armed, "overlay-stop").is_none());
-    assert_eq!(
-        accessible_name(&armed, "overlay-close").as_deref(),
-        Some("Cancel dictation")
-    );
-
-    state.apply_event(level(0.2, 0.4, 33));
-    let live = render(state);
-    assert_eq!(
-        announcement(&live),
-        announcement(&render(state_in(listening(RecordingMode::Toggle))))
-    );
-    assert_ne!(announcement(&live), "Starting…");
-    assert!(live.contains("role=\"timer\""));
-    assert!(tag(&live, "overlay-stop").is_some());
-}
-
-#[test]
 fn a_failed_overlay_action_is_announced_until_the_next_phase() {
     let mut bar = mount_bar(state_in(failed(ErrorCategory::Output)));
     bar.click("overlay-action");
@@ -610,10 +598,7 @@ fn an_overlay_navigation_request_opens_its_route_and_moves_focus() {
         page.publish(EventPayload::NavigationRequested { section });
         assert!(selected(&page, id), "{section:?}");
         let html = page.html();
-        assert!(
-            html.contains(&format!("id=\"page-heading\" tabindex=\"-1\">{title}</h1>")),
-            "{section:?}: {html}"
-        );
+        assert_eq!(text(&html, "page-heading"), title, "{section:?}");
         assert_eq!(
             focused().as_deref(),
             Some("page-heading"),

@@ -179,21 +179,15 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_output_drafts_the_whole_text() {
+    fn empty_inputs_keep_their_distinct_draft_behavior() {
         let mut aligner = WordAligner::new("  So can you\tsend it ");
         assert_eq!(draft(&mut aligner, ""), "So can you send it");
-    }
 
-    #[test]
-    fn an_empty_text_drafts_nothing() {
         let mut aligner = WordAligner::new(" \n ");
         assert!(aligner.is_empty());
         assert_eq!(draft(&mut aligner, ""), "");
         assert_eq!(draft(&mut aligner, "So"), "");
-    }
 
-    #[test]
-    fn a_whitespace_output_drafts_nothing() {
         let mut aligner = WordAligner::new("So can you send it");
         assert_eq!(draft(&mut aligner, " \n"), "");
     }

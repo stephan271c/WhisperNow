@@ -1,11 +1,9 @@
 use dioxus::prelude::*;
-use whispernow_domain::{ApiKey, LlmProvider, ProviderEndpoint, ProviderSettings, Settings};
+use whispernow_domain::{ApiKey, LlmProvider, ProviderEndpoint, Settings};
 
 use super::NoticeRegion;
-use super::actions::{DisabledReason, UiActions, use_actions};
-use super::configuration::{
-    AutosaveRow, SettingsLoading, choice_value, chosen, use_settings_blocked,
-};
+use super::actions::DisabledReason;
+use super::configuration::{AutosaveRow, SettingsLoading, choice_value, chosen};
 use super::models::{ModelRow, ModelRowKind};
 use super::ui::{
     Button, ButtonSize, ButtonVariant, ConfirmButton, DraftText, Section, Segmented, Select,
@@ -55,59 +53,21 @@ const SOURCES: [(CleanupSource, &str, &str); 3] = [
     (CleanupSource::Api, "api", "API provider"),
 ];
 
-/// Queues `edit`; while the desktop has refused the provider the user chose, asks for it
-/// again, since the edit may have made it usable.
-fn change_then_follow_choice(
-    actions: UiActions,
-    chosen: Signal<Option<LlmProvider>>,
-    key: SettingKey,
-    edit: impl Fn(&mut Settings) + 'static,
-) -> bool {
-    let taken = actions.change_setting(key, edit);
-    if taken && let Some(provider) = *chosen.peek() {
-        choose_provider(actions, provider);
-    }
-    taken
-}
-
-fn choose_provider(actions: UiActions, provider: LlmProvider) -> bool {
-    actions.change_setting(SettingKey::ActiveProvider, move |settings| {
-        settings.llm_provider = provider;
-    })
-}
-
-/// Picking a source or provider shows its fields. While AI cleanup is on, the desktop refuses a
-/// provider without a model (or a custom provider without an endpoint): the refusal says what
-/// is missing, and the switch is asked for again once the fields below change or AI cleanup is
-/// turned off.
 #[component]
 pub(super) fn AiCleanupPage() -> Element {
-    let actions = use_actions();
-    let settings_blocked = use_settings_blocked();
+    let actions = use_context::<UiContext>();
+    let settings_blocked = actions.phase_blocked();
     let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let Some(settings) = management.read().shown_settings().cloned() else {
         return rsx! { SettingsLoading {} };
     };
-    // The provider the user picked last, shown below even while the desktop refuses it.
-    let mut chosen_provider = use_signal(|| None::<LlmProvider>);
-    let saved = management
-        .read()
-        .settings
-        .as_ref()
-        .map(|view| view.settings.llm_provider);
-    // Once the desktop has saved the chosen provider, nothing is waiting any more.
-    use_effect(use_reactive!(|saved| {
-        if saved.is_some() && *chosen_provider.peek() == saved {
-            chosen_provider.set(None);
-        }
-    }));
-    let provider = chosen_provider().unwrap_or(settings.llm_provider);
+    let provider = settings.llm_provider;
     let source = CleanupSource::of(provider);
-    let mut pick = move |provider: LlmProvider| {
-        // The choice stays shown, so a refused provider's fields can be filled in.
-        chosen_provider.set((saved != Some(provider)).then_some(provider));
-        choose_provider(actions, provider);
+    let pick = move |provider: LlmProvider| {
+        actions.change_setting(SettingKey::ActiveProvider, move |settings| {
+            settings.llm_provider = provider;
+        });
     };
     rsx! { div { class: "settings-stack",
         DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
@@ -119,7 +79,7 @@ pub(super) fn AiCleanupPage() -> Element {
                 Toggle { checked: settings.cleanup_enabled,
                     disabled,
                     onchange: move |enabled: bool| {
-                        change_then_follow_choice(actions, chosen_provider, SettingKey::CleanupEnabled, move |settings| {
+                        actions.change_setting(SettingKey::CleanupEnabled, move |settings| {
                             settings.cleanup_enabled = enabled;
                         });
                     }
@@ -147,7 +107,7 @@ pub(super) fn AiCleanupPage() -> Element {
                 }
             }
             if source != CleanupSource::WhisperNow {
-                ProviderRows { settings: settings.clone(), provider, chosen: chosen_provider, disabled }
+                ProviderRows { settings: settings.clone(), provider, disabled }
             }
         }
         if source == CleanupSource::WhisperNow {
@@ -157,22 +117,12 @@ pub(super) fn AiCleanupPage() -> Element {
 }
 
 #[component]
-fn ProviderRows(
-    settings: Settings,
-    provider: LlmProvider,
-    chosen: Signal<Option<LlmProvider>>,
-    disabled: bool,
-) -> Element {
-    let actions = use_actions();
+fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> Element {
+    let actions = use_context::<UiContext>();
     let mut management = use_context::<UiContext>().management;
     let credential_blocked = actions.blocked(UiOperation::CredentialMutation);
     let mut credential = use_signal(String::new);
     let mut new_model = use_signal(String::new);
-    let change = move |key: SettingKey, edit: Box<dyn Fn(&mut ProviderSettings)>| {
-        change_then_follow_choice(actions, chosen, key, move |settings| {
-            edit(settings.provider_settings_mut(provider));
-        })
-    };
     let provider_settings = settings.provider_settings(provider);
     let key_saved = management
         .read()
@@ -185,7 +135,8 @@ fn ProviderRows(
                 disabled,
                 oncommit: move |model: String| {
                     let model = model.trim().to_owned();
-                    change(SettingKey::ProviderModel, Box::new(move |settings| settings.model.clone_from(&model)))
+                    actions.change_setting(SettingKey::ProviderModel, move |settings| settings.provider_settings_mut(provider).model.clone_from(&model));
+                    true
                 },
             }
         }
@@ -200,7 +151,7 @@ fn ProviderRows(
                                     disabled: disabled || saved == provider_settings.model,
                                     onclick: { let model = saved.clone(); move |_| {
                                         let model = model.clone();
-                                        change(SettingKey::ProviderModel, Box::new(move |settings| settings.model.clone_from(&model)));
+                                        actions.change_setting(SettingKey::ProviderModel, move |settings| settings.provider_settings_mut(provider).model.clone_from(&model));
                                     } },
                                     "Use"
                                 }
@@ -222,12 +173,13 @@ fn ProviderRows(
                     onsubmit: move |event: FormEvent| {
                         event.prevent_default();
                         let model = new_model().trim().to_owned();
-                        if !model.is_empty() && actions.change_setting(SettingKey::ProviderModel, move |settings| {
+                        if !model.is_empty() {
+                            actions.change_setting(SettingKey::ProviderModel, move |settings| {
                             let saved = &mut settings.provider_settings_mut(provider).saved_models;
                             if !saved.contains(&model) {
                                 saved.push(model.clone());
                             }
-                        }) {
+                        });
                             new_model.set(String::new());
                         }
                     },
@@ -246,7 +198,10 @@ fn ProviderRows(
                 oncommit: move |value: String| {
                     let value = value.trim();
                     match (!value.is_empty()).then(|| ProviderEndpoint::parse(value)).transpose() {
-                        Ok(api_base) => change(SettingKey::ProviderApiBase, Box::new(move |settings| settings.api_base.clone_from(&api_base))),
+                        Ok(api_base) => {
+                            actions.change_setting(SettingKey::ProviderApiBase, move |settings| settings.provider_settings_mut(provider).api_base = api_base);
+                            true
+                        },
                         Err(error) => {
                             management.write().reject_setting(SettingKey::ProviderApiBase, error.to_string());
                             false
@@ -292,7 +247,7 @@ fn ProviderRows(
 /// up on NVIDIA graphics cards.
 #[component]
 fn CleanupModels(chosen_model: String, disabled: bool) -> Element {
-    let actions = use_actions();
+    let actions = use_context::<UiContext>();
     let management = use_context::<UiContext>().management;
     let models = management
         .read()

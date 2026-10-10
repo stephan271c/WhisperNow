@@ -15,11 +15,6 @@ pub enum SettingsError {
     ModelName { provider: LlmProvider },
     #[error("Enter the text to replace")]
     VocabularySource,
-    #[error("AI cleanup needs {missing} for {provider}; enter one, or turn AI cleanup off", provider = .provider.label())]
-    CleanupProvider {
-        provider: LlmProvider,
-        missing: &'static str,
-    },
 }
 
 impl Settings {
@@ -49,12 +44,6 @@ impl Settings {
         {
             problems.push(SettingsError::VocabularySource);
         }
-        if let Some(missing) = self.cleanup_provider_missing() {
-            problems.push(SettingsError::CleanupProvider {
-                provider: self.llm_provider,
-                missing,
-            });
-        }
         problems
     }
 
@@ -81,22 +70,22 @@ impl Settings {
     }
 
     #[must_use]
-    fn cleanup_provider_missing(&self) -> Option<&'static str> {
-        if !self.cleanup_enabled {
-            return None;
-        }
-        // The local cleanup model runs in process: it needs no model name or endpoint.
-        if self.llm_provider == LlmProvider::LocalCleanup {
+    pub fn cleanup_warning(&self) -> Option<String> {
+        if !self.cleanup_enabled || self.llm_provider == LlmProvider::LocalCleanup {
             return None;
         }
         let provider = self.provider_settings(self.llm_provider);
-        if provider.model.trim().is_empty() {
-            Some("a model")
+        let missing = if self.llm_provider.request_model(&provider.model).is_empty() {
+            "a model"
         } else if self.llm_provider == LlmProvider::Custom && provider.api_base.is_none() {
-            Some("an API endpoint")
+            "an API endpoint"
         } else {
-            None
-        }
+            return None;
+        };
+        Some(format!(
+            "AI cleanup needs {missing} for {}; the plain transcript will be pasted until you enter one.",
+            self.llm_provider.label()
+        ))
     }
 }
 

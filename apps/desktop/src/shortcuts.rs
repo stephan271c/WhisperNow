@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     sync::{
-        Arc, Mutex, MutexGuard, PoisonError,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -233,10 +233,8 @@ impl ShortcutCoordinator {
         coordinator
     }
 
-    /// Serializes native work. The guarded registrations are rebuilt by every sync, so a panic
-    /// in an earlier registrar call does not disable later native work.
     fn native(&self) -> MutexGuard<'_, Native> {
-        self.native.lock().unwrap_or_else(PoisonError::into_inner)
+        self.native.lock().expect("native shortcut lock poisoned")
     }
 
     fn pressed(&self) -> MutexGuard<'_, HashSet<ShortcutId>> {
@@ -334,9 +332,7 @@ impl ShortcutCoordinator {
         {
             tracing::warn!(?error, "a shortcut could not be unregistered at shutdown");
         }
-        native
-            .cancel
-            .sync(self.registrar.as_ref(), false, &HashSet::new());
+        native.cancel.sync(self.registrar.as_ref(), false, None);
         *self.published() = Published::default();
         self.pressed().clear();
         self.registrar.shutdown();
@@ -454,16 +450,16 @@ impl ShortcutCoordinator {
             && !native.capturing
             && self.dictation_active.load(Ordering::Acquire)
             && self.registrar.supports_transient_shortcuts();
-        let recording: HashSet<ShortcutId> = native.live.iter().map(|live| live.id).collect();
+        let recording = native.live.as_ref().map(|live| live.id);
         let previous = native.cancel.live_id();
         native
             .cancel
-            .sync(self.registrar.as_ref(), wanted, &recording);
+            .sync(self.registrar.as_ref(), wanted, recording);
         let current = native.cancel.live_id();
         let mut pressed = self.pressed();
         if previous != current {
             for id in [previous, current].into_iter().flatten() {
-                if !recording.contains(&id) {
+                if recording != Some(id) {
                     pressed.remove(&id);
                 }
             }
@@ -506,12 +502,12 @@ impl CancelShortcut {
         &mut self,
         registrar: &R,
         wanted: bool,
-        recording_shortcuts: &HashSet<ShortcutId>,
+        recording: Option<ShortcutId>,
     ) {
         let desired = self
             .binding
             .clone()
-            .filter(|binding| wanted && !recording_shortcuts.contains(&binding.id));
+            .filter(|binding| wanted && recording != Some(binding.id));
         if self.live_id() == desired.as_ref().map(|binding| binding.id) {
             return;
         }

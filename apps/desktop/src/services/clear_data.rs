@@ -31,13 +31,7 @@ impl NativeServices {
         {
             let state = self.state.lock();
             state.phase.require_idle()?;
-            if !state.active_downloads.is_empty() {
-                return Err(AppError::new(
-                    ErrorCategory::General,
-                    "application_busy",
-                    "Wait for model downloads to finish before clearing data",
-                ));
-            }
+            state.require_no_downloads()?;
         }
         let clears_settings = categories.contains(&ClearDataCategory::Settings);
         // The recognizer holds the model files open.

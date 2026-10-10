@@ -841,5 +841,9 @@ mod tests {
         let safe = sanitize_release_notes(Some(&notes)).expect("notes");
         assert!(safe.len() <= MAX_RELEASE_NOTES_BYTES);
         assert!(safe.contains("<script>"));
+        assert_eq!(
+            sanitize_release_notes(Some("Fix\0es\u{7}\nNext\tstep\r\nDone\u{7f}")),
+            Some("Fixes\nNext\tstep\r\nDone".to_owned())
+        );
     }
 }

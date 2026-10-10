@@ -103,7 +103,6 @@ impl NativeServices {
             llm,
             output: output.clone(),
             engine: Box::new(|| Box::new(SherpaAsrEngine::new())),
-            max_recording_samples: DictationParts::MAX_RECORDING_SAMPLES,
         })?;
         Ok(Self {
             settings,

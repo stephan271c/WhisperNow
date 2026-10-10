@@ -1,23 +1,25 @@
-mod admission;
+mod blocked_reason;
 mod client;
 mod components;
+mod home_status;
 mod management;
 mod notice;
+mod operations;
 mod overlay;
-mod presentation;
 mod route;
 mod state;
 
-use admission::{BlockedReason, UiOperation, blocked};
+use blocked_reason::BlockedReason;
 use components::Navigator;
+use operations::UiOperation;
 // The two windows' roots; `app` picks one.
 pub use components::{AppShell, RecordingBar};
-use management::{HistoryCopied, ManagementState, SaveStatus, SettingKey, SetupEdit, SetupTest};
-use notice::{Notice, NoticeAction, NoticeScope};
+use home_status::{HomeStatus, HomeStatusKind};
+use management::{HistoryCopied, ManagementState, SaveStatus, SettingKey, SetupTest};
+use notice::{Notice, NoticeScope};
 use overlay::OverlayView;
-use presentation::{HomeStatus, HomeStatusKind};
 use route::{Route, SettingsRoute, TopLevel, nav_keyboard_target};
-use state::{EventStreamHealth, UiState};
+use state::UiState;
 
 #[cfg(target_arch = "wasm32")]
 use client::{ListenerOwner, current_window_label};
@@ -33,7 +35,11 @@ struct UiContext {
 
 #[cfg(target_arch = "wasm32")]
 pub fn app() -> Element {
-    let mut state = use_signal(UiState::default);
+    let window_label = use_signal(current_window_label);
+    let mut state = use_signal(move || UiState {
+        recording_bar: window_label.peek().as_str() == "recording-bar",
+        ..UiState::default()
+    });
     let management = use_signal(ManagementState::default);
     let navigator = Navigator::new(use_signal(|| Route::Home), use_signal(|| 0));
     let context = use_context_provider(|| UiContext {
@@ -41,11 +47,10 @@ pub fn app() -> Element {
         management,
         navigator,
     });
-    let actions = components::UiActions::new(context);
+    let actions = context;
     // Follows a theme change at once; the recording bar uses theme-independent inverse colours.
     use_effect(move || client::apply_theme(management.read().theme_attribute().map(str::to_owned)));
     let mut listeners = use_signal(|| None::<ListenerOwner>);
-    let window_label = use_signal(current_window_label);
     use_future(move || async move {
         let recording_bar = window_label() == "recording-bar";
         let mut event_state = state;
@@ -66,7 +71,7 @@ pub fn app() -> Element {
         {
             Ok(owner) => {
                 listeners.set(Some(owner));
-                state.write().mark_event_stream_listening();
+                state.write().event_stream_failed = false;
             }
             Err(error) => state.write().report_event_stream_failure(error),
         }
@@ -76,7 +81,7 @@ pub fn app() -> Element {
             return;
         }
 
-        match client::get_update_state().await {
+        match client::call("get_update_state").await {
             Ok(snapshot) => state.write().hydrate_update(snapshot),
             Err(error) => state.write().report_update_command_failure(error.summary),
         }
@@ -100,13 +105,16 @@ pub fn app() -> Element {
 /// Installs the recording bar's first snapshot; a newer event wins over it.
 #[cfg(target_arch = "wasm32")]
 async fn hydrate_recording_bar(mut state: Signal<UiState>) {
-    match client::get_state().await {
+    match client::call("get_state").await {
         Ok(snapshot) => state.write().hydrate(snapshot),
         Err(error) => state.write().report_client_error(error),
     }
 }
 
 #[cfg(test)]
+mod test_fixtures;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod test_support;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

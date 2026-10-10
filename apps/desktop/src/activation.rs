@@ -14,9 +14,10 @@ impl ActivationGate {
     /// read under the gate's lock and is `None` until setup has managed the application state,
     /// so a request racing setup is never lost.
     pub(crate) fn request_activation(&self, phase: impl FnOnce() -> Option<Phase>) -> bool {
-        let Ok(mut deferred) = self.activation_deferred.lock() else {
-            return false;
-        };
+        let mut deferred = self
+            .activation_deferred
+            .lock()
+            .expect("activation lock poisoned");
         if phase().as_ref().is_none_or(Phase::is_busy) {
             *deferred = true;
             false
@@ -29,9 +30,12 @@ impl ActivationGate {
         if phase.is_busy() {
             return false;
         }
-        self.activation_deferred
-            .lock()
-            .is_ok_and(|mut deferred| std::mem::take(&mut *deferred))
+        std::mem::take(
+            &mut *self
+                .activation_deferred
+                .lock()
+                .expect("activation lock poisoned"),
+        )
     }
 }
 

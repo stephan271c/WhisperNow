@@ -202,26 +202,12 @@ async fn each_mechanical_failure_falls_back_to_the_transcript() {
 }
 
 #[tokio::test]
-async fn a_reply_is_used_as_returned_once_reasoning_is_removed() {
+async fn a_quoted_reply_is_used_as_returned() {
+    let quoted = "\"Move the review to Thursday.\"";
     assert_eq!(
-        clean_up_once(
-            Behavior::Text(
-                "<think>The user wants punctuation.</think>\nMove the review to Thursday."
-            ),
-            "move the review to thursday",
-        )
-        .await,
-        Ok("Move the review to Thursday.".to_owned())
+        clean_up_once(Behavior::Text(quoted), "move the review to thursday").await,
+        Ok(quoted.to_owned())
     );
-    for quoted in [
-        "\"Move the review to Thursday.\"",
-        "```\nMove the review to Thursday.\n```",
-    ] {
-        assert_eq!(
-            clean_up_once(Behavior::Text(quoted), "move the review to thursday").await,
-            Ok(quoted.to_owned())
-        );
-    }
 }
 
 #[test]

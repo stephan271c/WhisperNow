@@ -8,7 +8,7 @@
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -39,6 +39,7 @@ use super::{
     capture_start_error, device_choice,
     history::HistoryStore,
     microphone_test,
+    models::installed,
     output::TranscriptOutput,
     settings::SettingsCoordinator,
     shutting_down,
@@ -84,11 +85,6 @@ pub(crate) struct DictationParts {
     pub(crate) output: Arc<dyn TranscriptOutput>,
     /// Builds the recognizer, and a fresh one after a native panic.
     pub(crate) engine: Box<dyn Fn() -> Box<dyn AsrEngine> + Send>,
-    pub(crate) max_recording_samples: usize,
-}
-
-impl DictationParts {
-    pub(crate) const MAX_RECORDING_SAMPLES: usize = MAX_RECORDING_SAMPLES;
 }
 
 type Reply<T> = mpsc::Sender<Result<T, AppError>>;
@@ -348,7 +344,7 @@ impl Dictation {
         let worker = self
             .worker
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("dictation worker lock poisoned")
             .take();
         if let Some(worker) = worker {
             let _worker_panicked = worker.join();
@@ -453,7 +449,7 @@ impl Worker {
             self.parts.settings.recording_settings()?
         };
         let device = device_choice(input_device.as_deref());
-        let model = resolve_model(self.parts.models.as_ref(), &settings.model_id)?;
+        let model = installed(self.parts.models.as_ref(), &settings.model_id)?;
         self.next_session += 1;
         let session = self.next_session;
         let cancellation = CancellationToken::default();
@@ -461,7 +457,7 @@ impl Worker {
             session,
             self.sender.clone(),
             self.parts.state.events().clone(),
-            self.parts.max_recording_samples,
+            MAX_RECORDING_SAMPLES,
             SpeechSegmenter::new((self.parts.voice_activity)()),
         ));
         let capture = self
@@ -524,7 +520,7 @@ impl Worker {
         let Ok(settings) = self.parts.settings.transaction().load() else {
             return;
         };
-        if let Ok(model) = resolve_model(self.parts.models.as_ref(), &settings.model_id) {
+        if let Ok(model) = installed(self.parts.models.as_ref(), &settings.model_id) {
             let _reported_by_dictation = self.ensure_loaded(&model);
         }
     }
@@ -861,37 +857,12 @@ impl Worker {
         }
         let begun = self.parts.state.update(|state| {
             state.phase.require_idle()?;
-            if !state.active_downloads.is_empty() {
-                return Err(AppError::new(
-                    ErrorCategory::General,
-                    "model_transition_busy",
-                    "Wait for the model download to finish",
-                ));
-            }
+            state.require_no_downloads()?;
             state.phase = Phase::Updating;
             Ok(())
         });
         let _caller_left = reply.send(begun);
     }
-}
-
-fn resolve_model(models: &ModelStore, model_id: &ModelId) -> Result<ResolvedModel, AppError> {
-    models
-        .resolve(model_id)
-        .map_err(|_| {
-            AppError::new(
-                ErrorCategory::Model,
-                "model_resolve",
-                "The selected model could not be inspected",
-            )
-        })?
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCategory::Model,
-                "model_not_installed",
-                "Install the selected model before transcribing",
-            )
-        })
 }
 
 fn model_load_error() -> AppError {

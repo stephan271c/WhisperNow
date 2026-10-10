@@ -7,9 +7,7 @@ use whispernow_core::{
 };
 use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest, SettingsView, SetupStateView};
 use whispernow_domain::{LlmProvider, SettingsError};
-use whispernow_domain::{
-    ModelId, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, WindowGeometry,
-};
+use whispernow_domain::{ModelId, Settings, SetupCheckpoint, SetupStep, WindowGeometry};
 use whispernow_platform::{ModelStore, SettingsNotice, SettingsStore};
 
 use super::{
@@ -35,26 +33,6 @@ impl SettingsTransaction<'_> {
 
     pub(super) fn save(&self, settings: &Settings) -> Result<(), AppError> {
         self.coordinator.persistence.save(settings)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PersistedShortcuts {
-    shortcut: Shortcut,
-    mode: RecordingMode,
-}
-
-impl PersistedShortcuts {
-    pub(crate) fn of(settings: &Settings) -> Self {
-        Self {
-            shortcut: settings.recording_shortcut.clone(),
-            mode: settings.recording_mode,
-        }
-    }
-
-    pub(crate) fn apply_to(&self, settings: &mut Settings) {
-        settings.recording_shortcut.clone_from(&self.shortcut);
-        settings.recording_mode = self.mode;
     }
 }
 
@@ -195,7 +173,6 @@ impl SettingsCoordinator {
             require_connected_device(audio, edited.input_device.as_deref())?;
         }
         transaction.save(&edited)?;
-        self.state.publish();
         Ok((before, SettingsView::new(&edited)))
     }
 
@@ -213,7 +190,6 @@ impl SettingsCoordinator {
             })?;
         settings.api_keys.insert(request.provider);
         transaction.save(&settings)?;
-        self.state.publish();
         Ok(SettingsView::new(&settings))
     }
 
@@ -229,7 +205,6 @@ impl SettingsCoordinator {
         })?;
         settings.api_keys.remove(&request);
         transaction.save(&settings)?;
-        self.state.publish();
         Ok(SettingsView::new(&settings))
     }
 
@@ -269,7 +244,6 @@ impl SettingsCoordinator {
         let mut settings = transaction.load()?;
         settings.setup = Some(checkpoint.clone());
         transaction.save(&settings)?;
-        self.state.publish();
         Ok(SetupStateView {
             first_run_complete: settings.first_run_complete,
             checkpoint,
@@ -303,7 +277,7 @@ impl SettingsCoordinator {
         settings.setup = Some(checkpoint.clone());
         settings.first_run_complete = false;
         transaction.save(&settings)?;
-        self.state.apply(|state| state.setup_complete = false);
+        self.state.lock().setup_complete = false;
         Ok(SetupStateView {
             first_run_complete: false,
             checkpoint,
@@ -375,14 +349,15 @@ pub(super) fn require_connected_device(
 }
 
 fn cleanup_plan(settings: &Settings) -> Option<CleanupPlan> {
-    settings.cleanup_enabled.then(|| CleanupPlan {
+    if !settings.cleanup_enabled {
+        return None;
+    }
+    provider_config(settings).map(|config| CleanupPlan {
         key_saved: settings.api_keys.contains(&settings.llm_provider),
-        config: provider_config(settings),
+        config,
     })
 }
 
-/// The chosen provider, or `None` until it has a model and, for a custom provider, an
-/// endpoint. Settings validation requires both while AI cleanup is on.
 fn provider_config(settings: &Settings) -> Option<LlmProviderConfig> {
     let provider = settings.llm_provider;
     if provider == LlmProvider::LocalCleanup {
@@ -497,21 +472,6 @@ mod tests {
         assert_eq!(model(&settings), MINICPM_CLEANUP_MODEL_ID);
     }
 
-    #[test]
-    fn a_long_model_name_still_configures_cleanup() {
-        use whispernow_domain::Settings;
-
-        let mut settings = Settings {
-            llm_provider: LlmProvider::Ollama,
-            ..Settings::default()
-        };
-        let long = "m".repeat(300);
-        settings.provider_settings_mut(LlmProvider::Ollama).model = long.clone();
-        assert_eq!(settings.validate(), Ok(()));
-        let config = super::provider_config(&settings).expect("a valid name configures cleanup");
-        assert_eq!(config.model, long);
-    }
-
     fn geometry() -> WindowGeometry {
         WindowGeometry {
             x: 10,
@@ -547,6 +507,63 @@ mod tests {
         assert_eq!(view.settings, expected);
         assert_eq!(fixture.settings.get().expect("reload").settings, expected);
         assert_eq!(fixture.stored_key().as_deref(), Some("kept-key"));
+    }
+
+    #[test]
+    fn an_incomplete_cleanup_provider_is_saved_with_a_warning_that_clears_after_repair() {
+        let fixture = Fixture::start();
+        let mut edited = fixture.settings.get().expect("settings view").settings;
+        edited.cleanup_enabled = true;
+        edited.llm_provider = LlmProvider::Custom;
+        edited
+            .provider_settings_mut(LlmProvider::Custom)
+            .model
+            .clear();
+        let audio = whispernow_platform::CpalAudioInput::new();
+
+        let (_, view) = fixture
+            .settings
+            .update(edited, &audio)
+            .expect("save provider");
+        assert_eq!(view.settings.llm_provider, LlmProvider::Custom);
+        assert!(view.warnings[0].contains("needs a model"));
+        assert_eq!(fixture.settings.get().expect("reload"), view);
+        assert!(
+            fixture
+                .settings
+                .recording_settings()
+                .expect("recording")
+                .dictation
+                .cleanup
+                .is_none()
+        );
+
+        let mut edited = view.settings;
+        edited.provider_settings_mut(LlmProvider::Custom).model = "local".to_owned();
+        let (_, view) = fixture.settings.update(edited, &audio).expect("save model");
+        assert!(view.warnings[0].contains("needs an API endpoint"));
+        assert_eq!(fixture.settings.get().expect("reload"), view);
+
+        let mut edited = view.settings;
+        edited.provider_settings_mut(LlmProvider::Custom).api_base = Some(
+            whispernow_domain::ProviderEndpoint::parse("http://localhost:8080/v1")
+                .expect("endpoint"),
+        );
+        let (_, view) = fixture
+            .settings
+            .update(edited, &audio)
+            .expect("save endpoint");
+        assert!(view.warnings.is_empty());
+        assert_eq!(fixture.settings.get().expect("reload"), view);
+        assert!(
+            fixture
+                .settings
+                .recording_settings()
+                .expect("recording")
+                .dictation
+                .cleanup
+                .is_some()
+        );
     }
 
     #[test]

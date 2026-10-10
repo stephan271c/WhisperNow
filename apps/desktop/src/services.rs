@@ -22,8 +22,7 @@ pub(crate) use dictation::Dictation;
 use history::HistoryStore;
 use models::ModelCoordinator;
 use output::OutputCoordinator;
-use permissions::{MicrophoneAccess, SystemPermissions, permission_states};
-pub(crate) use settings::PersistedShortcuts;
+use permissions::{MicrophoneAccess, PermissionFacts, permission_states};
 use settings::{SettingsCoordinator, device_choice, require_connected_device, settings_error};
 pub(crate) use state::{Events, StateCell};
 pub(crate) use whispernow_domain::ipc::{Phase, RecordingTrigger};
@@ -93,11 +92,8 @@ impl NativeServices {
         if !matches!(pruning, Ok(false)) {
             self.publish_history_changed();
         }
-        let warnings = pruning
-            .err()
-            .into_iter()
-            .map(|warning| warning.summary)
-            .collect();
+        let mut warnings = settings.warnings.clone();
+        warnings.extend(pruning.err().map(|warning| warning.summary));
         Ok((before, SaveSettingsResponse { settings, warnings }))
     }
 
@@ -140,10 +136,17 @@ impl NativeServices {
         })
     }
 
-    pub(crate) fn list_audio_devices(&self) -> Vec<AudioDevice> {
-        self.audio
+    pub(crate) fn list_audio_devices(&self) -> Result<Vec<AudioDevice>, AppError> {
+        Ok(self
+            .audio
             .list_input_devices()
-            .unwrap_or_default()
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCategory::Audio,
+                    "audio_devices",
+                    "Audio input devices could not be listed",
+                )
+            })?
             .into_iter()
             // The windows offer the system default themselves.
             .filter_map(|device| match device.choice {
@@ -154,7 +157,7 @@ impl NativeServices {
                     is_default: device.is_current_default,
                 }),
             })
-            .collect()
+            .collect())
     }
 
     /// Listens to the selected microphone for a few seconds and reports its levels. No audio
@@ -191,10 +194,7 @@ impl NativeServices {
     /// The shortcut portal's consent is the shortcut coordinator's to report, so the caller
     /// passes it in.
     pub(crate) fn permissions(&self, global_shortcuts: PermissionStatus) -> PermissionsResponse {
-        permission_states(&SystemPermissions {
-            services: self,
-            global_shortcuts,
-        })
+        permission_states(PermissionFacts::collect(self, global_shortcuts))
     }
 
     /// Asks for one first-run permission where the desktop services can.
@@ -267,41 +267,29 @@ impl NativeServices {
             state.phase.require_idle()?;
         }
         require_connected_device(self.audio.as_ref(), checkpoint.input_device.as_deref())?;
-        let resolved = self
-            .models
-            .resolve(&checkpoint.model_id)
-            .map_err(|_| {
-                AppError::new(
-                    ErrorCategory::Model,
-                    "model_resolve",
-                    "The model could not be inspected",
-                )
-            })?
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCategory::Model,
-                    "model_not_installed",
-                    "Install the model before finishing setup",
-                )
-            })?;
-        self.dictation.load_model(resolved)?;
-        let transaction = self.settings.transaction();
-        let mut settings = transaction.load()?;
-        let before = settings.clone();
-        settings.model_id = checkpoint.model_id.clone();
-        settings.input_device.clone_from(&checkpoint.input_device);
-        settings.recording_shortcut = checkpoint.recording_shortcut.clone();
-        settings.recording_mode = checkpoint.recording_mode;
-        settings.first_run_complete = true;
-        settings.setup = None;
-        settings
+        let before = self.settings.get()?.settings;
+        let edited = Settings {
+            input_device: checkpoint.input_device.clone(),
+            recording_shortcut: checkpoint.recording_shortcut.clone(),
+            recording_mode: checkpoint.recording_mode,
+            first_run_complete: true,
+            setup: None,
+            ..before.clone()
+        };
+        edited
             .validate_update(&before)
             .map_err(|error| settings_error(&error))?;
+        self.models
+            .select(checkpoint.model_id.clone(), &self.settings, &self.dictation)?;
+        let transaction = self.settings.transaction();
+        let mut settings = transaction.load()?;
+        settings.input_device = edited.input_device;
+        settings.recording_shortcut = edited.recording_shortcut;
+        settings.recording_mode = edited.recording_mode;
+        settings.first_run_complete = true;
+        settings.setup = None;
         transaction.save(&settings)?;
-        self.state.apply(|state| {
-            state.setup_complete = true;
-            state.selected_model_id.clone_from(&checkpoint.model_id);
-        });
+        self.state.lock().setup_complete = true;
         Ok(SettingsView::new(&settings))
     }
 

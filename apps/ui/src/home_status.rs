@@ -1,6 +1,6 @@
 use whispernow_domain::ipc::{ModelState, Phase};
 
-use crate::{EventStreamHealth, Route, SettingsRoute, UiState};
+use crate::{Route, SettingsRoute, UiState};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HomeStatusKind {
@@ -33,7 +33,7 @@ impl HomeStatus {
                 .flatten(),
         };
         let problem = |title, detail| status(HomeStatusKind::Problem, title, Some(detail));
-        if state.event_stream_health == EventStreamHealth::Failed {
+        if state.event_stream_failed {
             return problem(
                 "Live updates are unavailable",
                 "Close and reopen this window to reconnect.",

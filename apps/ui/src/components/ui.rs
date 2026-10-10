@@ -10,11 +10,11 @@ mod keys;
 mod layout;
 
 pub(crate) use buttons::{Button, ButtonSize, ButtonVariant, ConfirmButton, IconButton};
-pub(crate) use feedback::{Banner, ProgressBar, Toast, ToastRegion, Tone};
+pub(crate) use feedback::{Banner, ProgressBar, ToastRegion, Tone};
 pub(crate) use fields::{DraftText, Field, Segmented, Select, SettingRow, TextInput, Toggle};
 pub(crate) use icon::{BrandMark, Icon, IconName};
 pub(crate) use keys::{Kbd, ShortcutLabel, shortcut_parts};
-pub(crate) use layout::{Card, EmptyState, Section};
+pub(crate) use layout::{EmptyState, Section};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;

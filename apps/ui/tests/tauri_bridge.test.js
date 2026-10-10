@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
   applyTheme,
   audioBlob,
   closeWindow,
-  delay,
   hasCustomTitlebar,
   listenMaximized,
   invokeTyped,
@@ -31,18 +29,16 @@ function installTauri(invocations) {
   };
 }
 
-test("history retry DTO reaches the production Tauri invoke adapter", async () => {
+test("a history deletion request reaches the production Tauri invoke adapter", async () => {
   const invocations = [];
   installTauri(invocations);
-  const request = {
-    recordingId: 42,
-  };
+  const request = 42;
 
-  await invokeTyped("start_history_retry", request);
+  await invokeTyped("delete_history_entry", request);
 
   assert.deepEqual(invocations, [
     {
-      command: "start_history_retry",
+      command: "delete_history_entry",
       payload: { request },
     },
   ]);
@@ -95,7 +91,7 @@ test("loading history audio makes no object URL a closed player could leave behi
     return createObjectURL(blob);
   };
   try {
-    const audio = await audioBlob("get_history_audio", { recordingId: 7 });
+    const audio = await audioBlob("get_history_audio", 7);
     assert.equal(made, 0, "only a player that is still open asks for a URL");
     assert.equal(audio.type, "audio/wav");
   } finally {
@@ -107,7 +103,7 @@ test("history audio bytes become a playable object URL that can be revoked", asy
   const invocations = [];
   const bytes = new Uint8Array([82, 73, 70, 70]).buffer;
   installAudio(invocations, bytes);
-  const request = { recordingId: 7 };
+  const request = 7;
 
   const url = objectUrl(await audioBlob("get_history_audio", request));
 
@@ -130,12 +126,6 @@ test("a chosen theme sets data-theme and the system theme removes it", () => {
   assert.equal(root.dataset.theme, "light");
   applyTheme(undefined);
   assert.equal("theme" in root.dataset, false);
-});
-
-test("delay resolves after the requested time so success notices can retire", async () => {
-  const started = Date.now();
-  await delay(20);
-  assert.ok(Date.now() - started >= 15);
 });
 
 function installWindow(calls, state) {
@@ -190,26 +180,4 @@ test("maximize state is reported at once and after each resize until unlistened"
 
   assert.deepEqual(reports, [false, true]);
   assert.deepEqual(calls, ["unlisten"]);
-});
-
-test("the wasm production adapter remains bound to the tested bridge", async () => {
-  const client = await readFile(new URL("../src/client.rs", import.meta.url), "utf8");
-
-  assert.match(client, /wasm_bindgen\(module = "\/public\/tauri_bridge\.js"\)/);
-  assert.match(client, /js_name = invokeTyped/);
-  assert.match(client, /js_name = writeClipboardText/);
-  assert.match(client, /js_name = audioBlob\)\]\s*async fn audio_blob/);
-  assert.match(client, /js_name = objectUrl\)\]\s*fn object_url/);
-  assert.match(client, /js_name = revokeObjectUrl\)\]\s*pub fn revoke_object_url/);
-  assert.match(client, /audio_blob\("get_history_audio", request\)/);
-  assert.match(client, /js_name = applyTheme\)\]\s*pub fn apply_theme/);
-  assert.match(client, /call\("open_recordings_folder"\)/);
-  assert.match(client, /call\("clear_history"\)/);
-  assert.match(client, /call\("test_microphone"\)/);
-  assert.match(client, /js_name = delay\)\]\s*async fn delay_js/);
-  assert.match(client, /None => JsValue::UNDEFINED,[\s\S]*?invoke_typed\(command, request\)/);
-  assert.match(
-    client,
-    /async fn write_clipboard\([\s\S]*?wasm::write_clipboard_text\(text\)/,
-  );
 });

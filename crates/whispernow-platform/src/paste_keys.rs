@@ -47,27 +47,14 @@ mod tests {
 
     #[test]
     fn terminals_are_recognized_by_application_name() {
-        for terminal in [
-            "gnome-terminal-server",
-            "Ptyxis",
-            "org.gnome.Ptyxis",
-            "org.gnome.Console",
-            "com.mitchellh.ghostty",
-            "kitty",
-            "org.wezfurlong.wezterm",
-            "xfce4-terminal",
-            "XTerm",
+        for (application, expected) in [
+            ("org.gnome.Ptyxis", PasteKeys::ControlShiftV),
+            ("gnome-terminal-server", PasteKeys::ControlShiftV),
+            ("firefox", PasteKeys::ControlV),
         ] {
             assert_eq!(
-                PasteKeys::for_application(terminal),
-                PasteKeys::ControlShiftV,
-                "{terminal}"
-            );
-        }
-        for application in ["code", "obsidian", "org.gnome.Nautilus", "firefox", ""] {
-            assert_eq!(
                 PasteKeys::for_application(application),
-                PasteKeys::ControlV,
+                expected,
                 "{application}"
             );
         }

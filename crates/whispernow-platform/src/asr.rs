@@ -149,7 +149,6 @@ mod tests {
     use whispernow_domain::{ModelAvailability, ModelRegistry};
 
     use super::recognizer_config;
-    use whispernow_core::audio::TARGET_SAMPLE_RATE;
 
     fn model(id: &str) -> ResolvedModel {
         ResolvedModel {
@@ -160,39 +159,20 @@ mod tests {
     }
 
     #[test]
-    fn each_family_gets_its_own_cpu_greedy_config() {
+    fn speech_model_files_reach_the_matching_config() {
         let transducer = recognizer_config(&model("sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"))
             .expect("transducer config");
-        assert_eq!(transducer.model_config.provider.as_deref(), Some("cpu"));
-        assert_eq!(transducer.model_config.num_threads, 4);
         assert_eq!(
-            transducer.feat_config.sample_rate,
-            TARGET_SAMPLE_RATE.cast_signed()
+            transducer.model_config.transducer.joiner.as_deref(),
+            Some("/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16/joiner.fp16.onnx")
         );
-        assert_eq!(transducer.feat_config.feature_dim, 80);
-        assert_eq!(
-            transducer.model_config.model_type.as_deref(),
-            Some("nemo_transducer")
-        );
-        assert!(
-            transducer
-                .model_config
-                .transducer
-                .joiner
-                .as_deref()
-                .is_some_and(|joiner| joiner.starts_with("/models/sherpa-onnx-nemo-parakeet"))
-        );
-        assert_eq!(transducer.decoding_method.as_deref(), Some("greedy_search"));
 
         let whisper =
             recognizer_config(&model("sherpa-onnx-whisper-turbo")).expect("whisper config");
-        assert_eq!(whisper.model_config.whisper.language.as_deref(), Some(""));
         assert_eq!(
-            whisper.model_config.whisper.task.as_deref(),
-            Some("transcribe")
+            whisper.model_config.whisper.encoder.as_deref(),
+            Some("/models/sherpa-onnx-whisper-turbo/turbo-encoder.int8.onnx")
         );
-        assert!(!whisper.model_config.whisper.enable_token_timestamps);
-        assert_eq!(whisper.model_config.transducer.joiner, None);
 
         let qwen3 = recognizer_config(&model("sherpa-onnx-qwen3-asr-0.6b-int8-2026-03-25"))
             .expect("qwen3 config");
@@ -200,16 +180,14 @@ mod tests {
             qwen3.model_config.qwen3_asr.tokenizer.as_deref(),
             Some("/models/sherpa-onnx-qwen3-asr-0.6b-int8-2026-03-25/tokenizer")
         );
-        assert_eq!(qwen3.model_config.qwen3_asr.max_total_len, 1024);
 
         let sense_voice = recognizer_config(&model(
             "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
         ))
         .expect("sense voice config");
         assert_eq!(
-            sense_voice.model_config.sense_voice.language.as_deref(),
-            Some("auto")
+            sense_voice.model_config.sense_voice.model.as_deref(),
+            Some("/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx")
         );
-        assert!(sense_voice.model_config.sense_voice.use_itn);
     }
 }

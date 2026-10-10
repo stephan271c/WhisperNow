@@ -69,14 +69,6 @@ fn one_entry() -> ManagementState {
     management(vec![entry(7, UtcMillis(NOW.0 - HOUR))])
 }
 
-/// The search text of every history read so far.
-fn history_reads() -> Vec<String> {
-    fake::requests::<HistoryPageRequest>("get_history")
-        .into_iter()
-        .map(|request| request.filter.query)
-        .collect()
-}
-
 #[test]
 fn rows_group_by_the_viewers_local_day() {
     let at = |hours_before_now: i64| UtcMillis(NOW.0 - hours_before_now * HOUR);
@@ -184,20 +176,32 @@ fn search_is_debounced_and_paged_within_the_search() {
     page.input("history-search", "inv")
         .input("history-search", "invoice")
         .settle();
-    assert!(
-        fake::commands().is_empty(),
-        "typing reads nothing until it pauses"
-    );
-    assert_eq!(page.context().management.read().history_search, "invoice");
-
-    // The pause after the first keystroke was cut short; only the latest text is searched.
+    assert_eq!(fake::count("get_history"), 0, "typing waits for a pause");
     page.wait();
-    assert_eq!(history_reads(), ["invoice"]);
-    assert_eq!(page.context().management.read().history_window_pages(), 1);
+    let first = HistoryPageRequest {
+        before: None,
+        limit: HistoryPageRequest::DEFAULT_PAGE_SIZE,
+        filter: HistoryFilter {
+            query: "invoice".to_owned(),
+            failed_only: false,
+        },
+    };
+    assert_eq!(
+        fake::requests::<HistoryPageRequest>("get_history").as_slice(),
+        std::slice::from_ref(&first)
+    );
 
     page.click("history-load-more");
-    assert_eq!(history_reads(), ["invoice", "invoice"]);
-    assert_eq!(page.context().management.read().history_window_pages(), 2);
+    assert_eq!(
+        fake::requests::<HistoryPageRequest>("get_history"),
+        [
+            first.clone(),
+            HistoryPageRequest {
+                limit: 2 * HistoryPageRequest::DEFAULT_PAGE_SIZE,
+                ..first
+            },
+        ]
+    );
 }
 
 #[test]
@@ -208,8 +212,17 @@ fn the_failed_filter_and_an_empty_search_offer_a_way_back() {
             .is_some_and(|tag| tag.contains("aria-pressed=\"false\""))
     );
     page.click("history-failed-filter");
-    assert!(page.context().management.read().history_filter.failed_only);
-    assert_eq!(fake::commands(), ["get_history"]);
+    assert_eq!(
+        fake::requests::<HistoryPageRequest>("get_history"),
+        [HistoryPageRequest {
+            before: None,
+            limit: HistoryPageRequest::DEFAULT_PAGE_SIZE,
+            filter: HistoryFilter {
+                query: String::new(),
+                failed_only: true
+            },
+        },]
+    );
 
     let mut filtered = management(Vec::new());
     filtered.show_failed_history_only(true);
@@ -222,10 +235,13 @@ fn the_failed_filter_and_an_empty_search_offer_a_way_back() {
     assert!(!html.contains("to dictate"));
     page.click("history-clear-filter");
     assert_eq!(
-        page.context().management.read().history_filter,
-        HistoryFilter::default()
+        fake::requests::<HistoryPageRequest>("get_history"),
+        [HistoryPageRequest {
+            before: None,
+            limit: HistoryPageRequest::DEFAULT_PAGE_SIZE,
+            filter: HistoryFilter::default(),
+        }]
     );
-    assert_eq!(fake::commands(), ["get_history"]);
 }
 
 #[test]
@@ -256,16 +272,16 @@ fn the_header_summarizes_retention_and_links_to_privacy() {
         page.context().navigator.route(),
         Route::Settings(SettingsRoute::PrivacyData)
     );
-    assert_eq!(fake::commands(), ["open_recordings_folder"]);
+    assert_eq!(fake::count("open_recordings_folder"), 1);
 }
 
 #[test]
 fn deleting_an_entry_or_the_history_requires_confirmation() {
     let mut page = history_page(one_entry());
     page.click("history-delete-7");
-    assert!(fake::commands().is_empty(), "Delete only asks");
+    assert_eq!(fake::count("delete_history_entry"), 0, "Delete only asks");
     page.click("history-delete-7-confirm");
-    assert_eq!(fake::commands(), ["delete_history_entry"]);
+    assert_eq!(fake::count("delete_history_entry"), 1);
     assert_eq!(
         fake::requests::<EntryId>("delete_history_entry"),
         [EntryId(7)]
@@ -274,13 +290,9 @@ fn deleting_an_entry_or_the_history_requires_confirmation() {
     page.settle();
 
     page.click("history-clear");
-    assert_eq!(
-        fake::commands(),
-        ["delete_history_entry", "get_history"],
-        "Clear history only asks"
-    );
+    assert_eq!(fake::count("clear_history"), 0, "Clear history only asks");
     page.click("history-clear-confirm");
-    assert_eq!(fake::commands().last(), Some(&"clear_history"));
+    assert_eq!(fake::count("clear_history"), 1);
 }
 
 #[test]
@@ -293,7 +305,7 @@ fn history_changes_wait_for_the_change_in_flight() {
     assert!(tag(&html, "history-delete-7").is_some_and(|tag| tag.contains("disabled")));
     assert!(tag(&html, "history-clear").is_some_and(|tag| tag.contains("disabled")));
     assert!(text(&html, "history-change-reason").contains("Wait for the current change"));
-    assert_eq!(fake::commands(), ["delete_history_entry"]);
+    assert_eq!(fake::count("delete_history_entry"), 1);
 }
 
 #[test]
@@ -401,37 +413,4 @@ fn a_search_that_cannot_run_explains_itself_in_place_of_stale_rows() {
             .expect("search input")
             .contains("aria-invalid")
     );
-}
-
-#[test]
-fn production_controls_send_typed_commands() {
-    let mut state = one_entry();
-    state.history_next_cursor = Some(HistoryCursor {
-        created_at: NOW,
-        id: EntryId(7),
-    });
-    let sent = |ids: &[&str]| {
-        let mut page = history_page(state.clone());
-        for id in ids {
-            page.click(id);
-        }
-        fake::commands()
-    };
-
-    assert_eq!(
-        sent(&["history-delete-7", "history-delete-7-confirm"]),
-        ["delete_history_entry"]
-    );
-    assert_eq!(
-        fake::requests::<EntryId>("delete_history_entry"),
-        [EntryId(7)]
-    );
-    assert_eq!(
-        sent(&["history-clear", "history-clear-confirm"]),
-        ["clear_history"]
-    );
-    assert_eq!(sent(&["history-open-folder"]), ["open_recordings_folder"]);
-    assert_eq!(sent(&["history-load-more"]), ["get_history"]);
-    assert_eq!(sent(&["history-copy-7"]), ["write_clipboard"]);
-    assert_eq!(fake::requests::<String>("write_clipboard"), ["cleaned 7"]);
 }

@@ -5,7 +5,7 @@ use whispernow_domain::{
 };
 
 use super::NoticeRegion;
-use super::actions::{DisabledReason, use_actions};
+use super::actions::DisabledReason;
 use super::labels::{self, format_bytes};
 use super::ui::{
     Banner, Button, ButtonSize, ButtonVariant, ConfirmButton, ProgressBar, Section, Tone,
@@ -15,7 +15,7 @@ use crate::{NoticeScope, SettingKey, UiContext, UiOperation};
 #[component]
 pub(super) fn ModelsPage() -> Element {
     let context = use_context::<UiContext>();
-    let actions = use_actions();
+    let actions = context;
     let management = context.management;
     let snapshot = context.state.read().snapshot.clone();
     let active_id = snapshot
@@ -33,9 +33,13 @@ pub(super) fn ModelsPage() -> Element {
         active_id.as_ref(),
     );
     let loaded = management.read().models_loaded;
-    let switch_blocked = actions.blocked(UiOperation::ModelSwitch);
+    let switch_blocked = actions
+        .blocked(UiOperation::ModelSwitch)
+        .or(actions.phase_blocked());
     let download_blocked = actions.blocked(UiOperation::DownloadModel);
-    let delete_blocked = actions.blocked(UiOperation::ModelDelete);
+    let delete_blocked = actions
+        .blocked(UiOperation::ModelDelete)
+        .or(actions.phase_blocked());
     let reason = switch_blocked.or(download_blocked).or(delete_blocked);
     let failed_active = (active_state == ModelState::Failed)
         .then(|| active_id.clone())
@@ -100,20 +104,23 @@ pub(super) fn ModelRow(
     kind: ModelRowKind,
     #[props(default)] settings_disabled: bool,
 ) -> Element {
-    let actions = use_actions();
-    let management = use_context::<UiContext>().management;
+    let actions = use_context::<UiContext>();
     let id = model.id.clone();
     let slug = id.as_str().replace('.', "-");
     let name = model.display_name.clone();
-    let download = management.read().download(&id).cloned();
+    let download = actions.download(&id);
     let active_state = match kind {
         ModelRowKind::Speech { state } => state,
         _ => None,
     };
     let active = active_state.is_some();
-    let switch_blocked = actions.blocked(UiOperation::ModelSwitch);
+    let switch_blocked = actions
+        .blocked(UiOperation::ModelSwitch)
+        .or(actions.phase_blocked());
     let download_blocked = actions.blocked(UiOperation::DownloadModel);
-    let delete_blocked = actions.blocked(UiOperation::ModelDelete);
+    let delete_blocked = actions
+        .blocked(UiOperation::ModelDelete)
+        .or(actions.phase_blocked());
     let describe =
         |blocked: Option<crate::BlockedReason>| blocked.map(|_| "models-disabled-reason");
     rsx! {
@@ -199,7 +206,7 @@ pub(super) fn ModelRow(
 
 #[component]
 pub(super) fn DownloadProgress(download: ActiveDownload, name: String) -> Element {
-    let actions = use_actions();
+    let actions = use_context::<UiContext>();
     let cancel_blocked = actions.blocked(UiOperation::CancelDownload);
     let max = download
         .total_bytes

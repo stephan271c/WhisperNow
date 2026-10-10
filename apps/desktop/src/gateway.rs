@@ -4,7 +4,7 @@ pub(crate) mod lifecycle;
 mod permissions;
 mod settings;
 
-use std::sync::{Arc, PoisonError, RwLock, atomic::AtomicBool};
+use std::sync::{Arc, RwLock, atomic::AtomicBool};
 use whispernow_domain::AppError;
 
 use whispernow_core::CancellationToken;
@@ -92,7 +92,7 @@ impl Gateway {
         let shutdown = self.shutdown.clone();
         tracing::info!(operation, "desktop command started");
         let result = run_blocking(move || {
-            let _running = commands.read().unwrap_or_else(PoisonError::into_inner);
+            let _running = commands.read().expect("command barrier lock poisoned");
             if shutdown.is_cancelled() {
                 return Err(AppError::new(
                     ErrorCategory::General,

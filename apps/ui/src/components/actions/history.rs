@@ -4,49 +4,53 @@ use whispernow_domain::AppError;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use whispernow_domain::ipc::ErrorCategory;
-use whispernow_domain::{EntryId, HistoryFilter};
+use whispernow_domain::{EntryId, HistoryPageRequest};
 
-use super::UiActions;
+use crate::UiContext;
 use crate::client;
 
 use crate::{HistoryCopied, UiOperation};
 
 const COPIED_MS: u32 = 2_000;
 
-impl UiActions {
+impl UiContext {
     pub(crate) fn refresh_history(self) {
-        let (pages, filter) = self.management().peek().history_request();
-        self.read_history(pages, filter);
+        let request = self.management.peek().history_request();
+        self.read_history(request);
     }
 
-    pub(crate) fn load_older_history(self) {
-        let (pages, filter) = self.management().write().older_history_request();
-        self.read_history(pages, filter);
+    pub(crate) fn load_older_history(mut self) {
+        let request = self.management.write().older_history_request();
+        self.read_history(request);
     }
 
-    fn read_history(self, pages: u32, filter: HistoryFilter) {
+    fn read_history(self, request: HistoryPageRequest) {
         spawn_forever(async move {
-            let answer = client::history_window(pages, filter.clone()).await;
-            let mut management = self.management();
+            let answer = client::invoke("get_history", Some(&request)).await;
+            let mut management = self.management;
             match answer {
-                Ok(page) => management
+                Ok(page) => management.write().finish_history_refresh(
+                    request.limit / HistoryPageRequest::DEFAULT_PAGE_SIZE,
+                    &request.filter,
+                    page,
+                ),
+                Err(error) => management
                     .write()
-                    .finish_history_refresh(pages, &filter, page),
-                Err(error) => management.write().fail_history_refresh(&filter, &error),
+                    .fail_history_refresh(&request.filter, &error),
             }
         });
     }
 
     /// Searches for the typed search text, unless it is already the search shown.
-    pub(crate) fn search_history(self) {
-        if self.management().write().apply_history_search() {
+    pub(crate) fn search_history(mut self) {
+        if self.management.write().apply_history_search() {
             self.refresh_history();
         }
     }
 
-    pub(crate) fn show_failed_history_only(self, failed_only: bool) {
+    pub(crate) fn show_failed_history_only(mut self, failed_only: bool) {
         if self
-            .management()
+            .management
             .write()
             .show_failed_history_only(failed_only)
         {
@@ -54,28 +58,28 @@ impl UiActions {
         }
     }
 
-    pub(crate) fn clear_history_filter(self) {
-        if self.management().write().clear_history_filter() {
+    pub(crate) fn clear_history_filter(mut self) {
+        if self.management.write().clear_history_filter() {
             self.refresh_history();
         }
     }
 
     /// Copies one entry's text and shows the outcome on its Copy button for a moment; a newer
     /// copy replaces it.
-    pub(crate) fn copy_history_entry(self, entry: EntryId) {
-        let Some(text) = self.management().peek().history_copy(entry) else {
+    pub(crate) fn copy_history_entry(mut self, entry: EntryId) {
+        let Some(text) = self.management.peek().history_copy(entry) else {
             return;
         };
         let copy = spawn_forever(async move {
             let succeeded = client::write_clipboard(&text).await.is_ok();
-            self.management().write().history_copied = Some(HistoryCopied { entry, succeeded });
+            self.management.write().history_copied = Some(HistoryCopied { entry, succeeded });
             client::delay(COPIED_MS).await;
-            let mut management = self.management();
+            let mut management = self.management;
             let mut management = management.write();
             management.history_copied = None;
             management.history_copy = None;
         });
-        let mut management = self.management();
+        let mut management = self.management;
         let mut management = management.write();
         management.history_copied = None;
         if let Some(previous) = management.history_copy.replace(copy) {
@@ -84,11 +88,11 @@ impl UiActions {
     }
 
     pub(crate) fn delete_history_entry(self, id: EntryId) {
-        self.change_history(async move { client::delete_history_entry(&id).await });
+        self.change_history(async move { client::invoke("delete_history_entry", Some(&id)).await });
     }
 
     pub(crate) fn clear_history(self) {
-        self.change_history(client::clear_history());
+        self.change_history(client::call("clear_history"));
     }
 
     /// Changes history, then reads it again whatever the answer: last write wins, and a row
@@ -109,7 +113,7 @@ impl UiActions {
         let operation = UiOperation::OpenRecordingsFolder;
         self.run(
             operation,
-            client::open_recordings_folder(),
+            client::call::<()>("open_recordings_folder"),
             move |actions, answer| {
                 if let Err(error) = answer {
                     actions.report(operation, &error);

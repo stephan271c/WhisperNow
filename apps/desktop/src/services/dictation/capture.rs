@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Mutex, PoisonError,
+        Mutex,
         atomic::{AtomicUsize, Ordering},
         mpsc,
     },
@@ -84,7 +84,7 @@ impl RecordingSink {
 
     /// A copy of the samples of each segment found after the first `from`.
     pub(super) fn segments_after(&self, from: usize) -> Vec<Vec<f32>> {
-        let audio = self.audio.lock().unwrap_or_else(PoisonError::into_inner);
+        let audio = self.audio.lock().expect("recording audio lock poisoned");
         audio
             .segments
             .iter()
@@ -99,7 +99,7 @@ impl RecordingSink {
         if dropped_frames > 0 {
             tracing::warn!(dropped_frames, "audio capture dropped buffers under load");
         }
-        let mut audio = self.audio.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut audio = self.audio.lock().expect("recording audio lock poisoned");
         if let Some(segmenter) = audio.segmenter.take() {
             let last = segmenter.finish();
             audio.segments.extend(last);
@@ -114,7 +114,7 @@ impl RecordingSink {
         *self
             .interruption
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("recording audio lock poisoned")
     }
 
     fn interrupt(&self, interruption: CaptureInterruption) {
@@ -122,7 +122,7 @@ impl RecordingSink {
             let mut current = self
                 .interruption
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+                .expect("recording audio lock poisoned");
             if current.is_some() {
                 return;
             }
@@ -140,7 +140,7 @@ impl RecordingSink {
 
 impl AudioSink for RecordingSink {
     fn samples(&self, block: AudioBlock) -> Result<(), AudioSinkError> {
-        let mut audio = self.audio.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut audio = self.audio.lock().expect("recording audio lock poisoned");
         let remaining = self.max_samples.saturating_sub(audio.samples.len());
         let accepted = &block.samples()[..block.samples().len().min(remaining)];
         audio.samples.extend_from_slice(accepted);
@@ -191,9 +191,10 @@ impl AudioSink for RecordingSink {
             AudioObservation::Level { summary } => summary,
         };
         let now = Instant::now();
-        let Ok(mut last) = self.last_level_event.lock() else {
-            return;
-        };
+        let mut last = self
+            .last_level_event
+            .lock()
+            .expect("audio level lock poisoned");
         if last.is_some_and(|previous| now.duration_since(previous) < LEVEL_EVENT_INTERVAL) {
             return;
         }

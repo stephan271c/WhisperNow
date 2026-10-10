@@ -67,7 +67,7 @@ pub(crate) async fn list_audio_devices(
 ) -> Result<Vec<AudioDevice>, AppError> {
     state
         .run_command("list_audio_devices", Failure::Published, |services, _| {
-            Ok(services.list_audio_devices())
+            services.list_audio_devices()
         })
         .await
 }

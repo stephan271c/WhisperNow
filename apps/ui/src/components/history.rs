@@ -10,12 +10,10 @@ pub(crate) use format::LocalClock;
 use format::{group_by_day, retention_summary};
 use row::HistoryRow;
 
-use super::actions::use_actions;
 use super::ui::{
     Button, ButtonSize, ConfirmButton, EmptyState, Icon, IconName, ShortcutLabel, TextInput,
 };
-use super::use_navigator;
-use crate::{BlockedReason, Route, SettingsRoute, UiContext, UiOperation};
+use crate::{Route, SettingsRoute, UiContext, UiOperation};
 
 // Page-level control ids; as expressions they render as attributes tests can locate.
 const SEARCH_ID: &str = "history-search";
@@ -32,8 +30,8 @@ const SEARCH_PAUSE_MS: u32 = 300;
 
 #[component]
 pub(super) fn HistoryScreen() -> Element {
-    let actions = use_actions();
-    let navigator = use_navigator();
+    let actions = use_context::<UiContext>();
+    let navigator = use_context::<UiContext>().navigator;
     let mut management = use_context::<UiContext>().management;
     let clock = use_clock();
     // The search waiting for typing to pause; a key press restarts it.
@@ -150,7 +148,7 @@ pub(super) fn HistoryScreen() -> Element {
                         for entry in members {
                             HistoryRow { key: "{entry.id.0}",
                                 copied: copied.filter(|copied| copied.entry == entry.id),
-                                delete_blocked: change_blocked.map(BlockedReason::message),
+                                delete_blocked: change_blocked.is_some(),
                                 entry,
                                 clock,
                             }

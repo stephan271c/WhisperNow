@@ -24,7 +24,7 @@ impl SettingsView {
     pub fn new(settings: &Settings) -> Self {
         Self {
             settings: settings.clone(),
-            warnings: Vec::new(),
+            warnings: settings.cleanup_warning().into_iter().collect(),
         }
     }
 }
@@ -338,6 +338,11 @@ impl Phase {
     #[must_use]
     pub const fn is_busy(&self) -> bool {
         matches!(self, Self::Recording { .. } | Self::Processing { .. })
+    }
+
+    #[must_use]
+    pub const fn shortcuts_enabled(&self) -> bool {
+        !matches!(self, Self::Paused | Self::Updating)
     }
 
     /// Refuses work that needs the desktop idle: nothing dictating, paused or updating.

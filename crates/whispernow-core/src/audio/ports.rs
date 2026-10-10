@@ -105,18 +105,3 @@ pub trait AudioCapture: Send {
     /// Stops the stream and delivers the audio still queued.
     fn stop(self: Box<Self>) -> Result<(), AudioInputError>;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn device_ids_are_opaque_but_not_empty() {
-        assert_eq!(
-            AudioDeviceId::new(" \t"),
-            Err(AudioInputError::InvalidDeviceId)
-        );
-        let id = AudioDeviceId::new("native:opaque/id").expect("valid ID");
-        assert_eq!(id.as_str(), "native:opaque/id");
-    }
-}

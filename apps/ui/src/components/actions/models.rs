@@ -1,24 +1,21 @@
 use whispernow_domain::ModelId;
 
-use super::UiActions;
+use crate::UiContext;
 use crate::client;
 use crate::components::ui::Tone;
 use crate::{NoticeScope, UiOperation};
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 
-impl UiActions {
+impl UiContext {
     pub(crate) fn download_model(self, model_id: ModelId) {
         let operation = UiOperation::DownloadModel;
-        let name = self
-            .management()
-            .peek()
-            .model_display_name(model_id.as_str());
+        let name = self.management.peek().model_display_name(model_id.as_str());
         self.run(
             operation,
-            async move { client::download_model(&model_id).await },
-            move |actions, answer| match answer {
-                Ok(()) => actions.management().write().notify(
+            async move { client::invoke("download_model", Some(&model_id)).await },
+            move |mut actions, answer| match answer {
+                Ok(()) => actions.management.write().notify(
                     Tone::Info,
                     NoticeScope::Models,
                     format!("Downloading {name}"),
@@ -32,7 +29,7 @@ impl UiActions {
         let operation = UiOperation::CancelDownload;
         self.run(
             operation,
-            async move { client::cancel_download(&model_id).await },
+            async move { client::invoke::<_, ()>("cancel_download", Some(&model_id)).await },
             move |actions, answer| {
                 if let Err(error) = answer {
                     actions.report(operation, &error);
@@ -44,13 +41,13 @@ impl UiActions {
     /// Makes `model_id` the model in use, or loads it again after it failed to load.
     pub(crate) fn switch_model(self, model_id: ModelId) {
         let operation = UiOperation::ModelSwitch;
-        let sent = model_id.clone();
         self.run(
             operation,
-            async move { client::select_model(&sent).await },
-            move |actions, answer| match answer {
-                Ok(()) => actions.management().write().finish_model_switch(&model_id),
-                Err(error) => actions.report(operation, &error),
+            async move { client::invoke::<_, ()>("select_model", Some(&model_id)).await },
+            move |actions, answer| {
+                if let Err(error) = answer {
+                    actions.report(operation, &error);
+                }
             },
         );
     }
@@ -59,7 +56,7 @@ impl UiActions {
         let operation = UiOperation::ModelDelete;
         self.run(
             operation,
-            async move { client::delete_model(&model_id).await },
+            async move { client::invoke("delete_model", Some(&model_id)).await },
             move |actions, answer| match answer {
                 Ok(()) => actions.reload_models(),
                 Err(error) => actions.report(operation, &error),
@@ -67,10 +64,10 @@ impl UiActions {
         );
     }
 
-    pub(super) fn reload_models(self) {
+    pub(super) fn reload_models(mut self) {
         spawn_forever(async move {
-            match client::list_models().await {
-                Ok(models) => self.management().write().install_models(models),
+            match client::call("list_models").await {
+                Ok(models) => self.management.write().install_models(models),
                 Err(error) => self.load_failed("Speech models", &error),
             }
         });

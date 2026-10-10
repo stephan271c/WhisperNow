@@ -1,7 +1,7 @@
 //! The pill renders the published state snapshot itself; this module only decides where the
 //! window is and whether it shows.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use whispernow_domain::AppError;
 
 use whispernow_domain::ipc::{AppState, ErrorCategory, Phase};
@@ -27,8 +27,6 @@ pub(crate) enum OverlayPresentation {
     Notification,
 }
 
-/// The native side of the overlay. Every method only queues work (a main-thread window change
-/// or a notification), so the overlay may call it under its own lock.
 pub(crate) trait OverlayWindow: Send + Sync {
     /// Places the window on the monitor under the cursor and shows it without focus.
     fn show(&self);
@@ -125,18 +123,11 @@ fn notification(error: &AppError) -> String {
     }
 }
 
-#[derive(Default)]
-struct Presented {
-    window_shown: bool,
-    notified: bool,
-}
-
-/// Shows and hides the recording bar as snapshots arrive. Its lock is a leaf, and the window
-/// layer only queues work under it, which keeps window changes in snapshot order.
 pub(crate) struct RecordingOverlay {
     window: Arc<dyn OverlayWindow>,
     can_float: bool,
-    presented: Mutex<Presented>,
+    window_shown: bool,
+    notified: bool,
 }
 
 impl RecordingOverlay {
@@ -144,28 +135,28 @@ impl RecordingOverlay {
         Self {
             window,
             can_float,
-            presented: Mutex::default(),
+            window_shown: false,
+            notified: false,
         }
     }
 
-    pub(crate) fn observe(&self, snapshot: &AppState) {
+    pub(crate) fn observe(&mut self, snapshot: &AppState) {
         let presentation = overlay_presentation(&snapshot.phase, self.can_float);
-        let mut presented = self.presented.lock().expect("overlay lock poisoned");
         let show = presentation == OverlayPresentation::Window;
-        if show && !presented.window_shown {
+        if show && !self.window_shown {
             self.window.show();
-        } else if !show && presented.window_shown {
+        } else if !show && self.window_shown {
             self.window.hide();
         }
-        presented.window_shown = show;
+        self.window_shown = show;
         let notify = presentation == OverlayPresentation::Notification;
         if notify
-            && !presented.notified
+            && !self.notified
             && let Phase::Error { error } = &snapshot.phase
         {
             self.window.notify(notification(error));
         }
-        presented.notified = notify;
+        self.notified = notify;
     }
 }
 

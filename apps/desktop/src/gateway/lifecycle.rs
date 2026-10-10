@@ -107,7 +107,7 @@ impl Gateway {
         drop(
             self.commands
                 .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                .expect("command barrier lock poisoned"),
         );
         self.services.shutdown();
         self.shutdown_complete.store(true, Ordering::Release);
@@ -121,10 +121,7 @@ impl Gateway {
     /// updating, and the application is not closing.
     pub(crate) fn shortcuts_enabled(&self) -> bool {
         !self.shutdown_begun.load(Ordering::Acquire)
-            && !matches!(
-                self.services.state.lock().phase,
-                crate::services::Phase::Paused | crate::services::Phase::Updating
-            )
+            && self.services.state.lock().phase.shortcuts_enabled()
     }
 
     pub(crate) fn refuse_while_updating(&self) -> Result<(), AppError> {

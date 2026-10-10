@@ -2,15 +2,15 @@ use dioxus::prelude::*;
 use whispernow_domain::ipc::{ManualUpdatePackage, UpdateError, UpdatePhase};
 
 use super::NoticeRegion;
-use super::actions::{DisabledReason, use_actions};
+use super::actions::DisabledReason;
 use super::labels::format_bytes;
-use super::ui::{Banner, Button, ButtonVariant, Card, ProgressBar, Tone};
+use super::ui::{Banner, Button, ButtonVariant, ProgressBar, Tone};
 use crate::{NoticeScope, UiContext, UiOperation};
 
 #[component]
 pub(super) fn AboutPage() -> Element {
     let context = use_context::<UiContext>();
-    let actions = use_actions();
+    let actions = context;
     let check_blocked = actions.blocked(UiOperation::CheckForUpdates);
     let phase = context
         .state
@@ -21,7 +21,7 @@ pub(super) fn AboutPage() -> Element {
     let checking = phase == Some(UpdatePhase::Checking);
     let updates_disabled = phase == Some(UpdatePhase::Disabled);
     rsx! { div { class: "settings-stack",
-        Card { aria_labelledby: "about-title",
+        div { class: "card", aria_labelledby: "about-title",
             h2 { id: "about-title", "WhisperNow" }
             p { id: "about-version", "Version {env!(\"CARGO_PKG_VERSION\")}" }
             UpdateStatus {}
@@ -44,7 +44,7 @@ pub(super) fn AboutPage() -> Element {
 #[component]
 pub(super) fn UpdateStatus() -> Element {
     let context = use_context::<UiContext>();
-    let actions = use_actions();
+    let actions = context;
     let state = context.state;
     let restart_blocked = actions.blocked(UiOperation::UpdateInstallRestart);
     let check_blocked = actions.blocked(UiOperation::CheckForUpdates);

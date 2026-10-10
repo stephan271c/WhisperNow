@@ -2,16 +2,15 @@ use dioxus::prelude::*;
 use whispernow_domain::ipc::MicrophoneTestResponse;
 use whispernow_domain::{RecordingMode, SetupStep, Shortcut};
 
-use super::actions::{DisabledReason, use_actions};
+use super::NoticeRegion;
+use super::actions::DisabledReason;
 use super::labels;
 use super::ui::{
     Banner, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconName, ShortcutLabel, Tone,
 };
 use super::updates::UpdateStatus;
-use super::{NoticeRegion, use_navigator};
 use crate::{
-    BlockedReason, HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext,
-    UiOperation,
+    HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext, UiOperation,
 };
 
 /// The steps the setup checklist lists, each done once setup has moved past it.
@@ -61,7 +60,7 @@ pub(super) fn HomePage() -> Element {
 /// Setup waits here until the user continues it.
 #[component]
 fn SetupChecklist(step: SetupStep) -> Element {
-    let navigator = use_navigator();
+    let navigator = use_context::<UiContext>().navigator;
     rsx! {
         section { class: "setup-checklist-card", aria_labelledby: "setup-checklist-title",
             Banner { tone: Tone::Info,
@@ -91,7 +90,7 @@ fn SetupChecklist(step: SetupStep) -> Element {
 
 #[component]
 fn StatusCard(status: HomeStatus) -> Element {
-    let navigator = use_navigator();
+    let navigator = use_context::<UiContext>().navigator;
     let dot = match status.kind {
         HomeStatusKind::Ready => "status-dot",
         HomeStatusKind::Recording => "status-dot recording",
@@ -131,7 +130,7 @@ fn StatusCard(status: HomeStatus) -> Element {
 
 #[component]
 fn ShortcutsCard(shortcut: Option<(RecordingMode, Shortcut)>) -> Element {
-    let navigator = use_navigator();
+    let navigator = use_context::<UiContext>().navigator;
     rsx! {
         article { class: "card home-card", aria_labelledby: "home-shortcuts-title",
             h2 { id: "home-shortcuts-title", "Shortcuts" }
@@ -156,9 +155,14 @@ fn ShortcutsCard(shortcut: Option<(RecordingMode, Shortcut)>) -> Element {
 
 #[component]
 fn MicrophoneCard(test: Option<MicrophoneTestResponse>) -> Element {
-    let actions = use_actions();
-    let blocked = actions.blocked(UiOperation::TestMicrophone);
-    let testing = blocked == Some(BlockedReason::CommandPending);
+    let actions = use_context::<UiContext>();
+    let blocked = actions
+        .blocked(UiOperation::TestMicrophone)
+        .or(actions.phase_blocked());
+    let testing = actions
+        .management
+        .read()
+        .is_busy(UiOperation::TestMicrophone);
     rsx! {
         article { class: "card home-card", aria_labelledby: "home-microphone-title",
             h2 { id: "home-microphone-title", "Microphone" }
@@ -234,8 +238,8 @@ pub(super) fn percent(level: f32) -> u8 {
 
 #[component]
 fn LatestTranscript(transcript: Option<String>) -> Element {
-    let actions = use_actions();
-    let navigator = use_navigator();
+    let actions = use_context::<UiContext>();
+    let navigator = use_context::<UiContext>().navigator;
     rsx! {
         article { class: "card home-card home-transcript", aria_labelledby: "home-transcript-title",
             h2 { id: "home-transcript-title", "Latest transcript" }

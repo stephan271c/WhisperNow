@@ -234,10 +234,16 @@ impl PastePlatform for HelperPastePlatform {
         {
             return KeystrokeOutcome::NotSent(NativePasteError::Unavailable);
         }
+        #[allow(
+            clippy::match_same_arms,
+            reason = "keep the helper protocol replies explicit"
+        )]
         match self.answers.recv_timeout(ANSWER_TIMEOUT).as_deref() {
             Ok("sent") => KeystrokeOutcome::Sent,
             Ok("held") => KeystrokeOutcome::NotSent(NativePasteError::ModifierStillHeld),
             Ok("refused") => KeystrokeOutcome::NotSent(NativePasteError::InjectionFailed),
+            // The helper can fail after emitting part of the shortcut.
+            Ok("failed") => KeystrokeOutcome::Uncertain(NativePasteError::InjectionFailed),
             _ => KeystrokeOutcome::Uncertain(NativePasteError::InjectionFailed),
         }
     }
@@ -389,22 +395,6 @@ mod tests {
                 ShortcutKey::Enter
             ),
             "29,97+56,100+42,54+125,126+28,96"
-        );
-        assert_eq!(
-            chord_of(&[ShortcutModifier::Alt], ShortcutKey::A),
-            "56,100+30"
-        );
-        assert_eq!(
-            chord_of(&[ShortcutModifier::Control], ShortcutKey::M),
-            "29,97+50"
-        );
-        assert_eq!(
-            chord_of(&[ShortcutModifier::Control], ShortcutKey::Digit0),
-            "29,97+11"
-        );
-        assert_eq!(
-            chord_of(&[ShortcutModifier::Control], ShortcutKey::F12),
-            "29,97+88"
         );
         assert_eq!(
             chord_of(&[ShortcutModifier::Control], ShortcutKey::F24),

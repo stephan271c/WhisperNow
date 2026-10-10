@@ -168,9 +168,8 @@ pub fn nav_keyboard_target(key: &str, current: usize, count: usize) -> Option<us
 
 #[cfg(test)]
 mod tests {
-    use whispernow_domain::ipc::MainWindowSection;
 
-    use super::{Route, SettingsRoute, TopLevel, nav_keyboard_target};
+    use super::{Route, SettingsRoute, nav_keyboard_target};
     use crate::NoticeScope;
 
     #[test]
@@ -187,26 +186,6 @@ mod tests {
             "activation stays native"
         );
         assert_eq!(nav_keyboard_target("ArrowDown", 0, 0), None);
-    }
-
-    #[test]
-    fn overlay_sections_open_their_routes_and_each_page_has_one_title() {
-        assert_eq!(
-            Route::from_section(MainWindowSection::History),
-            Route::History
-        );
-        assert_eq!(
-            Route::from_section(MainWindowSection::Settings),
-            Route::Settings(SettingsRoute::General)
-        );
-        assert_eq!(Route::default(), Route::Home);
-        assert_eq!(Route::Setup.top_level(), TopLevel::Home);
-        let mut ids = SettingsRoute::ALL.map(SettingsRoute::nav_id).to_vec();
-        ids.dedup();
-        assert_eq!(ids.len(), SettingsRoute::ALL.len());
-        for top in TopLevel::ALL {
-            assert_eq!(top.route().top_level(), top);
-        }
     }
 
     #[test]

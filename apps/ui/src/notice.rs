@@ -1,4 +1,3 @@
-use crate::Route;
 use crate::components::ui::Tone;
 
 /// The part of the window a notice is about. A page that hosts the scope shows the notice
@@ -15,19 +14,12 @@ pub enum NoticeScope {
     Updates,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NoticeAction {
-    pub label: &'static str,
-    pub route: Route,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Notice {
     /// Distinguishes a repeated message so a new notice restarts its dismissal timer.
     pub id: u64,
     pub tone: Tone,
     pub message: String,
-    pub action: Option<NoticeAction>,
     pub scope: NoticeScope,
 }
 

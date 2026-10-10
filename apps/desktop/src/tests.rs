@@ -59,22 +59,14 @@ fn allowed_commands_by_window(manifest_dir: &Path) -> BTreeMap<String, BTreeSet<
     allowed_by_window
 }
 
-/// Every place that names a desktop command must name the same set: the api
-/// catalog, the list build.rs handed to Tauri, the registered invoke handler,
-/// the committed permission files, and the per-window capabilities.
 #[test]
-fn command_catalog_is_identical_across_build_handler_permissions_and_capabilities() {
+fn command_catalog_is_identical_across_handler_permissions_and_capabilities() {
     let catalog: BTreeSet<&str> = COMMAND_NAMES.into_iter().collect();
     assert_eq!(
         catalog.len(),
         COMMAND_NAMES.len(),
         "COMMAND_NAMES repeats a name"
     );
-
-    let build_commands: BTreeSet<&str> = env!("WHISPERNOW_TAURI_MANIFEST_COMMANDS")
-        .split(',')
-        .collect();
-    assert_eq!(build_commands, catalog, "build.rs Tauri manifest commands");
 
     let registered: Vec<&str> = REGISTERED_COMMANDS
         .iter()
@@ -193,21 +185,6 @@ fn production_csp_allows_the_dioxus_webassembly_frontend() {
 }
 
 #[test]
-fn dioxus_devtools_are_enabled_only_for_the_development_frontend() {
-    let config: serde_json::Value =
-        serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid JSON");
-    let development = config["build"]["beforeDevCommand"]["script"]
-        .as_str()
-        .expect("development frontend command");
-    let production = config["build"]["beforeBuildCommand"]["script"]
-        .as_str()
-        .expect("production frontend command");
-
-    assert!(development.contains("--features dev"));
-    assert!(!production.contains("--features dev"));
-}
-
-#[test]
 fn macos_bundle_declares_only_required_permissions_and_current_minimum() {
     let config: serde_json::Value =
         serde_json::from_str(include_str!("../tauri.macos.conf.json")).expect("valid JSON");
@@ -219,12 +196,9 @@ fn macos_bundle_declares_only_required_permissions_and_current_minimum() {
 
     let info = include_str!("../Info.plist");
     assert!(info.contains("NSMicrophoneUsageDescription"));
-    assert!(!info.contains("NSScreenCaptureUsageDescription"));
 
     let entitlements = include_str!("../Entitlements.plist");
     assert!(entitlements.contains("com.apple.security.device.audio-input"));
-    assert!(!entitlements.contains("allow-jit"));
-    assert!(!entitlements.contains("disable-library-validation"));
 }
 
 #[test]

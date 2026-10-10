@@ -1,0 +1,38 @@
+use wasm_bindgen_futures::JsFuture;
+
+pub fn install_mount_point() {
+    let document = web_sys::window()
+        .expect("window")
+        .document()
+        .expect("document");
+    if let Some(previous) = document.get_element_by_id("main") {
+        previous.remove();
+    }
+    let mount = document.create_element("div").expect("create mount point");
+    mount.set_id("main");
+    document
+        .document_element()
+        .expect("document element")
+        .append_child(&mount)
+        .expect("append mount point");
+}
+
+pub async fn render_turn() {
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        web_sys::window()
+            .expect("window")
+            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 10)
+            .expect("schedule render turn");
+    });
+    JsFuture::from(promise).await.expect("render turn");
+}
+
+pub async fn wait_for(what: &str, condition: impl Fn() -> bool) {
+    for _ in 0..200 {
+        if condition() {
+            return;
+        }
+        render_turn().await;
+    }
+    panic!("timed out waiting for {what}");
+}

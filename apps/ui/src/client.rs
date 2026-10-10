@@ -1,5 +1,4 @@
-//! One async function per desktop command, over a single transport: Tauri's `invoke` in the
-//! browser, and a scripted fake in native tests.
+//! Tauri command transport and browser window integration.
 #![cfg_attr(
     not(target_arch = "wasm32"),
     allow(dead_code, reason = "natively only tests call the desktop")
@@ -7,15 +6,6 @@
 
 use serde::{Serialize, de::DeserializeOwned};
 use whispernow_domain::AppError;
-use whispernow_domain::ipc::{
-    AppState, AudioDevice, ClearDataResult, DataLocation, MainWindowSection,
-    MicrophoneTestResponse, ModelSummary, PermissionKind, PermissionsResponse,
-    SaveSettingsResponse, SetApiKeyRequest, SettingsView, SetupStateView, UpdateState,
-};
-use whispernow_domain::{
-    ClearDataCategory, EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, LlmProvider,
-    ModelId, Settings, SetupCheckpoint,
-};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod fake;
@@ -31,7 +21,7 @@ pub(crate) fn connection_error() -> AppError {
 type Answer<R> = Result<R, AppError>;
 
 /// Invokes `command` with `request`, or with no input when it takes none.
-async fn invoke<Q, R>(command: &'static str, request: Option<&Q>) -> Answer<R>
+pub(crate) async fn invoke<Q, R>(command: &'static str, request: Option<&Q>) -> Answer<R>
 where
     Q: Serialize,
     R: DeserializeOwned,
@@ -51,165 +41,8 @@ where
     }
 }
 
-async fn call<R: DeserializeOwned>(command: &'static str) -> Answer<R> {
+pub(crate) async fn call<R: DeserializeOwned>(command: &'static str) -> Answer<R> {
     invoke::<(), R>(command, None).await
-}
-
-pub(crate) async fn get_state() -> Answer<AppState> {
-    call("get_state").await
-}
-
-pub(crate) async fn get_settings() -> Answer<SettingsView> {
-    call("get_settings").await
-}
-
-pub(crate) async fn update_settings(request: &Settings) -> Answer<SaveSettingsResponse> {
-    invoke("update_settings", Some(request)).await
-}
-
-pub(crate) async fn set_api_key(request: &SetApiKeyRequest) -> Answer<SettingsView> {
-    invoke("set_api_key", Some(request)).await
-}
-
-pub(crate) async fn clear_api_key(request: &LlmProvider) -> Answer<SettingsView> {
-    invoke("clear_api_key", Some(request)).await
-}
-
-pub(crate) async fn list_audio_devices() -> Answer<Vec<AudioDevice>> {
-    call("list_audio_devices").await
-}
-
-pub(crate) async fn test_microphone() -> Answer<MicrophoneTestResponse> {
-    call("test_microphone").await
-}
-
-pub(crate) async fn list_models() -> Answer<Vec<ModelSummary>> {
-    call("list_models").await
-}
-
-pub(crate) async fn download_model(model_id: &ModelId) -> Answer<()> {
-    invoke("download_model", Some(model_id)).await
-}
-
-pub(crate) async fn cancel_download(model_id: &ModelId) -> Answer<()> {
-    invoke("cancel_download", Some(model_id)).await
-}
-
-pub(crate) async fn select_model(model_id: &ModelId) -> Answer<()> {
-    invoke("select_model", Some(model_id)).await
-}
-
-pub(crate) async fn delete_model(model_id: &ModelId) -> Answer<()> {
-    invoke("delete_model", Some(model_id)).await
-}
-
-pub(crate) async fn get_setup_state() -> Answer<SetupStateView> {
-    call("get_setup_state").await
-}
-
-pub(crate) async fn save_setup_checkpoint(checkpoint: &SetupCheckpoint) -> Answer<SetupStateView> {
-    invoke("save_setup_checkpoint", Some(checkpoint)).await
-}
-
-pub(crate) async fn complete_setup(checkpoint: &SetupCheckpoint) -> Answer<SaveSettingsResponse> {
-    invoke("complete_setup", Some(checkpoint)).await
-}
-
-pub(crate) async fn restart_setup() -> Answer<SetupStateView> {
-    call("restart_setup").await
-}
-
-pub(crate) async fn get_permissions() -> Answer<PermissionsResponse> {
-    call("get_permissions").await
-}
-
-pub(crate) async fn request_permission(request: &PermissionKind) -> Answer<PermissionsResponse> {
-    invoke("request_permission", Some(request)).await
-}
-
-pub(crate) async fn open_permission_settings(request: &PermissionKind) -> Answer<()> {
-    invoke("open_permission_settings", Some(request)).await
-}
-
-pub(crate) async fn start_test_dictation() -> Answer<()> {
-    call("start_test_dictation").await
-}
-
-pub(crate) async fn stop_recording() -> Answer<()> {
-    call("stop_recording").await
-}
-
-pub(crate) async fn cancel_recording() -> Answer<()> {
-    call("cancel_recording").await
-}
-
-pub(crate) async fn dismiss_recording_overlay() -> Answer<()> {
-    call("dismiss_recording_overlay").await
-}
-
-pub(crate) async fn open_main_window(request: &MainWindowSection) -> Answer<()> {
-    invoke("open_main_window", Some(request)).await
-}
-
-pub(crate) async fn get_history(request: &HistoryPageRequest) -> Answer<HistoryPage> {
-    invoke("get_history", Some(request)).await
-}
-
-/// The newest `pages` pages matching `filter`, read as one page.
-pub(crate) async fn history_window(pages: u32, filter: HistoryFilter) -> Answer<HistoryPage> {
-    get_history(&HistoryPageRequest {
-        limit: pages.saturating_mul(HistoryPageRequest::DEFAULT_PAGE_SIZE),
-        ..HistoryPageRequest::first_page(filter)
-    })
-    .await
-}
-
-pub(crate) async fn open_recordings_folder() -> Answer<()> {
-    call("open_recordings_folder").await
-}
-
-pub(crate) async fn delete_history_entry(request: &EntryId) -> Answer<()> {
-    invoke("delete_history_entry", Some(request)).await
-}
-
-pub(crate) async fn clear_history() -> Answer<()> {
-    call("clear_history").await
-}
-
-pub(crate) async fn data_locations() -> Answer<Vec<DataLocation>> {
-    call("data_locations").await
-}
-
-pub(crate) async fn clear_data(request: &[ClearDataCategory]) -> Answer<ClearDataResult> {
-    invoke("clear_data", Some(&request)).await
-}
-
-pub(crate) async fn suspend_shortcuts() -> Answer<()> {
-    call("suspend_shortcuts").await
-}
-
-pub(crate) async fn resume_shortcuts() -> Answer<()> {
-    call("resume_shortcuts").await
-}
-
-pub(crate) async fn get_update_state() -> Answer<UpdateState> {
-    call("get_update_state").await
-}
-
-pub(crate) async fn check_for_updates() -> Answer<UpdateState> {
-    call("check_for_updates").await
-}
-
-pub(crate) async fn dismiss_update() -> Answer<UpdateState> {
-    call("dismiss_update").await
-}
-
-pub(crate) async fn restart_to_update() -> Answer<UpdateState> {
-    call("restart_to_update").await
-}
-
-pub(crate) async fn open_update_release_page() -> Answer<UpdateState> {
-    call("open_update_release_page").await
 }
 
 /// Waits `ms` milliseconds; native tests run every waiting timer with [`fake::run_timers`].
@@ -489,9 +322,9 @@ mod wasm {
             // Both commands are idempotent, so a failed suspension is not
             // retried; a later restore request is still sent and harmless.
             let _ = if target {
-                super::suspend_shortcuts().await
+                super::call::<()>("suspend_shortcuts").await
             } else {
-                super::resume_shortcuts().await
+                super::call::<()>("resume_shortcuts").await
             };
             SHORTCUT_CAPTURE.with_borrow_mut(|sync| sync.applied = target);
         }

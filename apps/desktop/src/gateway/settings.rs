@@ -9,7 +9,6 @@ use whispernow_domain::WindowGeometry;
 use super::{Failure, Gateway, run_blocking};
 use crate::{
     autostart::{self, AutostartError},
-    services::PersistedShortcuts,
     shortcuts::{
         RecordingBinding, ShortcutBinding, ShortcutRegistrationError, cancel_binding,
         recording_binding,
@@ -90,9 +89,8 @@ impl Gateway {
         response
             .warnings
             .extend(refused.map(|warning| warning.summary));
-        let effects = NativeEffects::between(&before, &response.settings.settings);
         response.warnings.extend(
-            self.apply_native_settings(&response.settings.settings, effects)
+            self.apply_native_settings(&response.settings.settings, Some(&before))
                 .await
                 .map(|warning| warning.summary),
         );
@@ -131,9 +129,10 @@ impl Gateway {
                 return Err(error);
             }
         };
-        let mut warnings: Vec<_> = refused.into_iter().map(|warning| warning.summary).collect();
+        let mut warnings = settings.warnings.clone();
+        warnings.extend(refused.map(|warning| warning.summary));
         warnings.extend(
-            self.apply_native_settings(&settings.settings, NativeEffects::SETUP)
+            self.apply_native_settings(&settings.settings, None)
                 .await
                 .map(|warning| warning.summary),
         );
@@ -161,8 +160,9 @@ impl Gateway {
         saved: &Settings,
         chosen: &mut Settings,
     ) -> (Option<AppError>, bool) {
-        let previous = PersistedShortcuts::of(saved);
-        if previous == PersistedShortcuts::of(chosen) {
+        if saved.recording_shortcut == chosen.recording_shortcut
+            && saved.recording_mode == chosen.recording_mode
+        {
             return (None, false);
         }
         let Ok(recording) = recording_binding(chosen) else {
@@ -171,7 +171,10 @@ impl Gateway {
         match self.apply_shortcuts(Ok(recording)).await {
             None => (None, true),
             Some(mut refused) => {
-                previous.apply_to(chosen);
+                chosen
+                    .recording_shortcut
+                    .clone_from(&saved.recording_shortcut);
+                chosen.recording_mode = saved.recording_mode;
                 "The recording shortcut could not be activated; the previous shortcut is still in use"
                     .clone_into(&mut refused.summary);
                 (Some(refused), false)
@@ -203,18 +206,18 @@ impl Gateway {
         Ok(())
     }
 
-    /// Applies the saved `settings`' `effects` other than the recording shortcuts, which are
+    /// Applies the saved settings' native effects beyond recording shortcuts, which are
     /// registered before the save. The caller holds `native_settings`; every native call runs
     /// on a blocking worker without any state lock held. Failures are returned as warnings.
     async fn apply_native_settings(
         &self,
         settings: &Settings,
-        effects: NativeEffects,
+        before: Option<&Settings>,
     ) -> Option<AppError> {
-        if effects.cancel_shortcut {
+        if before.is_some_and(|saved| saved.cancel_shortcut != settings.cancel_shortcut) {
             self.apply_cancel_shortcut(cancel_binding(settings)).await;
         }
-        if effects.autostart {
+        if before.is_none_or(|saved| saved.auto_start_on_login != settings.auto_start_on_login) {
             return self.apply_autostart(settings.auto_start_on_login).await;
         }
         None
@@ -287,28 +290,6 @@ impl Gateway {
 
     pub(crate) fn save_window_geometry(&self, geometry: WindowGeometry) -> Result<(), AppError> {
         self.services.settings.save_window_geometry(geometry)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct NativeEffects {
-    cancel_shortcut: bool,
-    autostart: bool,
-}
-
-impl NativeEffects {
-    /// Setup chooses only the recording shortcuts, so the cancel shortcut keeps
-    /// the binding it already has.
-    const SETUP: Self = Self {
-        cancel_shortcut: false,
-        autostart: true,
-    };
-
-    fn between(before: &Settings, after: &Settings) -> Self {
-        Self {
-            cancel_shortcut: before.cancel_shortcut != after.cancel_shortcut,
-            autostart: before.auto_start_on_login != after.auto_start_on_login,
-        }
     }
 }
 

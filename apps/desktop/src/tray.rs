@@ -51,7 +51,6 @@ pub(crate) enum TrayState {
     Processing,
     Paused,
     Error,
-    ErrorPaused,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,7 +86,7 @@ impl TrayState {
                 status_text: "Status: Paused",
                 tooltip: "WhisperNow — Paused",
             },
-            Self::Error | Self::ErrorPaused => TrayPresentation {
+            Self::Error => TrayPresentation {
                 status_text: "Status: Error — open WhisperNow",
                 tooltip: "WhisperNow — Error",
             },
@@ -100,8 +99,7 @@ pub(crate) fn tray_state(snapshot: &AppState) -> TrayState {
         || snapshot.model_state == ModelState::Failed
         || matches!(snapshot.phase, Phase::Error { .. });
     match snapshot.phase {
-        Phase::Paused if failed => TrayState::ErrorPaused,
-        Phase::Paused => TrayState::Paused,
+        Phase::Paused if !failed => TrayState::Paused,
         Phase::Recording { .. } if failed => TrayState::RecordingError,
         _ if failed => TrayState::Error,
         Phase::Recording { .. } => TrayState::Recording,
@@ -117,88 +115,43 @@ pub(crate) fn tray_state(snapshot: &AppState) -> TrayState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PauseIntent {
-    Pause,
-    Resume,
-}
-
-impl PauseIntent {
-    const fn text(self) -> &'static str {
-        match self {
-            Self::Pause => "Pause",
-            Self::Resume => "Resume",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TrayMenu {
-    pub(crate) pause_intent: PauseIntent,
-    pub(crate) pause_enabled: bool,
-    pub(crate) quick: QuickActions,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct QuickActions {
-    pub(crate) copy_last: bool,
-    /// Only while a dictation records or transcribes.
-    pub(crate) cancel: bool,
-}
-
-impl TrayMenu {
-    /// Before the first snapshot nothing lifecycle-changing is offered.
-    const UNKNOWN: Self = Self {
-        pause_intent: PauseIntent::Pause,
-        pause_enabled: false,
-        quick: QuickActions {
-            copy_last: false,
-            cancel: false,
-        },
-    };
-}
-
-/// `copy_capable` is whether this session can copy a transcript at all.
-pub(crate) fn tray_menu(snapshot: &AppState, copy_capable: bool) -> TrayMenu {
-    let (pause_intent, pause_enabled) = match snapshot.phase {
-        Phase::Paused => (PauseIntent::Resume, true),
-        Phase::Updating => (PauseIntent::Pause, false),
-        _ => (PauseIntent::Pause, true),
-    };
-    TrayMenu {
-        pause_intent,
-        pause_enabled,
-        quick: QuickActions {
-            copy_last: copy_capable
-                && snapshot
-                    .last_transcript
-                    .as_ref()
-                    .is_some_and(|transcript| !transcript.is_empty()),
-            cancel: snapshot.phase.is_busy(),
-        },
-    }
-}
-
 /// Everything the native tray shows. It is derived from snapshots alone and
 /// applied as a whole on the main thread, and only when it changes, so
 /// repeated snapshots never touch the native icon.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TrayDesired {
     pub(crate) state: TrayState,
-    pub(crate) menu: TrayMenu,
+    pub(crate) pause_text: &'static str,
+    pub(crate) pause_enabled: bool,
+    pub(crate) copy_last: bool,
+    pub(crate) cancel: bool,
 }
 
 impl TrayDesired {
     const LOADING: Self = Self {
         state: TrayState::Loading,
-        menu: TrayMenu::UNKNOWN,
+        pause_text: "Pause",
+        pause_enabled: false,
+        copy_last: false,
+        cancel: false,
     };
 }
 
 pub(crate) fn tray_desired(snapshot: &AppState, copy_capable: bool) -> TrayDesired {
     TrayDesired {
         state: tray_state(snapshot),
-        menu: tray_menu(snapshot, copy_capable),
+        pause_text: if snapshot.phase == Phase::Paused {
+            "Resume"
+        } else {
+            "Pause"
+        },
+        pause_enabled: snapshot.phase != Phase::Updating,
+        copy_last: copy_capable
+            && snapshot
+                .last_transcript
+                .as_ref()
+                .is_some_and(|transcript| !transcript.is_empty()),
+        cancel: snapshot.phase.is_busy(),
     }
 }
 
@@ -215,12 +168,11 @@ impl NativeTray {
     /// Runs on the main thread.
     fn render(&self, desired: TrayDesired) {
         let presentation = desired.state.presentation();
-        let menu = desired.menu;
         let _ = self.status.set_text(presentation.status_text);
-        let _ = self.copy_last.set_enabled(menu.quick.copy_last);
-        let _ = self.cancel.set_enabled(menu.quick.cancel);
-        let _ = self.pause.set_text(menu.pause_intent.text());
-        let _ = self.pause.set_enabled(menu.pause_enabled);
+        let _ = self.copy_last.set_enabled(desired.copy_last);
+        let _ = self.cancel.set_enabled(desired.cancel);
+        let _ = self.pause.set_text(desired.pause_text);
+        let _ = self.pause.set_enabled(desired.pause_enabled);
         let _ = self.icon.set_tooltip(Some(presentation.tooltip));
         let _ = self.icon.set_icon(Some(state_icon(desired.state)));
     }
@@ -253,7 +205,7 @@ impl TrayController {
         let status = menu_item(app, "tray-status", presentation.status_text, false)?;
         let copy_last = menu_item(app, COPY_LAST_MENU_ID, "Copy Last Transcript", false)?;
         let cancel = menu_item(app, CANCEL_MENU_ID, "Cancel Recording", false)?;
-        let pause = menu_item(app, PAUSE_MENU_ID, PauseIntent::Pause.text(), false)?;
+        let pause = menu_item(app, PAUSE_MENU_ID, "Pause", false)?;
         let settings = menu_item(app, SETTINGS_MENU_ID, "Open WhisperNow", true)?;
         let check_updates = menu_item(app, CHECK_UPDATES_MENU_ID, "Check for Updates", true)?;
         let quit = menu_item(app, QUIT_MENU_ID, "Quit WhisperNow", true)?;
@@ -329,7 +281,7 @@ impl TrayController {
     pub(crate) fn mark_copy_unavailable(&self) {
         self.copy_capable.store(false, Ordering::Release);
         let mut desired = *self.desired.lock().expect("tray desired lock poisoned");
-        desired.menu.quick.copy_last = false;
+        desired.copy_last = false;
         self.apply(desired);
     }
 
@@ -422,7 +374,7 @@ fn covers(state: TrayState, x: f32, y: f32) -> bool {
         TrayState::Paused => {
             rim || pill(x, y, 12.0, FACE_Y, 4.0, 12.0) || pill(x, y, 20.0, FACE_Y, 4.0, 12.0)
         }
-        TrayState::Error | TrayState::ErrorPaused => rim || exclamation,
+        TrayState::Error => rim || exclamation,
     }
 }
 
@@ -476,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn phases_map_to_shape_distinct_tray_states() {
+    fn tray_state_and_actions_follow_the_phase() {
         for (phase, background_error, expected) in [
             (Phase::Idle, false, TrayState::Idle),
             (recording(), false, TrayState::Recording),
@@ -490,71 +442,38 @@ mod tests {
             (failed(), false, TrayState::Error),
             (Phase::Idle, true, TrayState::Error),
             (recording(), true, TrayState::RecordingError),
-            (Phase::Paused, true, TrayState::ErrorPaused),
+            (Phase::Paused, true, TrayState::Error),
         ] {
             let mut snapshot = snapshot(phase.clone());
             if background_error {
                 snapshot.error = Some(transcription_failed());
             }
-            assert_eq!(tray_state(&snapshot), expected, "{phase:?}");
+            assert_eq!(tray_desired(&snapshot, true).state, expected, "{phase:?}");
         }
         let mut loading = snapshot(Phase::Idle);
         loading.model_state = ModelState::Loading;
-        assert_eq!(tray_state(&loading), TrayState::Loading);
-    }
-
-    #[test]
-    fn menu_labels_always_expose_status_and_pause_semantics() {
-        assert_eq!(PauseIntent::Pause.text(), "Pause");
-        assert_eq!(PauseIntent::Resume.text(), "Resume");
-        assert!(
-            TrayState::Error
-                .presentation()
-                .status_text
-                .contains("open WhisperNow")
-        );
+        assert_eq!(tray_desired(&loading, true).state, TrayState::Loading);
+        let idle = tray_desired(&snapshot(Phase::Idle), true);
         assert_eq!(
-            TrayAction::from_menu_id(PAUSE_MENU_ID),
-            Some(TrayAction::TogglePause)
-        );
-        assert_eq!(
-            TrayAction::from_menu_id(CHECK_UPDATES_MENU_ID),
-            Some(TrayAction::CheckForUpdates)
-        );
-        assert_eq!(
-            TrayAction::from_menu_id(COPY_LAST_MENU_ID),
-            Some(TrayAction::CopyLastTranscript)
-        );
-        assert_eq!(
-            TrayAction::from_menu_id(CANCEL_MENU_ID),
-            Some(TrayAction::CancelRecording)
-        );
-        assert_eq!(TrayAction::from_menu_id("unknown"), None);
-    }
-
-    #[test]
-    fn tray_menu_follows_the_phase() {
-        assert_eq!(
-            tray_menu(&snapshot(Phase::Idle), true),
-            TrayMenu {
-                pause_intent: PauseIntent::Pause,
-                pause_enabled: true,
-                quick: QuickActions {
-                    copy_last: false,
-                    cancel: false,
-                },
-            }
+            (
+                idle.pause_text,
+                idle.pause_enabled,
+                idle.copy_last,
+                idle.cancel
+            ),
+            ("Pause", true, false, false)
         );
         for busy in [recording(), Phase::Processing { cleaning_up: false }] {
-            assert!(tray_menu(&snapshot(busy), true).quick.cancel);
+            assert!(tray_desired(&snapshot(busy), true).cancel);
         }
-        let paused = tray_menu(&snapshot(Phase::Paused), true);
-        assert_eq!(paused.pause_intent, PauseIntent::Resume);
-        assert!(paused.pause_enabled);
-        let updating = tray_menu(&snapshot(Phase::Updating), true);
-        assert_eq!(updating.pause_intent, PauseIntent::Pause);
-        assert!(!updating.pause_enabled);
-        assert!(!tray_menu(&snapshot(failed()), true).quick.cancel);
+        let paused = tray_desired(&snapshot(Phase::Paused), true);
+        assert_eq!((paused.pause_text, paused.pause_enabled), ("Resume", true));
+        let updating = tray_desired(&snapshot(Phase::Updating), true);
+        assert_eq!(
+            (updating.pause_text, updating.pause_enabled),
+            ("Pause", false)
+        );
+        assert!(!tray_desired(&snapshot(failed()), true).cancel);
     }
 
     #[test]
@@ -563,14 +482,14 @@ mod tests {
             last_transcript: Some("hello".to_owned()),
             ..snapshot(Phase::Idle)
         };
-        assert!(tray_desired(&copied, true).menu.quick.copy_last);
+        assert!(tray_desired(&copied, true).copy_last);
         let silent = AppState {
             last_transcript: Some(String::new()),
             ..snapshot(Phase::Idle)
         };
-        assert!(!tray_desired(&silent, true).menu.quick.copy_last);
+        assert!(!tray_desired(&silent, true).copy_last);
         assert!(
-            !tray_desired(&copied, false).menu.quick.copy_last,
+            !tray_desired(&copied, false).copy_last,
             "a session that cannot copy never offers the copy"
         );
     }
@@ -583,16 +502,16 @@ mod tests {
             ..snapshot(Phase::Idle)
         };
         tray.apply_snapshot(&copied);
-        assert!(tray.desired.lock().expect("desired").menu.quick.copy_last);
+        assert!(tray.desired.lock().expect("desired").copy_last);
 
         tray.mark_copy_unavailable();
-        assert!(!tray.desired.lock().expect("desired").menu.quick.copy_last);
+        assert!(!tray.desired.lock().expect("desired").copy_last);
         tray.apply_snapshot(&AppState {
             last_transcript: Some("again".to_owned()),
             ..snapshot(Phase::Idle)
         });
         let desired = *tray.desired.lock().expect("desired");
-        assert!(!desired.menu.quick.copy_last);
+        assert!(!desired.copy_last);
         assert_eq!(desired.state, TrayState::Idle, "nothing became an error");
     }
 

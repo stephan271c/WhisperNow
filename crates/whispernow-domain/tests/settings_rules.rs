@@ -1,7 +1,7 @@
 use whispernow_domain::{
     ApiKey, DEFAULT_CLEANUP_MODEL_ID, InvalidApiKey, LlmProvider, MINICPM_CLEANUP_MODEL_ID,
-    Settings, SettingsError, SetupCheckpoint, Shortcut, ShortcutKey, ShortcutModifier,
-    VocabularyReplacement,
+    ProviderEndpoint, Settings, SettingsError, SetupCheckpoint, Shortcut, ShortcutKey,
+    ShortcutModifier, VocabularyReplacement,
 };
 
 fn shortcut(modifiers: &[ShortcutModifier], key: &str) -> Shortcut {
@@ -103,27 +103,33 @@ fn a_vocabulary_rule_needs_text_to_replace() {
 }
 
 #[test]
-fn ai_cleanup_needs_a_usable_provider_only_while_it_is_on() {
+fn incomplete_cleanup_settings_save_with_a_warning_until_repaired() {
     let mut settings = Settings {
         llm_provider: LlmProvider::Custom,
         ..Settings::default()
     };
     settings.provider_settings_mut(LlmProvider::Custom).model = String::new();
     assert_eq!(settings.validate(), Ok(()));
+    assert_eq!(settings.cleanup_warning(), None);
 
     settings.cleanup_enabled = true;
+    assert_eq!(settings.validate(), Ok(()));
     assert_eq!(
-        settings.validate().expect_err("refused").to_string(),
-        "AI cleanup needs a model for Custom provider; enter one, or turn AI cleanup off"
+        settings.cleanup_warning().as_deref(),
+        Some(
+            "AI cleanup needs a model for Custom provider; the plain transcript will be pasted until you enter one."
+        )
     );
     settings.provider_settings_mut(LlmProvider::Custom).model = "local".to_owned();
     assert_eq!(
-        settings.validate(),
-        Err(SettingsError::CleanupProvider {
-            provider: LlmProvider::Custom,
-            missing: "an API endpoint"
-        })
+        settings.cleanup_warning().as_deref(),
+        Some(
+            "AI cleanup needs an API endpoint for Custom provider; the plain transcript will be pasted until you enter one."
+        )
     );
+    settings.provider_settings_mut(LlmProvider::Custom).api_base =
+        Some(ProviderEndpoint::parse("http://localhost:8080/v1").expect("endpoint"));
+    assert_eq!(settings.cleanup_warning(), None);
 }
 
 #[test]

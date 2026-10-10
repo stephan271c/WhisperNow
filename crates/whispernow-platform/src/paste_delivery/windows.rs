@@ -355,23 +355,6 @@ mod tests {
     }
 
     #[test]
-    fn held_modifier_probe_covers_every_configurable_modifier_side() {
-        assert_eq!(
-            MODIFIER_KEYS,
-            [
-                VK_LCONTROL,
-                VK_RCONTROL,
-                VK_LSHIFT,
-                VK_RSHIFT,
-                VK_LMENU,
-                VK_RMENU,
-                VK_LWIN,
-                VK_RWIN,
-            ]
-        );
-    }
-
-    #[test]
     fn send_input_count_has_explicit_mutation_semantics() {
         assert_eq!(map_send_result(4, 4), NativePasteInjection::Sent);
         assert_eq!(

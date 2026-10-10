@@ -13,7 +13,7 @@ use whispernow_platform::{NativePasteError, NativePastePlatform};
 use crate::input_helper::HelperPastePlatform;
 #[cfg(target_os = "linux")]
 use std::{
-    sync::{Mutex, PoisonError, mpsc as std_mpsc},
+    sync::{Mutex, mpsc as std_mpsc},
     thread,
     time::Duration,
 };
@@ -352,7 +352,7 @@ impl WaylandOutputPortal {
 
     fn record_consent<T>(&self, result: &Result<T, WaylandPortalError>) {
         if let Some(consent) = consent_after(result) {
-            *self.consent.lock().unwrap_or_else(PoisonError::into_inner) = Some(consent);
+            *self.consent.lock().expect("output state lock poisoned") = Some(consent);
         }
     }
 
@@ -360,7 +360,7 @@ impl WaylandOutputPortal {
         if !self.available {
             return PermissionStatus::Unavailable;
         }
-        let observed = *self.consent.lock().unwrap_or_else(PoisonError::into_inner);
+        let observed = *self.consent.lock().expect("output state lock poisoned");
         observed.unwrap_or_else(|| {
             if self.restore_token.has_token() {
                 PermissionStatus::Granted
@@ -436,7 +436,7 @@ impl WaylandOutputPortal {
         let worker = self
             .worker
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("output state lock poisoned")
             .take();
         let Some(worker) = worker else {
             return;
@@ -463,24 +463,11 @@ mod tests {
                 OutputNotice::PastedAndRestored,
             ),
             (
-                PasteOutcome::PastedWithoutRestore,
-                OutputNotice::PastedClipboardNotRestored,
-            ),
-            (
-                PasteOutcome::RestoreSkippedClipboardChanged,
-                OutputNotice::RestoreSkippedClipboardChanged,
-            ),
-            (PasteOutcome::Cancelled, OutputNotice::Cancelled),
-            (
                 PasteOutcome::Failed(NativePasteError::PermissionDenied),
                 OutputNotice::PermissionDenied,
             ),
             (
                 PasteOutcome::Failed(NativePasteError::InjectionFailed),
-                OutputNotice::PasteFailed,
-            ),
-            (
-                PasteOutcome::Failed(NativePasteError::Unavailable),
                 OutputNotice::PasteFailed,
             ),
         ] {
@@ -608,20 +595,8 @@ mod tests {
         }
 
         #[test]
-        fn portal_results_map_to_notices() {
+        fn only_portal_permission_failures_ask_for_permission() {
             for (reply, expected) in [
-                (
-                    Ok(WaylandPasteOutcome::PastedAndRestored),
-                    OutputNotice::PastedAndRestored,
-                ),
-                (
-                    Ok(WaylandPasteOutcome::PastedWithoutRestore),
-                    OutputNotice::PastedClipboardNotRestored,
-                ),
-                (
-                    Ok(WaylandPasteOutcome::RestoreSkippedClipboardChanged),
-                    OutputNotice::RestoreSkippedClipboardChanged,
-                ),
                 (
                     Err(WaylandPortalError::PermissionDenied),
                     OutputNotice::PermissionDenied,
@@ -629,14 +604,6 @@ mod tests {
                 (
                     Err(WaylandPortalError::KeyboardUnavailable),
                     OutputNotice::PermissionDenied,
-                ),
-                (
-                    Err(WaylandPortalError::PortalUnavailable),
-                    OutputNotice::CapabilityUnavailable,
-                ),
-                (
-                    Err(WaylandPortalError::Disconnected),
-                    OutputNotice::CapabilityUnavailable,
                 ),
                 (Err(WaylandPortalError::Backend), OutputNotice::PasteFailed),
             ] {

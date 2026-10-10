@@ -2,10 +2,12 @@
 //! calls the desktop must still reach the backend instead of panicking the UI.
 #![cfg(target_arch = "wasm32")]
 
-use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
+
+mod browser_support;
+use browser_support::{install_mount_point, render_turn, wait_for};
 
 #[wasm_bindgen_test(async)]
 async fn history_changed_event_from_tauri_refreshes_history() {
@@ -22,11 +24,13 @@ async fn history_changed_event_from_tauri_refreshes_history() {
     // Let startup commands settle so only the event's refresh is counted below.
     settle().await;
     let before = history_requests();
+    let event = serde_json::to_string(&whispernow_domain::ipc::EventPayload::HistoryChanged)
+        .expect("history event");
 
     let threw = eval_bool(&format!(
         r#"(() => {{
           try {{
-            window.__whispernowListeners.get({:?})({{ payload: {{ payload: {{ type: "history_changed" }} }} }});
+            window.__whispernowListeners.get({:?})({{ payload: {event} }});
             return false;
           }} catch (error) {{
             console.error(error);
@@ -68,20 +72,6 @@ fn install_tauri_probe() {
     .expect("install Tauri probe");
 }
 
-fn install_mount_point() {
-    let document = web_sys::window()
-        .expect("window")
-        .document()
-        .expect("document");
-    let mount = document.create_element("div").expect("create mount point");
-    mount.set_id("main");
-    document
-        .document_element()
-        .expect("document element")
-        .append_child(&mount)
-        .expect("append mount point");
-}
-
 fn history_requests() -> f64 {
     js_sys::eval(
         r#"window.__whispernowAdapterCalls.filter(({ command }) => command === "get_history").length"#,
@@ -98,29 +88,8 @@ fn eval_bool(script: &str) -> bool {
         .expect("boolean probe result")
 }
 
-async fn render_turn() {
-    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
-        web_sys::window()
-            .expect("window")
-            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 10)
-            .expect("schedule render turn");
-    });
-    JsFuture::from(promise).await.expect("render turn");
-}
-
 async fn settle() {
     for _ in 0..20 {
         render_turn().await;
     }
-}
-
-/// Yields render turns until `condition` holds, failing after about two seconds.
-async fn wait_for(what: &str, condition: impl Fn() -> bool) {
-    for _ in 0..200 {
-        if condition() {
-            return;
-        }
-        render_turn().await;
-    }
-    panic!("timed out waiting for {what}");
 }
