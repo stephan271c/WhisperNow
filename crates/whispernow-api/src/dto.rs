@@ -410,6 +410,7 @@ pub enum SetupTestResultDto {
 pub enum MainWindowSectionDto {
     History,
     Settings,
+    AiCleanup,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -439,6 +440,7 @@ pub enum ErrorCategoryDto {
     Permission,
     Model,
     Recognition,
+    Cleanup,
     Output,
     /// The history store cannot be read, so none of its entries can be shown.
     HistoryUnavailable,
@@ -450,7 +452,7 @@ impl ErrorCategoryDto {
         match self {
             Self::NotFound => None,
             Self::Audio => Some(RecoveryActionDto::ChooseDevice),
-            Self::Permission => Some(RecoveryActionDto::OpenSettings),
+            Self::Permission | Self::Cleanup => Some(RecoveryActionDto::OpenSettings),
             Self::Model => Some(RecoveryActionDto::InstallModel),
             Self::Output => Some(RecoveryActionDto::CopyManually),
             Self::General | Self::Recognition | Self::HistoryUnavailable => {

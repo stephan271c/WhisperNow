@@ -55,6 +55,7 @@ impl UiActions {
             }
             OverlayAction::OpenHistory => MainWindowSectionDto::History,
             OverlayAction::OpenSettings => MainWindowSectionDto::Settings,
+            OverlayAction::OpenAiCleanup => MainWindowSectionDto::AiCleanup,
         };
         self.overlay_command(UiOperation::OverlayAction, async move {
             client::open_main_window(&OpenMainWindowRequest { section }).await

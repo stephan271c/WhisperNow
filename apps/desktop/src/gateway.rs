@@ -4,7 +4,7 @@ pub(crate) mod lifecycle;
 mod permissions;
 mod settings;
 
-use std::sync::{Arc, Mutex, PoisonError, RwLock, atomic::AtomicBool};
+use std::sync::{Arc, PoisonError, RwLock, atomic::AtomicBool};
 
 use whispernow_api::{ApiErrorDto, AppStateDto, ErrorCategoryDto, EventPayload};
 use whispernow_core::CancellationToken;
@@ -36,8 +36,6 @@ pub(crate) struct Gateway {
     shutdown_begun: AtomicBool,
     shutdown_claimed: AtomicBool,
     shutdown_complete: AtomicBool,
-    /// The latest pause, resume or shortcut failure, shown with the settings.
-    lifecycle_warning: Mutex<Option<String>>,
 }
 
 impl Gateway {
@@ -60,7 +58,6 @@ impl Gateway {
             shutdown_begun: AtomicBool::new(false),
             shutdown_claimed: AtomicBool::new(false),
             shutdown_complete: AtomicBool::new(false),
-            lifecycle_warning: Mutex::new(None),
         }
     }
 
@@ -118,7 +115,7 @@ impl Gateway {
         result
     }
 
-    fn publish_error(&self, error: &ApiErrorDto) {
+    pub(crate) fn publish_error(&self, error: &ApiErrorDto) {
         self.services.state.publish_error(error.clone());
     }
 }

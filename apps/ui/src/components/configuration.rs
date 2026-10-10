@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use whispernow_api::{
-    HistoryLimit, LlmProvider, PermissionKindDto, RecordingMode, Settings, Shortcut,
+    HistoryLimit, LlmProvider, PermissionKindDto, PhaseDto, RecordingMode, Settings, Shortcut,
     ThemePreference,
 };
 
@@ -71,11 +71,20 @@ pub(super) fn AutosaveRow(
     }
 }
 
-/// Explains, once per page, why settings cannot be changed right now.
-#[component]
-pub(super) fn SettingsBlockedReason() -> Element {
-    let blocked = use_actions().blocked(UiOperation::SaveSettings);
-    rsx! { DisabledReason { id: "settings-disabled-reason", reason: blocked } }
+pub(super) fn use_settings_blocked() -> Option<BlockedReason> {
+    let state = use_context::<UiContext>().state;
+    match state
+        .read()
+        .snapshot
+        .as_ref()
+        .map(|snapshot| &snapshot.phase)
+    {
+        None => Some(BlockedReason::Connecting),
+        Some(phase) if phase.is_busy() => Some(BlockedReason::Dictating),
+        Some(PhaseDto::Paused) => Some(BlockedReason::Paused),
+        Some(PhaseDto::Updating) => Some(BlockedReason::UpdateInstalling),
+        Some(_) => None,
+    }
 }
 
 #[component]
@@ -86,6 +95,8 @@ pub(super) fn SettingsLoading() -> Element {
 #[component]
 pub(super) fn GeneralPage() -> Element {
     let actions = use_actions();
+    let settings_blocked = use_settings_blocked();
+    let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let navigator = use_navigator();
     let Some(settings) = management.read().shown_settings().cloned() else {
@@ -99,7 +110,7 @@ pub(super) fn GeneralPage() -> Element {
         .as_ref()
         .and_then(|permissions| permissions.paste_helper_setup.clone());
     rsx! { div { class: "settings-stack",
-        SettingsBlockedReason {}
+        DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
         Section { id: "shortcuts", title: "Shortcuts",
             AutosaveRow { id: "recording-mode", title: "Recording shortcut",
                 description: match settings.recording_mode {
@@ -109,6 +120,7 @@ pub(super) fn GeneralPage() -> Element {
                 setting: SettingKey::RecordingShortcut,
                 div { class: "shortcut-control",
                     Segmented {
+                        disabled,
                         value: choice_value(&RECORDING_MODES, &settings.recording_mode),
                         options: RECORDING_MODES.iter().map(|(_, value, label)| (*value, *label)).collect::<Vec<_>>(),
                         onchange: move |value: &'static str| if let Some(mode) = chosen(&RECORDING_MODES, value) {
@@ -116,6 +128,7 @@ pub(super) fn GeneralPage() -> Element {
                         },
                     }
                     ShortcutCapture { id: "recording-shortcut", label: "recording shortcut",
+                        disabled,
                         shortcut: Some(settings.recording_shortcut.clone()),
                         oncapture: move |shortcut: Shortcut| { actions.change_setting(SettingKey::RecordingShortcut, move |settings| settings.recording_shortcut = shortcut.clone()); } }
                 }
@@ -124,6 +137,7 @@ pub(super) fn GeneralPage() -> Element {
                 setting: SettingKey::CancelShortcut,
                 div { class: "shortcut-control",
                     Toggle { checked: settings.cancel_shortcut.is_some(),
+                        disabled,
                         onchange: move |enabled: bool| {
                             actions.change_setting(SettingKey::CancelShortcut, move |settings| {
                                 settings.cancel_shortcut = enabled.then(Shortcut::default_cancel);
@@ -132,6 +146,7 @@ pub(super) fn GeneralPage() -> Element {
                     }
                     if settings.cancel_shortcut.is_some() {
                         ShortcutCapture { id: "cancel-shortcut", label: "cancel-dictation shortcut",
+                            disabled,
                             shortcut: settings.cancel_shortcut.clone(),
                             lone_keys: true,
                             oncapture: move |shortcut: Shortcut| { actions.change_setting(SettingKey::CancelShortcut, move |settings| settings.cancel_shortcut = Some(shortcut.clone())); } }
@@ -142,6 +157,7 @@ pub(super) fn GeneralPage() -> Element {
         Section { id: "appearance", title: "Appearance",
             AutosaveRow { id: "theme", title: "Theme", setting: SettingKey::Theme,
                 Select { value: choice_value(&THEMES, &settings.theme),
+                    disabled,
                     onchange: move |event: FormEvent| if let Some(theme) = chosen(&THEMES, &event.value()) {
                         actions.change_setting(SettingKey::Theme, move |settings| settings.theme = theme);
                     },
@@ -153,11 +169,13 @@ pub(super) fn GeneralPage() -> Element {
             AutosaveRow { id: "start-minimized", title: "Start minimized",
                 setting: SettingKey::StartMinimized,
                 Toggle { checked: settings.start_minimized,
+                    disabled,
                     onchange: move |value| { actions.change_setting(SettingKey::StartMinimized, move |settings| settings.start_minimized = value); } }
             }
             AutosaveRow { id: "start-on-login", title: "Start on login",
                 setting: SettingKey::StartOnLogin,
                 Toggle { checked: settings.auto_start_on_login,
+                    disabled,
                     onchange: move |value| { actions.change_setting(SettingKey::StartOnLogin, move |settings| settings.auto_start_on_login = value); } }
             }
         }
@@ -190,6 +208,8 @@ pub(super) fn GeneralPage() -> Element {
 #[component]
 pub(super) fn AudioPage() -> Element {
     let actions = use_actions();
+    let settings_blocked = use_settings_blocked();
+    let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let Some(settings) = management.read().shown_settings().cloned() else {
         return rsx! { SettingsLoading {} };
@@ -202,7 +222,7 @@ pub(super) fn AudioPage() -> Element {
     let test_blocked = actions.blocked(UiOperation::TestMicrophone);
     let testing = test_blocked == Some(BlockedReason::CommandPending);
     rsx! { div { class: "settings-stack",
-        SettingsBlockedReason {}
+        DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
         Section { id: "microphone", title: "Microphone",
             div { class: "section-note",
                 MicrophonePermissionNotice { status: permission }
@@ -210,6 +230,7 @@ pub(super) fn AudioPage() -> Element {
             AutosaveRow { id: "input-device", title: "Input device",
                 setting: SettingKey::InputDevice,
                 Select { value: settings.input_device.clone().unwrap_or_default(),
+                    disabled,
                     onchange: move |event: FormEvent| {
                         let value = event.value();
                         let device = (!value.is_empty()).then_some(value);
@@ -243,6 +264,8 @@ pub(super) fn AudioPage() -> Element {
 #[component]
 pub(super) fn PrivacyPage() -> Element {
     let actions = use_actions();
+    let settings_blocked = use_settings_blocked();
+    let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let Some(settings) = management.read().shown_settings().cloned() else {
         return rsx! { SettingsLoading {} };
@@ -254,11 +277,12 @@ pub(super) fn PrivacyPage() -> Element {
         },
     );
     rsx! { div { class: "settings-stack",
-        SettingsBlockedReason {}
+        DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
         p { id: "privacy-summary", "{summary}" }
         Section { id: "transcript-history", title: "History",
             AutosaveRow { id: "history-limit", title: "Keep", setting: SettingKey::HistoryLimit,
                 Select { value: history_limit_value(settings.history_limit),
+                    disabled,
                     onchange: move |event: FormEvent| {
                         if let Some(limit) = HistoryLimit::ALL
                             .into_iter()
@@ -276,6 +300,7 @@ pub(super) fn PrivacyPage() -> Element {
                 description: "About 2 MB per minute. Failed and cancelled dictations always keep it.",
                 setting: SettingKey::KeepAudio,
                 Toggle { checked: settings.keep_audio,
+                    disabled,
                     onchange: move |value| { actions.change_setting(SettingKey::KeepAudio, move |settings| settings.keep_audio = value); } }
             }
         }

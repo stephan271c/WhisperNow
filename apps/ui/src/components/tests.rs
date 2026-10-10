@@ -329,6 +329,26 @@ fn a_problem_on_home_links_to_the_page_that_fixes_it() {
 }
 
 #[test]
+fn a_cleanup_failure_on_home_opens_ai_cleanup_settings() {
+    let mut failed = snapshot(PhaseDto::Idle);
+    failed.error = Some(ApiErrorDto::new(
+        ErrorCategoryDto::Cleanup,
+        "cleanup_failed",
+        "AI cleanup was unavailable, so the transcript was kept as recognized",
+    ));
+    let mut page = shell(failed, loaded());
+    assert_eq!(text(&page.html(), "home-status-fix"), "Open AI cleanup");
+
+    page.click("home-status-fix");
+    assert_eq!(text(&page.html(), "page-heading"), "AI cleanup");
+    assert!(
+        tag(&page.html(), "nav-settings-ai-cleanup")
+            .expect("AI cleanup link")
+            .contains("aria-current=\"page\"")
+    );
+}
+
+#[test]
 fn the_latest_transcript_can_be_copied_from_home() {
     let mut transcribed = snapshot(PhaseDto::Idle);
     transcribed.last_transcript = Some(TranscriptResponse {
@@ -429,6 +449,112 @@ const SETTINGS_PAGES: [&str; 7] = [
     "nav-settings-privacy",
     "nav-settings-about",
 ];
+
+#[test]
+fn the_ai_cleanup_page_saves_api_keys_during_recording() {
+    let mut page = shell(snapshot(crate::test_support::RECORDING), loaded());
+    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+    page.input("provider-credential", "sk-test");
+    let html = page.html();
+    let save = tag(&html, "save-credential").expect("save key");
+    assert!(!save.contains(" disabled="), "{save}");
+
+    page.click("save-credential");
+    let requests = fake::requests::<whispernow_api::SetApiKeyRequest>("set_api_key");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].provider, LlmProvider::OpenAi);
+    assert_eq!(requests[0].key.expose_secret(), "sk-test");
+}
+
+#[test]
+fn a_settings_toggle_is_disabled_during_recording_and_sends_nothing() {
+    let mut page = shell(snapshot(crate::test_support::RECORDING), loaded());
+    open(&mut page, &["nav-settings"]);
+    let html = page.html();
+    assert!(
+        tag(&html, "start-minimized")
+            .expect("toggle")
+            .contains(" disabled=")
+    );
+    assert_eq!(
+        text(&html, "settings-disabled-reason"),
+        "Wait for the current dictation to finish"
+    );
+
+    page.click("start-minimized");
+    assert!(sent_settings().is_empty());
+    assert!(
+        tag(&page.html(), "start-minimized")
+            .expect("toggle")
+            .contains("aria-checked=\"false\"")
+    );
+
+    page.publish(whispernow_api::EventPayload::StateChanged {
+        state: snapshot(PhaseDto::Idle),
+    });
+    assert!(
+        !tag(&page.html(), "start-minimized")
+            .expect("toggle")
+            .contains(" disabled=")
+    );
+    page.click("start-minimized");
+    assert_eq!(sent_settings().len(), 1);
+    assert!(sent_settings()[0].start_minimized);
+}
+
+#[test]
+fn settings_controls_on_each_blocked_page_are_disabled() {
+    let cases: [(&str, &[&str]); 5] = [
+        (
+            "nav-settings-general",
+            &[
+                "recording-mode-toggle",
+                "recording-shortcut",
+                "cancel-dictation",
+                "theme",
+                "start-minimized",
+                "start-on-login",
+            ],
+        ),
+        ("nav-settings-audio", &["input-device"]),
+        (
+            "nav-settings-ai-cleanup",
+            &[
+                "ai-cleanup-enabled",
+                "cleanup-source-local",
+                "provider-name",
+                "provider-model",
+                "provider-endpoint",
+            ],
+        ),
+        (
+            "nav-settings-vocabulary",
+            &[
+                "vocabulary-source",
+                "vocabulary-replacement",
+                "vocabulary-add",
+                "vocabulary-rule-1-source",
+                "vocabulary-rule-1-replacement",
+                "vocabulary-rule-1-delete",
+                "vocabulary-import",
+            ],
+        ),
+        (
+            "nav-settings-privacy",
+            &["history-limit", "history-keep-audio"],
+        ),
+    ];
+    for (route, controls) in cases {
+        let mut page = shell(snapshot(crate::test_support::RECORDING), configured());
+        open(&mut page, &["nav-settings", route]);
+        let html = page.html();
+        assert!(tag(&html, "settings-disabled-reason").is_some(), "{route}");
+        for control in controls {
+            let element = tag(&html, control).unwrap_or_else(|| panic!("{route} {control}"));
+            assert!(element.contains(" disabled="), "{route} {element}");
+        }
+    }
+}
 
 #[test]
 fn a_settings_toggle_saves_once_and_a_refusal_restores_it_with_the_error_beside_it() {

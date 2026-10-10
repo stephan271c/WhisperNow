@@ -81,22 +81,8 @@ impl Gateway {
     pub(super) fn sync_shortcuts(&self) {
         if let Err(error) = self.shortcuts.sync_lifecycle() {
             tracing::warn!(?error, "recording shortcuts could not follow the lifecycle");
-            self.record_lifecycle_error(&shortcut_error(error));
+            self.publish_error(&shortcut_error(error));
         }
-    }
-
-    pub(crate) fn record_lifecycle_error(&self, error: &ApiErrorDto) {
-        if let Ok(mut warning) = self.lifecycle_warning.lock() {
-            *warning = Some(error.summary.clone());
-        }
-        self.publish_error(error);
-    }
-
-    pub(super) fn lifecycle_warning(&self) -> Option<String> {
-        self.lifecycle_warning
-            .lock()
-            .ok()
-            .and_then(|warning| warning.clone())
     }
 
     /// Refuses new commands and cancels the running ones. Returns false when shutdown had

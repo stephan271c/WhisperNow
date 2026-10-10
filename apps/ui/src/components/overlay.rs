@@ -42,6 +42,7 @@ const fn action_label(action: OverlayAction) -> &'static str {
         OverlayAction::CopyTranscript => "Copy",
         OverlayAction::OpenHistory => "Open history",
         OverlayAction::OpenSettings => "Fix",
+        OverlayAction::OpenAiCleanup => "Open AI cleanup",
     }
 }
 

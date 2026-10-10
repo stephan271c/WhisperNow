@@ -107,6 +107,7 @@ impl Route {
         match section {
             MainWindowSectionDto::History => Self::History,
             MainWindowSectionDto::Settings => Self::Settings(SettingsRoute::General),
+            MainWindowSectionDto::AiCleanup => Self::Settings(SettingsRoute::AiCleanup),
         }
     }
 

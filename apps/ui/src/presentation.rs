@@ -108,6 +108,7 @@ fn problem_fix(state: &UiState) -> Option<(&'static str, Route)> {
             "Open speech models",
             Route::Settings(SettingsRoute::SpeechModels),
         )),
+        Category::Cleanup => Some(("Open AI cleanup", Route::Settings(SettingsRoute::AiCleanup))),
         Category::Output => Some(("Open history", Route::History)),
         _ => None,
     }

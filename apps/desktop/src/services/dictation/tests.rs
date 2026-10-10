@@ -26,6 +26,8 @@ use whispernow_domain::{
 use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore, SettingsStore};
 
 use super::{AiCleanup, Dictation, DictationParts};
+
+mod lifecycle;
 use crate::services::{
     Events, RecordingTrigger,
     history::HistoryStore,
@@ -638,7 +640,9 @@ fn a_failed_cleanup_pastes_the_recognized_text_and_says_so() {
         state.last_error.as_ref().map(|error| error.code.as_str()),
         Some("cleanup_failed")
     );
+    let category = state.last_error.as_ref().map(|error| error.category);
     drop(state);
+    assert_eq!(category, Some(ErrorCategoryDto::Cleanup));
     let history = fixture.history();
     assert_eq!(history[0].status, EntryStatus::Ok);
     assert!(history[0].llm_model.is_none());

@@ -108,7 +108,6 @@ impl UiOperation {
         matches!(
             self,
             Self::SaveSettings
-                | Self::CredentialMutation
                 | Self::CompleteSetup
                 | Self::RestartSetup
                 | Self::StartSetupTest

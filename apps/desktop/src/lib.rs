@@ -470,7 +470,7 @@ fn toggle_pause(state: &Gateway) {
             paused,
             "the tray could not change dictation"
         );
-        state.record_lifecycle_error(&error);
+        state.publish_error(&error);
     }
 }
 

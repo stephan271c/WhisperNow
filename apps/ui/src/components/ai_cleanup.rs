@@ -4,7 +4,7 @@ use whispernow_api::{ApiKey, LlmProvider, ProviderEndpoint, ProviderSettings, Se
 use super::NoticeRegion;
 use super::actions::{DisabledReason, UiActions, use_actions};
 use super::configuration::{
-    AutosaveRow, SettingsBlockedReason, SettingsLoading, choice_value, chosen,
+    AutosaveRow, SettingsLoading, choice_value, chosen, use_settings_blocked,
 };
 use super::models::{ModelRow, ModelRowKind};
 use super::ui::{
@@ -83,6 +83,8 @@ fn choose_provider(actions: UiActions, provider: LlmProvider) -> bool {
 #[component]
 pub(super) fn AiCleanupPage() -> Element {
     let actions = use_actions();
+    let settings_blocked = use_settings_blocked();
+    let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let Some(settings) = management.read().shown_settings().cloned() else {
         return rsx! { SettingsLoading {} };
@@ -108,13 +110,14 @@ pub(super) fn AiCleanupPage() -> Element {
         choose_provider(actions, provider);
     };
     rsx! { div { class: "settings-stack",
-        SettingsBlockedReason {}
+        DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
         NoticeRegion { scope: NoticeScope::Models }
         Section { id: "ai-cleanup", title: "Cleanup",
             AutosaveRow { id: "ai-cleanup-enabled", title: "Use AI cleanup",
                 description: "If cleanup fails, the plain transcript is pasted.",
                 setting: SettingKey::CleanupEnabled,
                 Toggle { checked: settings.cleanup_enabled,
+                    disabled,
                     onchange: move |enabled: bool| {
                         change_then_follow_choice(actions, chosen_provider, SettingKey::CleanupEnabled, move |settings| {
                             settings.cleanup_enabled = enabled;
@@ -124,6 +127,7 @@ pub(super) fn AiCleanupPage() -> Element {
             }
             SettingRow { id: "cleanup-source", title: "Run with",
                 Segmented {
+                    disabled,
                     value: choice_value(&SOURCES, &source),
                     options: SOURCES.iter().map(|(_, value, label)| (*value, *label)).collect::<Vec<_>>(),
                     onchange: move |value: &'static str| if let Some(source) = chosen(&SOURCES, value) {
@@ -134,6 +138,7 @@ pub(super) fn AiCleanupPage() -> Element {
             if source.providers().len() > 1 {
                 AutosaveRow { id: "provider-name", title: "Provider", setting: SettingKey::ActiveProvider,
                     Select { value: provider.as_str(),
+                        disabled,
                         onchange: move |event: FormEvent| if let Some(provider) = LlmProvider::from_name(&event.value()) {
                             pick(provider);
                         },
@@ -142,11 +147,11 @@ pub(super) fn AiCleanupPage() -> Element {
                 }
             }
             if source != CleanupSource::WhisperNow {
-                ProviderRows { settings: settings.clone(), provider, chosen: chosen_provider }
+                ProviderRows { settings: settings.clone(), provider, chosen: chosen_provider, disabled }
             }
         }
         if source == CleanupSource::WhisperNow {
-            CleanupModels { chosen_model: settings.cleanup_model_id().to_owned() }
+            CleanupModels { chosen_model: settings.cleanup_model_id().to_owned(), disabled }
         }
     } }
 }
@@ -156,6 +161,7 @@ fn ProviderRows(
     settings: Settings,
     provider: LlmProvider,
     chosen: Signal<Option<LlmProvider>>,
+    disabled: bool,
 ) -> Element {
     let actions = use_actions();
     let mut management = use_context::<UiContext>().management;
@@ -176,6 +182,7 @@ fn ProviderRows(
     rsx! {
         AutosaveRow { id: "provider-model", title: "Model", setting: SettingKey::ProviderModel,
             DraftText { value: provider_settings.model.clone(),
+                disabled,
                 oncommit: move |model: String| {
                     let model = model.trim().to_owned();
                     change(SettingKey::ProviderModel, Box::new(move |settings| settings.model.clone_from(&model)))
@@ -190,7 +197,7 @@ fn ProviderRows(
                             li { key: "{saved}",
                                 span { class: "saved-model-name", "{saved}" }
                                 Button { size: ButtonSize::Sm, aria_label: "Use {saved}",
-                                    disabled: saved == provider_settings.model,
+                                    disabled: disabled || saved == provider_settings.model,
                                     onclick: { let model = saved.clone(); move |_| {
                                         let model = model.clone();
                                         change(SettingKey::ProviderModel, Box::new(move |settings| settings.model.clone_from(&model)));
@@ -198,6 +205,7 @@ fn ProviderRows(
                                     "Use"
                                 }
                                 Button { size: ButtonSize::Sm, variant: ButtonVariant::Ghost, aria_label: "Remove {saved}",
+                                    disabled,
                                     onclick: { let model = saved.clone(); move |_| {
                                         let model = model.clone();
                                         actions.change_setting(SettingKey::ProviderModel, move |settings| {
@@ -224,8 +232,9 @@ fn ProviderRows(
                         }
                     },
                     TextInput { placeholder: "Model name",
+                        disabled,
                         value: "{new_model}", oninput: move |event: FormEvent| new_model.set(event.value()) }
-                    button { r#type: "submit", class: "btn btn-secondary btn-sm", "Add model" }
+                    button { r#type: "submit", class: "btn btn-secondary btn-sm", disabled, "Add model" }
                 }
             }
         }
@@ -233,6 +242,7 @@ fn ProviderRows(
             description: (provider != LlmProvider::Custom).then(|| "Leave empty for the default address.".to_owned()),
             setting: SettingKey::ProviderApiBase,
             DraftText { value: provider_settings.api_base.as_ref().map(ProviderEndpoint::expose_url).unwrap_or_default().to_owned(),
+                disabled,
                 oncommit: move |value: String| {
                     let value = value.trim();
                     match (!value.is_empty()).then(|| ProviderEndpoint::parse(value)).transpose() {
@@ -255,6 +265,7 @@ fn ProviderRows(
                     }
                     div { class: "credential-actions",
                         Button {
+                            id: "save-credential",
                             disabled: ApiKey::new(credential()).is_err() || credential_blocked.is_some(),
                             aria_describedby: credential_blocked.map(|_| "credential-disabled-reason"),
                             onclick: move |_| if let Ok(key) = ApiKey::new(credential()) {
@@ -280,7 +291,7 @@ fn ProviderRows(
 /// The app's own cleanup models, which run on this computer, and the CUDA pack that speeds them
 /// up on NVIDIA graphics cards.
 #[component]
-fn CleanupModels(chosen_model: String) -> Element {
+fn CleanupModels(chosen_model: String, disabled: bool) -> Element {
     let actions = use_actions();
     let management = use_context::<UiContext>().management;
     let models = management
@@ -306,6 +317,7 @@ fn CleanupModels(chosen_model: String) -> Element {
                     ModelRow {
                         key: "{model.id.as_str()}",
                         kind: ModelRowKind::Cleanup { chosen: model.id.as_str() == chosen_model },
+                        settings_disabled: disabled,
                         model,
                     }
                 }

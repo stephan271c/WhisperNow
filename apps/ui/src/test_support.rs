@@ -125,6 +125,9 @@ impl Page {
     }
 
     pub(crate) fn click(&mut self, id: &str) -> &mut Self {
+        if tag(&self.html(), id).is_some_and(|element| element.contains(" disabled=")) {
+            return self;
+        }
         let mutations = click_rendered(&mut self.dom, &self.rendered, id);
         self.keep(mutations);
         self.settle()

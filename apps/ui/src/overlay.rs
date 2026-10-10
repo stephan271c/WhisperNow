@@ -39,12 +39,14 @@ pub enum OverlayAction {
     CopyTranscript,
     OpenHistory,
     OpenSettings,
+    OpenAiCleanup,
 }
 
 impl OverlayAction {
     #[must_use]
     pub fn for_error(error: &ApiErrorDto) -> Option<Self> {
         match (error.recovery, error.category) {
+            (_, ErrorCategoryDto::Cleanup) => Some(Self::OpenAiCleanup),
             (Some(RecoveryActionDto::CopyManually), _) => Some(Self::CopyTranscript),
             (
                 Some(

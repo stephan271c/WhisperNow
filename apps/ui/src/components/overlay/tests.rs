@@ -57,6 +57,10 @@ fn failed(action: Option<OverlayAction>) -> PhaseDto {
             ErrorCategoryDto::General,
             Some(RecoveryActionDto::OpenSettings),
         ),
+        Some(OverlayAction::OpenAiCleanup) => (
+            ErrorCategoryDto::Cleanup,
+            Some(RecoveryActionDto::OpenSettings),
+        ),
     };
     PhaseDto::Error {
         error: ApiErrorDto {
@@ -392,6 +396,24 @@ fn last_request(command: &str) -> Value {
 }
 
 #[test]
+fn a_cleanup_failure_in_the_overlay_opens_ai_cleanup_settings() {
+    let phase = PhaseDto::Error {
+        error: ApiErrorDto::new(
+            ErrorCategoryDto::Cleanup,
+            "cleanup_failed",
+            "AI cleanup was unavailable, so the transcript was kept as recognized",
+        ),
+    };
+    let mut bar = mount_bar(state_in(phase));
+    bar.click("overlay-action");
+    assert_eq!(fake::commands(), ["open_main_window"]);
+    assert_eq!(
+        last_request("open_main_window"),
+        serde_json::json!({ "section": "ai_cleanup" })
+    );
+}
+
+#[test]
 fn controls_send_the_overlay_commands_and_wait_for_them() {
     let open = |section| serde_json::to_value(OpenMainWindowRequest { section }).expect("json");
     let cases = [
@@ -599,6 +621,11 @@ fn an_overlay_navigation_request_opens_its_route_and_moves_focus() {
             MainWindowSectionDto::Settings,
             "settings-general",
             "General &#38; Shortcuts",
+        ),
+        (
+            MainWindowSectionDto::AiCleanup,
+            "settings-ai-cleanup",
+            "AI cleanup",
         ),
         (MainWindowSectionDto::History, "history", "History"),
     ] {

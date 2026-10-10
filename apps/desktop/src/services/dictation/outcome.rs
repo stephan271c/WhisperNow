@@ -259,7 +259,7 @@ pub(super) fn cleanup_fallback_warning(prepared: &PreparedTranscription) -> Opti
     };
     Some(ApiErrorDto {
         recovery: Some(RecoveryActionDto::OpenSettings),
-        ..ApiErrorDto::new(ErrorCategoryDto::Recognition, code, summary)
+        ..ApiErrorDto::new(ErrorCategoryDto::Cleanup, code, summary)
     })
 }
 

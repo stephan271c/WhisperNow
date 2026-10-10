@@ -4,8 +4,8 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 use whispernow_api::{Settings, VocabularyReplacement};
 
-use super::actions::use_actions;
-use super::configuration::{SettingsBlockedReason, SettingsLoading, status_parts};
+use super::actions::{DisabledReason, use_actions};
+use super::configuration::{SettingsLoading, status_parts, use_settings_blocked};
 use super::ui::focus::{neighbour, take_focus};
 use super::ui::{
     Button, ButtonVariant, DraftText, Field, IconButton, IconName, Section, TextInput,
@@ -46,6 +46,8 @@ fn matches(entry: &VocabularyReplacement, query: &str) -> bool {
 #[component]
 pub(super) fn VocabularyPage() -> Element {
     let actions = use_actions();
+    let settings_blocked = use_settings_blocked();
+    let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let mut source = use_signal(String::new);
     let mut replacement = use_signal(String::new);
@@ -80,7 +82,7 @@ pub(super) fn VocabularyPage() -> Element {
         })
     };
     rsx! { div { class: "settings-stack",
-        SettingsBlockedReason {}
+        DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
         Section { id: "vocabulary", title: "Vocabulary",
             description: "Rules run from top to bottom.",
             form { id: ADD_FORM, class: "vocabulary-add", tabindex: "-1", aria_label: "Add a rule",
@@ -97,13 +99,13 @@ pub(super) fn VocabularyPage() -> Element {
                     }
                 },
                 Field { id: "vocabulary-source", label: "Replace this",
-                    TextInput { value: "{source}", oninput: move |event: FormEvent| source.set(event.value()) }
+                    TextInput { value: "{source}", disabled, oninput: move |event: FormEvent| source.set(event.value()) }
                 }
                 Field { id: "vocabulary-replacement", label: "With this",
-                    TextInput { value: "{replacement}", oninput: move |event: FormEvent| replacement.set(event.value()) }
+                    TextInput { value: "{replacement}", disabled, oninput: move |event: FormEvent| replacement.set(event.value()) }
                 }
                 div { class: "vocabulary-add-action",
-                    button { r#type: "submit", id: "vocabulary-add", class: "btn btn-primary btn-md", "Add rule" }
+                    button { r#type: "submit", id: "vocabulary-add", class: "btn btn-primary btn-md", disabled, "Add rule" }
                     p { class: "field-description", "Press Enter to add." }
                 }
             }
@@ -129,12 +131,13 @@ pub(super) fn VocabularyPage() -> Element {
                 ol { class: "vocabulary-list",
                     for (position, (index, entry)) in shown.into_iter().enumerate() {
                         VocabularyRow { key: "{index}", index, entry, last: index + 1 == total, reorder: !filtering,
+                            disabled,
                             focus, after_delete: after_delete(position, index) }
                     }
                 }
             }
         }
-        VocabularyTransfer { rules: settings.vocabulary_replacements.clone() }
+        VocabularyTransfer { rules: settings.vocabulary_replacements.clone(), disabled }
     } }
 }
 
@@ -146,6 +149,7 @@ fn VocabularyRow(
     entry: VocabularyReplacement,
     last: bool,
     reorder: bool,
+    disabled: bool,
     focus: Signal<Option<RuleFocus>>,
     after_delete: RuleFocus,
 ) -> Element {
@@ -176,24 +180,27 @@ fn VocabularyRow(
         li { id: "vocabulary-rule-{number}", class: "vocabulary-row", tabindex: "-1", aria_label: "Rule {number}, {name}",
             onmounted: move |event| row.set(Some(event.data())),
             DraftText { id: "vocabulary-rule-{number}-source", aria_label: "Replace this, rule {number}",
+                disabled,
                 value: entry.source.clone(),
                 oncommit: move |text: String| edit(VocabularyReplacement::new(text.trim(), replacement.clone())),
             }
             span { class: "vocabulary-arrow", aria_hidden: "true", "→" }
             DraftText { id: "vocabulary-rule-{number}-replacement", aria_label: "With this, rule {number}",
+                disabled,
                 value: entry.replacement.clone(),
                 oncommit: move |text: String| edit(VocabularyReplacement::new(source.clone(), text.trim())),
             }
             div { class: "vocabulary-row-actions",
                 if reorder {
-                    IconButton { icon: IconName::ArrowUp, label: "Move rule {name} up", disabled: index == 0,
+                    IconButton { icon: IconName::ArrowUp, label: "Move rule {name} up", disabled: disabled || index == 0,
                         onclick: move |_| { change(|rules, index| if let Some(above) = index.checked_sub(1) { rules.swap(above, index) }); } }
-                    IconButton { icon: IconName::ArrowDown, label: "Move rule {name} down", disabled: last,
+                    IconButton { icon: IconName::ArrowDown, label: "Move rule {name} down", disabled: disabled || last,
                         onclick: move |_| {
                             change(|rules, index| if index + 1 < rules.len() { rules.swap(index, index + 1) });
                         } }
                 }
                 IconButton { id: "vocabulary-rule-{number}-delete", icon: IconName::Trash, label: "Delete rule {name}",
+                    disabled,
                     onclick: move |_| {
                         let mut focus = focus;
                         if change(|rules, index| if index < rules.len() { rules.remove(index); }) {
@@ -207,7 +214,7 @@ fn VocabularyRow(
 }
 
 #[component]
-fn VocabularyTransfer(rules: Vec<VocabularyReplacement>) -> Element {
+fn VocabularyTransfer(rules: Vec<VocabularyReplacement>, disabled: bool) -> Element {
     let actions = use_actions();
     let mut management = use_context::<UiContext>().management;
     let mut pasted = use_signal(String::new);
@@ -233,12 +240,13 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>) -> Element {
             Field { id: "vocabulary-import", label: "Paste rules to import",
                 description: "A rule for text that already has one replaces it.",
                 textarea { id: "vocabulary-import", class: "text-input", rows: "4",
+                    disabled,
                     aria_describedby: "vocabulary-import-description",
                     value: "{pasted}", oninput: move |event| pasted.set(event.value()) }
             }
             div { class: "card-actions",
                 Button { id: "vocabulary-import-submit", variant: ButtonVariant::Secondary,
-                    disabled: pasted().trim().is_empty(),
+                    disabled: disabled || pasted().trim().is_empty(),
                     onclick: move |_| match serde_json::from_str::<Vec<TransferRule>>(pasted().trim()) {
                         Ok(entries) => if actions.change_setting(SettingKey::Vocabulary, move |settings| import_rules(settings, &entries)) {
                             pasted.set(String::new());

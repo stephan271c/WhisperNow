@@ -95,7 +95,11 @@ pub(super) enum ModelRowKind {
 }
 
 #[component]
-pub(super) fn ModelRow(model: ModelDto, kind: ModelRowKind) -> Element {
+pub(super) fn ModelRow(
+    model: ModelDto,
+    kind: ModelRowKind,
+    #[props(default)] settings_disabled: bool,
+) -> Element {
     let actions = use_actions();
     let management = use_context::<UiContext>().management;
     let id = model.id.clone();
@@ -164,6 +168,7 @@ pub(super) fn ModelRow(model: ModelDto, kind: ModelRowKind) -> Element {
                     }
                 } else if kind == (ModelRowKind::Cleanup { chosen: false }) {
                     Button {
+                        disabled: settings_disabled,
                         id: "model-{slug}-use",
                         variant: ButtonVariant::Primary,
                         aria_label: "Use {name}",

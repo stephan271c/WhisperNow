@@ -20,7 +20,7 @@ use crate::{
 impl Gateway {
     /// Reads the saved settings and adds warnings for native side effects that are not
     /// currently in effect: an inactive recording shortcut, a cancel shortcut the last
-    /// dictation could not register, start-on-login drift, and the last lifecycle failure.
+    /// dictation could not register, and start-on-login drift.
     pub(crate) async fn settings_view(&self) -> Result<SettingsView, ApiErrorDto> {
         let mut view = self
             .run_command("get_settings", Failure::Published, |services, _| {
@@ -55,9 +55,6 @@ impl Gateway {
                 .warnings
                 .push("The OS startup registration could not be inspected".to_owned()),
             Ok(_) => {}
-        }
-        if let Some(warning) = self.lifecycle_warning() {
-            view.warnings.push(warning);
         }
         Ok(view)
     }
