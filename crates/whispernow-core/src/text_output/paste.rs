@@ -7,31 +7,10 @@ use std::{
 
 use crate::CancellationToken;
 
-/// `propagation` lets the clipboard change reach the focused application
-/// before the paste keystroke. `restore` is how long the target gets to read
-/// the transcript before the previous clipboard is put back; too short a wait
-/// makes slow targets paste the restored value instead.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PasteDelays {
-    propagation: Duration,
-    restore: Duration,
-}
-
-impl PasteDelays {
-    #[must_use]
-    pub const fn restore(self) -> Duration {
-        self.restore
-    }
-}
-
-impl Default for PasteDelays {
-    fn default() -> Self {
-        Self {
-            propagation: Duration::from_millis(80),
-            restore: Duration::from_millis(400),
-        }
-    }
-}
+/// Lets the clipboard change reach the focused application before the paste keystroke.
+pub const PASTE_PROPAGATION_DELAY: Duration = Duration::from_millis(80);
+/// Gives the target time to read the transcript before the previous clipboard is restored.
+pub const PASTE_RESTORE_DELAY: Duration = Duration::from_millis(400);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KeystrokeOutcome<E> {
@@ -99,15 +78,13 @@ pub trait PastePlatform {
 /// than the first transcript.
 pub struct PasteQueue<P> {
     platform: Mutex<P>,
-    delays: PasteDelays,
 }
 
 impl<P: PastePlatform> PasteQueue<P> {
     #[must_use]
-    pub const fn new(platform: P, delays: PasteDelays) -> Self {
+    pub const fn new(platform: P) -> Self {
         Self {
             platform: Mutex::new(platform),
-            delays,
         }
     }
 
@@ -125,7 +102,7 @@ impl<P: PastePlatform> PasteQueue<P> {
         sent: impl FnOnce(bool),
     ) -> PasteOutcome<P::Error> {
         let mut platform = self.platform.lock().unwrap_or_else(PoisonError::into_inner);
-        paste_and_restore(&mut *platform, text, cancellation, self.delays, sent)
+        paste_and_restore(&mut *platform, text, cancellation, sent)
     }
 
     /// Leaves `text` on the clipboard, excluded from clipboard history, for the user to paste.
@@ -154,7 +131,6 @@ fn paste_and_restore<P: PastePlatform>(
     platform: &mut P,
     text: &str,
     cancellation: &CancellationToken,
-    delays: PasteDelays,
     sent: impl FnOnce(bool),
 ) -> PasteOutcome<P::Error> {
     if cancellation.is_cancelled() {
@@ -174,7 +150,7 @@ fn paste_and_restore<P: PastePlatform>(
         restore_if_transcript(platform, text, previous);
         return PasteOutcome::Failed(error);
     }
-    if !platform.wait(delays.propagation, cancellation) {
+    if !platform.wait(PASTE_PROPAGATION_DELAY, cancellation) {
         restore_if_transcript(platform, text, previous);
         return PasteOutcome::Cancelled;
     }
@@ -189,7 +165,7 @@ fn paste_and_restore<P: PastePlatform>(
             return PasteOutcome::Failed(error);
         }
     };
-    let _elapsed = platform.wait(delays.restore, &CancellationToken::default());
+    let _elapsed = platform.wait(PASTE_RESTORE_DELAY, &CancellationToken::default());
     let restored = restore_if_transcript(platform, text, previous);
     failure.map_or(restored, PasteOutcome::Failed)
 }
@@ -318,7 +294,7 @@ mod tests {
         }
 
         fn wait(&mut self, duration: Duration, cancellation: &CancellationToken) -> bool {
-            if duration == PasteDelays::default().restore()
+            if duration == PASTE_RESTORE_DELAY
                 && let Some((entered, release)) = &self.restore_wait_gate
             {
                 entered.send(()).expect("test observes the restore wait");
@@ -349,7 +325,7 @@ mod tests {
     fn copy_writes_the_transcript_without_pasting_or_restoring() {
         let desktop = FakeDesktop::holding(Some("previous"));
         let events = Arc::clone(&desktop.events);
-        let queue = PasteQueue::new(desktop, PasteDelays::default());
+        let queue = PasteQueue::new(desktop);
 
         assert_eq!(queue.copy("transcript"), Ok(()));
         assert_eq!(
@@ -359,13 +335,7 @@ mod tests {
     }
 
     fn run(desktop: &mut FakeDesktop) -> PasteOutcome<&'static str> {
-        paste_and_restore(
-            desktop,
-            "transcript",
-            &CancellationToken::default(),
-            PasteDelays::default(),
-            |_| {},
-        )
+        paste_and_restore(desktop, "transcript", &CancellationToken::default(), |_| {})
     }
 
     fn pasted(text: &str) -> Event {
@@ -389,7 +359,6 @@ mod tests {
                 desktop,
                 "transcript",
                 &CancellationToken::default(),
-                PasteDelays::default(),
                 |restoring| reported = Some(restoring),
             );
             reported
@@ -456,7 +425,6 @@ mod tests {
 
     #[test]
     fn cancel_after_the_keystroke_still_gives_the_target_the_whole_restore_delay() {
-        let delays = PasteDelays::default();
         for shortcut in [
             KeystrokeOutcome::Sent,
             KeystrokeOutcome::Uncertain("uncertain"),
@@ -468,14 +436,13 @@ mod tests {
                 ..FakeDesktop::holding(Some("previous"))
             };
 
-            let outcome =
-                paste_and_restore(&mut desktop, "transcript", &cancellation, delays, |_| {});
+            let outcome = paste_and_restore(&mut desktop, "transcript", &cancellation, |_| {});
 
             assert!(cancellation.is_cancelled());
             assert_ne!(outcome, PasteOutcome::Cancelled);
             assert_eq!(
                 desktop.wait_log,
-                [(delays.propagation, true), (delays.restore, true)]
+                [(PASTE_PROPAGATION_DELAY, true), (PASTE_RESTORE_DELAY, true)]
             );
             assert_eq!(desktop.clipboard.as_deref(), Some("previous"));
         }
@@ -519,13 +486,7 @@ mod tests {
         let mut desktop = FakeDesktop::holding(Some("previous"));
 
         assert_eq!(
-            paste_and_restore(
-                &mut desktop,
-                "text",
-                &cancelled,
-                PasteDelays::default(),
-                |_| {}
-            ),
+            paste_and_restore(&mut desktop, "text", &cancelled, |_| {}),
             PasteOutcome::Cancelled
         );
         assert!(desktop.events().is_empty());
@@ -540,7 +501,7 @@ mod tests {
             ..FakeDesktop::holding(Some("previous"))
         };
         let events = Arc::clone(&desktop.events);
-        let queue = Arc::new(PasteQueue::new(desktop, PasteDelays::default()));
+        let queue = Arc::new(PasteQueue::new(desktop));
 
         let first_queue = Arc::clone(&queue);
         let first =

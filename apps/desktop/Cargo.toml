@@ -24,7 +24,6 @@ tauri-plugin-process.workspace = true
 tauri-plugin-updater.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-whispernow-api = { path = "../../crates/whispernow-api" }
 whispernow-core = { path = "../../crates/whispernow-core" }
 whispernow-domain = { path = "../../crates/whispernow-domain" }
 whispernow-platform = { path = "../../crates/whispernow-platform" }
@@ -35,6 +34,7 @@ futures-util.workspace = true
 gdk.workspace = true
 
 [dev-dependencies]
+whispernow-platform = { path = "../../crates/whispernow-platform", features = ["test-support"] }
 rusqlite.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

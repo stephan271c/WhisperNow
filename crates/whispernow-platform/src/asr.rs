@@ -7,7 +7,7 @@ use sherpa_onnx::{
 use whispernow_core::{
     ResolvedModel,
     asr::{AsrEngine, AsrError},
-    workflow::BATCH_SAMPLE_RATE_HZ,
+    audio::TARGET_SAMPLE_RATE,
 };
 use whispernow_domain::{ModelId, ModelLayout};
 
@@ -46,7 +46,7 @@ impl AsrEngine for SherpaAsrEngine {
     fn transcribe(&mut self, samples: &[f32]) -> Result<String, AsrError> {
         let (_, recognizer) = self.loaded.as_ref().ok_or(AsrError::TranscriptionFailed)?;
         let stream = recognizer.create_stream();
-        stream.accept_waveform(BATCH_SAMPLE_RATE_HZ.cast_signed(), samples);
+        stream.accept_waveform(TARGET_SAMPLE_RATE.cast_signed(), samples);
         recognizer.decode(&stream);
         Ok(stream
             .get_result()
@@ -79,7 +79,7 @@ fn recognizer_config(model: &ResolvedModel) -> Result<OfflineRecognizerConfig, A
                 joiner: Some(path(joiner)?),
             };
             config.model_config.model_type = Some("nemo_transducer".to_owned());
-            config.feat_config.sample_rate = BATCH_SAMPLE_RATE_HZ.cast_signed();
+            config.feat_config.sample_rate = TARGET_SAMPLE_RATE.cast_signed();
             config.feat_config.feature_dim = TRANSDUCER_FEATURE_DIM;
         }
         ModelLayout::Whisper {
@@ -149,6 +149,7 @@ mod tests {
     use whispernow_domain::{ModelAvailability, ModelRegistry};
 
     use super::recognizer_config;
+    use whispernow_core::audio::TARGET_SAMPLE_RATE;
 
     fn model(id: &str) -> ResolvedModel {
         ResolvedModel {
@@ -164,7 +165,10 @@ mod tests {
             .expect("transducer config");
         assert_eq!(transducer.model_config.provider.as_deref(), Some("cpu"));
         assert_eq!(transducer.model_config.num_threads, 4);
-        assert_eq!(transducer.feat_config.sample_rate, 16_000);
+        assert_eq!(
+            transducer.feat_config.sample_rate,
+            TARGET_SAMPLE_RATE.cast_signed()
+        );
         assert_eq!(transducer.feat_config.feature_dim, 80);
         assert_eq!(
             transducer.model_config.model_type.as_deref(),

@@ -2,17 +2,17 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use whispernow_domain::AppError;
 
-use whispernow_api::{ApiErrorDto, ErrorCategoryDto};
 use whispernow_core::{
     audio::AudioInput,
     llm::{LlmFuture, LlmProvider, LlmRequest, LlmService},
 };
+use whispernow_domain::ipc::ErrorCategory;
 use whispernow_domain::{CLEANUP_MODEL_FILE, CLEANUP_MODEL_IDS, ModelId};
 use whispernow_platform::{
-    AppPaths, CleanupModelLocator, CpalAudioInput, CudaPackLocator, DataCleaner,
-    LocalCleanupService, ModelStore, RemoteProvider, RigLlmService, SettingsStore, SherpaAsrEngine,
-    SileroVoiceActivitySource, silero_vad_model_path,
+    AppPaths, CleanupModelLocator, CpalAudioInput, CudaPackLocator, LocalCleanupService,
+    ModelStore, SettingsStore, SherpaAsrEngine, silero_vad_model_path, silero_voice_activity,
 };
 
 use super::{
@@ -31,10 +31,10 @@ impl NativeServices {
         events: Events,
         native_wayland: bool,
         resource_dir: PathBuf,
-    ) -> Result<Self, ApiErrorDto> {
+    ) -> Result<Self, AppError> {
         let paths = AppPaths::discover().map_err(|_| {
-            ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            AppError::new(
+                ErrorCategory::General,
                 "app_paths",
                 "Application storage is unavailable",
             )
@@ -43,11 +43,8 @@ impl NativeServices {
         let paste_helper_setup_dir = paths.paste_helper_setup_dir();
         let output = Arc::new(OutputCoordinator::native(wayland_token_path));
         let audio: Arc<dyn AudioInput> = Arc::new(CpalAudioInput::new());
-        let clear_data = DataCleaner::new(paths.clone());
         let persistence = Arc::new(SettingsStore::new(paths.clone()));
-        let persisted = persistence.load().map_err(|error| {
-            ApiErrorDto::new(ErrorCategoryDto::General, &error.code, &error.summary)
-        })?;
+        let persisted = persistence.load()?;
         let history = Arc::new(HistoryStore::open(paths.clone()));
         let startup_history_warning = history.take_warning();
         let llm_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -56,15 +53,14 @@ impl NativeServices {
             .enable_all()
             .build()
             .map_err(|_| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::General,
+                AppError::new(
+                    ErrorCategory::General,
                     "llm_runtime",
                     "AI cleanup is unavailable",
                 )
             })?;
         let llama_dir = llama_dir(&resource_dir);
-        let voice_activity =
-            SileroVoiceActivitySource::from_model_path(silero_vad_model_path(resource_dir));
+        let vad_model = silero_vad_model_path(resource_dir);
         let initial = State::new(persisted.model_id.clone(), persisted.first_run_complete);
         let state = Arc::new(StateCell::new(initial, events));
         if let Some(warning) = startup_history_warning {
@@ -75,7 +71,7 @@ impl NativeServices {
             Arc::clone(&state),
         ));
         settings.report_loaded(&persisted);
-        let store = Arc::new(ModelStore::new(paths, Vec::new()));
+        let store = Arc::new(ModelStore::new(paths.clone()));
         store.finish_cuda_pack_removal();
         let local_cleanup = Arc::new(LocalCleanupService::new(
             llama_dir,
@@ -93,7 +89,6 @@ impl NativeServices {
         let llm = Arc::new(AiCleanup {
             service: Arc::new(ProviderRouter {
                 local: Arc::clone(&local_cleanup),
-                remote: RigLlmService,
             }),
             runtime: Arc::new(llm_runtime),
             api_keys: settings.api_keys(),
@@ -104,7 +99,7 @@ impl NativeServices {
             history: Arc::clone(&history),
             audio: Arc::clone(&audio),
             models: store,
-            voice_activity: Arc::new(voice_activity),
+            voice_activity: Arc::new(move || silero_voice_activity(&vad_model)),
             llm,
             output: output.clone(),
             engine: Box::new(|| Box::new(SherpaAsrEngine::new())),
@@ -117,7 +112,7 @@ impl NativeServices {
             models,
             state,
             dictation,
-            clear_data,
+            paths,
             output,
             paste_helper_setup_dir,
             microphone_access: MicrophoneAccess::default(),
@@ -162,14 +157,14 @@ fn installed_cuda_pack(store: Arc<ModelStore>) -> CudaPackLocator {
 /// AI cleanup's providers: the local cleanup model in process, every other one through Rig.
 struct ProviderRouter {
     local: Arc<LocalCleanupService>,
-    remote: RigLlmService,
 }
 
 impl LlmService for ProviderRouter {
     fn complete(&self, request: LlmRequest) -> LlmFuture<'_> {
-        match RemoteProvider::of(request.config.provider) {
-            Some(provider) => self.remote.complete(provider, request),
-            None => self.local.complete(request),
+        if request.config.provider == LlmProvider::LocalCleanup {
+            self.local.complete(request)
+        } else {
+            Box::pin(whispernow_platform::complete(request))
         }
     }
 }

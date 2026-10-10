@@ -31,8 +31,8 @@ use gateway::{
 use services::NativeServices;
 use tauri::Manager as _;
 use tauri_plugin_global_shortcut::ShortcutState;
-use whispernow_api::EventPayload;
 use whispernow_domain::WindowGeometry;
+use whispernow_domain::ipc::EventPayload;
 
 use crate::shortcuts::{
     KeyTransition, ShortcutCoordinator, ShortcutEvent, ShortcutId, ShortcutRegistrar,

@@ -2,7 +2,7 @@
 //! control that changes the workflow is disabled while the desktop dictates, is paused or
 //! installs an update. The desktop refuses anything else it cannot do, and says why.
 
-use whispernow_api::{AppStateDto, PhaseDto};
+use whispernow_domain::ipc::{AppState, Phase};
 
 use crate::{ManagementState, NoticeScope};
 
@@ -35,8 +35,6 @@ impl BlockedReason {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiOperation {
-    /// Any settings control; changes queue behind one another rather than refusing.
-    SaveSettings,
     CredentialMutation,
     DownloadModel,
     CancelDownload,
@@ -107,8 +105,7 @@ impl UiOperation {
     const fn needs_idle(self) -> bool {
         matches!(
             self,
-            Self::SaveSettings
-                | Self::CompleteSetup
+            Self::CompleteSetup
                 | Self::RestartSetup
                 | Self::StartSetupTest
                 | Self::TestMicrophone
@@ -122,7 +119,7 @@ impl UiOperation {
 impl UiOperation {
     pub(crate) const fn notice_scope(self) -> NoticeScope {
         match self {
-            Self::SaveSettings | Self::CredentialMutation => NoticeScope::Settings,
+            Self::CredentialMutation => NoticeScope::Settings,
             Self::DownloadModel | Self::CancelDownload | Self::ModelSwitch | Self::ModelDelete => {
                 NoticeScope::Models
             }
@@ -153,17 +150,17 @@ impl UiOperation {
 #[must_use]
 pub fn blocked(
     operation: UiOperation,
-    snapshot: Option<&AppStateDto>,
+    snapshot: Option<&AppState>,
     management: &ManagementState,
 ) -> Option<BlockedReason> {
     let Some(snapshot) = snapshot else {
         return Some(BlockedReason::Connecting);
     };
     let phase = match snapshot.phase {
-        PhaseDto::Recording { .. } | PhaseDto::Processing { .. } => Some(BlockedReason::Dictating),
-        PhaseDto::Paused => Some(BlockedReason::Paused),
-        PhaseDto::Updating => Some(BlockedReason::UpdateInstalling),
-        PhaseDto::Idle | PhaseDto::Error { .. } => None,
+        Phase::Recording { .. } | Phase::Processing { .. } => Some(BlockedReason::Dictating),
+        Phase::Paused => Some(BlockedReason::Paused),
+        Phase::Updating => Some(BlockedReason::UpdateInstalling),
+        Phase::Idle | Phase::Error { .. } => None,
     };
     operation
         .needs_idle()
@@ -193,12 +190,6 @@ fn locally_blocked(operation: UiOperation, management: &ManagementState) -> Opti
         UiOperation::ChangeHistory => (!management.history_loaded())
             .then_some(BlockedReason::HistoryLoading)
             .or(change_in_flight),
-        UiOperation::SaveSettings => pending(
-            management
-                .busy
-                .iter()
-                .any(|busy| busy.blocks_workflow_changes()),
-        ),
         UiOperation::CredentialMutation
         | UiOperation::DownloadModel
         | UiOperation::CancelDownload

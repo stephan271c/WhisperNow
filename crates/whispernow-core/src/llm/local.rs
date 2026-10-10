@@ -37,7 +37,7 @@ const TURN_START: &str = "<|im_start|>";
 /// `ngram-simple`'s n-gram (`--spec-ngram-simple-size-n 4`).
 const NGRAM_SIZE: usize = 4;
 /// llama.cpp's `repeat_penalty`, as the cleanup model's evaluation ran it.
-pub const REPEAT_PENALTY: f64 = 1.05;
+pub const REPEAT_PENALTY: f32 = 1.05;
 /// The repeat penalty's window (`repeat_last_n`), which covers the whole prompt and reply.
 /// llama.cpp's default is the last 64 tokens; the model was chosen with the whole context
 /// penalized, which keeps spoken numbers as digits more often.
@@ -119,8 +119,6 @@ pub struct LocalDecodeRequest<'request> {
     /// The rendered prompt (`render_prompt`).
     pub prompt: &'request str,
     pub max_tokens: usize,
-    pub repeat_penalty: f32,
-    pub repeat_last_n: usize,
     /// `Some` decodes speculatively with this text as the transcript draft, which may be
     /// empty; `None` decodes one token at a time.
     pub draft: Option<&'request str>,
@@ -132,8 +130,6 @@ impl fmt::Debug for LocalDecodeRequest<'_> {
             .debug_struct("LocalDecodeRequest")
             .field("prompt_byte_count", &self.prompt.len())
             .field("max_tokens", &self.max_tokens)
-            .field("repeat_penalty", &self.repeat_penalty)
-            .field("repeat_last_n", &self.repeat_last_n)
             .field("draft_byte_count", &self.draft.map(str::len))
             .finish()
     }
@@ -207,8 +203,8 @@ pub fn decode<C: DecodeContext>(
     let prompt_tokens = prompt.len();
     let mut sampler = Sampler::new(
         context.vocabulary_size(),
-        request.repeat_penalty,
-        request.repeat_last_n,
+        REPEAT_PENALTY,
+        REPEAT_LAST_N,
         &context.suppressed_tokens(),
     );
     for &token in &prompt {

@@ -1,16 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use whispernow_api::{AppStateDto, COMMAND_NAMES, ModelStateDto, PhaseDto, RecordingMode};
+use whispernow_domain::ipc::{AppState, COMMAND_NAMES, ModelState, Phase};
 
 use crate::{RECORDING_BAR_WINDOW, REGISTERED_COMMANDS, SETTINGS_WINDOW};
 
 /// A snapshot in `phase` with the default model ready.
-pub(crate) fn snapshot(phase: PhaseDto) -> AppStateDto {
-    AppStateDto {
+pub(crate) fn snapshot(phase: Phase) -> AppState {
+    AppState {
         phase,
         selected_model_id: whispernow_domain::ModelId::default(),
-        model_state: ModelStateDto::Ready,
+        model_state: ModelState::Ready,
         last_transcript: None,
         error: None,
         active_downloads: Vec::new(),
@@ -18,9 +18,9 @@ pub(crate) fn snapshot(phase: PhaseDto) -> AppStateDto {
     }
 }
 
-pub(crate) const fn recording() -> PhaseDto {
-    PhaseDto::Recording {
-        mode: RecordingMode::Toggle,
+pub(crate) const fn recording() -> Phase {
+    Phase::Recording {
+        trigger: whispernow_domain::ipc::RecordingTrigger::Toggle,
         session: 1,
     }
 }

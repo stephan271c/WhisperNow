@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use whispernow_api::EntryId;
+use whispernow_domain::EntryId;
 
 use crate::components::ui::{Button, ButtonSize, ButtonVariant, Icon, IconName};
 
@@ -61,15 +61,9 @@ fn load_audio(id: EntryId, mut source: Signal<AudioSource>) {
 /// after the last await, in the same step that hands it to the player.
 #[cfg(target_arch = "wasm32")]
 async fn audio_url(id: EntryId) -> Result<String, String> {
-    let request = whispernow_api::GetHistoryAudioRequest { id };
-    let audio = crate::client::history_audio(&request)
+    let audio = crate::client::history_audio(&id)
         .await
-        .map_err(|error| {
-            error.api_error().map_or_else(
-                || "The audio could not be loaded".to_owned(),
-                |error| error.summary.clone(),
-            )
-        })?;
+        .map_err(|error| error.summary)?;
     Ok(audio.object_url())
 }
 

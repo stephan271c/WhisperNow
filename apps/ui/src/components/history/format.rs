@@ -2,7 +2,7 @@
 //! time. The clock is a context value so tests and galleries can pin both the time and the
 //! offset from UTC.
 
-use whispernow_api::{HistoryEntry, HistoryLimit, UtcMillis};
+use whispernow_domain::{HistoryEntry, HistoryLimit, UtcMillis};
 
 const MINUTE_MILLIS: i64 = 60_000;
 const DAY_MILLIS: i64 = 86_400_000;

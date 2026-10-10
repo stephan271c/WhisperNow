@@ -2,11 +2,11 @@ use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 
-use whispernow_api::PermissionStatusDto;
 use whispernow_core::{
     CancellationToken,
-    text_output::{PasteDelays, PasteOutcome, PastePlatform, PasteQueue},
+    text_output::{PasteOutcome, PastePlatform, PasteQueue},
 };
+use whispernow_domain::ipc::PermissionStatus;
 use whispernow_platform::{NativePasteError, NativePastePlatform};
 
 #[cfg(target_os = "linux")]
@@ -67,12 +67,7 @@ impl OutputCoordinator {
                     tracing::info!("the paste helper is unavailable; pasting through the portal");
                     OutputOperation::Wayland(WaylandOutputPortal::spawn(path, stopping.clone()))
                 },
-                |platform| {
-                    OutputOperation::Helper(Arc::new(PasteQueue::new(
-                        platform,
-                        PasteDelays::default(),
-                    )))
-                },
+                |platform| OutputOperation::Helper(Arc::new(PasteQueue::new(platform))),
             )
         });
         #[cfg(not(target_os = "linux"))]
@@ -84,9 +79,7 @@ impl OutputCoordinator {
             NativePastePlatform::connect()
                 .inspect_err(|error| tracing::warn!(?error, "native paste output is unavailable"))
                 .ok()
-                .map(|platform| {
-                    OutputOperation::Native(PasteQueue::new(platform, PasteDelays::default()))
-                })
+                .map(|platform| OutputOperation::Native(PasteQueue::new(platform)))
         });
         Self {
             operation,
@@ -149,7 +142,7 @@ impl OutputCoordinator {
 
     /// The `RemoteDesktop` portal consent the paste keystroke needs, or `None`
     /// outside a native Wayland session, where no portal is involved.
-    pub(crate) fn remote_desktop_consent(&self) -> Option<PermissionStatusDto> {
+    pub(crate) fn remote_desktop_consent(&self) -> Option<PermissionStatus> {
         match &self.operation {
             #[cfg(target_os = "linux")]
             Some(OutputOperation::Wayland(portal)) => Some(portal.consent()),
@@ -159,7 +152,7 @@ impl OutputCoordinator {
 
     /// Asks for the paste keystroke's portal consent now, while setup shows why,
     /// instead of at the first paste. It waits for the user's answer.
-    pub(crate) fn request_remote_desktop_consent(&self) -> Option<PermissionStatusDto> {
+    pub(crate) fn request_remote_desktop_consent(&self) -> Option<PermissionStatus> {
         match &self.operation {
             #[cfg(target_os = "linux")]
             Some(OutputOperation::Wayland(portal)) => Some(portal.prepare()),
@@ -265,19 +258,19 @@ struct WaylandOutputPortal {
     /// A saved restore token means the user already consented.
     restore_token: RemoteDesktopRestoreTokenStore,
     /// The consent the last portal answer showed, which outranks the token.
-    consent: Mutex<Option<PermissionStatusDto>>,
+    consent: Mutex<Option<PermissionStatus>>,
 }
 
 /// The consent a portal answer shows, when it shows one.
 #[cfg(target_os = "linux")]
-const fn consent_after<T>(result: &Result<T, WaylandPortalError>) -> Option<PermissionStatusDto> {
+const fn consent_after<T>(result: &Result<T, WaylandPortalError>) -> Option<PermissionStatus> {
     match result {
-        Ok(_) => Some(PermissionStatusDto::Granted),
+        Ok(_) => Some(PermissionStatus::Granted),
         Err(WaylandPortalError::PermissionDenied | WaylandPortalError::KeyboardUnavailable) => {
-            Some(PermissionStatusDto::Denied)
+            Some(PermissionStatus::Denied)
         }
         Err(WaylandPortalError::PortalUnavailable | WaylandPortalError::Disconnected) => {
-            Some(PermissionStatusDto::Unavailable)
+            Some(PermissionStatus::Unavailable)
         }
         Err(_) => None,
     }
@@ -363,25 +356,25 @@ impl WaylandOutputPortal {
         }
     }
 
-    fn consent(&self) -> PermissionStatusDto {
+    fn consent(&self) -> PermissionStatus {
         if !self.available {
-            return PermissionStatusDto::Unavailable;
+            return PermissionStatus::Unavailable;
         }
         let observed = *self.consent.lock().unwrap_or_else(PoisonError::into_inner);
         observed.unwrap_or_else(|| {
             if self.restore_token.has_token() {
-                PermissionStatusDto::Granted
+                PermissionStatus::Granted
             } else {
-                PermissionStatusDto::NotDetermined
+                PermissionStatus::NotDetermined
             }
         })
     }
 
     /// Opens the portal's output session, which asks for consent unless the
     /// restore token covers it. Stopping the application abandons the wait.
-    fn prepare(&self) -> PermissionStatusDto {
+    fn prepare(&self) -> PermissionStatus {
         if !self.available {
-            return PermissionStatusDto::Unavailable;
+            return PermissionStatus::Unavailable;
         }
         let (reply, receiver) = std_mpsc::sync_channel(1);
         if self
@@ -389,7 +382,7 @@ impl WaylandOutputPortal {
             .send(WaylandOutputCommand::Prepare { reply })
             .is_err()
         {
-            return PermissionStatusDto::Unavailable;
+            return PermissionStatus::Unavailable;
         }
         let result = receiver
             .recv()
@@ -505,7 +498,7 @@ mod tests {
 
         use whispernow_core::{
             CancellationToken,
-            text_output::{KeystrokeOutcome, PasteDelays, PastePlatform, PasteQueue},
+            text_output::{KeystrokeOutcome, PastePlatform, PasteQueue},
         };
 
         /// A clipboard the test reads while the paste thread restores it.
@@ -539,10 +532,7 @@ mod tests {
         }
 
         let clipboard = Arc::new(Mutex::new(Some("copied earlier".to_owned())));
-        let queue = Arc::new(PasteQueue::new(
-            Desktop(Arc::clone(&clipboard)),
-            PasteDelays::default(),
-        ));
+        let queue = Arc::new(PasteQueue::new(Desktop(Arc::clone(&clipboard))));
         assert_eq!(
             super::helper_output(&queue, "dictated words", &CancellationToken::default()),
             OutputNotice::PastedAndRestored
@@ -564,8 +554,8 @@ mod tests {
             thread,
         };
 
-        use whispernow_api::PermissionStatusDto;
         use whispernow_core::CancellationToken;
+        use whispernow_domain::ipc::PermissionStatus;
         use whispernow_platform::wayland::{
             RemoteDesktopRestoreTokenStore, WaylandPasteOutcome, WaylandPortalError,
         };
@@ -704,11 +694,11 @@ mod tests {
             );
             assert_eq!(
                 coordinator.remote_desktop_consent(),
-                Some(PermissionStatusDto::Unavailable)
+                Some(PermissionStatus::Unavailable)
             );
             assert_eq!(
                 coordinator.request_remote_desktop_consent(),
-                Some(PermissionStatusDto::Unavailable)
+                Some(PermissionStatus::Unavailable)
             );
         }
 
@@ -717,25 +707,25 @@ mod tests {
             for (reply, expected) in [
                 (
                     Ok(WaylandPasteOutcome::PastedAndRestored),
-                    PermissionStatusDto::Granted,
+                    PermissionStatus::Granted,
                 ),
                 (
                     Err(WaylandPortalError::PermissionDenied),
-                    PermissionStatusDto::Denied,
+                    PermissionStatus::Denied,
                 ),
                 (
                     Err(WaylandPortalError::PortalUnavailable),
-                    PermissionStatusDto::Unavailable,
+                    PermissionStatus::Unavailable,
                 ),
                 (
                     Err(WaylandPortalError::Backend),
-                    PermissionStatusDto::NotDetermined,
+                    PermissionStatus::NotDetermined,
                 ),
             ] {
                 let (coordinator, pastes) = scripted(reply);
                 assert_eq!(
                     coordinator.remote_desktop_consent(),
-                    Some(PermissionStatusDto::NotDetermined),
+                    Some(PermissionStatus::NotDetermined),
                     "without a restore token or an answer, consent is not known"
                 );
                 assert_eq!(

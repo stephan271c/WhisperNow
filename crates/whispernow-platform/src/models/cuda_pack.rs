@@ -7,21 +7,25 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{BufReader, Write},
+    io::BufReader,
     path::{Path, PathBuf},
 };
 
 use flate2::read::GzDecoder;
-use tar::Archive;
 use tempfile::Builder;
 use whispernow_core::CancellationToken;
 use whispernow_domain::DownloadPhase;
 
 use super::{
-    DownloadObserver, DownloadProgress, ModelStore, ModelStoreError, PinnedFile, check_cancelled,
-    copy_entry, download_file, filesystem, remove_path, sync_directory, validate_artifact_path,
+    DownloadProgress, ModelStore, ModelStoreError, PinnedFile, check_cancelled, download_file,
+    extract_tar, filesystem, remove_path, sync_directory, validate_artifact_path, write_member,
 };
 use crate::llama::CUDA_LIBRARIES;
+#[cfg(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
+use crate::llama::CUDA_PACK_LIBRARIES;
 
 const PACK_DIRECTORY: &str = "llama-cuda";
 /// Left in a pack that was removed while loaded; such a pack is deleted at the next start.
@@ -52,7 +56,7 @@ pub(super) const CUDA_PACK: &[CudaPackArchive] = &[
         size_bytes: 152_878_063,
         sha256: "ccd87e3754b7445a45231090e509b9142e171240f9dbc20eb9358e9f7ca9dfa6",
         format: CudaPackFormat::TarGz,
-        members: &[("llama-b11259/libggml-cuda.so", "libggml-cuda.so")],
+        members: &[("llama-b11259/libggml-cuda.so", CUDA_PACK_LIBRARIES.backend)],
     },
     CudaPackArchive {
         url: "https://github.com/ggml-org/llama.cpp/releases/download/b11259/cudart-llama-b11259-bin-ubuntu-cuda-13.4-x64.tar.gz",
@@ -62,15 +66,15 @@ pub(super) const CUDA_PACK: &[CudaPackArchive] = &[
         members: &[
             (
                 "cudart-llama-b11259-bin-ubuntu-cuda-13.4-x64/libcudart.so.13",
-                "libcudart.so.13",
+                CUDA_PACK_LIBRARIES.runtime[0],
             ),
             (
                 "cudart-llama-b11259-bin-ubuntu-cuda-13.4-x64/libcublasLt.so.13",
-                "libcublasLt.so.13",
+                CUDA_PACK_LIBRARIES.runtime[1],
             ),
             (
                 "cudart-llama-b11259-bin-ubuntu-cuda-13.4-x64/libcublas.so.13",
-                "libcublas.so.13",
+                CUDA_PACK_LIBRARIES.runtime[2],
             ),
         ],
     },
@@ -84,7 +88,7 @@ pub(super) const CUDA_PACK: &[CudaPackArchive] = &[
         size_bytes: 153_546_058,
         sha256: "7e93d79ed0dfacb67a7a5448eab38b60511ec3ad623022259b08490d5cf01404",
         format: CudaPackFormat::Zip,
-        members: &[("ggml-cuda.dll", "ggml-cuda.dll")],
+        members: &[(CUDA_PACK_LIBRARIES.backend, CUDA_PACK_LIBRARIES.backend)],
     },
     CudaPackArchive {
         url: "https://github.com/ggml-org/llama.cpp/releases/download/b11259/cudart-llama-bin-win-cuda-13.4-x64.zip",
@@ -92,9 +96,18 @@ pub(super) const CUDA_PACK: &[CudaPackArchive] = &[
         sha256: "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668",
         format: CudaPackFormat::Zip,
         members: &[
-            ("cudart64_13.dll", "cudart64_13.dll"),
-            ("cublasLt64_13.dll", "cublasLt64_13.dll"),
-            ("cublas64_13.dll", "cublas64_13.dll"),
+            (
+                CUDA_PACK_LIBRARIES.runtime[0],
+                CUDA_PACK_LIBRARIES.runtime[0],
+            ),
+            (
+                CUDA_PACK_LIBRARIES.runtime[1],
+                CUDA_PACK_LIBRARIES.runtime[1],
+            ),
+            (
+                CUDA_PACK_LIBRARIES.runtime[2],
+                CUDA_PACK_LIBRARIES.runtime[2],
+            ),
         ],
     },
 ];
@@ -148,15 +161,44 @@ impl ModelStore {
     #[must_use]
     pub fn cuda_pack_dir(&self) -> Option<PathBuf> {
         let root = self.cuda_pack_root();
-        (Self::cuda_pack_complete(&root) && !root.join(REMOVAL_MARKER).exists()).then_some(root)
+        (self.validate_cuda_pack(&root).is_ok() && !root.join(REMOVAL_MARKER).exists())
+            .then_some(root)
     }
 
-    fn cuda_pack_complete(root: &Path) -> bool {
-        CUDA_LIBRARIES.is_some_and(|libraries| {
-            libraries
-                .files()
-                .all(|file| validate_artifact_path(root, Path::new(file)).unwrap_or(false))
-        })
+    fn validate_cuda_pack(&self, root: &Path) -> Result<(), ModelStoreError> {
+        let libraries = CUDA_LIBRARIES.ok_or(ModelStoreError::InvalidArchive)?;
+        let mut required: HashMap<_, _> = self
+            .cuda_pack
+            .iter()
+            .flat_map(|archive| archive.members.iter())
+            .map(|&(member, name)| (name, Some(member)))
+            .collect();
+        for name in libraries.files() {
+            required.entry(name).or_insert(None);
+        }
+        let mut artifacts = Vec::new();
+        let mut invalid_archive = false;
+        for (name, member) in required {
+            if validate_artifact_path(root, Path::new(name))
+                .map_err(|_| ModelStoreError::InvalidArchive)?
+            {
+                continue;
+            }
+            invalid_archive = true;
+            if let Some(member) = member
+                && !root.join(name).exists()
+            {
+                artifacts.push(member.to_owned());
+            }
+        }
+        if !artifacts.is_empty() {
+            artifacts.sort();
+            return Err(ModelStoreError::MissingArtifacts { artifacts });
+        }
+        if invalid_archive {
+            return Err(ModelStoreError::InvalidArchive);
+        }
+        Ok(())
     }
 
     /// Downloads, verifies and installs the pack. A complete pack marked for removal is kept
@@ -164,7 +206,7 @@ impl ModelStore {
     pub fn download_cuda_pack(
         &self,
         cancellation: &CancellationToken,
-        observer: &dyn DownloadObserver,
+        observer: &dyn Fn(DownloadProgress),
     ) -> Result<(), ModelStoreError> {
         if self.cuda_pack.is_empty() {
             return Err(ModelStoreError::Unsupported);
@@ -177,14 +219,14 @@ impl ModelStore {
             total_bytes: Some(total),
         };
         {
-            let _guard = self.lock_store()?;
-            if Self::cuda_pack_complete(&root) {
+            let _guard = self.lock_store();
+            if self.validate_cuda_pack(&root).is_ok() {
                 match fs::remove_file(root.join(REMOVAL_MARKER)) {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(_) => return Err(filesystem("keep the CUDA pack")),
                 }
-                observer.report(complete(DownloadPhase::Complete));
+                observer(complete(DownloadPhase::Complete));
                 return Ok(());
             }
         }
@@ -204,7 +246,7 @@ impl ModelStore {
                 .map_err(|_| filesystem("create download staging file"))?;
             // Progress over the whole pack, not this one archive.
             let overall = |progress: DownloadProgress| {
-                observer.report(DownloadProgress {
+                observer(DownloadProgress {
                     phase: progress.phase,
                     downloaded_bytes: done.saturating_add(progress.downloaded_bytes),
                     total_bytes: Some(total),
@@ -222,20 +264,18 @@ impl ModelStore {
                 &overall,
             ))?;
             done = done.saturating_add(archive.size_bytes);
-            observer.report(DownloadProgress {
+            observer(DownloadProgress {
                 phase: DownloadPhase::Extracting,
                 downloaded_bytes: done,
                 total_bytes: Some(total),
             });
             extract(archive, file.path(), staging.path(), cancellation)?;
         }
-        if !Self::cuda_pack_complete(staging.path()) {
-            return Err(ModelStoreError::InvalidArchive);
-        }
-        observer.report(complete(DownloadPhase::Installing));
+        self.validate_cuda_pack(staging.path())?;
+        observer(complete(DownloadPhase::Installing));
         check_cancelled(cancellation)?;
         {
-            let _guard = self.lock_store()?;
+            let _guard = self.lock_store();
             if fs::symlink_metadata(&root).is_ok() {
                 remove_path(&root).map_err(|_| filesystem("replace the CUDA pack"))?;
             }
@@ -244,14 +284,14 @@ impl ModelStore {
             let _moved = staging.keep();
             sync_directory(data_dir)?;
         }
-        observer.report(complete(DownloadPhase::Complete));
+        observer(complete(DownloadPhase::Complete));
         Ok(())
     }
 
     /// Removes the pack, or, while `in_use` (loaded in this process), marks it so that it is
     /// no longer used and is deleted at the next start.
     pub fn remove_cuda_pack(&self, in_use: bool) -> Result<(), ModelStoreError> {
-        let _guard = self.lock_store()?;
+        let _guard = self.lock_store();
         let root = self.cuda_pack_root();
         if fs::symlink_metadata(&root).is_err() {
             return Err(ModelStoreError::NotInstalled);
@@ -268,9 +308,7 @@ impl ModelStore {
     /// Deletes a pack marked for removal, and staging left by an interrupted download. Run
     /// at startup, before anything loads the pack.
     pub fn finish_cuda_pack_removal(&self) {
-        let Ok(_guard) = self.lock_store() else {
-            return;
-        };
+        let _guard = self.lock_store();
         let root = self.cuda_pack_root();
         if root.join(REMOVAL_MARKER).exists()
             && let Err(error) = remove_path(&root)
@@ -296,27 +334,20 @@ fn extract(
     into: &Path,
     cancellation: &CancellationToken,
 ) -> Result<(), ModelStoreError> {
-    let mut wanted: HashMap<&str, &str> = archive.members.iter().copied().collect();
     let open = || File::open(file).map_err(|_| filesystem("open CUDA pack archive"));
     match archive.format {
         CudaPackFormat::TarGz => {
-            let mut tar = Archive::new(GzDecoder::new(BufReader::new(open()?)));
-            let entries = tar.entries().map_err(|_| ModelStoreError::InvalidArchive)?;
-            for entry in entries {
-                check_cancelled(cancellation)?;
-                let mut entry = entry.map_err(|_| ModelStoreError::InvalidArchive)?;
-                if !entry.header().entry_type().is_file() {
-                    continue;
-                }
-                let path = entry
-                    .path()
-                    .map_err(|_| ModelStoreError::InvalidArchive)?
-                    .to_string_lossy()
-                    .into_owned();
-                if let Some(name) = wanted.remove(path.as_str()) {
-                    write_member(&mut entry, &into.join(name), cancellation)?;
-                }
-            }
+            let mut members: Vec<_> = archive
+                .members
+                .iter()
+                .map(|&(member, name)| (PathBuf::from(member), name))
+                .collect();
+            extract_tar(
+                GzDecoder::new(BufReader::new(open()?)),
+                into,
+                &mut members,
+                cancellation,
+            )?;
         }
         CudaPackFormat::Zip => {
             let mut zip =
@@ -331,32 +362,8 @@ fn extract(
                     continue;
                 }
                 write_member(&mut entry, &into.join(name), cancellation)?;
-                wanted.remove(member);
             }
         }
     }
-    if wanted.is_empty() {
-        Ok(())
-    } else {
-        let mut artifacts: Vec<String> = wanted.into_keys().map(str::to_owned).collect();
-        artifacts.sort();
-        Err(ModelStoreError::MissingArtifacts { artifacts })
-    }
-}
-
-fn write_member(
-    input: &mut impl std::io::Read,
-    destination: &Path,
-    cancellation: &CancellationToken,
-) -> Result<(), ModelStoreError> {
-    let mut output = File::options()
-        .create_new(true)
-        .write(true)
-        .open(destination)
-        .map_err(|_| filesystem("create CUDA pack file"))?;
-    copy_entry(input, &mut output, cancellation)?;
-    output
-        .flush()
-        .and_then(|()| output.sync_all())
-        .map_err(|_| filesystem("sync CUDA pack file"))
+    Ok(())
 }

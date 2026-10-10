@@ -7,14 +7,9 @@ use std::{
 
 use thiserror::Error;
 pub use whispernow_domain::ClearDataCategory;
+use whispernow_domain::ipc::DataLocation;
 
 use crate::AppPaths;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DataLocation {
-    pub category: ClearDataCategory,
-    pub path: PathBuf,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClearDataResultEntry {
@@ -30,19 +25,9 @@ pub struct ClearDataError {
     pub kind: io::ErrorKind,
 }
 
-#[derive(Debug)]
-pub struct DataCleaner {
-    paths: AppPaths,
-}
-
-impl DataCleaner {
-    #[must_use]
-    pub fn new(paths: AppPaths) -> Self {
-        Self { paths }
-    }
-
+impl AppPaths {
     /// The fixed targets that currently exist.
-    pub fn locations(&self) -> Result<Vec<DataLocation>, ClearDataError> {
+    pub fn data_locations(&self) -> Result<Vec<DataLocation>, ClearDataError> {
         let mut locations = Vec::new();
         for (category, path) in self.fixed_targets()? {
             match fs::symlink_metadata(&path) {
@@ -61,12 +46,12 @@ impl DataCleaner {
 
     /// Retained recordings are removed before the `SQLite` lifecycle database; if they cannot
     /// be removed, the database and its sidecars are kept so the recordings stay recoverable.
-    pub fn clear(
+    pub fn clear_data(
         &self,
         categories: &[ClearDataCategory],
     ) -> Result<Vec<ClearDataResultEntry>, ClearDataError> {
         let targets = self
-            .locations()?
+            .data_locations()?
             .into_iter()
             .filter(|location| categories.contains(&location.category));
         let mut retained_audio_removed = true;
@@ -77,7 +62,7 @@ impl DataCleaner {
             } else {
                 delete(&path)
             };
-            if path == self.paths.recordings_dir() && outcome.is_err() {
+            if path == self.recordings_dir() && outcome.is_err() {
                 retained_audio_removed = false;
             }
             entries.push(ClearDataResultEntry {
@@ -91,9 +76,9 @@ impl DataCleaner {
 
     fn is_lifecycle_database(&self, path: &Path) -> bool {
         [
-            self.paths.history_database_file(),
-            self.paths.history_database_wal_file(),
-            self.paths.history_database_shm_file(),
+            self.history_database_file(),
+            self.history_database_wal_file(),
+            self.history_database_shm_file(),
         ]
         .iter()
         .any(|database| database == path)
@@ -102,44 +87,28 @@ impl DataCleaner {
     /// Fixed [`AppPaths`] targets plus every settings file moved aside.
     fn fixed_targets(&self) -> Result<Vec<(ClearDataCategory, PathBuf)>, ClearDataError> {
         let backups = self
-            .paths
             .settings_backup_files()
             .map_err(|error| ClearDataError {
                 category: ClearDataCategory::Settings,
                 kind: error.kind(),
             })?;
-        let mut targets = vec![(ClearDataCategory::Settings, self.paths.settings_file())];
+        let mut targets = vec![(ClearDataCategory::Settings, self.settings_file())];
         targets.extend(
             backups
                 .into_iter()
                 .map(|path| (ClearDataCategory::Settings, path)),
         );
         targets.extend([
-            (ClearDataCategory::History, self.paths.history_file()),
-            (
-                ClearDataCategory::History,
-                self.paths.migrated_history_file(),
-            ),
-            (
-                ClearDataCategory::History,
-                self.paths.history_quarantine_dir(),
-            ),
-            // Before the database, which `clear` keeps when the recordings cannot be removed.
-            (ClearDataCategory::History, self.paths.recordings_dir()),
-            (
-                ClearDataCategory::History,
-                self.paths.history_database_file(),
-            ),
-            (
-                ClearDataCategory::History,
-                self.paths.history_database_wal_file(),
-            ),
-            (
-                ClearDataCategory::History,
-                self.paths.history_database_shm_file(),
-            ),
-            (ClearDataCategory::Models, self.paths.models_dir()),
-            (ClearDataCategory::Logs, self.paths.logs_dir()),
+            (ClearDataCategory::History, self.history_file()),
+            (ClearDataCategory::History, self.migrated_history_file()),
+            (ClearDataCategory::History, self.history_quarantine_dir()),
+            // Before the database, which `clear_data` keeps when the recordings cannot be removed.
+            (ClearDataCategory::History, self.recordings_dir()),
+            (ClearDataCategory::History, self.history_database_file()),
+            (ClearDataCategory::History, self.history_database_wal_file()),
+            (ClearDataCategory::History, self.history_database_shm_file()),
+            (ClearDataCategory::Models, self.models_dir()),
+            (ClearDataCategory::Logs, self.logs_dir()),
         ]);
         Ok(targets)
     }
@@ -165,7 +134,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{ClearDataCategory, DataCleaner};
+    use super::ClearDataCategory;
     use crate::AppPaths;
 
     const EVERYTHING: [ClearDataCategory; 4] = [
@@ -221,10 +190,10 @@ mod tests {
     #[test]
     fn nothing_to_clear_lists_and_deletes_nothing() {
         let fixture = Fixture::separate_roots();
-        let manager = DataCleaner::new(fixture.paths);
+        let paths = fixture.paths;
 
-        assert_eq!(manager.locations(), Ok(Vec::new()));
-        assert_eq!(manager.clear(&EVERYTHING), Ok(Vec::new()));
+        assert_eq!(paths.data_locations(), Ok(Vec::new()));
+        assert_eq!(paths.clear_data(&EVERYTHING), Ok(Vec::new()));
     }
 
     #[test]
@@ -235,10 +204,10 @@ mod tests {
         let data_sentinel = fixture.paths.data_dir().join("keep.txt");
         create_file(&config_sentinel);
         create_file(&data_sentinel);
-        let manager = DataCleaner::new(fixture.paths.clone());
+        let paths = fixture.paths.clone();
 
-        let categories = manager
-            .locations()
+        let categories = paths
+            .data_locations()
             .expect("locations")
             .into_iter()
             .map(|location| location.category)
@@ -253,10 +222,10 @@ mod tests {
             .concat()
         );
 
-        let report = manager.clear(&EVERYTHING).expect("clear");
+        let report = paths.clear_data(&EVERYTHING).expect("clear");
         assert_eq!(report.len(), 10);
         assert!(report.iter().all(|entry| entry.outcome.is_ok()));
-        assert_eq!(manager.locations(), Ok(Vec::new()));
+        assert_eq!(paths.data_locations(), Ok(Vec::new()));
         assert!(config_sentinel.exists());
         assert!(data_sentinel.exists());
         assert!(fixture.paths.config_dir().is_dir());
@@ -267,10 +236,10 @@ mod tests {
     fn only_the_requested_categories_are_deleted() {
         let fixture = Fixture::separate_roots();
         fixture.create_every_target();
-        let manager = DataCleaner::new(fixture.paths.clone());
+        let paths = fixture.paths.clone();
 
-        let report = manager
-            .clear(&[ClearDataCategory::Logs])
+        let report = paths
+            .clear_data(&[ClearDataCategory::Logs])
             .expect("clear logs");
 
         assert_eq!(report.len(), 1);
@@ -294,10 +263,10 @@ mod tests {
         for path in [&later, &earlier, &python, &unrelated[0], &unrelated[1]] {
             create_file(path);
         }
-        let manager = DataCleaner::new(fixture.paths.clone());
+        let paths = fixture.paths.clone();
 
-        let settings_paths = manager
-            .locations()
+        let settings_paths = paths
+            .data_locations()
             .expect("locations")
             .into_iter()
             .filter(|location| location.category == ClearDataCategory::Settings)
@@ -312,7 +281,7 @@ mod tests {
                 python.clone()
             ]
         );
-        manager.clear(&EVERYTHING).expect("clear");
+        paths.clear_data(&EVERYTHING).expect("clear");
         for removed in [&earlier, &later, &python, &fixture.paths.settings_file()] {
             assert!(!removed.exists(), "{removed:?}");
         }
@@ -337,8 +306,8 @@ mod tests {
         ] {
             create_file(&path);
         }
-        let manager = DataCleaner::new(fixture.paths.clone());
-        let report = manager.clear(&EVERYTHING).expect("clear");
+        let paths = fixture.paths.clone();
+        let report = paths.clear_data(&EVERYTHING).expect("clear");
         fs::set_permissions(&recordings, fs::Permissions::from_mode(0o700))
             .expect("writable recordings");
 
@@ -362,9 +331,9 @@ mod tests {
         fixture.create_every_target();
         let sentinel = fixture.paths.config_dir().join("unrelated.db");
         create_file(&sentinel);
-        let manager = DataCleaner::new(fixture.paths.clone());
+        let paths = fixture.paths.clone();
 
-        let report = manager.clear(&EVERYTHING).expect("clear");
+        let report = paths.clear_data(&EVERYTHING).expect("clear");
 
         assert!(report.iter().all(|entry| entry.outcome.is_ok()));
         assert_eq!(fixture.paths.config_dir(), fixture.paths.data_dir());
@@ -384,9 +353,9 @@ mod tests {
         symlink(&outside, fixture.paths.models_dir()).expect("models symlink");
         create_dir(&fixture.paths.logs_dir());
         symlink(&outside, fixture.paths.logs_dir().join("outside-link")).expect("nested symlink");
-        let manager = DataCleaner::new(fixture.paths.clone());
+        let paths = fixture.paths.clone();
 
-        let report = manager.clear(&EVERYTHING).expect("clear");
+        let report = paths.clear_data(&EVERYTHING).expect("clear");
 
         assert!(report.iter().all(|entry| entry.outcome.is_ok()));
         assert!(outside.join("content").exists());

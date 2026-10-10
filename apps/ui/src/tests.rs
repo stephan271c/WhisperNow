@@ -1,13 +1,14 @@
 use dioxus::prelude::*;
-use whispernow_api::{
-    ActiveDownloadDto, ApiErrorDto, AppStateDto, AudioDeviceDto, ClearDataCategory,
-    ClearDataResult, ClearDataResultItemDto, DownloadPhase, EntryId, ErrorCategoryDto,
-    EventPayload, HistoryCursor, HistoryEntry, HistoryFilter, HistoryPage,
-    ListAudioDevicesResponse, ListModelsResponse, LlmProvider, ManualUpdatePackageDto,
-    ModelAvailability, ModelDto, ModelStateDto, PhaseDto, RecoveryActionDto, Settings,
-    SettingsView, SetupCheckpoint, SetupStateView, SetupStep, Shortcut, ShortcutKey,
-    ShortcutModifier, TextOutputStatusDto, TranscriptResponse, UpdateErrorCodeDto, UpdateErrorDto,
-    UpdatePhaseDto, UpdateProgressDto, UpdateStateDto, UtcMillis,
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{
+    ActiveDownload, AppState, AudioDevice, ClearDataItem, ClearDataResult, ErrorCategory,
+    EventPayload, ManualUpdatePackage, ModelState, ModelSummary, Phase, SettingsView,
+    SetupStateView, UpdateError, UpdatePhase, UpdateProgress, UpdateState,
+};
+use whispernow_domain::{
+    ClearDataCategory, DownloadPhase, EntryId, HistoryCursor, HistoryEntry, HistoryFilter,
+    HistoryPage, LlmProvider, ModelAvailability, Settings, SetupCheckpoint, SetupStep, Shortcut,
+    ShortcutKey, ShortcutModifier, UtcMillis,
 };
 
 use crate::client::fake;
@@ -29,7 +30,7 @@ fn TestSurface(initial_state: UiState) -> Element {
     rsx! { AppShell {} }
 }
 
-fn state_event(state: AppStateDto) -> EventPayload {
+fn state_event(state: AppState) -> EventPayload {
     EventPayload::StateChanged { state }
 }
 
@@ -37,15 +38,15 @@ fn history_event() -> EventPayload {
     EventPayload::HistoryChanged
 }
 
-fn ui_state(phase: PhaseDto) -> UiState {
+fn ui_state(phase: Phase) -> UiState {
     let mut state = UiState::default();
     state.hydrate(snapshot(phase));
     state.mark_event_stream_listening();
     state
 }
 
-fn update_state(phase: UpdatePhaseDto) -> UpdateStateDto {
-    UpdateStateDto {
+fn update_state(phase: UpdatePhase) -> UpdateState {
+    UpdateState {
         phase,
         available_version: None,
         release_notes: None,
@@ -57,8 +58,8 @@ fn update_state(phase: UpdatePhaseDto) -> UpdateStateDto {
     }
 }
 
-fn settings_html(update: UpdateStateDto) -> String {
-    let mut state = ui_state(PhaseDto::Idle);
+fn settings_html(update: UpdateState) -> String {
+    let mut state = ui_state(Phase::Idle);
     state.hydrate_update(update);
     dioxus_ssr::render_element(rsx! {
         TestSurface { initial_state: state }
@@ -71,16 +72,16 @@ fn cleanup_to(provider: LlmProvider, api_base: Option<&str>) -> Settings {
     settings.llm_provider = provider;
     settings.cleanup_enabled = true;
     settings.provider_settings_mut(provider).api_base = api_base.map(|api_base| {
-        whispernow_api::ProviderEndpoint::parse(api_base).expect("a safe endpoint")
+        whispernow_domain::ProviderEndpoint::parse(api_base).expect("a safe endpoint")
     });
     settings
 }
 
-fn model_id(id: &str) -> whispernow_api::ModelId {
-    whispernow_api::ModelId::new(id).expect("test model id")
+fn model_id(id: &str) -> whispernow_domain::ModelId {
+    whispernow_domain::ModelId::new(id).expect("test model id")
 }
 
-fn history_entry(id: u64, text: &str) -> HistoryEntry {
+fn history_entry(id: i64, text: &str) -> HistoryEntry {
     crate::test_support::history_entry(id, text)
 }
 
@@ -99,12 +100,11 @@ fn notice_message(management: &ManagementState) -> Option<&str> {
         .map(|notice| notice.message.as_str())
 }
 
-fn history_unavailable_error() -> ApiErrorDto {
-    ApiErrorDto {
-        category: ErrorCategoryDto::HistoryUnavailable,
+fn history_unavailable_error() -> AppError {
+    AppError {
+        category: ErrorCategory::HistoryUnavailable,
         code: "history_unavailable".to_owned(),
         summary: "History storage is unavailable".to_owned(),
-        recovery: None,
     }
 }
 
@@ -143,7 +143,7 @@ fn a_history_read_for_a_filter_no_longer_shown_is_ignored() {
         &stale,
         history_window(vec![history_entry(10, "stale")]),
     );
-    management.fail_history_refresh(&stale, Some(&history_unavailable_error()));
+    management.fail_history_refresh(&stale, &history_unavailable_error());
 
     assert!(management.history_loaded());
     assert!(management.history_unavailable.is_none());
@@ -188,7 +188,10 @@ fn failed_refresh_keeps_loaded_rows_but_unavailable_storage_degrades() {
     let mut management = ManagementState::default();
     show_history(&mut management, vec![history_entry(10, "loaded")]);
 
-    management.fail_history_refresh(&HistoryFilter::default(), None);
+    management.fail_history_refresh(
+        &HistoryFilter::default(),
+        &crate::client::connection_error(),
+    );
     assert_eq!(
         management.history.len(),
         1,
@@ -196,14 +199,11 @@ fn failed_refresh_keeps_loaded_rows_but_unavailable_storage_degrades() {
     );
     assert_eq!(
         notice_message(&management),
-        Some("History could not be loaded")
+        Some("The desktop connection failed")
     );
     assert!(management.history_unavailable.is_none());
 
-    management.fail_history_refresh(
-        &HistoryFilter::default(),
-        Some(&history_unavailable_error()),
-    );
+    management.fail_history_refresh(&HistoryFilter::default(), &history_unavailable_error());
     assert!(management.history.is_empty());
     assert!(!management.history_loaded());
     assert_eq!(
@@ -229,36 +229,29 @@ fn history_unavailability_preserves_independently_loaded_management_sections() {
                 modifiers: [ShortcutModifier::Control].into(),
                 key: ShortcutKey::Space,
             },
-            recording_mode: whispernow_api::RecordingMode::Hold,
+            recording_mode: whispernow_domain::RecordingMode::Hold,
         },
     });
-    management.install_devices(ListAudioDevicesResponse {
-        devices: vec![AudioDeviceDto {
-            id: "microphone".to_owned(),
-            display_name: "Microphone".to_owned(),
-            is_default: true,
-        }],
-    });
-    management.install_models(ListModelsResponse {
-        models: vec![ModelDto {
-            id: whispernow_api::ModelId::new("model").expect("fixture model id"),
-            display_name: "Model".to_owned(),
-            family: whispernow_api::ModelFamily::Whisper,
-            availability: ModelAvailability::Downloaded,
-            languages: vec!["en".to_owned()],
-            size_bytes: 116_204_861,
-            speed: whispernow_api::Rating::new(5),
-            accuracy: whispernow_api::Rating::new(1),
-            benchmark: None,
-            recommended: false,
-        }],
-    });
+    management.install_devices(vec![AudioDevice {
+        id: "microphone".to_owned(),
+        display_name: "Microphone".to_owned(),
+        is_default: true,
+    }]);
+    management.install_models(vec![ModelSummary {
+        id: whispernow_domain::ModelId::new("model").expect("fixture model id"),
+        display_name: "Model".to_owned(),
+        family: whispernow_domain::ModelFamily::Whisper,
+        availability: ModelAvailability::Downloaded,
+        languages: vec!["en".to_owned()],
+        size_bytes: 116_204_861,
+        speed: whispernow_domain::Rating::new(5),
+        accuracy: whispernow_domain::Rating::new(1),
+        benchmark: None,
+        recommended: false,
+    }]);
     show_history(&mut management, vec![history_entry(10, "stale")]);
 
-    management.fail_history_refresh(
-        &HistoryFilter::default(),
-        Some(&history_unavailable_error()),
-    );
+    management.fail_history_refresh(&HistoryFilter::default(), &history_unavailable_error());
 
     assert_eq!(
         management
@@ -291,14 +284,8 @@ fn state_events_do_not_refresh_history_but_history_events_do() {
         management.install_snapshot(&snapshot(crate::test_support::PROCESSING));
         UiActions::new(test_context(UiState::default(), management))
     });
-    let mut idle = snapshot(PhaseDto::Idle);
-    idle.last_transcript = Some(TranscriptResponse {
-        raw_text: "new recording".to_owned(),
-        final_text: "new recording".to_owned(),
-        text_output_status: None,
-        cleanup_failed: false,
-        history_save_failed: false,
-    });
+    let mut idle = snapshot(Phase::Idle);
+    idle.last_transcript = Some("new recording".to_owned());
     dom.in_scope(ScopeId::ROOT, || actions.apply_event(state_event(idle)));
     dom.process_events();
     assert!(fake::commands().is_empty());
@@ -307,7 +294,7 @@ fn state_events_do_not_refresh_history_but_history_events_do() {
     dom.process_events();
     assert_eq!(fake::commands(), ["get_history"]);
     assert_eq!(
-        fake::requests::<whispernow_api::HistoryPageRequest>("get_history")[0].filter,
+        fake::requests::<whispernow_domain::HistoryPageRequest>("get_history")[0].filter,
         HistoryFilter::default()
     );
 }
@@ -329,12 +316,12 @@ fn partial_clear_data_does_not_hide_history_when_database_deletion_failed() {
 
     management.apply_clear_result(ClearDataResult {
         items: vec![
-            ClearDataResultItemDto {
+            ClearDataItem {
                 category: ClearDataCategory::History,
                 path: "history.sqlite3".to_owned(),
                 deleted: false,
             },
-            ClearDataResultItemDto {
+            ClearDataItem {
                 category: ClearDataCategory::History,
                 path: "recordings".to_owned(),
                 deleted: true,
@@ -366,7 +353,7 @@ fn start_on_login(settings: &mut Settings) {
     settings.auto_start_on_login = true;
 }
 
-fn theme(theme: whispernow_api::ThemePreference) -> impl Fn(&mut Settings) {
+fn theme(theme: whispernow_domain::ThemePreference) -> impl Fn(&mut Settings) {
     move |settings| settings.theme = theme
 }
 
@@ -379,16 +366,16 @@ fn a_change_shows_at_once_and_changes_made_during_a_save_go_out_together_after_i
     let mut management = loaded_management(editable_settings());
     assert!(management.change_setting(SettingKey::StartMinimized, start_minimized));
     let first = management.next_settings_update().expect("first change");
-    assert!(first.settings.start_minimized);
+    assert!(first.start_minimized);
 
     assert!(management.change_setting(
         SettingKey::Theme,
-        theme(whispernow_api::ThemePreference::Dark)
+        theme(whispernow_domain::ThemePreference::Dark)
     ));
     assert!(management.change_setting(SettingKey::StartOnLogin, start_on_login));
     let shown = management.shown_settings().expect("loaded");
     assert!(shown.start_minimized && shown.auto_start_on_login);
-    assert_eq!(shown.theme, whispernow_api::ThemePreference::Dark);
+    assert_eq!(shown.theme, whispernow_domain::ThemePreference::Dark);
     assert_eq!(
         management.setting_status(&SettingKey::Theme),
         SaveStatus::Saving
@@ -398,9 +385,9 @@ fn a_change_shows_at_once_and_changes_made_during_a_save_go_out_together_after_i
         "the later changes wait for the first answer"
     );
 
-    management.finish_settings_update(Ok(whispernow_api::SaveSettingsResponse {
+    management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
         settings: SettingsView {
-            settings: first.settings,
+            settings: first,
             warnings: Vec::new(),
         },
         warnings: Vec::new(),
@@ -419,8 +406,8 @@ fn a_change_shows_at_once_and_changes_made_during_a_save_go_out_together_after_i
     let next = management
         .next_settings_update()
         .expect("the waiting changes");
-    assert!(next.settings.start_minimized && next.settings.auto_start_on_login);
-    assert_eq!(next.settings.theme, whispernow_api::ThemePreference::Dark);
+    assert!(next.start_minimized && next.auto_start_on_login);
+    assert_eq!(next.theme, whispernow_domain::ThemePreference::Dark);
 }
 
 #[test]
@@ -488,14 +475,8 @@ fn nothing_is_disclosed_when_cleanup_is_off_or_runs_on_this_computer() {
 
 #[test]
 fn one_snapshot_reconstructs_phase_and_last_transcript_after_reload() {
-    let mut snapshot = snapshot(PhaseDto::Idle);
-    snapshot.last_transcript = Some(TranscriptResponse {
-        raw_text: "raw dictation".to_owned(),
-        final_text: "Finished dictation".to_owned(),
-        text_output_status: Some(TextOutputStatusDto::PastedAndRestored),
-        cleanup_failed: false,
-        history_save_failed: false,
-    });
+    let mut snapshot = snapshot(Phase::Idle);
+    snapshot.last_transcript = Some("Finished dictation".to_owned());
 
     let mut state = UiState::default();
     state.hydrate(snapshot);
@@ -506,7 +487,7 @@ fn one_snapshot_reconstructs_phase_and_last_transcript_after_reload() {
             .snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.last_transcript.as_ref())
-            .map(|transcript| transcript.final_text.as_str()),
+            .map(String::as_str),
         Some("Finished dictation")
     );
 }
@@ -520,16 +501,16 @@ fn state_changed_replaces_the_entire_workflow_projection_without_reconciliation(
         Some(&crate::test_support::PROCESSING)
     );
 
-    state.apply_event(state_event(snapshot(PhaseDto::Idle)));
+    state.apply_event(state_event(snapshot(Phase::Idle)));
     assert_eq!(
         state.snapshot.as_ref().map(|snapshot| &snapshot.phase),
-        Some(&PhaseDto::Idle)
+        Some(&Phase::Idle)
     );
 }
 
 #[test]
 fn audio_level_is_scoped_by_the_single_recording_phase_and_clamped() {
-    let mut state = ui_state(PhaseDto::Idle);
+    let mut state = ui_state(Phase::Idle);
     state.apply_event(EventPayload::AudioLevel {
         rms: 0.4,
         peak: 0.8,
@@ -562,16 +543,16 @@ fn audio_level_is_scoped_by_the_single_recording_phase_and_clamped() {
 
 #[test]
 fn update_snapshot_hydration_and_events_replace_the_complete_projection() {
-    let mut state = ui_state(PhaseDto::Idle);
-    let mut downloading = update_state(UpdatePhaseDto::Downloading);
+    let mut state = ui_state(Phase::Idle);
+    let mut downloading = update_state(UpdatePhase::Downloading);
     downloading.available_version = Some("0.3.0".to_owned());
-    downloading.progress = Some(UpdateProgressDto {
+    downloading.progress = Some(UpdateProgress {
         downloaded_bytes: 512,
         total_bytes: Some(1_024),
     });
     state.hydrate_update(downloading);
 
-    let mut ready = update_state(UpdatePhaseDto::ReadyToRestart);
+    let mut ready = update_state(UpdatePhase::ReadyToRestart);
     ready.available_version = Some("0.3.0".to_owned());
     ready.release_notes = Some("Verified release".to_owned());
     state.apply_event(EventPayload::UpdateChanged {
@@ -583,9 +564,9 @@ fn update_snapshot_hydration_and_events_replace_the_complete_projection() {
 
 #[test]
 fn settings_show_update_download_progress() {
-    let mut update = update_state(UpdatePhaseDto::Downloading);
+    let mut update = update_state(UpdatePhase::Downloading);
     update.available_version = Some("0.3.0".to_owned());
-    update.progress = Some(UpdateProgressDto {
+    update.progress = Some(UpdateProgress {
         downloaded_bytes: 512,
         total_bytes: Some(1_024),
     });
@@ -598,7 +579,7 @@ fn settings_show_update_download_progress() {
 
 #[test]
 fn ready_update_banner_escapes_remote_release_notes_as_plain_text() {
-    let mut update = update_state(UpdatePhaseDto::ReadyToRestart);
+    let mut update = update_state(UpdatePhase::ReadyToRestart);
     update.available_version = Some("0.3.0".to_owned());
     update.release_notes = Some("Fixes\n<script>alert('remote')</script>".to_owned());
 
@@ -614,7 +595,7 @@ fn ready_update_banner_escapes_remote_release_notes_as_plain_text() {
 
 #[test]
 fn dismissed_ready_update_keeps_a_secondary_restart_affordance() {
-    let mut update = update_state(UpdatePhaseDto::ReadyToRestart);
+    let mut update = update_state(UpdatePhase::ReadyToRestart);
     update.available_version = Some("v0.3.0".to_owned());
     update.notification_dismissed = true;
 
@@ -631,10 +612,10 @@ fn dismissed_ready_update_keeps_a_secondary_restart_affordance() {
 #[test]
 fn manual_install_offer_names_the_package_and_links_the_release_page_without_restart() {
     for (package, format) in [
-        (ManualUpdatePackageDto::Deb, ".deb"),
-        (ManualUpdatePackageDto::Rpm, ".rpm"),
+        (ManualUpdatePackage::Deb, ".deb"),
+        (ManualUpdatePackage::Rpm, ".rpm"),
     ] {
-        let mut update = update_state(UpdatePhaseDto::ManualInstallAvailable);
+        let mut update = update_state(UpdatePhase::ManualInstallAvailable);
         update.available_version = Some("0.3.0".to_owned());
         update.manual_package = Some(package);
 
@@ -660,15 +641,12 @@ fn manual_install_offer_names_the_package_and_links_the_release_page_without_res
 
 #[test]
 fn manual_check_results_render_up_to_date_and_typed_errors() {
-    let up_to_date = settings_html(update_state(UpdatePhaseDto::UpToDate));
+    let up_to_date = settings_html(update_state(UpdatePhase::UpToDate));
     assert!(up_to_date.contains("WhisperNow is up to date"));
     assert!(up_to_date.contains("No newer stable release is available"));
 
-    let mut offline = update_state(UpdatePhaseDto::Error);
-    offline.error = Some(UpdateErrorDto {
-        code: UpdateErrorCodeDto::Offline,
-        recoverable: true,
-    });
+    let mut offline = update_state(UpdatePhase::Error);
+    offline.error = Some(UpdateError::Offline);
     let offline = settings_html(offline);
     assert!(offline.contains("Update needs attention"));
     assert!(offline.contains("You appear to be offline"));
@@ -678,7 +656,7 @@ fn manual_check_results_render_up_to_date_and_typed_errors() {
 #[test]
 fn three_app_phases_drive_the_home_status() {
     let kind = |phase| HomeStatus::from_state(&ui_state(phase)).kind;
-    assert_eq!(kind(PhaseDto::Idle), HomeStatusKind::Ready);
+    assert_eq!(kind(Phase::Idle), HomeStatusKind::Ready);
     assert_eq!(
         kind(crate::test_support::RECORDING),
         HomeStatusKind::Recording
@@ -691,12 +669,11 @@ fn three_app_phases_drive_the_home_status() {
 
 #[test]
 fn ordinary_state_error_drives_the_home_problem() {
-    let mut snapshot = snapshot(PhaseDto::Idle);
-    snapshot.error = Some(ApiErrorDto {
-        category: ErrorCategoryDto::Audio,
+    let mut snapshot = snapshot(Phase::Idle);
+    snapshot.error = Some(AppError {
+        category: ErrorCategory::Audio,
         code: "microphone_unavailable".to_owned(),
         summary: "Choose an available microphone".to_owned(),
-        recovery: Some(RecoveryActionDto::ChooseDevice),
     });
     let mut state = UiState::default();
     state.hydrate(snapshot);
@@ -710,33 +687,32 @@ fn ordinary_state_error_drives_the_home_problem() {
 
 #[test]
 fn idle_no_audio_and_no_speech_outcomes_preserve_exact_retry_messages() {
-    const OUTCOMES: [(&str, ErrorCategoryDto, &str); 2] = [
+    const OUTCOMES: [(&str, ErrorCategory, &str); 2] = [
         (
             "no_microphone_audio",
-            ErrorCategoryDto::Audio,
+            ErrorCategory::Audio,
             "No microphone audio was detected; check the selected input and try again.",
         ),
         (
             "no_speech",
-            ErrorCategoryDto::Recognition,
+            ErrorCategory::Recognition,
             "No speech was detected; check the microphone and try again.",
         ),
     ];
 
     for (code, category, summary) in OUTCOMES {
-        let mut snapshot = snapshot(PhaseDto::Idle);
-        snapshot.error = Some(ApiErrorDto {
+        let mut snapshot = snapshot(Phase::Idle);
+        snapshot.error = Some(AppError {
             category,
             code: code.to_owned(),
             summary: summary.to_owned(),
-            recovery: Some(RecoveryActionDto::Retry),
         });
         let mut state = UiState::default();
         state.hydrate(snapshot);
 
         assert_eq!(
             state.snapshot.as_ref().map(|snapshot| &snapshot.phase),
-            Some(&PhaseDto::Idle),
+            Some(&Phase::Idle),
             "{code} must not leave the batch workflow in Processing"
         );
         let status = HomeStatus::from_state(&state);
@@ -757,8 +733,8 @@ fn idle_no_audio_and_no_speech_outcomes_preserve_exact_retry_messages() {
 
 #[test]
 fn model_loading_still_takes_priority_over_idle() {
-    let mut snapshot = snapshot(PhaseDto::Idle);
-    snapshot.model_state = ModelStateDto::Loading;
+    let mut snapshot = snapshot(Phase::Idle);
+    snapshot.model_state = ModelState::Loading;
     let mut state = UiState::default();
     state.hydrate(snapshot);
     assert!(state.is_loading_model());
@@ -767,9 +743,10 @@ fn model_loading_still_takes_priority_over_idle() {
 
 #[test]
 fn state_snapshot_is_sufficient_for_download_management() {
-    let model_id = whispernow_api::ModelId::new("parakeet-tdt-0.6b-v3").expect("fixture model id");
-    let mut snapshot = snapshot(PhaseDto::Idle);
-    snapshot.active_downloads.push(ActiveDownloadDto {
+    let model_id =
+        whispernow_domain::ModelId::new("parakeet-tdt-0.6b-v3").expect("fixture model id");
+    let mut snapshot = snapshot(Phase::Idle);
+    snapshot.active_downloads.push(ActiveDownload {
         model_id: model_id.clone(),
         phase: DownloadPhase::Downloading,
         downloaded_bytes: 512,
@@ -793,8 +770,8 @@ fn state_snapshot_is_sufficient_for_download_management() {
 
 #[test]
 fn event_stream_failure_remains_visible_without_an_extra_backend_event() {
-    let mut state = ui_state(PhaseDto::Idle);
-    state.report_event_stream_failure(None);
+    let mut state = ui_state(Phase::Idle);
+    state.report_event_stream_failure(crate::client::connection_error());
     assert_eq!(state.event_stream_health, EventStreamHealth::Failed);
     assert_eq!(HomeStatus::from_state(&state).kind, HomeStatusKind::Problem);
 }
@@ -802,8 +779,8 @@ fn event_stream_failure_remains_visible_without_an_extra_backend_event() {
 #[test]
 fn dashboard_status_never_claims_ready_when_workflow_is_unavailable() {
     for (phase, kind) in [
-        (PhaseDto::Paused, HomeStatusKind::Paused),
-        (PhaseDto::Updating, HomeStatusKind::Waiting),
+        (Phase::Paused, HomeStatusKind::Paused),
+        (Phase::Updating, HomeStatusKind::Waiting),
     ] {
         let snapshot = snapshot(phase);
         let mut state = UiState::default();
@@ -828,19 +805,18 @@ fn a_saved_settings_warning_is_shown_beside_the_installed_settings() {
     let request = management
         .next_settings_update()
         .expect("loaded settings can be saved");
-    let warning = ApiErrorDto {
-        category: ErrorCategoryDto::General,
+    let warning = AppError {
+        category: ErrorCategory::General,
         code: "shortcut_registration_failed".to_owned(),
         summary: "The recording shortcut is taken by another app".to_owned(),
-        recovery: None,
     };
 
-    management.finish_settings_update(Ok(whispernow_api::SaveSettingsResponse {
+    management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
         settings: SettingsView {
-            settings: request.settings,
+            settings: request,
             warnings: Vec::new(),
         },
-        warnings: vec![warning.clone()],
+        warnings: vec![warning.summary.clone()],
     }));
 
     assert_eq!(
@@ -860,7 +836,7 @@ fn theme_attribute_follows_a_theme_change_at_once_and_its_rollback() {
     assert_eq!(management.theme_attribute(), None);
 
     let mut settings = editable_settings();
-    settings.theme = whispernow_api::ThemePreference::Dark;
+    settings.theme = whispernow_domain::ThemePreference::Dark;
     management.install_settings(SettingsView {
         settings,
         warnings: Vec::new(),
@@ -869,7 +845,7 @@ fn theme_attribute_follows_a_theme_change_at_once_and_its_rollback() {
 
     assert!(management.change_setting(
         SettingKey::Theme,
-        theme(whispernow_api::ThemePreference::Light)
+        theme(whispernow_domain::ThemePreference::Light)
     ));
     assert_eq!(management.theme_attribute(), Some("light"));
 
@@ -879,7 +855,7 @@ fn theme_attribute_follows_a_theme_change_at_once_and_its_rollback() {
 
     assert!(management.change_setting(
         SettingKey::Theme,
-        theme(whispernow_api::ThemePreference::System)
+        theme(whispernow_domain::ThemePreference::System)
     ));
     assert_eq!(management.theme_attribute(), None);
 }

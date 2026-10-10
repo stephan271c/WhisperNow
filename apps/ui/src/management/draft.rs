@@ -1,4 +1,4 @@
-use whispernow_api::{ModelId, RecordingMode, Shortcut};
+use whispernow_domain::{ModelId, RecordingMode, Shortcut};
 
 use super::ManagementState;
 

@@ -1,13 +1,16 @@
+use std::num::NonZeroUsize;
+
 use super::{
     AudioBlock, AudioLevelAccumulator, AudioLevelSummary, AudioProcessingError, StreamingResampler,
     convert_interleaved_to_mono,
 };
 
+const OUTPUT_BLOCK_SAMPLES: usize = 320;
+
 /// A native callback may copy/convert into pooled `f32` storage, but it must
 /// hand that storage to a worker before calling this allocation-heavy type.
 pub struct AudioProcessor {
-    channels: usize,
-    output_block_samples: usize,
+    channels: NonZeroUsize,
     resampler: StreamingResampler,
     delivery_pending: AudioBlock,
     levels: AudioLevelAccumulator,
@@ -16,18 +19,10 @@ pub struct AudioProcessor {
 impl AudioProcessor {
     pub fn new(
         input_sample_rate: u32,
-        channels: usize,
-        output_block_samples: usize,
+        channels: NonZeroUsize,
     ) -> Result<Self, AudioProcessingError> {
-        if channels == 0 {
-            return Err(AudioProcessingError::InvalidChannelCount);
-        }
-        if output_block_samples == 0 {
-            return Err(AudioProcessingError::InvalidOutputBlockSize);
-        }
         Ok(Self {
             channels,
-            output_block_samples,
             resampler: StreamingResampler::new(input_sample_rate)?,
             delivery_pending: AudioBlock::default(),
             levels: AudioLevelAccumulator::default(),
@@ -66,11 +61,8 @@ impl AudioProcessor {
     }
 
     fn emit_delivery_blocks(&mut self, output: &mut Vec<AudioBlock>, include_partial: bool) {
-        while self.delivery_pending.samples().len() >= self.output_block_samples {
-            output.push(
-                self.delivery_pending
-                    .drain_prefix(self.output_block_samples),
-            );
+        while self.delivery_pending.samples().len() >= OUTPUT_BLOCK_SAMPLES {
+            output.push(self.delivery_pending.drain_prefix(OUTPUT_BLOCK_SAMPLES));
         }
         if include_partial && !self.delivery_pending.is_empty() {
             output.push(std::mem::take(&mut self.delivery_pending));
@@ -83,7 +75,6 @@ impl std::fmt::Debug for AudioProcessor {
         formatter
             .debug_struct("AudioProcessor")
             .field("channels", &self.channels)
-            .field("output_block_samples", &self.output_block_samples)
             .field("resampler", &self.resampler)
             .field(
                 "delivery_pending_samples",
@@ -95,12 +86,18 @@ impl std::fmt::Debug for AudioProcessor {
 
 #[cfg(test)]
 mod tests {
+    use super::super::TARGET_SAMPLE_RATE;
     use super::*;
 
     #[test]
     fn delivery_framing_preserves_normalized_samples_across_blocks_and_partial_tail() {
-        let mut processor = AudioProcessor::new(16_000, 1, 3).expect("processor");
-        let samples = [-1.0, -0.0, f32::MIN_POSITIVE, 0.25, 1.0, 0.0, -0.75];
+        let mut processor =
+            AudioProcessor::new(TARGET_SAMPLE_RATE, NonZeroUsize::MIN).expect("processor");
+        let samples = [-1.0, -0.0, f32::MIN_POSITIVE, 0.25, 1.0, 0.0, -0.75]
+            .into_iter()
+            .cycle()
+            .take(OUTPUT_BLOCK_SAMPLES * 2 + 1)
+            .collect::<Vec<_>>();
         let mut output = Vec::new();
         for chunk in samples.chunks(2) {
             output.extend(processor.process_resampled(AudioBlock::new(chunk.to_vec())));
@@ -111,7 +108,7 @@ mod tests {
                 .iter()
                 .map(|block| block.samples().len())
                 .collect::<Vec<_>>(),
-            [3, 3, 1]
+            [OUTPUT_BLOCK_SAMPLES, OUTPUT_BLOCK_SAMPLES, 1]
         );
         assert_eq!(
             output
@@ -119,18 +116,27 @@ mod tests {
                 .flat_map(AudioBlock::samples)
                 .map(|sample| sample.to_bits())
                 .collect::<Vec<_>>(),
-            samples.map(f32::to_bits)
+            samples
+                .iter()
+                .copied()
+                .map(f32::to_bits)
+                .collect::<Vec<_>>()
         );
     }
 
     #[test]
     fn worker_path_downmixes_resamples_and_frames() {
-        let mut processor = AudioProcessor::new(48_000, 2, 320).expect("processor");
+        let mut processor = AudioProcessor::new(48_000, NonZeroUsize::new(2).expect("channels"))
+            .expect("processor");
         let stereo = vec![0.25_f32; 96_000];
         let mut output = processor.push_interleaved(&stereo).expect("push");
         output.extend(processor.finish().expect("finish"));
         assert_eq!(output.len(), 50);
-        assert!(output.iter().all(|block| block.samples().len() == 320));
+        assert!(
+            output
+                .iter()
+                .all(|block| block.samples().len() == OUTPUT_BLOCK_SAMPLES)
+        );
         assert!(
             output
                 .iter()
@@ -138,7 +144,7 @@ mod tests {
                 .all(|sample| sample.is_finite() && sample.abs() <= 1.0)
         );
         let levels = processor.take_level_summary();
-        assert_eq!(levels.sample_count, 16_000);
+        assert_eq!(levels.sample_count, u64::from(TARGET_SAMPLE_RATE));
         assert!(levels.peak <= 1.0);
         assert_eq!(processor.take_level_summary().sample_count, 0);
     }

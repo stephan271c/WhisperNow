@@ -20,8 +20,8 @@ use std::{
     time::Duration,
 };
 
-use whispernow_api::Shortcut;
 use whispernow_core::text_output::{KeystrokeOutcome, PastePlatform};
+use whispernow_domain::Shortcut;
 use whispernow_platform::{
     ClipboardContents, NativeClipboard, NativePasteError, PasteKeys, wayland::active_paste_keys,
 };
@@ -332,7 +332,7 @@ fn chord(shortcut: &Shortcut) -> String {
 
 #[cfg(test)]
 mod tests {
-    use whispernow_api::{ShortcutKey, ShortcutModifier};
+    use whispernow_domain::{ShortcutKey, ShortcutModifier};
 
     use super::*;
 

@@ -15,28 +15,26 @@ use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
+use whispernow_domain::AppError;
 
-use whispernow_api::{
-    ApiErrorDto, ErrorCategoryDto, EventPayload, MicrophoneTestResponse, TranscriptResponse,
-};
 use whispernow_core::{
     CancellationToken, ResolvedModel,
     asr::AsrEngine,
     audio::{
-        AudioCapture, AudioDeviceChoice, AudioInput, AudioInputError, AudioSink,
-        StartCaptureRequest,
+        AudioCapture, AudioDeviceChoice, AudioInput, AudioInputError, AudioSink, TARGET_SAMPLE_RATE,
     },
     workflow::{
-        AudioSegment, PipelineFailureKind, PreparedTranscription, SpeechSegmenter,
-        VoiceActivitySource, has_microphone_audio, prepare_segmented, recognize_segment,
+        AudioSegment, PipelineFailureKind, PreparedTranscription, SpeechSegmenter, VoiceActivity,
+        has_microphone_audio, prepare_segmented, recognize_segment,
     },
 };
+use whispernow_domain::ipc::{ErrorCategory, EventPayload, MicrophoneTestResponse};
 use whispernow_domain::{
     EntryStatus, HistoryLimit, ModelId, NewHistoryEntry, UtcMillis, VocabularyReplacement,
 };
 use whispernow_platform::ModelStore;
 
-use super::RecordingTrigger;
+use super::{Phase, RecordingTrigger};
 use super::{
     capture_start_error, device_choice,
     history::HistoryStore,
@@ -44,7 +42,7 @@ use super::{
     output::TranscriptOutput,
     settings::SettingsCoordinator,
     shutting_down,
-    state::{CancelReason, ModelStatus, Phase, StateCell},
+    state::{CancelReason, LoadedModel, StateCell},
 };
 
 mod capture;
@@ -55,10 +53,10 @@ use capture::{CapturedSpeech, RecordingSink};
 pub(crate) use cleanup::{AiCleanup, CleanupPlan};
 use outcome::{
     DecodeFailure, Outcome, capture_duration_millis, cleanup_fallback_warning, delivery_error,
-    delivery_failure, interruption_warning, text_output_status,
+    delivery_failure, interruption_warning,
 };
 
-const MAX_RECORDING_SAMPLES: usize = 16_000 * 60 * 30;
+const MAX_RECORDING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 60 * 30;
 
 #[derive(Clone)]
 pub(crate) struct DictationSettings {
@@ -81,7 +79,7 @@ pub(crate) struct DictationParts {
     pub(crate) history: Arc<HistoryStore>,
     pub(crate) audio: Arc<dyn AudioInput>,
     pub(crate) models: Arc<ModelStore>,
-    pub(crate) voice_activity: Arc<dyn VoiceActivitySource>,
+    pub(crate) voice_activity: Arc<dyn Fn() -> Box<dyn VoiceActivity> + Send + Sync>,
     pub(crate) llm: Arc<AiCleanup>,
     pub(crate) output: Arc<dyn TranscriptOutput>,
     /// Builds the recognizer, and a fresh one after a native panic.
@@ -93,7 +91,7 @@ impl DictationParts {
     pub(crate) const MAX_RECORDING_SAMPLES: usize = MAX_RECORDING_SAMPLES;
 }
 
-type Reply<T> = mpsc::Sender<Result<T, ApiErrorDto>>;
+type Reply<T> = mpsc::Sender<Result<T, AppError>>;
 
 pub(super) enum Message {
     Start {
@@ -141,7 +139,7 @@ pub(crate) struct Dictation {
 }
 
 impl Dictation {
-    pub(crate) fn spawn(parts: DictationParts) -> Result<Self, ApiErrorDto> {
+    pub(crate) fn spawn(parts: DictationParts) -> Result<Self, AppError> {
         let (sender, receiver) = mpsc::channel();
         let state = Arc::clone(&parts.state);
         let stopping = Arc::new(AtomicBool::new(false));
@@ -159,8 +157,8 @@ impl Dictation {
             .name("whispernow-dictation".to_owned())
             .spawn(move || worker.run(&receiver))
             .map_err(|_| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::General,
+                AppError::new(
+                    ErrorCategory::General,
                     "worker_spawn_failed",
                     "The dictation worker could not be started",
                 )
@@ -173,11 +171,11 @@ impl Dictation {
         })
     }
 
-    fn send(&self, message: Message) -> Result<(), ApiErrorDto> {
+    fn send(&self, message: Message) -> Result<(), AppError> {
         self.sender.send(message).map_err(|_| worker_stopped())
     }
 
-    fn ask<T>(&self, message: impl FnOnce(Reply<T>) -> Message) -> Result<T, ApiErrorDto> {
+    fn ask<T>(&self, message: impl FnOnce(Reply<T>) -> Message) -> Result<T, AppError> {
         if self.stopping.load(Ordering::Acquire) {
             return Err(shutting_down());
         }
@@ -189,7 +187,7 @@ impl Dictation {
     /// Starts capturing a dictation and returns its session. A start while the previous
     /// dictation is transcribed and pasted, a fraction of a second, waits for it in the
     /// worker's queue, so a quick re-press is not lost; one during a slower cleanup is refused.
-    pub(crate) fn start(&self, trigger: RecordingTrigger) -> Result<u64, ApiErrorDto> {
+    pub(crate) fn start(&self, trigger: RecordingTrigger) -> Result<u64, AppError> {
         {
             let state = self.state.lock();
             if !matches!(
@@ -208,11 +206,11 @@ impl Dictation {
     /// A recording shortcut went down. The worker decides from its recording whether this
     /// starts one or ends the toggle recording it started. A press during a slower cleanup,
     /// a pause or an update is dropped.
-    pub(crate) fn shortcut_pressed(&self, trigger: RecordingTrigger) -> Result<(), ApiErrorDto> {
+    pub(crate) fn shortcut_pressed(&self, trigger: RecordingTrigger) -> Result<(), AppError> {
         let accepted = matches!(
             self.state.lock().phase,
             Phase::Idle
-                | Phase::Error(_)
+                | Phase::Error { .. }
                 | Phase::Recording { .. }
                 | Phase::Processing {
                     cleaning_up: false,
@@ -226,11 +224,11 @@ impl Dictation {
         }
     }
 
-    pub(crate) fn hold_released(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn hold_released(&self) -> Result<(), AppError> {
         self.send(Message::HoldReleased)
     }
 
-    pub(crate) fn stop(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn stop(&self) -> Result<(), AppError> {
         let Phase::Recording { session, .. } = self.state.lock().phase else {
             return Err(not_recording());
         };
@@ -238,7 +236,7 @@ impl Dictation {
     }
 
     /// Ends the dictation in flight early, keeping its audio in history.
-    pub(crate) fn cancel(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn cancel(&self) -> Result<(), AppError> {
         {
             let mut state = self.state.lock();
             if !matches!(
@@ -255,9 +253,9 @@ impl Dictation {
 
     /// Pauses dictation. A dictation in flight ends early, its audio is kept, and the phase
     /// becomes `Paused` when it has.
-    pub(crate) fn pause(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn pause(&self) -> Result<(), AppError> {
         let busy = self.state.update(|state| match state.phase {
-            Phase::Idle | Phase::Error(_) => {
+            Phase::Idle | Phase::Error { .. } => {
                 state.phase = Phase::Paused;
                 Ok(false)
             }
@@ -266,8 +264,8 @@ impl Dictation {
                 state.cancellation.cancel();
                 Ok(true)
             }
-            Phase::Paused => Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            Phase::Paused => Err(AppError::new(
+                ErrorCategory::General,
                 "application_already_paused",
                 "The application is already paused",
             )),
@@ -279,11 +277,11 @@ impl Dictation {
         Ok(())
     }
 
-    pub(crate) fn resume(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn resume(&self) -> Result<(), AppError> {
         self.state.update(|state| {
             if state.phase != Phase::Paused {
-                return Err(ApiErrorDto::new(
-                    ErrorCategoryDto::General,
+                return Err(AppError::new(
+                    ErrorCategory::General,
                     "application_not_paused",
                     "The application is not paused",
                 ));
@@ -294,14 +292,14 @@ impl Dictation {
     }
 
     /// A model never changes during a dictation.
-    pub(crate) fn load_model(&self, model: ResolvedModel) -> Result<(), ApiErrorDto> {
+    pub(crate) fn load_model(&self, model: ResolvedModel) -> Result<(), AppError> {
         self.ask(|reply| Message::LoadModel {
             model: Box::new(model),
             reply,
         })
     }
 
-    pub(crate) fn unload_model(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn unload_model(&self) -> Result<(), AppError> {
         self.ask(|reply| Message::UnloadModel { reply })
     }
 
@@ -310,7 +308,7 @@ impl Dictation {
         &self,
         device: AudioDeviceChoice,
         duration: Duration,
-    ) -> Result<MicrophoneTestResponse, ApiErrorDto> {
+    ) -> Result<MicrophoneTestResponse, AppError> {
         self.ask(|reply| Message::MicTest {
             device,
             duration,
@@ -319,7 +317,7 @@ impl Dictation {
     }
 
     /// Waits until no dictation is in flight, then enters `Updating`.
-    pub(crate) fn begin_update(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn begin_update(&self) -> Result<(), AppError> {
         self.ask(|reply| Message::BeginUpdate { reply })
     }
 
@@ -445,7 +443,7 @@ impl Worker {
         self.unload();
     }
 
-    fn start(&mut self, trigger: RecordingTrigger) -> Result<u64, ApiErrorDto> {
+    fn start(&mut self, trigger: RecordingTrigger) -> Result<u64, AppError> {
         let RecordingSettings {
             input_device,
             dictation: settings,
@@ -464,15 +462,12 @@ impl Worker {
             self.sender.clone(),
             self.parts.state.events().clone(),
             self.parts.max_recording_samples,
-            SpeechSegmenter::new(self.parts.voice_activity.create()),
+            SpeechSegmenter::new((self.parts.voice_activity)()),
         ));
         let capture = self
             .parts
             .audio
-            .start(
-                StartCaptureRequest { device },
-                Arc::clone(&sink) as Arc<dyn AudioSink>,
-            )
+            .start(device, Arc::clone(&sink) as Arc<dyn AudioSink>)
             .map_err(|error| capture_start_error(&error))?;
         // A refused start drops the capture, which stops it.
         self.parts.state.update(|state| {
@@ -564,10 +559,7 @@ impl Worker {
         };
         let trigger = recording.trigger;
         self.parts.state.apply(|state| {
-            state.phase = Phase::Processing {
-                trigger,
-                cleaning_up: false,
-            };
+            state.phase = Phase::Processing { cleaning_up: false };
         });
         let outcome = self.process(&mut recording);
         self.finish(trigger, outcome);
@@ -597,8 +589,8 @@ impl Worker {
             return self.failed_with_audio(
                 recording,
                 &samples,
-                ApiErrorDto::new(
-                    ErrorCategoryDto::Audio,
+                AppError::new(
+                    ErrorCategory::Audio,
                     "audio_stop",
                     "Audio capture could not be stopped",
                 ),
@@ -639,12 +631,8 @@ impl Worker {
                 Err(kind) => return self.pipeline_failure(recording, &samples, kind),
             };
         if settings.cleanup.is_some() {
-            let trigger = recording.trigger;
             self.parts.state.apply(|state| {
-                state.phase = Phase::Processing {
-                    trigger,
-                    cleaning_up: true,
-                };
+                state.phase = Phase::Processing { cleaning_up: true };
             });
         }
         let llm_model = self.parts.llm.apply(
@@ -703,18 +691,12 @@ impl Worker {
         let warning = history
             .as_ref()
             .err()
-            .map(|error| ApiErrorDto::new(ErrorCategoryDto::General, &error.code, &error.summary))
+            .cloned()
             .or_else(|| recording.sink.interruption().and_then(interruption_warning))
-            .or_else(|| cleanup_warning.clone())
+            .or(cleanup_warning)
             .or(history_warning);
         Outcome::Delivered {
-            transcript: TranscriptResponse {
-                raw_text: prepared.raw_text,
-                final_text: prepared.final_text,
-                text_output_status: Some(text_output_status(notice)),
-                cleanup_failed: cleanup_warning.is_some(),
-                history_save_failed: history.is_err(),
-            },
+            transcript: prepared.final_text,
             failure: delivery_error(notice),
             warning,
         }
@@ -805,38 +787,38 @@ impl Worker {
     }
 
     /// Makes `model` the resident model. A failed load leaves the previous model resident.
-    fn ensure_loaded(&mut self, model: &ResolvedModel) -> Result<(), ApiErrorDto> {
+    fn ensure_loaded(&mut self, model: &ResolvedModel) -> Result<(), AppError> {
         let requested = &model.definition.id;
         if self.engine.loaded_model_id() == Some(requested) {
-            if self.parts.state.lock().model != ModelStatus::Ready(requested.clone()) {
-                self.set_model(ModelStatus::Ready(requested.clone()));
+            if self.parts.state.lock().model != LoadedModel::Ready(requested.clone()) {
+                self.set_model(LoadedModel::Ready(requested.clone()));
             }
             return Ok(());
         }
-        self.set_model(ModelStatus::Loading);
+        self.set_model(LoadedModel::Loading);
         let engine = self.engine.as_mut();
         let loaded = catch_unwind(AssertUnwindSafe(|| engine.load(model)));
         match loaded {
             Ok(Ok(())) => {
-                self.set_model(ModelStatus::Ready(requested.clone()));
+                self.set_model(LoadedModel::Ready(requested.clone()));
                 Ok(())
             }
             Ok(Err(_)) => {
-                self.set_model(ModelStatus::Failed);
+                self.set_model(LoadedModel::Failed);
                 Err(model_load_error())
             }
             Err(_) => {
                 self.replace_engine();
-                self.set_model(ModelStatus::Failed);
+                self.set_model(LoadedModel::Failed);
                 Err(model_load_error())
             }
         }
     }
 
-    fn load_model(&mut self, model: &ResolvedModel) -> Result<(), ApiErrorDto> {
+    fn load_model(&mut self, model: &ResolvedModel) -> Result<(), AppError> {
         if self.recording.is_some() {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            return Err(AppError::new(
+                ErrorCategory::General,
                 "workflow_busy",
                 "The speech model cannot change during a recording",
             ));
@@ -849,7 +831,7 @@ impl Worker {
         if catch_unwind(AssertUnwindSafe(|| engine.unload())).is_err() {
             self.replace_engine();
         }
-        self.set_model(ModelStatus::Unloaded);
+        self.set_model(LoadedModel::Unloaded);
     }
 
     fn replace_engine(&mut self) {
@@ -857,7 +839,7 @@ impl Worker {
         let _drop_panicked = catch_unwind(AssertUnwindSafe(move || drop(failed)));
     }
 
-    fn set_model(&self, model: ModelStatus) {
+    fn set_model(&self, model: LoadedModel) {
         self.parts.state.apply(|state| state.model = model);
     }
 
@@ -865,7 +847,7 @@ impl Worker {
         &self,
         device: AudioDeviceChoice,
         duration: Duration,
-    ) -> Result<MicrophoneTestResponse, ApiErrorDto> {
+    ) -> Result<MicrophoneTestResponse, AppError> {
         self.parts.state.lock().phase.require_idle()?;
         microphone_test::run(self.parts.audio.as_ref(), device, duration, || {
             self.stopping.load(Ordering::Acquire)
@@ -880,8 +862,8 @@ impl Worker {
         let begun = self.parts.state.update(|state| {
             state.phase.require_idle()?;
             if !state.active_downloads.is_empty() {
-                return Err(ApiErrorDto::new(
-                    ErrorCategoryDto::General,
+                return Err(AppError::new(
+                    ErrorCategory::General,
                     "model_transition_busy",
                     "Wait for the model download to finish",
                 ));
@@ -893,44 +875,44 @@ impl Worker {
     }
 }
 
-fn resolve_model(models: &ModelStore, model_id: &ModelId) -> Result<ResolvedModel, ApiErrorDto> {
+fn resolve_model(models: &ModelStore, model_id: &ModelId) -> Result<ResolvedModel, AppError> {
     models
         .resolve(model_id)
         .map_err(|_| {
-            ApiErrorDto::new(
-                ErrorCategoryDto::Model,
+            AppError::new(
+                ErrorCategory::Model,
                 "model_resolve",
                 "The selected model could not be inspected",
             )
         })?
         .ok_or_else(|| {
-            ApiErrorDto::new(
-                ErrorCategoryDto::Model,
+            AppError::new(
+                ErrorCategory::Model,
                 "model_not_installed",
                 "Install the selected model before transcribing",
             )
         })
 }
 
-fn model_load_error() -> ApiErrorDto {
-    ApiErrorDto::new(
-        ErrorCategoryDto::Recognition,
+fn model_load_error() -> AppError {
+    AppError::new(
+        ErrorCategory::Recognition,
         "model_load",
         "The speech model could not be loaded",
     )
 }
 
-fn worker_stopped() -> ApiErrorDto {
-    ApiErrorDto::new(
-        ErrorCategoryDto::General,
+fn worker_stopped() -> AppError {
+    AppError::new(
+        ErrorCategory::General,
         "worker_stopped",
         "The dictation worker stopped",
     )
 }
 
-fn not_recording() -> ApiErrorDto {
-    ApiErrorDto::new(
-        ErrorCategoryDto::General,
+fn not_recording() -> AppError {
+    AppError::new(
+        ErrorCategory::General,
         "recording_conflict",
         "No recording is in progress",
     )

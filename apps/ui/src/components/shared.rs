@@ -1,9 +1,8 @@
 use std::collections::BTreeSet;
 
 use dioxus::prelude::*;
-use whispernow_api::{
-    PasteHelperSetupDto, PermissionStatusDto, Shortcut, ShortcutKey, ShortcutModifier,
-};
+use whispernow_domain::ipc::{PasteHelperSetup, PermissionStatus};
+use whispernow_domain::{Shortcut, ShortcutKey, ShortcutModifier};
 
 use super::actions::use_actions;
 use super::ui::{Banner, Button, Kbd, Tone, shortcut_parts};
@@ -26,13 +25,13 @@ enum CaptureError {
 }
 
 #[component]
-pub(super) fn MicrophonePermissionNotice(status: Option<PermissionStatusDto>) -> Element {
+pub(super) fn MicrophonePermissionNotice(status: Option<PermissionStatus>) -> Element {
     let (label, guidance) = match status {
-        Some(PermissionStatusDto::Granted) => (
+        Some(PermissionStatus::Granted) => (
             "Microphone access is available",
             "Starting a recording remains the final permission check.",
         ),
-        Some(PermissionStatusDto::Denied) => (
+        Some(PermissionStatus::Denied) => (
             "Microphone access is denied",
             "Allow microphone access in system privacy settings, then reopen or retry setup.",
         ),
@@ -51,7 +50,7 @@ pub(super) fn MicrophonePermissionNotice(status: Option<PermissionStatusDto>) ->
 /// paste helper is not set up: why the desktop shows its indicator, and how to
 /// set the helper up.
 #[component]
-pub(super) fn PasteHelperNotice(setup: PasteHelperSetupDto, scope: NoticeScope) -> Element {
+pub(super) fn PasteHelperNotice(setup: PasteHelperSetup, scope: NoticeScope) -> Element {
     let actions = use_actions();
     rsx! { div { id: "paste-helper-notice",
         Banner { tone: Tone::Warning, title: "Your desktop shows a remote control indicator",

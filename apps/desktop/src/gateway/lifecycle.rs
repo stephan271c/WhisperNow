@@ -1,6 +1,5 @@
 use std::sync::{Arc, atomic::Ordering};
-
-use whispernow_api::ApiErrorDto;
+use whispernow_domain::AppError;
 
 use super::{Failure, Gateway, settings::shortcut_error};
 use crate::{
@@ -128,7 +127,7 @@ impl Gateway {
             )
     }
 
-    pub(crate) fn refuse_while_updating(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn refuse_while_updating(&self) -> Result<(), AppError> {
         self.services.state.refuse_while_updating()
     }
 }

@@ -1,12 +1,12 @@
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use whispernow_api::{
-    PermissionKindDto, PermissionRequest, PermissionsResponse, SetupCheckpoint, SetupStateView,
-    SetupStep,
-};
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{PermissionKind, PermissionsResponse, SetupStateView};
+use whispernow_domain::{SetupCheckpoint, SetupStep};
 
 use super::UiActions;
-use crate::client::{self, ClientError};
+use crate::client;
+
 use crate::{SetupEdit, UiOperation};
 
 const PERMISSION_POLL_MS: u32 = 1_000;
@@ -144,12 +144,12 @@ impl UiActions {
     }
 
     /// Asks for `kind`, then watches the cards until none can change any more.
-    pub(crate) fn request_permission(self, kind: PermissionKindDto) {
+    pub(crate) fn request_permission(self, kind: PermissionKind) {
         let operation = UiOperation::RequestPermission;
         self.management().write().requested_permission = Some(kind);
         self.run(
             operation,
-            async move { client::request_permission(&PermissionRequest { kind }).await },
+            async move { client::request_permission(&kind).await },
             move |actions, answer| {
                 actions.management().write().requested_permission = None;
                 match answer {
@@ -162,11 +162,11 @@ impl UiActions {
     }
 
     /// Opens the system page that grants `kind`, then watches the cards for the grant.
-    pub(crate) fn open_permission_settings(self, kind: PermissionKindDto) {
+    pub(crate) fn open_permission_settings(self, kind: PermissionKind) {
         let operation = UiOperation::OpenPermissionSettings;
         self.run(
             operation,
-            async move { client::open_permission_settings(&PermissionRequest { kind }).await },
+            async move { client::open_permission_settings(&kind).await },
             move |actions, answer| {
                 if let Err(error) = answer {
                     actions.report(operation, &error);
@@ -214,7 +214,7 @@ impl UiActions {
         );
     }
 
-    fn fail_setup_test(self, answer: Result<(), ClientError>) {
+    fn fail_setup_test(self, answer: Result<(), AppError>) {
         if let Err(error) = answer {
             self.management().write().fail_setup_test(&error);
         }

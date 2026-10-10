@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
-use whispernow_api::{
-    HistoryLimit, LlmProvider, PermissionKindDto, PhaseDto, RecordingMode, Settings, Shortcut,
-    ThemePreference,
+use whispernow_domain::ipc::{PermissionKind, Phase};
+use whispernow_domain::{
+    HistoryLimit, LlmProvider, RecordingMode, Settings, Shortcut, ThemePreference,
 };
 
 use super::actions::{DisabledReason, use_actions};
@@ -81,8 +81,8 @@ pub(super) fn use_settings_blocked() -> Option<BlockedReason> {
     {
         None => Some(BlockedReason::Connecting),
         Some(phase) if phase.is_busy() => Some(BlockedReason::Dictating),
-        Some(PhaseDto::Paused) => Some(BlockedReason::Paused),
-        Some(PhaseDto::Updating) => Some(BlockedReason::UpdateInstalling),
+        Some(Phase::Paused) => Some(BlockedReason::Paused),
+        Some(Phase::Updating) => Some(BlockedReason::UpdateInstalling),
         Some(_) => None,
     }
 }
@@ -217,7 +217,7 @@ pub(super) fn AudioPage() -> Element {
     let devices = management.read().devices.clone();
     let permission = management
         .read()
-        .permission_status(PermissionKindDto::Microphone);
+        .permission_status(PermissionKind::Microphone);
     let test = management.read().microphone_test.clone();
     let test_blocked = actions.blocked(UiOperation::TestMicrophone);
     let testing = test_blocked == Some(BlockedReason::CommandPending);
@@ -313,7 +313,7 @@ pub(crate) fn cleanup_destination(settings: &Settings) -> Option<String> {
         return None;
     }
     let provider = settings.llm_provider;
-    match settings.provider_settings(provider).api_base {
+    match settings.provider_settings(provider).api_base.as_ref() {
         Some(endpoint) if endpoint.is_on_this_computer() => None,
         Some(endpoint) => Some(endpoint.origin()),
         None => match provider {

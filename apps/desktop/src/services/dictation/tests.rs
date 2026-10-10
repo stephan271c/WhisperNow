@@ -9,17 +9,20 @@ use std::{
     time::{Duration, Instant},
 };
 
-use whispernow_api::{ErrorCategoryDto, RecoveryActionDto, TextOutputStatusDto};
 use whispernow_core::{
     CancellationToken, ResolvedModel,
     asr::{AsrEngine, AsrError},
     audio::{
         AudioBlock, AudioCapture, AudioDeviceChoice, AudioDeviceDescriptor, AudioInput,
-        AudioInputError, AudioSink, StartCaptureRequest,
+        AudioInputError, AudioSink, TARGET_SAMPLE_RATE,
     },
-    llm::{LlmError, LlmFinishReason, LlmFuture, LlmProvider, LlmRequest, LlmResponse, LlmService},
-    workflow::{VoiceActivity, VoiceActivitySource},
+    llm::{
+        LlmDecoding, LlmError, LlmFinishReason, LlmFuture, LlmProvider, LlmRequest, LlmResponse,
+        LlmService,
+    },
+    workflow::VoiceActivity,
 };
+use whispernow_domain::ipc::ErrorCategory;
 use whispernow_domain::{
     EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, ModelId, ModelRegistry, Settings,
 };
@@ -29,11 +32,11 @@ use super::{AiCleanup, Dictation, DictationParts};
 
 mod lifecycle;
 use crate::services::{
-    Events, RecordingTrigger,
+    Events, Phase, RecordingTrigger,
     history::HistoryStore,
     output::{OutputNotice, TranscriptOutput},
     settings::SettingsCoordinator,
-    state::{ModelStatus, Phase, State, StateCell},
+    state::{LoadedModel, State, StateCell},
 };
 
 const TRANSCRIPT: &str = "hello from the worker";
@@ -107,7 +110,7 @@ impl AudioInput for FakeAudio {
 
     fn start(
         &self,
-        _request: StartCaptureRequest,
+        _device: AudioDeviceChoice,
         sink: Arc<dyn AudioSink>,
     ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
         sink.samples(AudioBlock::new(self.audio.clone()))
@@ -140,12 +143,6 @@ impl TranscriptOutput for FakeOutput {
 
 /// A frame is speech when it is loud.
 struct Loudness;
-
-impl VoiceActivitySource for Loudness {
-    fn create(&self) -> Box<dyn VoiceActivity> {
-        Box::new(Loudness)
-    }
-}
 
 impl VoiceActivity for Loudness {
     fn is_speech(&mut self, frame: &[f32]) -> bool {
@@ -185,7 +182,7 @@ struct Fixture {
     script: Arc<Script>,
     provider: Arc<FakeProvider>,
     model: ResolvedModel,
-    _root: tempfile::TempDir,
+    root: tempfile::TempDir,
 }
 
 impl Fixture {
@@ -194,7 +191,7 @@ impl Fixture {
     }
 
     fn with_output(notice: OutputNotice) -> Self {
-        Self::build(notice, vec![0.25; 16_000])
+        Self::build(notice, vec![0.25; TARGET_SAMPLE_RATE as usize])
     }
 
     fn with_audio(audio: Vec<f32>) -> Self {
@@ -204,12 +201,11 @@ impl Fixture {
     fn build(notice: OutputNotice, audio: Vec<f32>) -> Self {
         let root = tempfile::tempdir().expect("temporary root");
         let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
-        let bundled = root.path().join("bundled");
         let model_id = ModelId::default();
         let registry = ModelRegistry::builtin();
         let definition = registry.get(model_id.as_str()).expect("default model");
         for artifact in definition.layout.required_artifacts() {
-            let path = bundled.join(model_id.as_str()).join(artifact);
+            let path = paths.models_dir().join(model_id.as_str()).join(artifact);
             fs::create_dir_all(path.parent().expect("artifact parent")).expect("model directory");
             fs::write(path, b"fixture").expect("model artifact");
         }
@@ -231,11 +227,11 @@ impl Fixture {
             Arc::clone(&persistence),
             Arc::clone(&state),
         ));
-        let models = Arc::new(ModelStore::new(paths, vec![bundled]));
+        let models = Arc::new(ModelStore::new(paths));
         let model = models
             .resolve(&model_id)
             .expect("resolve")
-            .expect("bundled model");
+            .expect("downloaded model");
         let output = Arc::new(FakeOutput {
             notice,
             pasted: Mutex::new(Vec::new()),
@@ -249,7 +245,7 @@ impl Fixture {
             history: Arc::clone(&history),
             audio: Arc::new(FakeAudio { audio }),
             models,
-            voice_activity: Arc::new(Loudness),
+            voice_activity: Arc::new(|| Box::new(Loudness)),
             llm: Arc::new(AiCleanup {
                 service: Arc::clone(&provider) as Arc<dyn LlmService>,
                 runtime: Arc::new(
@@ -279,7 +275,7 @@ impl Fixture {
             script,
             provider,
             model,
-            _root: root,
+            root,
         }
     }
 
@@ -340,7 +336,7 @@ impl Fixture {
 
 fn error_code(phase: &Phase) -> &str {
     match phase {
-        Phase::Error(error) => &error.code,
+        Phase::Error { error } => &error.code,
         other => panic!("expected an error phase, got {other:?}"),
     }
 }
@@ -355,11 +351,7 @@ fn a_dictation_is_transcribed_saved_and_pasted() {
     assert_eq!(fixture.pasted(), [TRANSCRIPT]);
     let state = fixture.state.lock();
     let transcript = state.last_transcript.as_ref().expect("last transcript");
-    assert_eq!(transcript.final_text, TRANSCRIPT);
-    assert_eq!(
-        transcript.text_output_status,
-        Some(TextOutputStatusDto::PastedAndRestored)
-    );
+    assert_eq!(transcript, TRANSCRIPT);
     assert!(state.last_error.is_none());
     drop(state);
     let history = fixture.history();
@@ -372,7 +364,12 @@ fn a_dictation_is_transcribed_saved_and_pasted() {
 #[test]
 fn a_blank_segment_is_left_out_of_the_transcript() {
     let speech = vec![0.25; 24_000];
-    let audio = [speech.as_slice(), &vec![0.0; 16_000], &speech].concat();
+    let audio = [
+        speech.as_slice(),
+        &vec![0.0; TARGET_SAMPLE_RATE as usize],
+        &speech,
+    ]
+    .concat();
     let fixture = Fixture::with_audio(audio);
     fixture
         .script
@@ -573,9 +570,7 @@ fn a_cleaned_dictation_pastes_and_saves_the_cleaned_text() {
     assert_eq!(fixture.cleanup_models(), ["gpt-test"]);
     let state = fixture.state.lock();
     let transcript = state.last_transcript.as_ref().expect("last transcript");
-    assert_eq!(transcript.raw_text, TRANSCRIPT);
-    assert_eq!(transcript.final_text, "Cleaned words.");
-    assert!(!transcript.cleanup_failed);
+    assert_eq!(transcript, "Cleaned words.");
     assert!(state.last_error.is_none());
     drop(state);
     let history = fixture.history();
@@ -605,7 +600,10 @@ fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
     let requests = fixture.provider.requests.lock().expect("requests");
     assert_eq!(requests[0].config.provider, LlmProvider::LocalCleanup);
     assert!(
-        requests[0].decoding.draft.is_some(),
+        matches!(
+            &requests[0].decoding,
+            LlmDecoding::LocalCleanup { draft: Some(_), .. }
+        ),
         "the local model drafts from the transcript"
     );
     drop(requests);
@@ -630,43 +628,34 @@ fn a_failed_cleanup_pastes_the_recognized_text_and_says_so() {
     assert_eq!(fixture.settled(), Phase::Idle);
     assert_eq!(fixture.pasted(), [TRANSCRIPT]);
     let state = fixture.state.lock();
-    assert!(
-        state
-            .last_transcript
-            .as_ref()
-            .is_some_and(|transcript| transcript.cleanup_failed)
-    );
+    assert_eq!(state.last_transcript.as_deref(), Some(TRANSCRIPT));
     assert_eq!(
         state.last_error.as_ref().map(|error| error.code.as_str()),
         Some("cleanup_failed")
     );
     let category = state.last_error.as_ref().map(|error| error.category);
     drop(state);
-    assert_eq!(category, Some(ErrorCategoryDto::Cleanup));
+    assert_eq!(category, Some(ErrorCategory::Cleanup));
     let history = fixture.history();
     assert_eq!(history[0].status, EntryStatus::Ok);
     assert!(history[0].llm_model.is_none());
 }
 
 #[test]
-fn a_failed_paste_is_recorded_and_offers_a_copy() {
+fn a_failed_paste_is_recorded_and_points_to_history() {
     let fixture = Fixture::with_output(OutputNotice::PasteFailed);
     fixture.start();
     fixture.dictation.stop().expect("stop");
 
     let phase = fixture.settled();
     assert_eq!(error_code(&phase), "paste_failed");
-    let Phase::Error(error) = &phase else {
+    let Phase::Error { error } = &phase else {
         unreachable!("checked above")
     };
-    assert_eq!(error.recovery, Some(RecoveryActionDto::CopyManually));
+    assert_eq!(error.category, ErrorCategory::Output);
+
     assert_eq!(
-        fixture
-            .state
-            .lock()
-            .last_transcript
-            .as_ref()
-            .map(|transcript| transcript.final_text.clone()),
+        fixture.state.lock().last_transcript.clone(),
         Some(TRANSCRIPT.to_owned())
     );
     let history = fixture.history();
@@ -687,7 +676,7 @@ fn the_model_cannot_change_during_a_recording() {
         .load_model(fixture.model.clone())
         .expect_err("a recording keeps its model");
     assert_eq!(refused.code, "workflow_busy");
-    assert_eq!(refused.category, ErrorCategoryDto::General);
+    assert_eq!(refused.category, ErrorCategory::General);
 
     fixture.dictation.stop().expect("stop");
     assert_eq!(fixture.settled(), Phase::Idle);
@@ -700,7 +689,7 @@ fn the_model_cannot_change_during_a_recording() {
 #[test]
 fn the_selected_model_loads_before_the_first_dictation() {
     let fixture = Fixture::new();
-    let ready = ModelStatus::Ready(fixture.model.definition.id.clone());
+    let ready = LoadedModel::Ready(fixture.model.definition.id.clone());
     let deadline = Instant::now() + Duration::from_secs(10);
     while fixture.state.lock().model != ready {
         assert!(Instant::now() < deadline, "the model was not preloaded");
@@ -739,7 +728,7 @@ fn closing_during_processing_keeps_the_audio_and_stops_the_worker() {
 #[test]
 fn a_recording_without_speech_pastes_and_saves_nothing() {
     for (audio, code) in [(0.005, "no_speech"), (0.0, "no_microphone_audio")] {
-        let fixture = Fixture::with_audio(vec![audio; 16_000]);
+        let fixture = Fixture::with_audio(vec![audio; TARGET_SAMPLE_RATE as usize]);
         fixture.start();
         fixture.dictation.stop().expect("stop");
 
@@ -757,18 +746,45 @@ fn a_paste_without_permission_points_to_the_settings() {
     fixture.start();
     fixture.dictation.stop().expect("stop");
 
-    let Phase::Error(error) = fixture.settled() else {
+    let Phase::Error { error } = fixture.settled() else {
         panic!("a refused paste is an error")
     };
-    assert_eq!(error.category, ErrorCategoryDto::Permission);
-    assert_eq!(error.recovery, Some(RecoveryActionDto::OpenSettings));
+    assert_eq!(error.category, ErrorCategory::Settings);
+
     assert_eq!(
-        fixture
-            .state
-            .lock()
-            .last_transcript
-            .as_ref()
-            .and_then(|transcript| transcript.text_output_status),
-        Some(TextOutputStatusDto::PasteFailed)
+        fixture.state.lock().last_transcript.as_deref(),
+        Some(TRANSCRIPT)
     );
+}
+
+#[test]
+fn a_setup_test_reports_its_transcript_without_paste_history_or_a_last_transcript() {
+    let fixture = Fixture::new();
+    fixture
+        .state
+        .apply(|state| state.last_transcript = Some("Earlier dictation".to_owned()));
+    fixture
+        .dictation
+        .start(RecordingTrigger::SetupTest)
+        .expect("start setup test");
+    assert!(matches!(
+        fixture.state.snapshot().phase,
+        Phase::Recording {
+            trigger: RecordingTrigger::SetupTest,
+            ..
+        }
+    ));
+    fixture.dictation.stop().expect("stop setup test");
+    assert_eq!(fixture.settled(), Phase::Idle);
+    let state = fixture.state.snapshot();
+    assert_eq!(
+        state.setup_test,
+        Some(whispernow_domain::ipc::SetupTestResult::Heard {
+            text: TRANSCRIPT.to_owned()
+        })
+    );
+    assert_eq!(state.last_transcript.as_deref(), Some("Earlier dictation"));
+    assert!(state.error.is_none());
+    assert!(fixture.pasted().is_empty());
+    assert!(fixture.history().is_empty());
 }

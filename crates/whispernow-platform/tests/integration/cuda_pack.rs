@@ -32,10 +32,10 @@ fn contents(name: &str) -> Vec<u8> {
 }
 
 /// The backend in a gzipped tar under a top directory, beside a symlink and another file.
-fn backend_archive(backend: &str) -> Vec<u8> {
+fn backend_archive(backend: &str, body: &[u8]) -> Vec<u8> {
     let mut archive = TarBuilder::new(GzEncoder::new(Vec::new(), Compression::default()));
     for (path, body) in [
-        (format!("release/{backend}"), contents(backend)),
+        (format!("release/{backend}"), body.to_vec()),
         ("release/llama-server".to_owned(), b"tool".to_vec()),
     ] {
         let mut header = Header::new_gnu();
@@ -79,11 +79,26 @@ struct Fixture {
 /// `runtime_sha256` is given.
 fn fixture(runtime_sha256: Option<&'static str>) -> (Fixture, FixtureServer, u64) {
     let libraries = CUDA_LIBRARIES.expect("this platform has a CUDA pack");
-    let backend = backend_archive(libraries.backend);
-    let runtime = runtime_archive(&libraries.runtime);
+    fixture_archives(
+        backend_archive(libraries.backend, &contents(libraries.backend)),
+        runtime_archive(&libraries.runtime),
+        runtime_sha256,
+    )
+}
+
+fn fixture_archives(
+    backend: Vec<u8>,
+    runtime: Vec<u8>,
+    runtime_sha256: Option<&'static str>,
+) -> (Fixture, FixtureServer, u64) {
+    let libraries = CUDA_LIBRARIES.expect("this platform has a CUDA pack");
+    let backend_size = backend.len() as u64;
+    let runtime_size = runtime.len() as u64;
+    let backend_digest = sha256(&backend);
+    let runtime_digest = runtime_sha256.unwrap_or_else(|| sha256(&runtime));
     let server = FixtureServer::start([
-        ("/backend.tar.gz", Response::ok(backend.clone())),
-        ("/runtime.zip", Response::ok(runtime.clone())),
+        ("/backend.tar.gz", Response::ok(backend)),
+        ("/runtime.zip", Response::ok(runtime)),
     ]);
     let backend_member: &'static str = format!("release/{}", libraries.backend).leak();
     let runtime_members: Vec<(&'static str, &'static str)> = libraries
@@ -94,26 +109,25 @@ fn fixture(runtime_sha256: Option<&'static str>) -> (Fixture, FixtureServer, u64
     let archives = vec![
         CudaPackArchive {
             url: server.url("/backend.tar.gz").leak(),
-            size_bytes: backend.len() as u64,
-            sha256: sha256(&backend),
+            size_bytes: backend_size,
+            sha256: backend_digest,
             format: CudaPackFormat::TarGz,
             members: vec![(backend_member, libraries.backend)].leak(),
         },
         CudaPackArchive {
             url: server.url("/runtime.zip").leak(),
-            size_bytes: runtime.len() as u64,
-            sha256: runtime_sha256.unwrap_or_else(|| sha256(&runtime)),
+            size_bytes: runtime_size,
+            sha256: runtime_digest,
             format: CudaPackFormat::Zip,
             members: runtime_members.leak(),
         },
     ];
-    let total = (backend.len() + runtime.len()) as u64;
+    let total = backend_size + runtime_size;
     let root = tempdir().expect("temporary root");
     let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
     let manager = ModelStore::with_registry_and_timeouts(
         whispernow_domain::ModelRegistry::builtin(),
         paths.clone(),
-        Vec::new(),
         DownloadTimeouts {
             connect: Duration::from_secs(2),
             receive_body: Duration::from_secs(2),
@@ -209,6 +223,73 @@ fn a_wrong_digest_installs_nothing() {
 }
 
 #[test]
+fn a_missing_runtime_library_reports_the_archive_member_and_installs_nothing() {
+    let libraries = CUDA_LIBRARIES.expect("pack");
+    let runtime = runtime_archive(&[libraries.runtime[0], libraries.runtime[2]]);
+    let (fixture, _server, _) = fixture_archives(
+        backend_archive(libraries.backend, &contents(libraries.backend)),
+        runtime,
+        None,
+    );
+    assert_eq!(
+        fixture
+            .manager
+            .download_cuda_pack(&CancellationToken::default(), &|_| {}),
+        Err(ModelStoreError::MissingArtifacts {
+            artifacts: vec![libraries.runtime[1].to_owned()],
+        })
+    );
+    assert!(fixture.manager.cuda_pack_dir().is_none());
+    assert!(!fixture.paths.data_dir().join("llama-cuda").exists());
+}
+
+#[test]
+fn an_empty_backend_is_rejected_before_installation() {
+    let libraries = CUDA_LIBRARIES.expect("pack");
+    let (fixture, _server, _) = fixture_archives(
+        backend_archive(libraries.backend, &[]),
+        runtime_archive(&libraries.runtime),
+        None,
+    );
+    assert_eq!(
+        fixture
+            .manager
+            .download_cuda_pack(&CancellationToken::default(), &|_| {}),
+        Err(ModelStoreError::InvalidArchive)
+    );
+    assert!(!fixture.paths.data_dir().join("llama-cuda").exists());
+}
+
+#[test]
+fn a_link_cannot_supply_the_required_backend() {
+    let libraries = CUDA_LIBRARIES.expect("pack");
+    let member = format!("release/{}", libraries.backend);
+    for entry_type in [EntryType::symlink(), EntryType::hard_link()] {
+        let mut archive = TarBuilder::new(GzEncoder::new(Vec::new(), Compression::default()));
+        let mut header = Header::new_gnu();
+        header.set_size(0);
+        header.set_entry_type(entry_type);
+        header.set_link_name("../../outside").expect("link target");
+        header.set_cksum();
+        archive
+            .append_data(&mut header, &member, &[][..])
+            .expect("link member");
+        let backend = archive.into_inner().expect("tar").finish().expect("gzip");
+        let (fixture, _server, _) =
+            fixture_archives(backend, runtime_archive(&libraries.runtime), None);
+        assert_eq!(
+            fixture
+                .manager
+                .download_cuda_pack(&CancellationToken::default(), &|_| {}),
+            Err(ModelStoreError::MissingArtifacts {
+                artifacts: vec![member.clone()],
+            })
+        );
+        assert!(!fixture.paths.data_dir().join("llama-cuda").exists());
+    }
+}
+
+#[test]
 fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
     let (fixture, _server, _) = fixture(None);
     let manager = &fixture.manager;
@@ -268,7 +349,7 @@ fn a_pack_not_in_use_is_removed_at_once() {
 fn without_archives_there_is_no_pack() {
     let root = tempdir().expect("temporary root");
     let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
-    let manager = ModelStore::new(paths, Vec::new()).with_cuda_pack(&[]);
+    let manager = ModelStore::new(paths).with_cuda_pack(&[]);
     assert_eq!(manager.cuda_pack_state(), CudaPackState::Unsupported);
     let (_, observer) = recorded();
     assert_eq!(

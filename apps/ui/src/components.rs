@@ -1,7 +1,8 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use dioxus::prelude::*;
-use whispernow_api::{ModelAvailability, ModelStateDto, UpdatePhaseDto};
+use whispernow_domain::ModelAvailability;
+use whispernow_domain::ipc::{ModelState, UpdatePhase};
 
 use crate::{
     Notice, NoticeScope, Route, SettingsRoute, TopLevel, UiContext, UiOperation,
@@ -301,8 +302,8 @@ fn SidebarFooter() -> Element {
         |(id, model_state)| (management.model_display_name(id), Some(*model_state)),
     );
     let dot = match model_state {
-        Some(ModelStateDto::Ready) => "status-dot",
-        Some(ModelStateDto::Failed) => "status-dot error",
+        Some(ModelState::Ready) => "status-dot",
+        Some(ModelState::Failed) => "status-dot error",
         _ => "status-dot waiting",
     };
     let state_label = model_state.map_or("Connecting", labels::model_state);
@@ -351,12 +352,12 @@ fn SidebarFooter() -> Element {
 }
 
 /// A short footer line for update phases that need the user.
-const fn update_summary(phase: Option<UpdatePhaseDto>) -> Option<&'static str> {
+const fn update_summary(phase: Option<UpdatePhase>) -> Option<&'static str> {
     match phase {
-        Some(UpdatePhaseDto::ReadyToRestart) => Some("Update ready to install"),
-        Some(UpdatePhaseDto::ManualInstallAvailable) => Some("Update available"),
-        Some(UpdatePhaseDto::Downloading) => Some("Downloading update"),
-        Some(UpdatePhaseDto::Error) => Some("Update needs attention"),
+        Some(UpdatePhase::ReadyToRestart) => Some("Update ready to install"),
+        Some(UpdatePhase::ManualInstallAvailable) => Some("Update available"),
+        Some(UpdatePhase::Downloading) => Some("Downloading update"),
+        Some(UpdatePhase::Error) => Some("Update needs attention"),
         _ => None,
     }
 }

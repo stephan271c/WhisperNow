@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use whispernow_api::Shortcut;
+use whispernow_domain::Shortcut;
 
 #[component]
 pub(crate) fn Kbd(children: Element) -> Element {
@@ -29,7 +29,7 @@ pub(crate) fn shortcut_parts(shortcut: &Shortcut) -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use whispernow_api::{ShortcutKey, ShortcutModifier};
+    use whispernow_domain::{ShortcutKey, ShortcutModifier};
 
     use super::*;
 

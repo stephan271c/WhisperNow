@@ -11,13 +11,11 @@ use std::{
 use whispernow_core::audio::{
     AudioBlock, AudioCapture, AudioDeviceChoice, AudioDeviceDescriptor, AudioEvent, AudioInput,
     AudioInputError, AudioObservation, AudioProcessor, AudioSink, AudioSinkError,
-    StartCaptureRequest,
 };
 
 use super::{CaptureBackend, CaptureStream, CpalBackend, OpenedCapture, StreamFault};
 
 const RAW_QUEUE_CAPACITY: usize = 8;
-const OUTPUT_BLOCK_SAMPLES: usize = 320;
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const DEFAULT_DEVICE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const LEVEL_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
@@ -54,7 +52,7 @@ impl AudioInput for CpalAudioInput {
 
     fn start(
         &self,
-        request: StartCaptureRequest,
+        device: AudioDeviceChoice,
         sink: Arc<dyn AudioSink>,
     ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
         let request_started = Instant::now();
@@ -67,8 +65,8 @@ impl AudioInput for CpalAudioInput {
             recycle,
             fault,
             dropped_frames,
-        } = self.backend.open(&request.device, chunks_tx)?;
-        let processor = AudioProcessor::new(sample_rate_hz, channels.get(), OUTPUT_BLOCK_SAMPLES)
+        } = self.backend.open(&device, chunks_tx)?;
+        let processor = AudioProcessor::new(sample_rate_hz, channels)
             .map_err(|_| AudioInputError::UnsupportedConfiguration)?;
         stream.start()?;
         sink.observe(AudioObservation::StreamReady {
@@ -78,7 +76,7 @@ impl AudioInput for CpalAudioInput {
         let worker = Worker {
             backend: Arc::clone(&self.backend),
             stream,
-            choice: request.device,
+            choice: device,
             resolved_device_id,
             sink,
             request_started,
@@ -467,12 +465,7 @@ mod tests {
         service: &CpalAudioInput,
         sink: Arc<dyn AudioSink>,
     ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
-        service.start(
-            StartCaptureRequest {
-                device: AudioDeviceChoice::SystemDefault,
-            },
-            sink,
-        )
+        service.start(AudioDeviceChoice::SystemDefault, sink)
     }
 
     /// Waits for the capture worker to reach `condition`, bounded so a broken
@@ -522,11 +515,10 @@ mod tests {
         capture.stop().expect("stop");
         let blocks = sink.blocks.lock().expect("blocks lock");
         assert!(blocks.iter().all(|block| {
-            block.sample_rate() == 16_000
-                && block
-                    .samples()
-                    .iter()
-                    .all(|sample| sample.is_finite() && sample.abs() <= 1.0)
+            block
+                .samples()
+                .iter()
+                .all(|sample| sample.is_finite() && sample.abs() <= 1.0)
         }));
         let observations = sink.observations.lock().expect("observations lock");
         assert!(
@@ -615,9 +607,7 @@ mod tests {
         assert_eq!(
             service
                 .start(
-                    StartCaptureRequest {
-                        device: AudioDeviceChoice::Device(missing),
-                    },
+                    AudioDeviceChoice::Device(missing),
                     Arc::new(RecordingSink::default()),
                 )
                 .err(),

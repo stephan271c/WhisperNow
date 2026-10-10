@@ -3,13 +3,12 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+use whispernow_domain::AppError;
 
-use whispernow_api::{
-    ActiveDownloadDto, ApiErrorDto, DownloadPhase, ErrorCategoryDto, ListModelsResponse,
-    ModelAvailability, ModelDto,
-};
 use whispernow_core::{CancellationToken, ResolvedModel};
-use whispernow_domain::{CLEANUP_MODEL_IDS, CUDA_PACK_ID, ModelFamily, ModelId, ModelProfile};
+use whispernow_domain::ipc::{ActiveDownload, ErrorCategory, ModelSummary};
+use whispernow_domain::{CLEANUP_MODEL_IDS, ModelFamily, ModelId, ModelProfile};
+use whispernow_domain::{DownloadPhase, ModelAvailability};
 use whispernow_platform::{
     CudaPackState, DownloadProgress, Llama, LocalCleanupService, ModelStore, ModelStoreError,
 };
@@ -18,7 +17,7 @@ use super::{
     Dictation, lock,
     settings::SettingsCoordinator,
     shutting_down,
-    state::{ActiveDownload, StateCell},
+    state::{DownloadTask, StateCell},
 };
 
 /// The dictation worker owns the recognizer; selecting a model asks it to load the model.
@@ -65,13 +64,13 @@ impl ModelCoordinator {
         self.store.resolve(model_id)
     }
 
-    pub(crate) fn list(&self) -> Result<ListModelsResponse, ApiErrorDto> {
+    pub(crate) fn list(&self) -> Result<Vec<ModelSummary>, AppError> {
         let models = self
             .store
             .list()
             .map_err(model_list_error)?
             .into_iter()
-            .map(|entry| ModelDto {
+            .map(|entry| ModelSummary {
                 recommended: entry.definition.id == ModelId::default(),
                 family: entry.definition.family(),
                 id: entry.definition.id,
@@ -85,18 +84,18 @@ impl ModelCoordinator {
             })
             .chain(self.cuda_pack())
             .collect();
-        Ok(ListModelsResponse { models })
+        Ok(models)
     }
 
     /// The CUDA pack, listed with the models it serves, where the platform has one.
-    fn cuda_pack(&self) -> Option<ModelDto> {
+    fn cuda_pack(&self) -> Option<ModelSummary> {
         let availability = match self.store.cuda_pack_state() {
             CudaPackState::Unsupported => return None,
             CudaPackState::NotInstalled => ModelAvailability::NotInstalled,
             CudaPackState::Installed => ModelAvailability::Downloaded,
         };
-        Some(ModelDto {
-            id: ModelId::new(CUDA_PACK_ID).expect("the CUDA pack id is a valid model id"),
+        Some(ModelSummary {
+            id: ModelId::cuda_pack(),
             display_name: "NVIDIA CUDA for cleanup models".to_owned(),
             family: ModelFamily::CudaPack,
             recommended: false,
@@ -113,15 +112,15 @@ impl ModelCoordinator {
         &self,
         model_id: &ModelId,
         cancellation: &CancellationToken,
-    ) -> Result<(), ApiErrorDto> {
+    ) -> Result<(), AppError> {
         if cancellation.is_cancelled() {
             return Err(shutting_down());
         }
         self.state.refuse_while_updating()?;
         let _transition = self.transition();
         if self.state.lock().active_downloads.contains_key(model_id) {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            return Err(AppError::new(
+                ErrorCategory::General,
                 "download_already_active",
                 "This model download is already in progress",
             ));
@@ -133,8 +132,8 @@ impl ModelCoordinator {
             }
             state.active_downloads.insert(
                 model_id.clone(),
-                ActiveDownload {
-                    progress: ActiveDownloadDto {
+                DownloadTask {
+                    progress: ActiveDownload {
                         model_id: model_id.clone(),
                         phase: DownloadPhase::Downloading,
                         downloaded_bytes: 0,
@@ -159,8 +158,8 @@ impl ModelCoordinator {
                 state.active_downloads.remove(model_id);
                 state.download_failures = state.download_failures.saturating_add(1);
             });
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            return Err(AppError::new(
+                ErrorCategory::General,
                 "download_worker",
                 "The model download could not be started",
             ));
@@ -171,11 +170,11 @@ impl ModelCoordinator {
         Ok(())
     }
 
-    pub(crate) fn cancel_download(&self, model_id: &ModelId) -> Result<(), ApiErrorDto> {
+    pub(crate) fn cancel_download(&self, model_id: &ModelId) -> Result<(), AppError> {
         let state = self.state.lock();
         let download = state.active_downloads.get(model_id).ok_or_else(|| {
-            ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            AppError::new(
+                ErrorCategory::General,
                 "download_inactive",
                 "The download is no longer active",
             )
@@ -191,14 +190,14 @@ impl ModelCoordinator {
         model_id: ModelId,
         settings: &SettingsCoordinator,
         dictation: &Dictation,
-    ) -> Result<(), ApiErrorDto> {
+    ) -> Result<(), AppError> {
         let _transition = self.transition();
         {
             let state = self.state.lock();
             state.phase.require_idle()?;
             if !state.active_downloads.is_empty() {
-                return Err(ApiErrorDto::new(
-                    ErrorCategoryDto::General,
+                return Err(AppError::new(
+                    ErrorCategory::General,
                     "model_transition_busy",
                     "Wait for active model downloads to finish",
                 ));
@@ -207,22 +206,22 @@ impl ModelCoordinator {
         let resolved = self
             .resolve(&model_id)
             .map_err(|_| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::Model,
+                AppError::new(
+                    ErrorCategory::Model,
                     "model_resolve",
                     "The model could not be inspected",
                 )
             })?
             .ok_or_else(|| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::Model,
+                AppError::new(
+                    ErrorCategory::Model,
                     "model_not_installed",
                     "Install the model before selecting it",
                 )
             })?;
         if !resolved.definition.family().is_speech() {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::Model,
+            return Err(AppError::new(
+                ErrorCategory::Model,
                 "model_not_speech",
                 "This model cleans up transcripts; choose a speech model",
             ));
@@ -241,18 +240,18 @@ impl ModelCoordinator {
     /// Checks that the requested model is a downloaded, inactive model and not the last usable
     /// one. The caller holds the model transition and the settings, so nothing changes that
     /// before the file is deleted.
-    fn require_deletable(&self, model_id: &ModelId) -> Result<(), ApiErrorDto> {
+    fn require_deletable(&self, model_id: &ModelId) -> Result<(), AppError> {
         let state = self.state.lock();
         if state.selected_model_id == *model_id {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            return Err(AppError::new(
+                ErrorCategory::General,
                 "active_model",
                 "Switch models before deleting the active model",
             ));
         }
         if !state.active_downloads.is_empty() {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            return Err(AppError::new(
+                ErrorCategory::General,
                 "model_transition_busy",
                 "A model operation is already in progress",
             ));
@@ -263,15 +262,15 @@ impl ModelCoordinator {
             .iter()
             .find(|entry| entry.definition.id == *model_id)
             .ok_or_else(|| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::Model,
+                AppError::new(
+                    ErrorCategory::Model,
                     "unknown_model",
                     "The model is not supported",
                 )
             })?;
         if target.availability != ModelAvailability::Downloaded {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::Model,
+            return Err(AppError::new(
+                ErrorCategory::Model,
                 "model_not_deletable",
                 "Only downloaded models can be deleted",
             ));
@@ -284,8 +283,8 @@ impl ModelCoordinator {
             })
             .count();
         if target.definition.family().is_speech() && usable <= 1 {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            return Err(AppError::new(
+                ErrorCategory::General,
                 "last_usable_model",
                 "Keep at least one usable model installed",
             ));
@@ -297,10 +296,10 @@ impl ModelCoordinator {
         &self,
         model_id: &ModelId,
         settings: &SettingsCoordinator,
-    ) -> Result<(), ApiErrorDto> {
+    ) -> Result<(), AppError> {
         let _transition = self.transition();
         self.state.lock().phase.require_idle()?;
-        if model_id.as_str() == CUDA_PACK_ID {
+        if model_id.is_cuda_pack() {
             return self.delete_cuda_pack();
         }
         let _transaction = settings.transaction();
@@ -311,8 +310,8 @@ impl ModelCoordinator {
                 self.local_cleanup
                     .hold_unloaded(Duration::from_secs(10))
                     .ok_or_else(|| {
-                        ApiErrorDto::new(
-                            ErrorCategoryDto::General,
+                        AppError::new(
+                            ErrorCategory::General,
                             "model_in_use",
                             "The cleanup model is busy; try again when the current cleanup finishes",
                         )
@@ -322,8 +321,8 @@ impl ModelCoordinator {
             None
         };
         self.store.remove(model_id).map_err(|_| {
-            ApiErrorDto::new(
-                ErrorCategoryDto::Model,
+            AppError::new(
+                ErrorCategory::Model,
                 "model_delete",
                 "The model could not be deleted",
             )
@@ -334,10 +333,10 @@ impl ModelCoordinator {
 
     /// Removes the CUDA pack. Once loaded it stays in use until the app restarts, so it is
     /// then only marked, and deleted at the next start.
-    fn delete_cuda_pack(&self) -> Result<(), ApiErrorDto> {
+    fn delete_cuda_pack(&self) -> Result<(), AppError> {
         if !self.state.lock().active_downloads.is_empty() {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            return Err(AppError::new(
+                ErrorCategory::General,
                 "model_transition_busy",
                 "A model operation is already in progress",
             ));
@@ -345,8 +344,8 @@ impl ModelCoordinator {
         self.store
             .remove_cuda_pack(Llama::cuda_loaded())
             .map_err(|_| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::Model,
+                AppError::new(
+                    ErrorCategory::Model,
                     "model_delete",
                     "The CUDA download could not be deleted",
                 )
@@ -371,9 +370,9 @@ impl ModelCoordinator {
     }
 }
 
-pub(super) fn model_list_error<E>(_error: E) -> ApiErrorDto {
-    ApiErrorDto::new(
-        ErrorCategoryDto::Model,
+pub(super) fn model_list_error<E>(_error: E) -> AppError {
+    AppError::new(
+        ErrorCategory::Model,
         "model_list",
         "Models could not be listed",
     )
@@ -402,7 +401,7 @@ fn run_model_download(
             }
         });
     };
-    let result = if model_id.as_str() == CUDA_PACK_ID {
+    let result = if model_id.is_cuda_pack() {
         let installed = store.download_cuda_pack(&cancellation, &observer);
         if installed.is_ok() {
             // The loaded cleanup model, if any, moves to CUDA now.
@@ -416,8 +415,8 @@ fn run_model_download(
     };
     let (failed, cancelled) = download_completion(&result);
     let completion_error = failed.then(|| {
-        ApiErrorDto::new(
-            ErrorCategoryDto::Model,
+        AppError::new(
+            ErrorCategory::Model,
             "model_download",
             "The model could not be installed",
         )

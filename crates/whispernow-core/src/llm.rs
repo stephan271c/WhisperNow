@@ -41,11 +41,13 @@ impl fmt::Debug for LlmProviderConfig {
 /// The output budget and draft sent with one request. API providers get neither and decode
 /// with their own defaults.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct LlmDecoding {
-    /// Output tokens after which generation stops and the reply counts as cut off; `None`
-    /// leaves the provider's own limit.
-    pub max_output_tokens: Option<u64>,
-    pub draft: Option<DraftText>,
+pub enum LlmDecoding {
+    #[default]
+    ProviderDefaults,
+    LocalCleanup {
+        max_output_tokens: u64,
+        draft: Option<DraftText>,
+    },
 }
 
 /// The pre-cleaned transcript the local cleanup model drafts from (see `draft`).
@@ -77,29 +79,18 @@ impl LlmDecoding {
     pub fn local_cleanup(deterministic_text: &str) -> Self {
         let words =
             u64::try_from(deterministic_text.split_whitespace().count()).unwrap_or(u64::MAX);
-        Self {
-            max_output_tokens: Some(words.saturating_mul(5).div_ceil(2).max(64)),
+        Self::LocalCleanup {
+            max_output_tokens: words.saturating_mul(5).div_ceil(2).max(64),
             draft: Some(DraftText(draft::preclean(deterministic_text))),
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LlmRequest {
     pub config: LlmProviderConfig,
     pub prompt: LlmPrompt,
     pub decoding: LlmDecoding,
-}
-
-impl fmt::Debug for LlmRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("LlmRequest")
-            .field("config", &self.config)
-            .field("prompt", &self.prompt)
-            .field("decoding", &self.decoding)
-            .finish()
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -211,25 +202,6 @@ fn accept_response(response: &LlmResponse) -> Result<String, CleanupFallback> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct CleanupRequest<'input> {
-    pub deterministic_text: &'input str,
-    pub config: &'input LlmProviderConfig,
-}
-
-impl fmt::Debug for CleanupRequest<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CleanupRequest")
-            .field(
-                "deterministic_character_count",
-                &self.deterministic_text.chars().count(),
-            )
-            .field("config", &self.config)
-            .finish()
-    }
-}
-
 /// Why cleanup kept the deterministic text. Every reason is a mechanical failure;
 /// the content of a completed response is never judged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -246,22 +218,23 @@ pub enum CleanupFallback {
 /// provider takes; cancellation drops the call in flight.
 pub async fn clean_up(
     service: &dyn LlmService,
-    input: CleanupRequest<'_>,
+    deterministic_text: &str,
+    config: &LlmProviderConfig,
     cancellation: &CancellationToken,
 ) -> Result<String, CleanupFallback> {
-    let (prompt, decoding) = if input.config.provider == LlmProvider::LocalCleanup {
+    let (prompt, decoding) = if config.provider == LlmProvider::LocalCleanup {
         (
-            build_local_cleanup_prompt(input.deterministic_text),
-            LlmDecoding::local_cleanup(input.deterministic_text),
+            build_local_cleanup_prompt(deterministic_text),
+            LlmDecoding::local_cleanup(deterministic_text),
         )
     } else {
         (
-            build_cleanup_prompt(input.deterministic_text),
+            build_cleanup_prompt(deterministic_text),
             LlmDecoding::default(),
         )
     };
     let request = LlmRequest {
-        config: input.config.clone(),
+        config: config.clone(),
         prompt,
         decoding,
     };

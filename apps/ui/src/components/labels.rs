@@ -1,4 +1,5 @@
-use whispernow_api::{ClearDataCategory, DownloadPhase, ModelStateDto, RecordingMode, SetupStep};
+use whispernow_domain::ipc::ModelState;
+use whispernow_domain::{ClearDataCategory, DownloadPhase, RecordingMode, SetupStep};
 
 pub(crate) const fn recording_mode(mode: RecordingMode) -> &'static str {
     match mode {
@@ -7,13 +8,13 @@ pub(crate) const fn recording_mode(mode: RecordingMode) -> &'static str {
     }
 }
 
-pub(crate) const fn model_state(state: ModelStateDto) -> &'static str {
+pub(crate) const fn model_state(state: ModelState) -> &'static str {
     match state {
-        ModelStateDto::Unloaded => "Not loaded",
-        ModelStateDto::Downloading => "Downloading",
-        ModelStateDto::Loading => "Loading",
-        ModelStateDto::Ready => "Ready",
-        ModelStateDto::Failed => "Could not load",
+        ModelState::Unloaded => "Not loaded",
+        ModelState::Downloading => "Downloading",
+        ModelState::Loading => "Loading",
+        ModelState::Ready => "Ready",
+        ModelState::Failed => "Could not load",
     }
 }
 

@@ -1,25 +1,20 @@
-use whispernow_api::{
-    ApiErrorDto, ClearDataCategory, ClearDataRequest, ClearDataResult, ClearDataResultItemDto,
-    DataLocationDto, ErrorCategoryDto,
-};
+use whispernow_domain::AppError;
+use whispernow_domain::ClearDataCategory;
 use whispernow_domain::ModelId;
+use whispernow_domain::ipc::{ClearDataItem, ClearDataResult, DataLocation, ErrorCategory};
 use whispernow_platform::ClearDataError;
 
 use super::NativeServices;
 
 impl NativeServices {
     /// The existing data each category would remove, including the credential store entry.
-    pub(crate) fn data_locations(&self) -> Result<Vec<DataLocationDto>, ApiErrorDto> {
-        let locations = self.clear_data.locations().map_err(inspect_error)?;
+    pub(crate) fn data_locations(&self) -> Result<Vec<DataLocation>, AppError> {
+        let locations = self.paths.data_locations().map_err(inspect_error)?;
         Ok(locations
             .into_iter()
-            .map(|location| DataLocationDto {
-                category: location.category,
-                path: location.path.to_string_lossy().into_owned(),
-            })
-            .chain([DataLocationDto {
+            .chain([DataLocation {
                 category: ClearDataCategory::Settings,
-                path: CREDENTIAL_STORE_CLEAR_TARGET.to_owned(),
+                path: CREDENTIAL_STORE_CLEAR_TARGET.into(),
             }])
             .collect())
     }
@@ -29,28 +24,27 @@ impl NativeServices {
     /// repair that follows it.
     pub(crate) fn clear_data(
         &self,
-        request: &ClearDataRequest,
-    ) -> Result<ClearDataResult, ApiErrorDto> {
+        categories: &[ClearDataCategory],
+    ) -> Result<ClearDataResult, AppError> {
         let _model_transition = self.models.transition();
         let settings_lock = self.settings.transaction();
         {
             let state = self.state.lock();
             state.phase.require_idle()?;
             if !state.active_downloads.is_empty() {
-                return Err(ApiErrorDto::new(
-                    ErrorCategoryDto::General,
+                return Err(AppError::new(
+                    ErrorCategory::General,
                     "application_busy",
                     "Wait for model downloads to finish before clearing data",
                 ));
             }
         }
-        let categories = &request.categories;
         let clears_settings = categories.contains(&ClearDataCategory::Settings);
         // The recognizer holds the model files open.
         self.dictation.unload_model()?;
         let clear_result = self
             .history
-            .with_repository_closed(|| self.clear_data.clear(categories).map_err(inspect_error));
+            .with_repository_closed(|| self.paths.clear_data(categories).map_err(inspect_error));
         self.publish_history_changed();
         let entries = clear_result.and_then(|result| result)?;
         let restart_required = entries.iter().any(|entry| {
@@ -61,7 +55,7 @@ impl NativeServices {
         });
         // Keys are deleted after the files so a slow or unavailable store never
         // holds history closed or blocks them.
-        let credential_item = clears_settings.then(|| ClearDataResultItemDto {
+        let credential_item = clears_settings.then(|| ClearDataItem {
             category: ClearDataCategory::Settings,
             path: CREDENTIAL_STORE_CLEAR_TARGET.to_owned(),
             deleted: self.settings.delete_api_keys(),
@@ -70,14 +64,14 @@ impl NativeServices {
             .as_ref()
             .filter(|item| !item.deleted)
             .map(|_| {
-                ApiErrorDto::new(ErrorCategoryDto::General,
+                AppError::new(ErrorCategory::General,
                     "credential_store_unavailable",
                     "The OS credential store is unavailable, so saved API keys were not removed from it",
                 )
             });
         let result_items = entries
             .into_iter()
-            .map(|entry| ClearDataResultItemDto {
+            .map(|entry| ClearDataItem {
                 category: entry.category,
                 path: entry.path.to_string_lossy().into_owned(),
                 deleted: entry.outcome.is_ok(),
@@ -102,9 +96,9 @@ impl NativeServices {
 
 pub(super) const CREDENTIAL_STORE_CLEAR_TARGET: &str = "OS credential store: saved LLM API keys";
 
-fn inspect_error(_: ClearDataError) -> ApiErrorDto {
-    ApiErrorDto::new(
-        ErrorCategoryDto::General,
+fn inspect_error(_: ClearDataError) -> AppError {
+    AppError::new(
+        ErrorCategory::General,
         "clear_data_inspect",
         "Application data could not be inspected",
     )

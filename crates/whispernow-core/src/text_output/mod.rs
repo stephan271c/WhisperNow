@@ -4,4 +4,7 @@
 
 mod paste;
 
-pub use paste::{KeystrokeOutcome, PasteDelays, PasteOutcome, PastePlatform, PasteQueue};
+pub use paste::{
+    KeystrokeOutcome, PASTE_PROPAGATION_DELAY, PASTE_RESTORE_DELAY, PasteOutcome, PastePlatform,
+    PasteQueue,
+};

@@ -1,21 +1,22 @@
-use whispernow_api::{AppStateDto, ListModelsResponse, ModelFamily, ModelId};
+use whispernow_domain::ipc::{AppState, ModelSummary};
+use whispernow_domain::{ModelFamily, ModelId};
 
 use super::ManagementState;
 use crate::components::ui::Tone;
 
 impl ManagementState {
-    pub fn speech_models(&self) -> impl Iterator<Item = &whispernow_api::ModelDto> {
+    pub fn speech_models(&self) -> impl Iterator<Item = &ModelSummary> {
         self.models.iter().filter(|model| model.family.is_speech())
     }
 
     #[must_use]
-    pub fn cuda_pack(&self) -> Option<&whispernow_api::ModelDto> {
+    pub fn cuda_pack(&self) -> Option<&ModelSummary> {
         self.models
             .iter()
             .find(|model| model.family == ModelFamily::CudaPack)
     }
 
-    pub fn cleanup_models(&self) -> impl Iterator<Item = &whispernow_api::ModelDto> {
+    pub fn cleanup_models(&self) -> impl Iterator<Item = &ModelSummary> {
         self.models
             .iter()
             .filter(|model| model.family == ModelFamily::Cleanup)
@@ -32,7 +33,10 @@ impl ManagementState {
             )
     }
 
-    pub fn finish_microphone_test(&mut self, result: whispernow_api::MicrophoneTestResponse) {
+    pub fn finish_microphone_test(
+        &mut self,
+        result: whispernow_domain::ipc::MicrophoneTestResponse,
+    ) {
         const SILENT_PEAK: f32 = 0.01;
         if result.peak < SILENT_PEAK {
             self.notify(
@@ -50,14 +54,14 @@ impl ManagementState {
         self.microphone_test = Some(result);
     }
 
-    pub fn install_models(&mut self, models: ListModelsResponse) {
-        self.models = models.models;
+    pub fn install_models(&mut self, models: Vec<ModelSummary>) {
+        self.models = models;
         self.models_loaded = true;
     }
 
     /// Installs a process snapshot; returns whether a download has ended since the last one,
     /// so the models must be read again.
-    pub fn install_snapshot(&mut self, snapshot: &AppStateDto) -> bool {
+    pub fn install_snapshot(&mut self, snapshot: &AppState) -> bool {
         self.observe_selected_model(&snapshot.selected_model_id);
         let ended = self.downloads.iter().any(|download| {
             !snapshot
@@ -71,7 +75,7 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn download(&self, model_id: &ModelId) -> Option<&whispernow_api::ActiveDownloadDto> {
+    pub fn download(&self, model_id: &ModelId) -> Option<&whispernow_domain::ipc::ActiveDownload> {
         self.downloads
             .iter()
             .find(|download| download.model_id == *model_id)

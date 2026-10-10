@@ -4,9 +4,7 @@ use crate::CancellationToken;
 use crate::asr::AsrEngine;
 use whispernow_domain::{UtcMillis, VocabularyReplacement};
 
-use super::{
-    PipelineFailureKind, PreparedTranscription, UNKNOWN_TOKEN_PATTERN, join_segment_texts,
-};
+use super::{PipelineFailureKind, PreparedTranscription, join_segment_texts};
 
 /// Blank text is not a failure here: a segment may hold only noise, and the joined transcript
 /// decides whether the recording produced text.
@@ -50,7 +48,7 @@ pub fn prepare_segmented(
     if raw_text.is_empty() {
         return Err(PipelineFailureKind::EmptyTranscription);
     }
-    if contains_unknown_tokens(&raw_text) {
+    if raw_text.contains("<unk>") {
         return Err(PipelineFailureKind::UnknownTokens);
     }
     let deterministic_started = Instant::now();
@@ -68,11 +66,6 @@ pub fn prepare_segmented(
         deterministic_text,
         fallback: None,
     })
-}
-
-#[must_use]
-fn contains_unknown_tokens(text: &str) -> bool {
-    text.contains(UNKNOWN_TOKEN_PATTERN)
 }
 
 /// Applies literal, case-sensitive vocabulary rules in order.

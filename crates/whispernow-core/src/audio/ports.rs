@@ -38,11 +38,6 @@ pub struct AudioDeviceDescriptor {
     pub is_current_default: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StartCaptureRequest {
-    pub device: AudioDeviceChoice,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AudioObservation {
     StreamReady { request_to_stream_ready: Duration },
@@ -101,7 +96,7 @@ pub trait AudioInput: Send + Sync {
     /// Starts one recording. Dropping the returned capture stops it.
     fn start(
         &self,
-        request: StartCaptureRequest,
+        device: AudioDeviceChoice,
         sink: Arc<dyn AudioSink>,
     ) -> Result<Box<dyn AudioCapture>, AudioInputError>;
 }

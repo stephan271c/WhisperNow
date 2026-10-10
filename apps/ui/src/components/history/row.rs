@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use whispernow_api::{EntryStatus, HistoryEntry};
+use whispernow_domain::{EntryStatus, HistoryEntry};
 
 use super::audio::AudioPlayer;
 use super::format::{LocalClock, duration_label, machine_time};

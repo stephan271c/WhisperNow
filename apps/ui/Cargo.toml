@@ -16,7 +16,7 @@ dev = ["dioxus/devtools"]
 dioxus.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-whispernow-api = { path = "../../crates/whispernow-api" }
+whispernow-domain = { path = "../../crates/whispernow-domain" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys.workspace = true

@@ -1,11 +1,14 @@
 use std::future::Future;
+use whispernow_domain::AppError;
 
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use whispernow_api::{DeleteHistoryEntryRequest, EntryId, ErrorCategoryDto, HistoryFilter};
+use whispernow_domain::ipc::ErrorCategory;
+use whispernow_domain::{EntryId, HistoryFilter};
 
 use super::UiActions;
-use crate::client::{self, ClientError};
+use crate::client;
+
 use crate::{HistoryCopied, UiOperation};
 
 const COPIED_MS: u32 = 2_000;
@@ -29,9 +32,7 @@ impl UiActions {
                 Ok(page) => management
                     .write()
                     .finish_history_refresh(pages, &filter, page),
-                Err(error) => management
-                    .write()
-                    .fail_history_refresh(&filter, error.api_error()),
+                Err(error) => management.write().fail_history_refresh(&filter, &error),
             }
         });
     }
@@ -83,9 +84,7 @@ impl UiActions {
     }
 
     pub(crate) fn delete_history_entry(self, id: EntryId) {
-        self.change_history(async move {
-            client::delete_history_entry(&DeleteHistoryEntryRequest { id }).await
-        });
+        self.change_history(async move { client::delete_history_entry(&id).await });
     }
 
     pub(crate) fn clear_history(self) {
@@ -94,14 +93,12 @@ impl UiActions {
 
     /// Changes history, then reads it again whatever the answer: last write wins, and a row
     /// another surface already removed is the refresh's result rather than an error.
-    fn change_history(self, call: impl Future<Output = Result<(), ClientError>> + 'static) {
+    fn change_history(self, call: impl Future<Output = Result<(), AppError>> + 'static) {
         let operation = UiOperation::ChangeHistory;
         self.run(operation, call, move |actions, answer| {
             actions.refresh_history();
             if let Err(error) = answer
-                && error
-                    .api_error()
-                    .is_none_or(|error| error.category != ErrorCategoryDto::NotFound)
+                && error.category != ErrorCategory::NotFound
             {
                 actions.report(operation, &error);
             }

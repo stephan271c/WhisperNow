@@ -53,7 +53,7 @@ pub fn app() -> Element {
         // callback re-enters this component's scope before `spawn` looks it up.
         let runtime = dioxus::core::Runtime::current();
         let scope = dioxus::core::current_scope_id();
-        match client::listen_all(&whispernow_api::EVENT_NAMES, move |event| {
+        match client::listen_all(&whispernow_domain::ipc::EVENT_NAMES, move |event| {
             runtime.in_scope(scope, || {
                 if recording_bar {
                     event_state.write().apply_event(event);
@@ -68,9 +68,7 @@ pub fn app() -> Element {
                 listeners.set(Some(owner));
                 state.write().mark_event_stream_listening();
             }
-            Err(error) => state
-                .write()
-                .report_event_stream_failure(error.api_error().cloned()),
+            Err(error) => state.write().report_event_stream_failure(error),
         }
 
         if recording_bar {
@@ -80,9 +78,7 @@ pub fn app() -> Element {
 
         match client::get_update_state().await {
             Ok(snapshot) => state.write().hydrate_update(snapshot),
-            Err(error) => state
-                .write()
-                .report_update_command_failure(error.api_error().map(|api| api.summary.clone())),
+            Err(error) => state.write().report_update_command_failure(error.summary),
         }
         actions.refresh_all();
     });
@@ -106,9 +102,7 @@ pub fn app() -> Element {
 async fn hydrate_recording_bar(mut state: Signal<UiState>) {
     match client::get_state().await {
         Ok(snapshot) => state.write().hydrate(snapshot),
-        Err(error) => state
-            .write()
-            .report_client_error(error.api_error().cloned()),
+        Err(error) => state.write().report_client_error(error),
     }
 }
 

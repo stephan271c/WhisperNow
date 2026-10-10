@@ -1,9 +1,9 @@
 use dioxus::prelude::*;
-use whispernow_api::RecordingMode;
+use whispernow_domain::RecordingMode;
 
 use super::actions::UiActions;
 use super::ui::{Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
-use crate::overlay::{LEVEL_BARS, OverlayAction, OverlayPhase, format_elapsed};
+use crate::overlay::{LEVEL_BARS, OverlayPhase, format_elapsed};
 use crate::{OverlayView, UiContext, UiOperation};
 
 /// Meter geometry in SVG units; bars are attributes because the CSP forbids inline styles.
@@ -34,15 +34,6 @@ const fn phase_class(phase: &OverlayPhase) -> &'static str {
         OverlayPhase::Transcribing => "overlay-transcribing",
         OverlayPhase::CleaningUp => "overlay-cleaning-up",
         OverlayPhase::Failed { .. } => "overlay-failed",
-    }
-}
-
-const fn action_label(action: OverlayAction) -> &'static str {
-    match action {
-        OverlayAction::CopyTranscript => "Copy",
-        OverlayAction::OpenHistory => "Open history",
-        OverlayAction::OpenSettings => "Fix",
-        OverlayAction::OpenAiCleanup => "Open AI cleanup",
     }
 }
 
@@ -167,7 +158,7 @@ pub fn RecordingBar() -> Element {
                                 Button { id: "overlay-action", variant: ButtonVariant::Secondary,
                                     size: ButtonSize::Sm, disabled: action_blocked,
                                     onclick: move |_| actions.overlay_action(action),
-                                    "{action_label(action)}"
+                                    "{action.label}"
                                 }
                             }
                             if mode == Some(RecordingMode::Toggle) {

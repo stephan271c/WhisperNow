@@ -1,8 +1,7 @@
 use std::fmt;
+use whispernow_domain::AppError;
 
-use whispernow_api::{
-    ApiErrorDto, AppStateDto, EventPayload, ModelStateDto, PhaseDto, UpdateStateDto,
-};
+use whispernow_domain::ipc::{AppState, EventPayload, ModelState, Phase, UpdateState};
 
 use crate::OverlayView;
 
@@ -16,10 +15,10 @@ pub enum EventStreamHealth {
 
 #[derive(Clone, Default, PartialEq)]
 pub struct UiState {
-    pub snapshot: Option<AppStateDto>,
-    pub update_snapshot: Option<UpdateStateDto>,
+    pub snapshot: Option<AppState>,
+    pub update_snapshot: Option<UpdateState>,
     pub audio_rms: f32,
-    pub error: Option<ApiErrorDto>,
+    pub error: Option<AppError>,
     pub update_command_error: Option<String>,
     pub connection_failed: bool,
     pub event_stream_health: EventStreamHealth,
@@ -44,14 +43,14 @@ impl fmt::Debug for UiState {
 
 impl UiState {
     /// Installs a snapshot read at startup unless an event already brought a newer one.
-    pub(crate) fn hydrate(&mut self, state: AppStateDto) {
+    pub(crate) fn hydrate(&mut self, state: AppState) {
         if self.snapshot.is_none() {
             self.apply_state(state);
         }
         self.connection_failed = false;
     }
 
-    pub fn hydrate_update(&mut self, state: UpdateStateDto) {
+    pub fn hydrate_update(&mut self, state: UpdateState) {
         self.apply_update_state(state);
     }
 
@@ -64,7 +63,7 @@ impl UiState {
                 if self
                     .snapshot
                     .as_ref()
-                    .is_some_and(|state| matches!(state.phase, PhaseDto::Recording { .. }))
+                    .is_some_and(|state| matches!(state.phase, Phase::Recording { .. }))
                 {
                     self.audio_rms = rms.clamp(0.0, 1.0);
                 }
@@ -76,19 +75,19 @@ impl UiState {
         }
     }
 
-    fn apply_update_state(&mut self, state: UpdateStateDto) {
+    fn apply_update_state(&mut self, state: UpdateState) {
         self.update_command_error = None;
         self.update_snapshot = Some(state);
     }
 
-    fn apply_state(&mut self, state: AppStateDto) {
+    fn apply_state(&mut self, state: AppState) {
         self.overlay.install(&state);
-        if !matches!(state.phase, PhaseDto::Recording { .. }) {
+        if !matches!(state.phase, Phase::Recording { .. }) {
             self.audio_rms = 0.0;
         }
         // A failed dictation is the current problem until it is dismissed.
         self.error = match &state.phase {
-            PhaseDto::Error { error } => Some(error.clone()),
+            Phase::Error { error } => Some(error.clone()),
             _ => state.error.clone(),
         };
         self.snapshot = Some(state);
@@ -99,22 +98,21 @@ impl UiState {
         self.snapshot.as_ref().is_some_and(|snapshot| {
             matches!(
                 snapshot.model_state,
-                ModelStateDto::Downloading | ModelStateDto::Loading
+                ModelState::Downloading | ModelState::Loading
             )
         })
     }
 
-    pub fn report_client_error(&mut self, error: Option<ApiErrorDto>) {
-        if let Some(error) = error {
-            self.error = Some(error);
-        } else {
+    pub fn report_client_error(&mut self, error: AppError) {
+        if error.code == "desktop_unreachable" {
             self.connection_failed = true;
+        } else {
+            self.error = Some(error);
         }
     }
 
-    pub fn report_update_command_failure(&mut self, summary: Option<String>) {
-        self.update_command_error =
-            Some(summary.unwrap_or_else(|| "The update service could not be reached".to_owned()));
+    pub fn report_update_command_failure(&mut self, summary: String) {
+        self.update_command_error = Some(summary);
     }
 
     #[cfg_attr(
@@ -129,10 +127,8 @@ impl UiState {
         not(any(test, target_arch = "wasm32")),
         expect(dead_code, reason = "called by the browser's window root and by tests")
     )]
-    pub fn report_event_stream_failure(&mut self, error: Option<ApiErrorDto>) {
+    pub fn report_event_stream_failure(&mut self, error: AppError) {
         self.event_stream_health = EventStreamHealth::Failed;
-        if let Some(error) = error {
-            self.error = Some(error);
-        }
+        self.error = Some(error);
     }
 }

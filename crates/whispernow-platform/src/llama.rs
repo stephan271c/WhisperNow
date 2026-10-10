@@ -54,17 +54,25 @@ impl CudaLibraries {
     }
 }
 
-#[cfg(target_os = "linux")]
-pub const CUDA_LIBRARIES: Option<CudaLibraries> = Some(CudaLibraries {
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) const CUDA_PACK_LIBRARIES: CudaLibraries = CudaLibraries {
     runtime: ["libcudart.so.13", "libcublasLt.so.13", "libcublas.so.13"],
     backend: "libggml-cuda.so",
-});
-#[cfg(target_os = "windows")]
-pub const CUDA_LIBRARIES: Option<CudaLibraries> = Some(CudaLibraries {
+};
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub(crate) const CUDA_PACK_LIBRARIES: CudaLibraries = CudaLibraries {
     runtime: ["cudart64_13.dll", "cublasLt64_13.dll", "cublas64_13.dll"],
     backend: "ggml-cuda.dll",
-});
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+};
+#[cfg(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
+pub const CUDA_LIBRARIES: Option<CudaLibraries> = Some(CUDA_PACK_LIBRARIES);
+#[cfg(not(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
 pub const CUDA_LIBRARIES: Option<CudaLibraries> = None;
 
 /// The oldest NVIDIA architecture the CUDA 13 build has code for (Turing, compute 7.5). On

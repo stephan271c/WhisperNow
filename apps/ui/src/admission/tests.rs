@@ -1,4 +1,4 @@
-use whispernow_api::PhaseDto;
+use whispernow_domain::ipc::Phase;
 
 use super::{BlockedReason, UiOperation, blocked};
 use crate::ManagementState;
@@ -6,7 +6,7 @@ use crate::test_support::snapshot;
 
 fn loaded_history() -> ManagementState {
     let mut management = ManagementState::default();
-    management.history_rows_filter = Some(whispernow_api::HistoryFilter::default());
+    management.history_rows_filter = Some(whispernow_domain::HistoryFilter::default());
     management
 }
 
@@ -15,14 +15,13 @@ fn workflow_changes_wait_for_an_idle_desktop() {
     let management = loaded_history();
     for (phase, reason) in [
         (crate::test_support::PROCESSING, BlockedReason::Dictating),
-        (PhaseDto::Paused, BlockedReason::Paused),
-        (PhaseDto::Updating, BlockedReason::UpdateInstalling),
+        (Phase::Paused, BlockedReason::Paused),
+        (Phase::Updating, BlockedReason::UpdateInstalling),
     ] {
         let state = snapshot(phase);
         for operation in [
             UiOperation::StartSetupTest,
             UiOperation::TestMicrophone,
-            UiOperation::SaveSettings,
             UiOperation::ModelSwitch,
         ] {
             assert_eq!(
@@ -48,7 +47,7 @@ fn workflow_changes_wait_for_an_idle_desktop() {
 #[test]
 fn nothing_is_sent_before_the_first_desktop_snapshot() {
     assert_eq!(
-        blocked(UiOperation::SaveSettings, None, &loaded_history()),
+        blocked(UiOperation::ModelSwitch, None, &loaded_history()),
         Some(BlockedReason::Connecting)
     );
 }
@@ -56,10 +55,9 @@ fn nothing_is_sent_before_the_first_desktop_snapshot() {
 #[test]
 fn own_calls_in_flight_disable_controls_until_they_are_answered() {
     let mut management = loaded_history();
-    let idle = snapshot(PhaseDto::Idle);
+    let idle = snapshot(Phase::Idle);
     management.begin_busy(UiOperation::CheckForUpdates);
     for operation in [
-        UiOperation::SaveSettings,
         UiOperation::ModelSwitch,
         UiOperation::ChangeHistory,
         UiOperation::DismissUpdate,
@@ -79,7 +77,7 @@ fn own_calls_in_flight_disable_controls_until_they_are_answered() {
 
     management.end_busy(UiOperation::CheckForUpdates);
     assert_eq!(
-        blocked(UiOperation::SaveSettings, Some(&idle), &management),
+        blocked(UiOperation::ModelSwitch, Some(&idle), &management),
         None
     );
 }

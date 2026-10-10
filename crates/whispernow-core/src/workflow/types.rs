@@ -2,8 +2,6 @@ use whispernow_domain::UtcMillis;
 
 use crate::llm::CleanupFallback;
 
-pub const BATCH_SAMPLE_RATE_HZ: u32 = 16_000;
-
 /// Has not yet caused history or output side effects.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedTranscription {

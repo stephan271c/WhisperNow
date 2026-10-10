@@ -3,18 +3,19 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
+use whispernow_domain::AppError;
 
-use whispernow_api::{
-    ApiErrorDto, AudioDeviceDto, DeleteHistoryEntryRequest, ErrorCategoryDto, EventPayload,
-    HistoryFilter, HistoryPage, HistoryPageRequest, ListAudioDevicesResponse,
-    MicrophoneTestResponse, PermissionKindDto, PermissionStatusDto, PermissionsResponse,
-    SaveSettingsResponse, Settings, SettingsView, SetupCheckpoint, SetupStep,
-};
 use whispernow_core::audio::{AudioDeviceChoice, AudioInput, AudioInputError};
 use whispernow_domain::LlmProvider;
+use whispernow_domain::ipc::{
+    AudioDevice, ErrorCategory, EventPayload, MicrophoneTestResponse, PermissionKind,
+    PermissionStatus, PermissionsResponse, SaveSettingsResponse, SettingsView,
+};
+use whispernow_domain::{
+    EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, Settings, SetupCheckpoint, SetupStep,
+};
 use whispernow_platform::{
-    DataCleaner, LocalCleanupService, PrivacySettingsPage, open_in_file_manager,
-    open_privacy_settings,
+    AppPaths, LocalCleanupService, PrivacySettingsPage, open_in_file_manager, open_privacy_settings,
 };
 
 pub(crate) use dictation::Dictation;
@@ -24,7 +25,8 @@ use output::OutputCoordinator;
 use permissions::{MicrophoneAccess, SystemPermissions, permission_states};
 pub(crate) use settings::PersistedShortcuts;
 use settings::{SettingsCoordinator, device_choice, require_connected_device, settings_error};
-pub(crate) use state::{Events, Phase, RecordingTrigger, StateCell};
+pub(crate) use state::{Events, StateCell};
+pub(crate) use whispernow_domain::ipc::{Phase, RecordingTrigger};
 
 mod clear_data;
 mod compose;
@@ -46,7 +48,7 @@ pub(crate) struct NativeServices {
     pub(crate) models: Arc<ModelCoordinator>,
     pub(crate) state: Arc<StateCell>,
     pub(crate) dictation: Dictation,
-    clear_data: DataCleaner,
+    paths: AppPaths,
     output: Arc<OutputCoordinator>,
     paste_helper_setup_dir: PathBuf,
     microphone_access: MicrophoneAccess,
@@ -62,8 +64,8 @@ impl NativeServices {
     /// history store's lock orders it against dictations.
     fn run_history_mutation(
         &self,
-        operation: impl FnOnce() -> Result<bool, ApiErrorDto>,
-    ) -> Result<(), ApiErrorDto> {
+        operation: impl FnOnce() -> Result<bool, AppError>,
+    ) -> Result<(), AppError> {
         let result = operation();
         if !matches!(result, Ok(false)) {
             self.publish_history_changed();
@@ -78,7 +80,7 @@ impl NativeServices {
     pub(crate) fn update_settings(
         &self,
         edited: Settings,
-    ) -> Result<(Settings, SaveSettingsResponse), ApiErrorDto> {
+    ) -> Result<(Settings, SaveSettingsResponse), AppError> {
         self.state.lock().phase.require_idle()?;
         let (before, settings) = self.settings.update(edited, self.audio.as_ref())?;
         self.follow_cleanup_provider(&settings.settings);
@@ -91,7 +93,11 @@ impl NativeServices {
         if !matches!(pruning, Ok(false)) {
             self.publish_history_changed();
         }
-        let warnings = pruning.err().into_iter().collect();
+        let warnings = pruning
+            .err()
+            .into_iter()
+            .map(|warning| warning.summary)
+            .collect();
         Ok((before, SaveSettingsResponse { settings, warnings }))
     }
 
@@ -111,52 +117,49 @@ impl NativeServices {
         self.output.can_copy()
     }
 
-    pub(crate) fn copy_last_transcript(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn copy_last_transcript(&self) -> Result<(), AppError> {
         let text = self
             .state
             .lock()
             .last_transcript
-            .as_ref()
-            .map(|transcript| transcript.final_text.clone())
+            .clone()
             .filter(|text| !text.is_empty())
             .ok_or_else(|| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::NotFound,
+                AppError::new(
+                    ErrorCategory::NotFound,
                     "no_transcript",
                     "There is no transcript to copy yet",
                 )
             })?;
         self.output.copy(&text).map_err(|_| {
-            ApiErrorDto::new(
-                ErrorCategoryDto::Output,
+            AppError::new(
+                ErrorCategory::Output,
                 "copy_unavailable",
                 "The transcript could not be copied; open History to copy it",
             )
         })
     }
 
-    pub(crate) fn list_audio_devices(&self) -> ListAudioDevicesResponse {
-        let devices = self
-            .audio
+    pub(crate) fn list_audio_devices(&self) -> Vec<AudioDevice> {
+        self.audio
             .list_input_devices()
             .unwrap_or_default()
             .into_iter()
             // The windows offer the system default themselves.
             .filter_map(|device| match device.choice {
                 AudioDeviceChoice::SystemDefault => None,
-                AudioDeviceChoice::Device(id) => Some(AudioDeviceDto {
+                AudioDeviceChoice::Device(id) => Some(AudioDevice {
                     id: id.as_str().to_owned(),
                     display_name: device.display_name,
                     is_default: device.is_current_default,
                 }),
             })
-            .collect();
-        ListAudioDevicesResponse { devices }
+            .collect()
     }
 
     /// Listens to the selected microphone for a few seconds and reports its levels. No audio
     /// is kept.
-    pub(crate) fn test_microphone(&self) -> Result<MicrophoneTestResponse, ApiErrorDto> {
+    pub(crate) fn test_microphone(&self) -> Result<MicrophoneTestResponse, AppError> {
         let device = device_choice(self.settings.recording_settings()?.input_device.as_deref());
         self.listen(device, microphone_test::TEST_DURATION)
     }
@@ -166,7 +169,7 @@ impl NativeServices {
         &self,
         device: AudioDeviceChoice,
         duration: Duration,
-    ) -> Result<MicrophoneTestResponse, ApiErrorDto> {
+    ) -> Result<MicrophoneTestResponse, AppError> {
         let result = self.dictation.test_microphone(device, duration);
         self.microphone_access.observe(&result);
         result
@@ -187,7 +190,7 @@ impl NativeServices {
 
     /// The shortcut portal's consent is the shortcut coordinator's to report, so the caller
     /// passes it in.
-    pub(crate) fn permissions(&self, global_shortcuts: PermissionStatusDto) -> PermissionsResponse {
+    pub(crate) fn permissions(&self, global_shortcuts: PermissionStatus) -> PermissionsResponse {
         permission_states(&SystemPermissions {
             services: self,
             global_shortcuts,
@@ -195,23 +198,23 @@ impl NativeServices {
     }
 
     /// Asks for one first-run permission where the desktop services can.
-    pub(crate) fn request_permission(&self, kind: PermissionKindDto) -> Result<(), ApiErrorDto> {
+    pub(crate) fn request_permission(&self, kind: PermissionKind) -> Result<(), AppError> {
         match kind {
-            PermissionKindDto::Microphone => self.request_microphone(),
-            PermissionKindDto::RemoteDesktop => self.request_remote_desktop(),
-            PermissionKindDto::Accessibility
-            | PermissionKindDto::GlobalShortcuts
-            | PermissionKindDto::PasteSupport => Err(permission_not_requestable()),
+            PermissionKind::Microphone => self.request_microphone(),
+            PermissionKind::RemoteDesktop => self.request_remote_desktop(),
+            PermissionKind::Accessibility
+            | PermissionKind::GlobalShortcuts
+            | PermissionKind::PasteSupport => Err(permission_not_requestable()),
         }
     }
 
-    pub(crate) fn open_permission_settings(kind: PermissionKindDto) -> Result<(), ApiErrorDto> {
+    pub(crate) fn open_permission_settings(kind: PermissionKind) -> Result<(), AppError> {
         let page = match kind {
-            PermissionKindDto::Microphone => PrivacySettingsPage::Microphone,
-            PermissionKindDto::Accessibility => PrivacySettingsPage::Accessibility,
-            PermissionKindDto::GlobalShortcuts
-            | PermissionKindDto::RemoteDesktop
-            | PermissionKindDto::PasteSupport => return Err(no_permission_settings()),
+            PermissionKind::Microphone => PrivacySettingsPage::Microphone,
+            PermissionKind::Accessibility => PrivacySettingsPage::Accessibility,
+            PermissionKind::GlobalShortcuts
+            | PermissionKind::RemoteDesktop
+            | PermissionKind::PasteSupport => return Err(no_permission_settings()),
         };
         open_privacy_settings(page).map_err(|_| no_permission_settings())
     }
@@ -219,19 +222,19 @@ impl NativeServices {
     /// Listens to the default microphone briefly, which is how each platform
     /// asks for it. A refusal is an answer, shown on the permission card; any
     /// other failure is returned.
-    fn request_microphone(&self) -> Result<(), ApiErrorDto> {
+    fn request_microphone(&self) -> Result<(), AppError> {
         match self.listen(
             AudioDeviceChoice::SystemDefault,
             microphone_test::PERMISSION_CHECK_DURATION,
         ) {
-            Err(error) if error.code != "microphone_permission_denied" => Err(error),
+            Err(error) if error.category != ErrorCategory::Permission => Err(error),
             Ok(_) | Err(_) => Ok(()),
         }
     }
 
     /// Asks the compositor for the paste keystroke's consent and waits for the
     /// user's answer, which the permission card then shows.
-    fn request_remote_desktop(&self) -> Result<(), ApiErrorDto> {
+    fn request_remote_desktop(&self) -> Result<(), AppError> {
         self.state.lock().phase.require_idle()?;
         self.output
             .request_remote_desktop_consent()
@@ -244,10 +247,10 @@ impl NativeServices {
     pub(crate) fn complete_setup(
         &self,
         checkpoint: &SetupCheckpoint,
-    ) -> Result<SettingsView, ApiErrorDto> {
+    ) -> Result<SettingsView, AppError> {
         if checkpoint.step != SetupStep::TryIt {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            return Err(AppError::new(
+                ErrorCategory::General,
                 "setup_incomplete",
                 "Review every setup step before finishing",
             ));
@@ -255,8 +258,8 @@ impl NativeServices {
         {
             let state = self.state.lock();
             if state.setup_complete {
-                return Err(ApiErrorDto::new(
-                    ErrorCategoryDto::General,
+                return Err(AppError::new(
+                    ErrorCategory::General,
                     "setup_already_complete",
                     "Setup has already finished",
                 ));
@@ -268,15 +271,15 @@ impl NativeServices {
             .models
             .resolve(&checkpoint.model_id)
             .map_err(|_| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::Model,
+                AppError::new(
+                    ErrorCategory::Model,
                     "model_resolve",
                     "The model could not be inspected",
                 )
             })?
             .ok_or_else(|| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::Model,
+                AppError::new(
+                    ErrorCategory::Model,
                     "model_not_installed",
                     "Install the model before finishing setup",
                 )
@@ -306,10 +309,10 @@ impl NativeServices {
     /// orders it against changes and data clearing. A search that is too long is the search
     /// field's problem; a store that cannot be read, or a problem found while opening it, is
     /// the application's.
-    pub(crate) fn history(&self, request: &HistoryPageRequest) -> Result<HistoryPage, ApiErrorDto> {
+    pub(crate) fn history(&self, request: &HistoryPageRequest) -> Result<HistoryPage, AppError> {
         if request.filter.query.len() > HistoryFilter::MAX_QUERY_BYTES {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            return Err(AppError::new(
+                ErrorCategory::General,
                 "text_too_large",
                 "This search is too long. Shorten it and try again.",
             ));
@@ -325,25 +328,22 @@ impl NativeServices {
     }
 
     /// The path never crosses the webview boundary.
-    pub(crate) fn open_recordings_folder(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn open_recordings_folder(&self) -> Result<(), AppError> {
         let directory = self.history.recordings_dir()?;
         open_in_file_manager(&directory).map_err(|_| {
-            ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            AppError::new(
+                ErrorCategory::General,
                 "recordings_folder_open_failed",
                 "The recordings folder could not be opened",
             )
         })
     }
 
-    pub(crate) fn delete_history_entry(
-        &self,
-        request: DeleteHistoryEntryRequest,
-    ) -> Result<(), ApiErrorDto> {
-        self.run_history_mutation(|| self.history.delete(request.id))
+    pub(crate) fn delete_history_entry(&self, request: EntryId) -> Result<(), AppError> {
+        self.run_history_mutation(|| self.history.delete(request))
     }
 
-    pub(crate) fn clear_history(&self) -> Result<(), ApiErrorDto> {
+    pub(crate) fn clear_history(&self) -> Result<(), AppError> {
         self.run_history_mutation(|| self.history.clear())
     }
 
@@ -374,41 +374,41 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().expect("service state lock poisoned")
 }
 
-fn permission_not_requestable() -> ApiErrorDto {
-    ApiErrorDto::new(
-        ErrorCategoryDto::General,
+fn permission_not_requestable() -> AppError {
+    AppError::new(
+        ErrorCategory::General,
         "permission_not_requestable",
         "This permission cannot be requested here",
     )
 }
 
 /// This platform has no system page for the permission, or it could not be opened.
-fn no_permission_settings() -> ApiErrorDto {
-    ApiErrorDto::new(
-        ErrorCategoryDto::General,
+fn no_permission_settings() -> AppError {
+    AppError::new(
+        ErrorCategory::General,
         "permission_settings_unavailable",
         "The system settings page could not be opened",
     )
 }
 
-fn shutting_down() -> ApiErrorDto {
-    ApiErrorDto::new(
-        ErrorCategoryDto::General,
+fn shutting_down() -> AppError {
+    AppError::new(
+        ErrorCategory::General,
         "application_shutting_down",
         "The application is shutting down",
     )
 }
 
-fn capture_start_error(error: &AudioInputError) -> ApiErrorDto {
+fn capture_start_error(error: &AudioInputError) -> AppError {
     if matches!(error, AudioInputError::PermissionDenied) {
-        ApiErrorDto::new(
-            ErrorCategoryDto::Permission,
+        AppError::new(
+            ErrorCategory::Permission,
             "microphone_permission_denied",
             "Microphone access is disabled. Enable it in system privacy settings and retry.",
         )
     } else {
-        ApiErrorDto::new(
-            ErrorCategoryDto::Audio,
+        AppError::new(
+            ErrorCategory::Audio,
             "audio_start",
             "Audio capture could not be started",
         )

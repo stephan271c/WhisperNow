@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
-use whispernow_api::{
-    ActiveDownloadDto, LlmProvider, ModelAvailability, ModelDto, ModelId, ModelStateDto, Rating,
-    SpeechBenchmark, WerSource,
+use whispernow_domain::ipc::{ActiveDownload, ModelState, ModelSummary};
+use whispernow_domain::{
+    LlmProvider, ModelAvailability, ModelId, Rating, SpeechBenchmark, WerSource,
 };
 
 use super::NoticeRegion;
@@ -23,7 +23,7 @@ pub(super) fn ModelsPage() -> Element {
         .map(|snapshot| snapshot.selected_model_id.clone());
     let active_state = snapshot
         .as_ref()
-        .map_or(ModelStateDto::Unloaded, |snapshot| snapshot.model_state);
+        .map_or(ModelState::Unloaded, |snapshot| snapshot.model_state);
     let models = ordered_models(
         &management
             .read()
@@ -37,7 +37,7 @@ pub(super) fn ModelsPage() -> Element {
     let download_blocked = actions.blocked(UiOperation::DownloadModel);
     let delete_blocked = actions.blocked(UiOperation::ModelDelete);
     let reason = switch_blocked.or(download_blocked).or(delete_blocked);
-    let failed_active = (active_state == ModelStateDto::Failed)
+    let failed_active = (active_state == ModelState::Failed)
         .then(|| active_id.clone())
         .flatten();
     rsx! { div { class: "settings-stack",
@@ -78,7 +78,7 @@ pub(super) fn ModelsPage() -> Element {
 }
 
 /// The model in use first, then the others in catalogue order.
-fn ordered_models(models: &[ModelDto], active_id: Option<&ModelId>) -> Vec<ModelDto> {
+fn ordered_models(models: &[ModelSummary], active_id: Option<&ModelId>) -> Vec<ModelSummary> {
     let mut ordered = models.to_vec();
     ordered.sort_by_key(|model| Some(&model.id) != active_id);
     ordered
@@ -87,7 +87,7 @@ fn ordered_models(models: &[ModelDto], active_id: Option<&ModelId>) -> Vec<Model
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum ModelRowKind {
     /// `state` is the load state of the model in use; `None` for the others.
-    Speech { state: Option<ModelStateDto> },
+    Speech { state: Option<ModelState> },
     /// `chosen` marks the model the local cleanup provider runs.
     Cleanup { chosen: bool },
     /// The CUDA pack, which has no speed or accuracy of its own.
@@ -96,7 +96,7 @@ pub(super) enum ModelRowKind {
 
 #[component]
 pub(super) fn ModelRow(
-    model: ModelDto,
+    model: ModelSummary,
     kind: ModelRowKind,
     #[props(default)] settings_disabled: bool,
 ) -> Element {
@@ -198,7 +198,7 @@ pub(super) fn ModelRow(
 }
 
 #[component]
-pub(super) fn DownloadProgress(download: ActiveDownloadDto, name: String) -> Element {
+pub(super) fn DownloadProgress(download: ActiveDownload, name: String) -> Element {
     let actions = use_actions();
     let cancel_blocked = actions.blocked(UiOperation::CancelDownload);
     let max = download

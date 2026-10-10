@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Instant};
 
 use whispernow_core::{
     CancellationToken,
-    llm::{CleanupFallback, CleanupRequest, LlmProviderConfig, LlmService, clean_up},
+    llm::{CleanupFallback, LlmProviderConfig, LlmService, clean_up},
     workflow::PreparedTranscription,
 };
 use whispernow_platform::SettingsStore;
@@ -73,10 +73,8 @@ impl AiCleanup {
         }
         self.runtime.block_on(clean_up(
             self.service.as_ref(),
-            CleanupRequest {
-                deterministic_text,
-                config: &config,
-            },
+            deterministic_text,
+            &config,
             cancellation,
         ))
     }

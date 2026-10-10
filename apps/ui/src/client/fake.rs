@@ -7,13 +7,12 @@ use std::{
     rc::Rc,
     task::{Poll, Waker},
 };
+use whispernow_domain::AppError;
 
 use serde::Serialize;
 use serde_json::Value;
 
-use super::ClientError;
-
-type Reply = Result<Value, ClientError>;
+type Reply = Result<Value, AppError>;
 
 #[derive(Default)]
 struct Slot {
@@ -90,7 +89,7 @@ pub(super) async fn invoke(command: &'static str, request: Option<Value>) -> Rep
     .await
 }
 
-fn reply(answer: Result<impl Serialize, ClientError>) -> Reply {
+fn reply(answer: Result<impl Serialize, AppError>) -> Reply {
     answer.map(|value| serde_json::to_value(value).expect("serializable answer"))
 }
 
@@ -100,7 +99,7 @@ pub(crate) fn reset() {
 }
 
 /// Answers the oldest unanswered call of `command`.
-pub(crate) fn answer(command: &str, answer: Result<impl Serialize, ClientError>) {
+pub(crate) fn answer(command: &str, answer: Result<impl Serialize, AppError>) {
     let answer = reply(answer);
     let waker = DESKTOP.with_borrow(|desktop| {
         let call = desktop
@@ -150,5 +149,5 @@ pub(crate) fn count(command: &str) -> usize {
 
 /// Fails the oldest unanswered call of `command` as if the bridge had dropped it.
 pub(crate) fn fail(command: &str) {
-    answer(command, Err::<(), _>(ClientError::Transport));
+    answer(command, Err::<(), _>(crate::client::connection_error()));
 }

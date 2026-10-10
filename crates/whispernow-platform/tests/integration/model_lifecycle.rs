@@ -144,7 +144,6 @@ fn make_manager_for_definition(
     let manager = ModelStore::with_registry_and_timeouts(
         registry,
         paths,
-        Vec::new(),
         DownloadTimeouts {
             connect: Duration::from_secs(2),
             receive_body: Duration::from_secs(2),
@@ -421,7 +420,6 @@ impl BlockedDownload {
         let manager = Arc::new(ModelStore::with_registry_and_timeouts(
             registry,
             paths,
-            Vec::new(),
             DownloadTimeouts {
                 connect: Duration::from_secs(5),
                 receive_body: Duration::from_mins(1),
@@ -627,12 +625,8 @@ fn resolver_rejects_intermediate_directory_symlinks_in_nested_artifacts() {
     };
     let id = definition.id.clone();
     let registry = ModelRegistry::new(vec![definition]);
-    let manager = ModelStore::with_registry_and_timeouts(
-        registry,
-        paths,
-        Vec::new(),
-        DownloadTimeouts::default(),
-    );
+    let manager =
+        ModelStore::with_registry_and_timeouts(registry, paths, DownloadTimeouts::default());
     let outside = root.path().join("outside");
     fs::create_dir_all(&outside).expect("outside root");
     for artifact in ARTIFACTS {
@@ -648,31 +642,48 @@ fn resolver_rejects_intermediate_directory_symlinks_in_nested_artifacts() {
 }
 
 #[test]
-fn resolver_uses_bundled_assets_without_cwd_paths_and_remove_only_affects_downloads() {
+fn remove_only_affects_the_downloaded_model_inside_the_data_directory() {
     let archive = valid_archive();
     let root = tempdir().expect("temporary root");
     let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
-    let bundled = root.path().join("bundled");
-    let bundled_model = bundled.join(MODEL_ID);
-    fs::create_dir_all(&bundled_model).expect("bundled model root");
+    let outside_model = root.path().join("outside").join(MODEL_ID);
+    fs::create_dir_all(&outside_model).expect("outside model root");
     for artifact in ARTIFACTS {
-        fs::write(bundled_model.join(artifact), artifact).expect("bundled artifact");
+        fs::write(outside_model.join(artifact), artifact).expect("outside artifact");
     }
     let definition = definition("http://127.0.0.1:1/model.tar.bz2".to_owned(), &archive);
     let id = definition.id.clone();
     let registry = ModelRegistry::new(vec![definition]);
-    let manager = ModelStore::with_registry_and_timeouts(
-        registry,
-        paths,
-        vec![bundled],
-        DownloadTimeouts::default(),
-    );
+    let downloaded_model = paths.models_dir().join(MODEL_ID);
+    let manager =
+        ModelStore::with_registry_and_timeouts(registry, paths, DownloadTimeouts::default());
 
-    let resolved = manager
-        .resolve(&id)
-        .expect("resolve")
-        .expect("bundled model");
-    assert_eq!(resolved.availability, ModelAvailability::Bundled);
+    assert!(manager.resolve(&id).expect("resolve").is_none());
     assert_eq!(manager.remove(&id), Err(ModelStoreError::NotInstalled));
-    assert!(bundled_model.is_dir());
+    fs::create_dir_all(&downloaded_model).expect("downloaded model root");
+    for artifact in ARTIFACTS {
+        fs::write(downloaded_model.join(artifact), artifact).expect("downloaded artifact");
+    }
+    assert_eq!(
+        manager
+            .resolve(&id)
+            .expect("resolve")
+            .expect("downloaded model")
+            .root,
+        downloaded_model
+    );
+    manager.remove(&id).expect("remove downloaded model");
+    assert!(!downloaded_model.exists());
+    assert!(
+        manager
+            .resolve(&id)
+            .expect("resolve after removal")
+            .is_none()
+    );
+    for artifact in ARTIFACTS {
+        assert_eq!(
+            fs::read_to_string(outside_model.join(artifact)).expect("outside artifact remains"),
+            artifact
+        );
+    }
 }

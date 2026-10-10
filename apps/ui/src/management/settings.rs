@@ -2,10 +2,8 @@
 //! settings, which goes to the desktop whole; edits made while it is there go together once
 //! it answers. A refused edit drops out again while its control shows why.
 
-use whispernow_api::{
-    ApiErrorDto, SaveSettingsResponse, Settings, SettingsView, ThemePreference,
-    UpdateSettingsRequest,
-};
+use whispernow_domain::ipc::{SaveSettingsResponse, SettingsView};
+use whispernow_domain::{Settings, ThemePreference};
 
 use super::ManagementState;
 use crate::NoticeScope;
@@ -96,14 +94,12 @@ impl ManagementState {
     }
 
     /// The shown settings, when they hold edits and no other save is with the desktop.
-    pub fn next_settings_update(&mut self) -> Option<UpdateSettingsRequest> {
+    pub fn next_settings_update(&mut self) -> Option<Settings> {
         if !self.sending.is_empty() || self.unsent.is_empty() {
             return None;
         }
         self.sending = std::mem::take(&mut self.unsent);
-        Some(UpdateSettingsRequest {
-            settings: self.edited.clone()?,
-        })
+        self.edited.clone()
     }
 
     #[must_use]
@@ -155,14 +151,10 @@ impl ManagementState {
 }
 
 /// A save confirmation that names every side effect the desktop could not apply.
-pub(super) fn saved_notice(saved: &str, warnings: &[ApiErrorDto]) -> String {
+pub(super) fn saved_notice(saved: &str, warnings: &[String]) -> String {
     if warnings.is_empty() {
         return saved.to_owned();
     }
-    let summaries = warnings
-        .iter()
-        .map(|warning| warning.summary.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let summaries = warnings.join(" ");
     format!("{saved}, but not everything took effect. {summaries}")
 }

@@ -6,11 +6,12 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex, PoisonError},
 };
+use whispernow_domain::AppError;
 
 use serde::Serialize;
 use serde_json::Value;
 use time::OffsetDateTime;
-use whispernow_domain::{ApiKey, AppError, LlmProvider, PythonSettings, Settings};
+use whispernow_domain::{ApiKey, ErrorCategory, LlmProvider, PythonSettings, Settings};
 
 use crate::{
     AppPaths,
@@ -198,7 +199,7 @@ fn timestamp() -> String {
 }
 
 fn redacted(code: &'static str, summary: &'static str) -> AppError {
-    AppError::redacted(code, summary)
+    AppError::new(ErrorCategory::General, code, summary)
 }
 
 #[cfg(test)]

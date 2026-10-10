@@ -7,13 +7,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use whispernow_api::EventPayload;
 use whispernow_core::{
     audio::{
         AudioBlock, AudioEvent, AudioObservation, AudioSink, AudioSinkError, TARGET_SAMPLE_RATE,
     },
     workflow::{AudioSegment, SpeechSegmenter},
 };
+use whispernow_domain::ipc::EventPayload;
 
 use super::Message;
 use crate::services::Events;
@@ -242,7 +242,7 @@ mod tests {
             1,
             worker,
             Events::channel().0,
-            16_000,
+            whispernow_core::audio::TARGET_SAMPLE_RATE as usize,
             SpeechSegmenter::new(Box::new(Silence)),
         ));
         let busy = sink.audio.lock().expect("audio");

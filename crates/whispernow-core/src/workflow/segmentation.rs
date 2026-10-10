@@ -4,18 +4,13 @@
 
 use std::{collections::VecDeque, ops::Range};
 
-use super::BATCH_SAMPLE_RATE_HZ;
+use crate::audio::TARGET_SAMPLE_RATE;
 
 /// Per-frame speech decision carrying one recording's recurrent detector state.
 pub trait VoiceActivity: Send {
     /// Classifies one frame of normalized mono 16-kHz audio. Every frame is
     /// [`FRAME_SAMPLES`] long; a final partial frame is zero-padded.
     fn is_speech(&mut self, frame: &[f32]) -> bool;
-}
-
-/// Creates fresh detector state for each recording or retry.
-pub trait VoiceActivitySource: Send + Sync {
-    fn create(&self) -> Box<dyn VoiceActivity>;
 }
 
 /// Treats every frame as speech. Used when no detector is available: segments then end only at
@@ -29,14 +24,8 @@ impl VoiceActivity for AlwaysSpeech {
     }
 }
 
-impl VoiceActivitySource for AlwaysSpeech {
-    fn create(&self) -> Box<dyn VoiceActivity> {
-        Box::new(Self)
-    }
-}
-
 const fn millis(milliseconds: usize) -> usize {
-    milliseconds * BATCH_SAMPLE_RATE_HZ as usize / 1_000
+    milliseconds * TARGET_SAMPLE_RATE as usize / 1_000
 }
 
 // Segmentation constants, in samples at 16 kHz. These are tuning constants, not user settings.
@@ -157,21 +146,16 @@ impl SpeechSegmenter {
         let end = start + len;
         self.position = end;
         let speech = self.activity.is_speech(frame);
-        if self.open.is_none() {
-            if !speech {
-                return;
-            }
-            self.open = Some(OpenSegment {
-                start: start.saturating_sub(PADDING_SAMPLES).max(self.emitted_end),
-                speech_end: start,
-                speech_samples: 0,
-                held: false,
-                recent: VecDeque::new(),
-            });
-        }
-        let Some(open) = self.open.as_mut() else {
+        if self.open.is_none() && !speech {
             return;
-        };
+        }
+        let open = self.open.get_or_insert_with(|| OpenSegment {
+            start: start.saturating_sub(PADDING_SAMPLES).max(self.emitted_end),
+            speech_end: start,
+            speech_samples: 0,
+            held: false,
+            recent: VecDeque::new(),
+        });
         if speech {
             open.speech_end = end;
             open.speech_samples += len;
@@ -223,9 +207,10 @@ impl SpeechSegmenter {
     /// Cuts the open segment at the quietest frame of its trailing window, preferring the latest
     /// such frame, and keeps the remainder open.
     fn force_cut(&mut self, finished: &mut Vec<AudioSegment>) {
-        let Some(mut open) = self.open.take() else {
-            return;
-        };
+        let mut open = self
+            .open
+            .take()
+            .expect("forced cut requires an open segment");
         let cut = open
             .recent
             .iter()
@@ -306,7 +291,7 @@ mod tests {
         }
     }
 
-    const SECOND: usize = BATCH_SAMPLE_RATE_HZ as usize;
+    const SECOND: usize = TARGET_SAMPLE_RATE as usize;
 
     fn speech(seconds: f64) -> Vec<f32> {
         tone(seconds, 0.25)
@@ -322,7 +307,7 @@ mod tests {
         reason = "test durations are small positive values"
     )]
     fn tone(seconds: f64, amplitude: f32) -> Vec<f32> {
-        let count = (seconds * f64::from(BATCH_SAMPLE_RATE_HZ)) as usize;
+        let count = (seconds * f64::from(TARGET_SAMPLE_RATE)) as usize;
         (0..count)
             .map(|index| {
                 if index % 2 == 0 {

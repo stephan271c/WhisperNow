@@ -10,13 +10,12 @@ use dioxus_html::{
     HtmlEventConverter, MountedResult, RenderedElementBacking, SerializedFormData,
     SerializedHtmlEventConverter, SerializedKeyboardData, SerializedMouseData,
 };
-use whispernow_api::{
-    AppStateDto, EntryId, EntryStatus, HistoryEntry, ModelId, ModelStateDto, PhaseDto, UtcMillis,
-};
+use whispernow_domain::ipc::EventPayload;
+use whispernow_domain::ipc::{AppState, ModelState, Phase};
+use whispernow_domain::{EntryId, EntryStatus, HistoryEntry, ModelId, UtcMillis};
 #[cfg(not(target_arch = "wasm32"))]
-use whispernow_api::{
-    EventPayload, HistoryFilter, HistoryLimit, HistoryPage, LlmProvider, ProviderSettings,
-    RecordingMode, Settings,
+use whispernow_domain::{
+    HistoryFilter, HistoryLimit, HistoryPage, LlmProvider, ProviderSettings, Settings,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -164,7 +163,7 @@ impl Page {
     pub(crate) fn answer(
         &mut self,
         command: &str,
-        answer: Result<impl serde::Serialize, crate::client::ClientError>,
+        answer: Result<impl serde::Serialize, whispernow_domain::AppError>,
     ) -> &mut Self {
         fake::answer(command, answer);
         self.settle()
@@ -190,11 +189,11 @@ impl Page {
 }
 
 /// A snapshot in `phase` with the tiny Whisper model ready.
-pub(crate) fn snapshot(phase: PhaseDto) -> AppStateDto {
-    AppStateDto {
+pub(crate) fn snapshot(phase: Phase) -> AppState {
+    AppState {
         phase,
         selected_model_id: ModelId::new("sherpa-onnx-whisper-tiny").expect("fixture model id"),
-        model_state: ModelStateDto::Ready,
+        model_state: ModelState::Ready,
         last_transcript: None,
         error: None,
         active_downloads: Vec::new(),
@@ -315,12 +314,12 @@ pub(crate) fn label_in_name_violations(html: &str) -> Vec<String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) const RECORDING: PhaseDto = PhaseDto::Recording {
-    mode: RecordingMode::Toggle,
+pub(crate) const RECORDING: Phase = Phase::Recording {
+    trigger: whispernow_domain::ipc::RecordingTrigger::Toggle,
     session: 1,
 };
 
-pub(crate) const PROCESSING: PhaseDto = PhaseDto::Processing { cleaning_up: false };
+pub(crate) const PROCESSING: Phase = Phase::Processing { cleaning_up: false };
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn show_history(management: &mut crate::ManagementState, entries: Vec<HistoryEntry>) {
@@ -355,10 +354,10 @@ pub(crate) fn editable_settings() -> Settings {
 }
 
 /// A pasted dictation `id` saying `text`, made `id` milliseconds after the epoch.
-pub(crate) fn history_entry(id: u64, text: &str) -> HistoryEntry {
+pub(crate) fn history_entry(id: i64, text: &str) -> HistoryEntry {
     HistoryEntry {
         id: EntryId(id),
-        created_at: UtcMillis(i64::try_from(id).expect("test timestamp")),
+        created_at: UtcMillis(id),
         duration_millis: None,
         raw_text: Some(text.to_owned()),
         cleaned_text: None,

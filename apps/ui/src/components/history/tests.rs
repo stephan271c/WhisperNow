@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
-use whispernow_api::{
-    AppStateDto, DeleteHistoryEntryRequest, EntryId, EntryStatus, HistoryCursor, HistoryEntry,
-    HistoryFilter, HistoryPage, HistoryPageRequest, PhaseDto, SettingsView, UtcMillis,
+use whispernow_domain::ipc::{AppState, Phase, SettingsView};
+use whispernow_domain::{
+    EntryId, EntryStatus, HistoryCursor, HistoryEntry, HistoryFilter, HistoryPage,
+    HistoryPageRequest, UtcMillis,
 };
 
 use super::format::group_by_day;
@@ -16,7 +17,7 @@ const HOUR: i64 = 3_600_000;
 
 /// The page with a fixed clock, wired to the fake desktop.
 #[component]
-fn Surface(management_state: ManagementState, snapshot: AppStateDto, probe: Probe) -> Element {
+fn Surface(management_state: ManagementState, snapshot: AppState, probe: Probe) -> Element {
     let state = use_signal(move || {
         let mut state = UiState::default();
         state.hydrate(snapshot);
@@ -34,7 +35,7 @@ fn history_page(management_state: ManagementState) -> Page {
             Surface,
             SurfaceProps {
                 management_state,
-                snapshot: snapshot(PhaseDto::Idle),
+                snapshot: snapshot(Phase::Idle),
                 probe,
             },
         )
@@ -42,7 +43,7 @@ fn history_page(management_state: ManagementState) -> Page {
 }
 
 /// A pasted dictation of 1:15 with kept audio, cleaned up from its transcript.
-fn entry(id: u64, created_at: UtcMillis) -> HistoryEntry {
+fn entry(id: i64, created_at: UtcMillis) -> HistoryEntry {
     HistoryEntry {
         created_at,
         duration_millis: Some(75_000),
@@ -93,7 +94,7 @@ fn rows_group_by_the_viewers_local_day() {
             })
             .collect::<Vec<_>>()
     };
-    let named = |groups: &[(&str, &[u64])]| {
+    let named = |groups: &[(&str, &[i64])]| {
         groups
             .iter()
             .map(|(label, ids)| ((*label).to_owned(), ids.to_vec()))
@@ -266,8 +267,8 @@ fn deleting_an_entry_or_the_history_requires_confirmation() {
     page.click("history-delete-7-confirm");
     assert_eq!(fake::commands(), ["delete_history_entry"]);
     assert_eq!(
-        fake::requests::<DeleteHistoryEntryRequest>("delete_history_entry"),
-        [DeleteHistoryEntryRequest { id: EntryId(7) }]
+        fake::requests::<EntryId>("delete_history_entry"),
+        [EntryId(7)]
     );
     fake::answer("delete_history_entry", Ok(()));
     page.settle();
@@ -333,12 +334,11 @@ fn storage_unavailability_replaces_the_list_with_a_reload() {
     let mut management = ManagementState::default();
     management.fail_history_refresh(
         &HistoryFilter::default(),
-        Some(&whispernow_api::ApiErrorDto {
-            category: whispernow_api::ErrorCategoryDto::General,
+        &whispernow_domain::ipc::AppError {
+            category: whispernow_domain::ipc::ErrorCategory::General,
             code: "history_unavailable".to_owned(),
             summary: "History storage is unavailable".to_owned(),
-            recovery: None,
-        }),
+        },
     );
     let mut page = history_page(management);
     let html = page.html();
@@ -361,12 +361,11 @@ fn a_search_that_cannot_run_explains_itself_in_place_of_stale_rows() {
     let filter = management.history_filter.clone();
     management.fail_history_refresh(
         &filter,
-        Some(&whispernow_api::ApiErrorDto {
-            category: whispernow_api::ErrorCategoryDto::General,
+        &whispernow_domain::ipc::AppError {
+            category: whispernow_domain::ipc::ErrorCategory::General,
             code: "text_too_large".to_owned(),
             summary: "This search is too long. Shorten it and try again.".to_owned(),
-            recovery: None,
-        }),
+        },
     );
     assert!(management.notice.is_none(), "no page-wide notice");
 
@@ -424,8 +423,8 @@ fn production_controls_send_typed_commands() {
         ["delete_history_entry"]
     );
     assert_eq!(
-        fake::requests::<DeleteHistoryEntryRequest>("delete_history_entry"),
-        [DeleteHistoryEntryRequest { id: EntryId(7) }]
+        fake::requests::<EntryId>("delete_history_entry"),
+        [EntryId(7)]
     );
     assert_eq!(
         sent(&["history-clear", "history-clear-confirm"]),

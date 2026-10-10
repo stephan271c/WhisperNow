@@ -3,8 +3,8 @@ use std::fs;
 use rusqlite::Connection;
 use serde_json::json;
 use whispernow_domain::{
-    EntryStatus, HistoryFilter, HistoryLimit, HistoryPageRequest, ModelId, NewHistoryEntry,
-    UtcMillis,
+    EntryStatus, ErrorCategory, HistoryFilter, HistoryLimit, HistoryPageRequest, ModelId,
+    NewHistoryEntry, UtcMillis,
 };
 
 use super::SqliteHistoryRepository;
@@ -315,7 +315,21 @@ fn an_entry_with_an_unknown_status_fails_to_load() {
         .expect("database")
         .execute("UPDATE entries SET status = 'lost'", [])
         .expect("unknown status");
-    assert!(fixture.open().get(stored.id).is_err());
+    let error = fixture.open().get(stored.id).expect_err("unknown status");
+    assert_eq!(error.category, ErrorCategory::General);
+}
+
+#[test]
+fn a_failed_open_reports_history_unavailable() {
+    let fixture = Fixture::new();
+    let database = fixture.paths.history_database_file();
+    fs::create_dir_all(database.parent().expect("database directory")).expect("directory");
+    fs::write(database, "not a SQLite database").expect("invalid database");
+    let Err(error) = SqliteHistoryRepository::open(&fixture.paths) else {
+        panic!("the database cannot be opened")
+    };
+    assert_eq!(error.category, ErrorCategory::HistoryUnavailable);
+    assert_eq!(error.summary, "Transcription history is unavailable");
 }
 
 #[test]

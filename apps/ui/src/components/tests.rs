@@ -1,21 +1,22 @@
 use dioxus::prelude::*;
-use whispernow_api::{
-    ApiErrorDto, AppStateDto, ClearDataCategory, ClearDataRequest, ClearDataResult,
-    ClearDataResultItemDto, DataLocationDto, ErrorCategoryDto, HistoryLimit, ListModelsResponse,
-    LlmProvider, MicrophoneTestResponse, ModelAvailability, ModelDto, ModelId, ModelStateDto,
-    PhaseDto, ProviderSettings, Rating, RecordingMode, SaveSettingsResponse, Settings,
-    SettingsView, SetupCheckpoint, SetupStateView, SetupStep, Shortcut, ShortcutKey,
-    ShortcutModifier, SpeechBenchmark, TranscriptResponse, UpdateSettingsRequest,
-    VocabularyReplacement, WerSource,
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{
+    AppState, ClearDataItem, ClearDataResult, DataLocation, ErrorCategory, MicrophoneTestResponse,
+    ModelState, ModelSummary, Phase, SaveSettingsResponse, SettingsView, SetupStateView,
+};
+use whispernow_domain::{
+    ClearDataCategory, HistoryLimit, LlmProvider, ModelAvailability, ModelId, ProviderSettings,
+    Rating, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
+    ShortcutModifier, SpeechBenchmark, VocabularyReplacement, WerSource,
 };
 
-use crate::client::{ClientError, fake};
+use crate::client::fake;
 use crate::components::ui::Tone;
 use crate::test_support::{Page, Probe, focused, label_in_name_violations, snapshot, tag, text};
 use crate::{AppShell, ManagementState, NoticeScope, UiState};
 
 #[component]
-fn Shell(snapshot: AppStateDto, management: ManagementState, probe: Probe) -> Element {
+fn Shell(snapshot: AppState, management: ManagementState, probe: Probe) -> Element {
     let state = use_signal(move || {
         let mut state = UiState::default();
         state.hydrate(snapshot);
@@ -26,7 +27,7 @@ fn Shell(snapshot: AppStateDto, management: ManagementState, probe: Probe) -> El
     rsx! { AppShell {} }
 }
 
-pub(super) fn shell(snapshot: AppStateDto, management: ManagementState) -> Page {
+pub(super) fn shell(snapshot: AppState, management: ManagementState) -> Page {
     Page::new(|probe| {
         VirtualDom::new_with_props(
             Shell,
@@ -94,7 +95,7 @@ fn current_links(html: &str) -> usize {
 
 #[test]
 fn home_is_the_first_page_and_shows_the_setup_checklist_without_redirecting() {
-    let mut page = shell(snapshot(PhaseDto::Idle), unfinished_setup());
+    let mut page = shell(snapshot(Phase::Idle), unfinished_setup());
     let html = page.html();
 
     assert_eq!(text(&html, "page-heading"), "Home", "no redirect to setup");
@@ -131,14 +132,14 @@ fn home_is_the_first_page_and_shows_the_setup_checklist_without_redirecting() {
         "continuing setup moves focus to its heading"
     );
 
-    let page = shell(snapshot(PhaseDto::Idle), loaded());
+    let page = shell(snapshot(Phase::Idle), loaded());
     let html = page.html();
     assert!(tag(&html, "setup-checklist").is_none(), "setup is complete");
 }
 
 #[test]
 fn sidebar_links_mark_one_current_page_and_move_focus_to_its_heading() {
-    let mut page = shell(snapshot(PhaseDto::Idle), loaded());
+    let mut page = shell(snapshot(Phase::Idle), loaded());
     let html = page.html();
     assert!(
         tag(&html, "nav-settings-general").is_none(),
@@ -198,7 +199,7 @@ fn sidebar_links_mark_one_current_page_and_move_focus_to_its_heading() {
 
 #[test]
 fn notices_announce_by_severity_and_appear_beside_the_page_that_hosts_them() {
-    let mut page = shell(snapshot(PhaseDto::Idle), loaded());
+    let mut page = shell(snapshot(Phase::Idle), loaded());
     let mut management = page.context().management;
     for (severity, role) in [
         (Tone::Info, "status"),
@@ -261,7 +262,7 @@ fn notices_announce_by_severity_and_appear_beside_the_page_that_hosts_them() {
 
 #[test]
 fn test_microphone_runs_once_and_shows_the_measured_level() {
-    let mut page = shell(snapshot(PhaseDto::Idle), loaded());
+    let mut page = shell(snapshot(Phase::Idle), loaded());
     page.click("test-microphone");
     let mut management = page.context().management;
     assert_eq!(
@@ -292,7 +293,7 @@ fn test_microphone_runs_once_and_shows_the_measured_level() {
 
 #[test]
 fn disabled_controls_explain_why_in_visible_text() {
-    let mut dictating = snapshot(PhaseDto::Idle);
+    let mut dictating = snapshot(Phase::Idle);
     dictating.phase = crate::test_support::RECORDING;
     let page = shell(dictating, loaded());
     let html = page.html();
@@ -310,8 +311,8 @@ fn disabled_controls_explain_why_in_visible_text() {
 
 #[test]
 fn a_problem_on_home_links_to_the_page_that_fixes_it() {
-    let mut failed = snapshot(PhaseDto::Idle);
-    failed.model_state = ModelStateDto::Failed;
+    let mut failed = snapshot(Phase::Idle);
+    failed.model_state = ModelState::Failed;
     let mut page = shell(failed, loaded());
     let html = page.html();
     let status = tag(&html, "home-status").expect("status");
@@ -330,9 +331,10 @@ fn a_problem_on_home_links_to_the_page_that_fixes_it() {
 
 #[test]
 fn a_cleanup_failure_on_home_opens_ai_cleanup_settings() {
-    let mut failed = snapshot(PhaseDto::Idle);
-    failed.error = Some(ApiErrorDto::new(
-        ErrorCategoryDto::Cleanup,
+    let mut failed = snapshot(Phase::Idle);
+    failed.model_state = ModelState::Failed;
+    failed.error = Some(AppError::new(
+        ErrorCategory::Cleanup,
         "cleanup_failed",
         "AI cleanup was unavailable, so the transcript was kept as recognized",
     ));
@@ -350,14 +352,8 @@ fn a_cleanup_failure_on_home_opens_ai_cleanup_settings() {
 
 #[test]
 fn the_latest_transcript_can_be_copied_from_home() {
-    let mut transcribed = snapshot(PhaseDto::Idle);
-    transcribed.last_transcript = Some(TranscriptResponse {
-        raw_text: "raw".to_owned(),
-        final_text: "Meet on Thursday".to_owned(),
-        text_output_status: None,
-        cleanup_failed: false,
-        history_save_failed: false,
-    });
+    let mut transcribed = snapshot(Phase::Idle);
+    transcribed.last_transcript = Some("Meet on Thursday".to_owned());
     let mut page = shell(transcribed, loaded());
     let html = page.html();
     assert_eq!(text(&html, "latest-transcript"), "Meet on Thursday");
@@ -378,17 +374,14 @@ fn open(page: &mut Page, ids: &[&str]) {
 
 /// Every settings change sent to the desktop so far.
 fn sent_settings() -> Vec<Settings> {
-    fake::requests::<UpdateSettingsRequest>("update_settings")
-        .into_iter()
-        .map(|request| request.settings)
-        .collect()
+    fake::requests::<Settings>("update_settings")
 }
 
-pub(super) fn model(id: &str, name: &str, availability: ModelAvailability) -> ModelDto {
-    ModelDto {
+pub(super) fn model(id: &str, name: &str, availability: ModelAvailability) -> ModelSummary {
+    ModelSummary {
         id: ModelId::new(id).expect("fixture model id"),
         display_name: name.to_owned(),
-        family: whispernow_api::ModelFamily::Whisper,
+        family: whispernow_domain::ModelFamily::Whisper,
         availability,
         languages: vec!["en".to_owned()],
         size_bytes: 75_000_000,
@@ -418,25 +411,23 @@ fn configured() -> ManagementState {
         settings,
         warnings: Vec::new(),
     });
-    management.install_models(ListModelsResponse {
-        models: vec![
-            model(
-                "sherpa-onnx-whisper-tiny",
-                "Tiny",
-                ModelAvailability::Downloaded,
-            ),
-            model(
-                "sherpa-onnx-whisper-base",
-                "Base",
-                ModelAvailability::Downloaded,
-            ),
-            model(
-                "sherpa-onnx-whisper-small",
-                "Small",
-                ModelAvailability::NotInstalled,
-            ),
-        ],
-    });
+    management.install_models(vec![
+        model(
+            "sherpa-onnx-whisper-tiny",
+            "Tiny",
+            ModelAvailability::Downloaded,
+        ),
+        model(
+            "sherpa-onnx-whisper-base",
+            "Base",
+            ModelAvailability::Downloaded,
+        ),
+        model(
+            "sherpa-onnx-whisper-small",
+            "Small",
+            ModelAvailability::NotInstalled,
+        ),
+    ]);
     management
 }
 
@@ -460,7 +451,7 @@ fn the_ai_cleanup_page_saves_api_keys_during_recording() {
     assert!(!save.contains(" disabled="), "{save}");
 
     page.click("save-credential");
-    let requests = fake::requests::<whispernow_api::SetApiKeyRequest>("set_api_key");
+    let requests = fake::requests::<whispernow_domain::ipc::SetApiKeyRequest>("set_api_key");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].provider, LlmProvider::OpenAi);
     assert_eq!(requests[0].key.expose_secret(), "sk-test");
@@ -489,8 +480,8 @@ fn a_settings_toggle_is_disabled_during_recording_and_sends_nothing() {
             .contains("aria-checked=\"false\"")
     );
 
-    page.publish(whispernow_api::EventPayload::StateChanged {
-        state: snapshot(PhaseDto::Idle),
+    page.publish(whispernow_domain::ipc::EventPayload::StateChanged {
+        state: snapshot(Phase::Idle),
     });
     assert!(
         !tag(&page.html(), "start-minimized")
@@ -558,7 +549,7 @@ fn settings_controls_on_each_blocked_page_are_disabled() {
 
 #[test]
 fn a_settings_toggle_saves_once_and_a_refusal_restores_it_with_the_error_beside_it() {
-    let mut page = shell(snapshot(PhaseDto::Idle), loaded());
+    let mut page = shell(snapshot(Phase::Idle), loaded());
     open(&mut page, &["nav-settings"]);
     let html = page.html();
     assert!(
@@ -600,7 +591,7 @@ fn a_settings_toggle_saves_once_and_a_refusal_restores_it_with_the_error_beside_
 
 #[test]
 fn text_fields_save_when_committed_not_on_each_keystroke() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
     for typed in ["g", "gp", "gpt-4", "gpt-4o"] {
         page.fire("provider-model", "input", typed);
@@ -625,7 +616,7 @@ fn text_fields_save_when_committed_not_on_each_keystroke() {
 
 #[test]
 fn deleting_a_downloaded_model_needs_a_confirmation() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let deletes = || fake::count("delete_model");
     let html = page.html();
@@ -652,7 +643,7 @@ fn deleting_a_downloaded_model_needs_a_confirmation() {
 
 #[test]
 fn a_cancelled_model_delete_sends_nothing() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(
         &mut page,
         &[
@@ -669,7 +660,7 @@ fn a_cancelled_model_delete_sends_nothing() {
 
 #[test]
 fn every_settings_control_names_itself_with_its_visible_label() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings"]);
     for section in SETTINGS_PAGES {
         open(&mut page, &[section]);
@@ -681,7 +672,7 @@ fn every_settings_control_names_itself_with_its_visible_label() {
 
 #[test]
 fn repeated_controls_name_the_row_they_act_on() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-vocabulary"]);
     let html = page.html();
     for (source, replacement) in [("teh", "the"), ("whisper now", "WhisperNow")] {
@@ -700,7 +691,7 @@ fn repeated_controls_name_the_row_they_act_on() {
 
 #[test]
 fn a_new_vocabulary_rule_is_added_with_enter() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-vocabulary"]);
     page.fire("vocabulary-source", "input", "recieve");
     page.fire("vocabulary-replacement", "input", "receive");
@@ -719,7 +710,7 @@ fn a_new_vocabulary_rule_is_added_with_enter() {
 
 #[test]
 fn typed_text_survives_a_refused_or_failed_save_until_the_user_reverts() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
     let management = page.context().management;
 
@@ -780,11 +771,11 @@ fn a_refused_provider_keeps_its_fields_shown_and_is_asked_for_again_once_edited(
         settings,
         warnings: Vec::new(),
     });
-    let mut page = shell(snapshot(PhaseDto::Idle), management);
+    let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
     let management = page.context().management;
     let saved = |settings: Settings| {
-        Ok::<_, ClientError>(SaveSettingsResponse {
+        Ok::<_, AppError>(SaveSettingsResponse {
             settings: SettingsView {
                 settings,
                 warnings: Vec::new(),
@@ -797,11 +788,11 @@ fn a_refused_provider_keeps_its_fields_shown_and_is_asked_for_again_once_edited(
     assert_eq!(sent_settings()[0].llm_provider, LlmProvider::Anthropic);
     fake::answer(
         "update_settings",
-        Err::<(), _>(ClientError::Api(ApiErrorDto::new(
-            ErrorCategoryDto::General,
+        Err::<(), _>(AppError::new(
+            ErrorCategory::General,
             "invalid_settings",
             "AI cleanup needs a model for Anthropic",
-        ))),
+        )),
     );
     page.settle();
     let html = page.html();
@@ -839,9 +830,9 @@ fn a_refused_provider_keeps_its_fields_shown_and_is_asked_for_again_once_edited(
     assert!(tag(&html, "provider-name-error").is_none());
 }
 
-fn cleanup_model(id: &str, name: &str, availability: ModelAvailability) -> ModelDto {
-    ModelDto {
-        family: whispernow_api::ModelFamily::Cleanup,
+fn cleanup_model(id: &str, name: &str, availability: ModelAvailability) -> ModelSummary {
+    ModelSummary {
+        family: whispernow_domain::ModelFamily::Cleanup,
         languages: Vec::new(),
         recommended: false,
         ..model(id, name, availability)
@@ -863,39 +854,37 @@ fn local_cleanup(small: &str, large: &str, pack: &str) -> ManagementState {
         settings,
         warnings: Vec::new(),
     });
-    management.install_models(ListModelsResponse {
-        models: vec![
-            model(
-                "sherpa-onnx-whisper-base",
-                "Base",
-                ModelAvailability::Downloaded,
-            ),
-            cleanup_model(
-                small,
-                "Local cleanup model (LFM2.5 350M)",
-                ModelAvailability::Downloaded,
-            ),
-            cleanup_model(
-                large,
-                "Local cleanup model (MiniCPM5 1B)",
-                ModelAvailability::Downloaded,
-            ),
-            ModelDto {
-                family: whispernow_api::ModelFamily::CudaPack,
-                ..cleanup_model(
-                    pack,
-                    "NVIDIA CUDA for cleanup models",
-                    ModelAvailability::NotInstalled,
-                )
-            },
-        ],
-    });
+    management.install_models(vec![
+        model(
+            "sherpa-onnx-whisper-base",
+            "Base",
+            ModelAvailability::Downloaded,
+        ),
+        cleanup_model(
+            small,
+            "Local cleanup model (LFM2.5 350M)",
+            ModelAvailability::Downloaded,
+        ),
+        cleanup_model(
+            large,
+            "Local cleanup model (MiniCPM5 1B)",
+            ModelAvailability::Downloaded,
+        ),
+        ModelSummary {
+            family: whispernow_domain::ModelFamily::CudaPack,
+            ..cleanup_model(
+                pack,
+                "NVIDIA CUDA for cleanup models",
+                ModelAvailability::NotInstalled,
+            )
+        },
+    ]);
     management
 }
 
 #[test]
 fn speech_models_show_speed_and_accuracy_as_bars() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
     assert!(html.contains("aria-label=\"Speed: 5 of 5\""), "{html}");
@@ -916,7 +905,7 @@ fn speed_and_accuracy_bars_explain_themselves_on_hover() {
         wer_source: WerSource::Estimated,
         speed: 55.6,
     });
-    let mut page = shell(snapshot(PhaseDto::Idle), management);
+    let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
     assert!(
@@ -935,7 +924,7 @@ fn one_language_is_named_and_several_open_as_a_list_by_name() {
     let mut management = configured();
     management.models[0].languages = vec!["en".to_owned()];
     management.models[1].languages = ["uk", "de", "en", "xx"].map(str::to_owned).to_vec();
-    let mut page = shell(snapshot(PhaseDto::Idle), management);
+    let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
     assert!(html.contains("<span>English</span>"), "{html}");
@@ -955,7 +944,7 @@ fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() 
             .speech_models()
             .all(|model| model.id.as_str() != PACK)
     );
-    let mut page = shell(snapshot(PhaseDto::Idle), management);
+    let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
     assert!(
@@ -996,7 +985,7 @@ fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() 
 
 #[test]
 fn choosing_a_cleanup_source_picks_its_first_provider_and_shows_its_fields() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
     let html = page.html();
     assert!(
@@ -1020,7 +1009,7 @@ fn choosing_a_cleanup_source_picks_its_first_provider_and_shows_its_fields() {
 
 #[test]
 fn the_recording_shortcut_switches_between_hold_and_toggle() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-general"]);
     let html = page.html();
     assert!(
@@ -1040,7 +1029,7 @@ fn the_recording_shortcut_switches_between_hold_and_toggle() {
 
 #[test]
 fn deleting_a_rule_names_it_and_moves_focus_to_its_neighbour() {
-    let mut page = shell(snapshot(PhaseDto::Idle), configured());
+    let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-vocabulary"]);
     for id in ["vocabulary-rule-1", "vocabulary-add-form"] {
         page.mount(id);
@@ -1077,7 +1066,7 @@ fn deleting_a_rule_names_it_and_moves_focus_to_its_neighbour() {
 
 #[test]
 fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
-    let mut page = shell(snapshot(PhaseDto::Idle), loaded());
+    let mut page = shell(snapshot(Phase::Idle), loaded());
     open(
         &mut page,
         &["nav-settings", "nav-settings-privacy", "preview-clear-data"],
@@ -1086,9 +1075,9 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
     assert_eq!(fake::commands(), ["get_permissions", "data_locations"]);
     fake::answer(
         "data_locations",
-        Ok(vec![DataLocationDto {
+        Ok(vec![DataLocation {
             category: ClearDataCategory::History,
-            path: "/data/history.sqlite3".to_owned(),
+            path: "/data/history.sqlite3".into(),
         }]),
     );
     page.settle();
@@ -1098,16 +1087,14 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
     assert_eq!(fake::count("clear_data"), 0, "the first press only asks");
     open(&mut page, &["execute-clear-data-confirm"]);
     assert_eq!(
-        fake::requests::<ClearDataRequest>("clear_data"),
-        [ClearDataRequest {
-            categories: ClearDataCategory::ALL.to_vec(),
-        }]
+        fake::requests::<Vec<ClearDataCategory>>("clear_data"),
+        [ClearDataCategory::ALL.to_vec()]
     );
 
     fake::answer(
         "clear_data",
         Ok(ClearDataResult {
-            items: vec![ClearDataResultItemDto {
+            items: vec![ClearDataItem {
                 category: ClearDataCategory::History,
                 path: "/data/history.sqlite3".to_owned(),
                 deleted: true,
@@ -1135,7 +1122,7 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
 
 #[test]
 fn a_decorated_window_keeps_the_native_frame_and_no_drag_region() {
-    let page = shell(snapshot(PhaseDto::Idle), ManagementState::default());
+    let page = shell(snapshot(Phase::Idle), ManagementState::default());
     let html = page.html();
 
     assert!(!html.contains("custom-chrome"), "{html}");

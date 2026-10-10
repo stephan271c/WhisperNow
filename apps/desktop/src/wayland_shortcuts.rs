@@ -704,7 +704,7 @@ mod tests {
     fn binding(id: u32) -> ShortcutBinding {
         ShortcutBinding {
             id: ShortcutId(id),
-            ..crate::shortcuts::binding(&whispernow_api::Shortcut::default())
+            ..crate::shortcuts::binding(&whispernow_domain::Shortcut::default())
         }
     }
 

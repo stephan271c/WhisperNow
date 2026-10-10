@@ -1,13 +1,12 @@
 use std::sync::{Arc, Mutex, MutexGuard};
+use whispernow_domain::AppError;
 
-use whispernow_api::{
-    ApiErrorDto, ClearApiKeyRequest, ErrorCategoryDto, LlmProvider, SetApiKeyRequest,
-    SettingsError, SettingsView, SetupStateView,
-};
 use whispernow_core::{
     audio::{AudioDeviceChoice, AudioDeviceId, AudioInput},
     llm::LlmProviderConfig,
 };
+use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest, SettingsView, SetupStateView};
+use whispernow_domain::{LlmProvider, SettingsError};
 use whispernow_domain::{
     ModelId, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, WindowGeometry,
 };
@@ -28,21 +27,14 @@ pub(super) struct SettingsTransaction<'a> {
 
 impl SettingsTransaction<'_> {
     /// A file that could not be read is reported once here.
-    pub(super) fn load(&self) -> Result<Settings, ApiErrorDto> {
-        let loaded = self.coordinator.persistence.load().map_err(|error| {
-            ApiErrorDto::new(ErrorCategoryDto::General, &error.code, &error.summary)
-        });
+    pub(super) fn load(&self) -> Result<Settings, AppError> {
+        let loaded = self.coordinator.persistence.load();
         self.coordinator.report_notice();
         loaded
     }
 
-    pub(super) fn save(&self, settings: &Settings) -> Result<(), ApiErrorDto> {
-        self.coordinator
-            .persistence
-            .save(settings)
-            .map_err(|error| {
-                ApiErrorDto::new(ErrorCategoryDto::General, &error.code, &error.summary)
-            })
+    pub(super) fn save(&self, settings: &Settings) -> Result<(), AppError> {
+        self.coordinator.persistence.save(settings)
     }
 }
 
@@ -141,11 +133,11 @@ impl SettingsCoordinator {
 
     fn warn(&self, code: &str, summary: &str) {
         self.state
-            .publish_error(ApiErrorDto::new(ErrorCategoryDto::General, code, summary));
+            .publish_error(AppError::new(ErrorCategory::General, code, summary));
     }
 
     /// Provider configurations in the snapshot carry no API key.
-    pub(super) fn recording_settings(&self) -> Result<RecordingSettings, ApiErrorDto> {
+    pub(super) fn recording_settings(&self) -> Result<RecordingSettings, AppError> {
         let settings = self.transaction().load()?;
         let cleanup = cleanup_plan(&settings);
         let (model_id, input_device) = (settings.model_id.clone(), settings.input_device.clone());
@@ -155,7 +147,7 @@ impl SettingsCoordinator {
     /// The snapshot a first-run test dictation records with: the model and microphone setup
     /// has chosen so far, or the saved ones once setup has finished. It never runs AI cleanup,
     /// so the test never reaches a provider.
-    pub(super) fn setup_test_settings(&self) -> Result<RecordingSettings, ApiErrorDto> {
+    pub(super) fn setup_test_settings(&self) -> Result<RecordingSettings, AppError> {
         let settings = self.transaction().load()?;
         let (model_id, input_device) = if settings.first_run_complete {
             (settings.model_id.clone(), settings.input_device.clone())
@@ -166,11 +158,11 @@ impl SettingsCoordinator {
         Ok(recording(settings, model_id, input_device, None))
     }
 
-    pub(crate) fn get(&self) -> Result<SettingsView, ApiErrorDto> {
+    pub(crate) fn get(&self) -> Result<SettingsView, AppError> {
         Ok(SettingsView::new(&self.transaction().load()?))
     }
 
-    pub(crate) fn save_window_geometry(&self, geometry: WindowGeometry) -> Result<(), ApiErrorDto> {
+    pub(crate) fn save_window_geometry(&self, geometry: WindowGeometry) -> Result<(), AppError> {
         let transaction = self.transaction();
         let mut settings = transaction.load()?;
         if settings.window_geometry == Some(geometry) {
@@ -188,7 +180,7 @@ impl SettingsCoordinator {
         &self,
         mut edited: Settings,
         audio: &dyn AudioInput,
-    ) -> Result<(Settings, SettingsView), ApiErrorDto> {
+    ) -> Result<(Settings, SettingsView), AppError> {
         let transaction = self.transaction();
         let before = transaction.load()?;
         edited.model_id.clone_from(&before.model_id);
@@ -207,17 +199,14 @@ impl SettingsCoordinator {
         Ok((before, SettingsView::new(&edited)))
     }
 
-    pub(crate) fn set_api_key(
-        &self,
-        request: &SetApiKeyRequest,
-    ) -> Result<SettingsView, ApiErrorDto> {
+    pub(crate) fn set_api_key(&self, request: &SetApiKeyRequest) -> Result<SettingsView, AppError> {
         let transaction = self.transaction();
         let mut settings = transaction.load()?;
         self.persistence
             .store_api_key(request.provider, &request.key)
             .map_err(|_| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::General,
+                AppError::new(
+                    ErrorCategory::General,
                     "credential_store_unavailable",
                     "The OS credential store is unavailable, so the API key was not saved",
                 )
@@ -228,28 +217,23 @@ impl SettingsCoordinator {
         Ok(SettingsView::new(&settings))
     }
 
-    pub(crate) fn clear_api_key(
-        &self,
-        request: ClearApiKeyRequest,
-    ) -> Result<SettingsView, ApiErrorDto> {
+    pub(crate) fn clear_api_key(&self, request: LlmProvider) -> Result<SettingsView, AppError> {
         let transaction = self.transaction();
         let mut settings = transaction.load()?;
-        self.persistence
-            .delete_api_key(request.provider)
-            .map_err(|_| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::General,
-                    "credential_store_unavailable",
-                    "The OS credential store is unavailable, so the API key was not removed",
-                )
-            })?;
-        settings.api_keys.remove(&request.provider);
+        self.persistence.delete_api_key(request).map_err(|_| {
+            AppError::new(
+                ErrorCategory::General,
+                "credential_store_unavailable",
+                "The OS credential store is unavailable, so the API key was not removed",
+            )
+        })?;
+        settings.api_keys.remove(&request);
         transaction.save(&settings)?;
         self.state.publish();
         Ok(SettingsView::new(&settings))
     }
 
-    pub(crate) fn get_setup_state(&self) -> Result<SetupStateView, ApiErrorDto> {
+    pub(crate) fn get_setup_state(&self) -> Result<SetupStateView, AppError> {
         let settings = self.transaction().load()?;
         Ok(SetupStateView {
             first_run_complete: settings.first_run_complete,
@@ -261,11 +245,11 @@ impl SettingsCoordinator {
         &self,
         checkpoint: SetupCheckpoint,
         models: &ModelStore,
-    ) -> Result<SetupStateView, ApiErrorDto> {
+    ) -> Result<SetupStateView, AppError> {
         let transaction = self.transaction();
         if self.state.lock().setup_complete {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            return Err(AppError::new(
+                ErrorCategory::General,
                 "setup_already_complete",
                 "Setup has already finished",
             ));
@@ -276,8 +260,8 @@ impl SettingsCoordinator {
             .iter()
             .any(|entry| entry.definition.id == checkpoint.model_id)
         {
-            return Err(ApiErrorDto::new(
-                ErrorCategoryDto::Model,
+            return Err(AppError::new(
+                ErrorCategory::Model,
                 "unknown_model",
                 "The model is not supported",
             ));
@@ -295,12 +279,12 @@ impl SettingsCoordinator {
     /// Starts first-run setup again from its first step. The checkpoint begins
     /// with the saved choices, and the saved settings stay in effect until setup
     /// finishes again.
-    pub(crate) fn restart_setup(&self) -> Result<SetupStateView, ApiErrorDto> {
+    pub(crate) fn restart_setup(&self) -> Result<SetupStateView, AppError> {
         {
             let state = self.state.lock();
             if !state.setup_complete {
-                return Err(ApiErrorDto::new(
-                    ErrorCategoryDto::General,
+                return Err(AppError::new(
+                    ErrorCategory::General,
                     "setup_incomplete",
                     "Finish the remaining setup steps first",
                 ));
@@ -328,11 +312,11 @@ impl SettingsCoordinator {
 }
 
 /// A settings rule an edit broke, worded for the control that made it.
-pub(crate) fn settings_error(error: &SettingsError) -> ApiErrorDto {
-    ApiErrorDto::new(
-        ErrorCategoryDto::General,
+pub(crate) fn settings_error(error: &SettingsError) -> AppError {
+    AppError::new(
+        ErrorCategory::General,
         "invalid_settings",
-        &error.to_string(),
+        error.to_string(),
     )
 }
 
@@ -367,14 +351,14 @@ pub(super) fn device_choice(selected: Option<&str>) -> AudioDeviceChoice {
 pub(super) fn require_connected_device(
     audio: &dyn AudioInput,
     selected: Option<&str>,
-) -> Result<(), ApiErrorDto> {
+) -> Result<(), AppError> {
     let choice = device_choice(selected);
     if choice == AudioDeviceChoice::SystemDefault {
         return Ok(());
     }
     let devices = audio.list_input_devices().map_err(|_| {
-        ApiErrorDto::new(
-            ErrorCategoryDto::Audio,
+        AppError::new(
+            ErrorCategory::Audio,
             "audio_devices",
             "Audio input devices could not be listed",
         )
@@ -382,8 +366,8 @@ pub(super) fn require_connected_device(
     if devices.iter().any(|device| device.choice == choice) {
         Ok(())
     } else {
-        Err(ApiErrorDto::new(
-            ErrorCategoryDto::Audio,
+        Err(AppError::new(
+            ErrorCategory::Audio,
             "audio_device_missing",
             "Choose an available microphone",
         ))
@@ -412,7 +396,7 @@ fn provider_config(settings: &Settings) -> Option<LlmProviderConfig> {
     }
     let provider_settings = settings.provider_settings(provider);
     let model = provider.request_model(&provider_settings.model);
-    let endpoint = provider_settings.api_base;
+    let endpoint = provider_settings.api_base.clone();
     if model.is_empty() || (provider == LlmProvider::Custom && endpoint.is_none()) {
         return None;
     }
@@ -428,10 +412,8 @@ fn provider_config(settings: &Settings) -> Option<LlmProviderConfig> {
 mod tests {
     use std::{fs, sync::Arc};
 
-    use whispernow_api::{
-        ApiKey, ClearApiKeyRequest, LlmProvider, SetApiKeyRequest, ThemePreference,
-        VocabularyReplacement,
-    };
+    use whispernow_domain::ipc::SetApiKeyRequest;
+    use whispernow_domain::{ApiKey, LlmProvider, ThemePreference, VocabularyReplacement};
     use whispernow_platform::{AppPaths, MemoryCredentialStore, SettingsStore};
 
     use whispernow_domain::WindowGeometry;
@@ -477,7 +459,7 @@ mod tests {
             state.last_error.as_ref().map(|error| error.code.clone())
         }
 
-        fn set_key(&self, secret: &str) -> Result<(), whispernow_api::ApiErrorDto> {
+        fn set_key(&self, secret: &str) -> Result<(), whispernow_domain::ipc::AppError> {
             self.settings
                 .set_api_key(&SetApiKeyRequest {
                     provider: LlmProvider::OpenAi,
@@ -628,9 +610,7 @@ mod tests {
 
         fixture
             .settings
-            .clear_api_key(ClearApiKeyRequest {
-                provider: LlmProvider::OpenAi,
-            })
+            .clear_api_key(LlmProvider::OpenAi)
             .expect("clear key");
         assert_eq!(fixture.stored_key(), None);
         assert!(
@@ -655,9 +635,7 @@ mod tests {
         assert_eq!(error.code, "credential_store_unavailable");
         let error = fixture
             .settings
-            .clear_api_key(ClearApiKeyRequest {
-                provider: LlmProvider::OpenAi,
-            })
+            .clear_api_key(LlmProvider::OpenAi)
             .expect_err("clearing needs the store");
         assert_eq!(error.code, "credential_store_unavailable");
 

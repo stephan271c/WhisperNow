@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
+use whispernow_domain::AppError;
 
-use whispernow_api::{ApiErrorDto, ErrorCategoryDto, PhaseDto, RecoveryActionDto};
+use whispernow_domain::ipc::{ErrorCategory, Phase};
 
 use crate::tests::{recording, snapshot};
 
@@ -35,13 +36,12 @@ impl OverlayWindow for FakeWindow {
     }
 }
 
-fn failed(recovery: RecoveryActionDto) -> PhaseDto {
-    PhaseDto::Error {
-        error: ApiErrorDto {
-            category: ErrorCategoryDto::Output,
+fn failed(category: ErrorCategory) -> Phase {
+    Phase::Error {
+        error: AppError {
+            category,
             code: "paste_failed".to_owned(),
             summary: "The text was not pasted; copy it instead".to_owned(),
-            recovery: Some(recovery),
         },
     }
 }
@@ -56,9 +56,9 @@ fn a_dictation_shows_the_window_once_until_it_ends() {
     let (overlay, window) = overlay(true);
     for phase in [
         recording(),
-        PhaseDto::Processing { cleaning_up: false },
-        PhaseDto::Processing { cleaning_up: true },
-        PhaseDto::Idle,
+        Phase::Processing { cleaning_up: false },
+        Phase::Processing { cleaning_up: true },
+        Phase::Idle,
     ] {
         overlay.observe(&snapshot(phase));
     }
@@ -69,9 +69,9 @@ fn a_dictation_shows_the_window_once_until_it_ends() {
 fn a_failure_stays_until_the_phase_leaves_it() {
     let (overlay, window) = overlay(true);
     overlay.observe(&snapshot(recording()));
-    overlay.observe(&snapshot(failed(RecoveryActionDto::CopyManually)));
+    overlay.observe(&snapshot(failed(ErrorCategory::Output)));
     assert_eq!(window.calls(), ["show"]);
-    overlay.observe(&snapshot(PhaseDto::Idle));
+    overlay.observe(&snapshot(Phase::Idle));
     assert_eq!(window.calls(), ["show", "hide"]);
 }
 
@@ -79,10 +79,10 @@ fn a_failure_stays_until_the_phase_leaves_it() {
 fn native_wayland_notifies_each_failure_once_instead_of_showing_a_window() {
     let (overlay, window) = overlay(false);
     overlay.observe(&snapshot(recording()));
-    overlay.observe(&snapshot(failed(RecoveryActionDto::CopyManually)));
-    overlay.observe(&snapshot(failed(RecoveryActionDto::CopyManually)));
-    overlay.observe(&snapshot(PhaseDto::Idle));
-    overlay.observe(&snapshot(failed(RecoveryActionDto::Retry)));
+    overlay.observe(&snapshot(failed(ErrorCategory::Output)));
+    overlay.observe(&snapshot(failed(ErrorCategory::Output)));
+    overlay.observe(&snapshot(Phase::Idle));
+    overlay.observe(&snapshot(failed(ErrorCategory::General)));
     assert_eq!(
         window.calls(),
         [
@@ -96,17 +96,17 @@ fn native_wayland_notifies_each_failure_once_instead_of_showing_a_window() {
 fn visibility_policy_covers_every_phase() {
     for (phase, window, wayland) in [
         (
-            PhaseDto::Idle,
+            Phase::Idle,
             OverlayPresentation::None,
             OverlayPresentation::None,
         ),
         (
-            PhaseDto::Paused,
+            Phase::Paused,
             OverlayPresentation::None,
             OverlayPresentation::None,
         ),
         (
-            PhaseDto::Updating,
+            Phase::Updating,
             OverlayPresentation::None,
             OverlayPresentation::None,
         ),
@@ -116,12 +116,12 @@ fn visibility_policy_covers_every_phase() {
             OverlayPresentation::None,
         ),
         (
-            PhaseDto::Processing { cleaning_up: false },
+            Phase::Processing { cleaning_up: false },
             OverlayPresentation::Window,
             OverlayPresentation::None,
         ),
         (
-            failed(RecoveryActionDto::Retry),
+            failed(ErrorCategory::General),
             OverlayPresentation::Window,
             OverlayPresentation::Notification,
         ),

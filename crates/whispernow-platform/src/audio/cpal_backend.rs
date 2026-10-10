@@ -15,7 +15,7 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use whispernow_core::audio::{
-    AudioDeviceChoice, AudioDeviceDescriptor, AudioDeviceId, AudioInputError,
+    AudioDeviceChoice, AudioDeviceDescriptor, AudioDeviceId, AudioInputError, TARGET_SAMPLE_RATE,
 };
 
 const CALLBACK_BUFFER_POOL: usize = 8;
@@ -225,7 +225,7 @@ fn negotiate_input_config(
 }
 
 fn preferred_sample_rate(range: &SupportedStreamConfigRange) -> u32 {
-    for preferred in [48_000, 44_100, 16_000] {
+    for preferred in [48_000, 44_100, TARGET_SAMPLE_RATE] {
         if range.min_sample_rate() <= preferred && preferred <= range.max_sample_rate() {
             return preferred;
         }

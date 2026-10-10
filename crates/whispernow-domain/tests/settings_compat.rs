@@ -107,7 +107,7 @@ fn python_settings_import_picks_known_fields() {
     assert_eq!(settings.llm_provider, LlmProvider::Ollama);
     assert_eq!(
         settings.provider_settings(LlmProvider::Ollama),
-        ProviderSettings {
+        &ProviderSettings {
             model: "llama3.2".to_owned(),
             api_base: ProviderEndpoint::parse("http://localhost:11434").ok(),
             saved_models: vec!["llama3.2".to_owned(), "qwen2.5".to_owned()],
@@ -176,7 +176,7 @@ fn python_settings_import_moves_keys_out_and_reads_the_older_layouts() {
     );
     assert_eq!(
         settings.provider_settings(LlmProvider::OpenRouter),
-        ProviderSettings {
+        &ProviderSettings {
             model: "anthropic/claude-3-sonnet".to_owned(),
             api_base: ProviderEndpoint::parse("https://openrouter.ai/api/v1").ok(),
             saved_models: Vec::new(),

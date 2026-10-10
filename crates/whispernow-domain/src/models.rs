@@ -48,6 +48,16 @@ impl ModelId {
     }
 
     #[must_use]
+    pub fn cuda_pack() -> Self {
+        Self(CUDA_PACK_ID.to_owned())
+    }
+
+    #[must_use]
+    pub fn is_cuda_pack(&self) -> bool {
+        self.0 == CUDA_PACK_ID
+    }
+
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -117,7 +127,6 @@ pub enum DownloadPhase {
 #[serde(rename_all = "snake_case")]
 pub enum ModelAvailability {
     Downloaded,
-    Bundled,
     NotInstalled,
 }
 

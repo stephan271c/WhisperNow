@@ -175,3 +175,13 @@ fn setup_shortcuts_are_ready_when_the_recording_shortcut_is_valid() {
     checkpoint.recording_shortcut = shortcut(&[], "space");
     assert!(!checkpoint.shortcuts_ready());
 }
+
+#[test]
+fn credentials_serialize_only_when_requested_and_debug_is_redacted() {
+    let key = ApiKey::new("write-only-secret").expect("a key");
+    assert_eq!(
+        serde_json::to_value(&key).expect("serialize credential mutation"),
+        serde_json::json!("write-only-secret")
+    );
+    assert!(!format!("{key:?}").contains("write-only-secret"));
+}

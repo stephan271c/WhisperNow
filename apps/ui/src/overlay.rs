@@ -1,9 +1,8 @@
 //! The desktop decides the phase and the window's visibility; this model only adds what
 //! arrives between snapshots: the smoothed level history and the elapsed time.
 
-use whispernow_api::{
-    ApiErrorDto, AppStateDto, ErrorCategoryDto, PhaseDto, RecordingMode, RecoveryActionDto,
-};
+use whispernow_domain::RecordingMode;
+use whispernow_domain::ipc::{AppState, Phase, RecordingTrigger};
 
 pub(crate) const LEVEL_BARS: usize = 9;
 
@@ -35,35 +34,9 @@ pub enum OverlayPhase {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OverlayAction {
-    CopyTranscript,
-    OpenHistory,
-    OpenSettings,
-    OpenAiCleanup,
-}
-
-impl OverlayAction {
-    #[must_use]
-    pub fn for_error(error: &ApiErrorDto) -> Option<Self> {
-        match (error.recovery, error.category) {
-            (_, ErrorCategoryDto::Cleanup) => Some(Self::OpenAiCleanup),
-            (Some(RecoveryActionDto::CopyManually), _) => Some(Self::CopyTranscript),
-            (
-                Some(
-                    RecoveryActionDto::OpenSettings
-                    | RecoveryActionDto::InstallModel
-                    | RecoveryActionDto::ChooseDevice,
-                ),
-                _,
-            )
-            | (
-                _,
-                ErrorCategoryDto::Permission | ErrorCategoryDto::Model | ErrorCategoryDto::Audio,
-            ) => Some(Self::OpenSettings),
-            (_, ErrorCategoryDto::Recognition) => Some(Self::OpenHistory),
-            _ => None,
-        }
-    }
+pub struct OverlayAction {
+    pub label: &'static str,
+    pub route: crate::Route,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -81,23 +54,31 @@ pub struct OverlayView {
 }
 
 impl OverlayView {
-    pub fn install(&mut self, snapshot: &AppStateDto) {
+    pub fn install(&mut self, snapshot: &AppState) {
         let phase = match &snapshot.phase {
-            PhaseDto::Idle | PhaseDto::Paused | PhaseDto::Updating => OverlayPhase::Hidden,
-            PhaseDto::Recording { mode, session } => {
+            Phase::Idle | Phase::Paused | Phase::Updating => OverlayPhase::Hidden,
+            Phase::Recording { trigger, session } => {
                 if self.session != Some(*session) {
                     self.session = Some(*session);
                     self.levels = [0.0; LEVEL_BARS];
                     self.levels_seen = false;
                     self.elapsed_ms = 0;
                 }
-                OverlayPhase::Listening { mode: *mode }
+                OverlayPhase::Listening {
+                    mode: match trigger {
+                        RecordingTrigger::Hold => RecordingMode::Hold,
+                        RecordingTrigger::Toggle | RecordingTrigger::SetupTest => {
+                            RecordingMode::Toggle
+                        }
+                    },
+                }
             }
-            PhaseDto::Processing { cleaning_up: false } => OverlayPhase::Transcribing,
-            PhaseDto::Processing { cleaning_up: true } => OverlayPhase::CleaningUp,
-            PhaseDto::Error { error } => OverlayPhase::Failed {
+            Phase::Processing { cleaning_up: false } => OverlayPhase::Transcribing,
+            Phase::Processing { cleaning_up: true } => OverlayPhase::CleaningUp,
+            Phase::Error { error } => OverlayPhase::Failed {
                 message: error.summary.clone(),
-                action: OverlayAction::for_error(error),
+                action: crate::presentation::category_fix(error.category)
+                    .map(|(label, route)| OverlayAction { label, route }),
             },
         };
         if phase != self.phase {

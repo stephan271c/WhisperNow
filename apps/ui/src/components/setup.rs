@@ -3,10 +3,11 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use whispernow_api::{
-    ModelAvailability, ModelDto, PermissionDto, PermissionKindDto, PermissionStatusDto,
-    RecoveryActionDto, SetupCheckpoint, SetupStep, SetupTestResultDto, Shortcut, ShortcutKey,
-    ShortcutModifier,
+use whispernow_domain::ipc::{
+    ModelSummary, Permission, PermissionKind, PermissionStatus, SetupTestResult,
+};
+use whispernow_domain::{
+    ModelAvailability, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
 };
 
 use super::actions::{DisabledReason, use_actions};
@@ -249,18 +250,18 @@ fn PermissionsStep() -> Element {
 }
 
 #[component]
-fn PermissionCard(permission: PermissionDto, blocked: bool) -> Element {
+fn PermissionCard(permission: Permission, blocked: bool) -> Element {
     let actions = use_actions();
     let kind = permission.kind;
     let slug = permission_slug(kind);
     let (title, purpose) = permission_text(kind);
     let asking = actions.permission_requested(kind);
-    let granted = permission.status == PermissionStatusDto::Granted;
+    let granted = permission.status == PermissionStatus::Granted;
     let (state, icon) = match permission.status {
-        PermissionStatusDto::Granted => ("Granted", IconName::CheckCircle),
-        PermissionStatusDto::NotDetermined => ("Waiting", IconName::Info),
-        PermissionStatusDto::Denied => ("Not allowed", IconName::Warning),
-        PermissionStatusDto::Unavailable => ("Not available", IconName::AlertCircle),
+        PermissionStatus::Granted => ("Granted", IconName::CheckCircle),
+        PermissionStatus::NotDetermined => ("Waiting", IconName::Info),
+        PermissionStatus::Denied => ("Not allowed", IconName::Warning),
+        PermissionStatus::Unavailable => ("Not available", IconName::AlertCircle),
     };
     rsx! { li { id: "permission-{slug}", class: "permission-card {status_class(permission.status)}",
         div { class: "permission-text",
@@ -283,7 +284,7 @@ fn PermissionCard(permission: PermissionDto, blocked: bool) -> Element {
                     disabled: blocked || asking,
                     aria_describedby: blocked.then_some("permission-disabled-reason"),
                     onclick: move |_| actions.request_permission(kind),
-                    if permission.status == PermissionStatusDto::Denied { "Ask again" } else { "Grant" }
+                    if permission.status == PermissionStatus::Denied { "Ask again" } else { "Grant" }
                 }
             }
             if !granted && permission.can_open_settings {
@@ -298,45 +299,45 @@ fn PermissionCard(permission: PermissionDto, blocked: bool) -> Element {
     } }
 }
 
-const fn permission_slug(kind: PermissionKindDto) -> &'static str {
+const fn permission_slug(kind: PermissionKind) -> &'static str {
     match kind {
-        PermissionKindDto::Microphone => "microphone",
-        PermissionKindDto::Accessibility => "accessibility",
-        PermissionKindDto::GlobalShortcuts => "global-shortcuts",
-        PermissionKindDto::RemoteDesktop => "remote-desktop",
-        PermissionKindDto::PasteSupport => "paste-support",
+        PermissionKind::Microphone => "microphone",
+        PermissionKind::Accessibility => "accessibility",
+        PermissionKind::GlobalShortcuts => "global-shortcuts",
+        PermissionKind::RemoteDesktop => "remote-desktop",
+        PermissionKind::PasteSupport => "paste-support",
     }
 }
 
-const fn status_class(status: PermissionStatusDto) -> &'static str {
+const fn status_class(status: PermissionStatus) -> &'static str {
     match status {
-        PermissionStatusDto::Granted => "granted",
-        PermissionStatusDto::NotDetermined => "waiting",
-        PermissionStatusDto::Denied => "denied",
-        PermissionStatusDto::Unavailable => "unavailable",
+        PermissionStatus::Granted => "granted",
+        PermissionStatus::NotDetermined => "waiting",
+        PermissionStatus::Denied => "denied",
+        PermissionStatus::Unavailable => "unavailable",
     }
 }
 
 /// Each permission's name and why dictation needs it, in plain words.
-const fn permission_text(kind: PermissionKindDto) -> (&'static str, &'static str) {
+const fn permission_text(kind: PermissionKind) -> (&'static str, &'static str) {
     match kind {
-        PermissionKindDto::Microphone => (
+        PermissionKind::Microphone => (
             "Microphone",
             "Lets WhisperNow hear you while you dictate. Audio is processed on this computer.",
         ),
-        PermissionKindDto::Accessibility => (
+        PermissionKind::Accessibility => (
             "Accessibility",
             "Lets WhisperNow paste the text into the app you are using.",
         ),
-        PermissionKindDto::GlobalShortcuts => (
+        PermissionKind::GlobalShortcuts => (
             "Recording shortcuts",
             "Lets your recording shortcut work in every app. Your desktop asks once whether to allow it.",
         ),
-        PermissionKindDto::RemoteDesktop => (
+        PermissionKind::RemoteDesktop => (
             "Typing into other apps",
             "Lets WhisperNow press the paste keys for you. Your desktop asks once to allow input control; nothing on your screen is shared.",
         ),
-        PermissionKindDto::PasteSupport => (
+        PermissionKind::PasteSupport => (
             "Pasting into other apps",
             "Checks that WhisperNow can press the paste keys in the app you are using.",
         ),
@@ -344,30 +345,27 @@ const fn permission_text(kind: PermissionKindDto) -> (&'static str, &'static str
 }
 
 /// What to do when a permission is refused or cannot be asked for.
-const fn permission_help(
-    kind: PermissionKindDto,
-    status: PermissionStatusDto,
-) -> Option<&'static str> {
+const fn permission_help(kind: PermissionKind, status: PermissionStatus) -> Option<&'static str> {
     match (kind, status) {
-        (_, PermissionStatusDto::Granted) => None,
-        (PermissionKindDto::Accessibility, _) => Some(
+        (_, PermissionStatus::Granted) => None,
+        (PermissionKind::Accessibility, _) => Some(
             "Open Settings, turn on WhisperNow under Privacy & Security › Accessibility, then come back.",
         ),
-        (PermissionKindDto::Microphone, PermissionStatusDto::Denied) => {
+        (PermissionKind::Microphone, PermissionStatus::Denied) => {
             Some("Allow WhisperNow in your system's microphone privacy settings, then ask again.")
         }
-        (PermissionKindDto::PasteSupport, _) => Some(
+        (PermissionKind::PasteSupport, _) => Some(
             "This X server does not accept simulated keys (XTEST), so WhisperNow copies the text for you to paste.",
         ),
         (
-            PermissionKindDto::GlobalShortcuts | PermissionKindDto::RemoteDesktop,
-            PermissionStatusDto::Unavailable,
+            PermissionKind::GlobalShortcuts | PermissionKind::RemoteDesktop,
+            PermissionStatus::Unavailable,
         ) => Some(
             "Your desktop does not offer this. Shortcuts work while WhisperNow is focused, and the text is copied for you to paste.",
         ),
         (
-            PermissionKindDto::GlobalShortcuts | PermissionKindDto::RemoteDesktop,
-            PermissionStatusDto::Denied,
+            PermissionKind::GlobalShortcuts | PermissionKind::RemoteDesktop,
+            PermissionStatus::Denied,
         ) => Some("Ask again and choose Allow when your desktop asks."),
         _ => None,
     }
@@ -422,7 +420,7 @@ fn ModelStep(selected: String) -> Element {
 }
 
 #[component]
-fn ModelChoice(model: ModelDto, checked: bool) -> Element {
+fn ModelChoice(model: ModelSummary, checked: bool) -> Element {
     let actions = use_actions();
     let mut management = use_context::<UiContext>().management;
     let id = model.id.clone();
@@ -462,7 +460,7 @@ fn ModelChoice(model: ModelDto, checked: bool) -> Element {
                 }
             } else {
                 span { class: "pill",
-                    if model.availability == ModelAvailability::Bundled { "Included" } else { "Installed" }
+                    "Installed"
                 }
             }
         }
@@ -590,7 +588,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
             }
             div { id: "setup-test-result", class: "setup-test-result", role: "status", aria_live: "polite",
                 if let Some(SetupTest::Finished(outcome)) = test {
-                    SetupTestResult { outcome }
+                    TestDictationResult { outcome }
                 }
             }
         }
@@ -598,49 +596,46 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
 }
 
 #[component]
-fn SetupTestResult(outcome: SetupTestResultDto) -> Element {
+fn TestDictationResult(outcome: SetupTestResult) -> Element {
     match outcome {
-        SetupTestResultDto::Heard { text } => rsx! {
+        SetupTestResult::Heard { text } => rsx! {
             Banner { tone: Tone::Success, title: "Perfect",
                 p { class: "transcript-text", "“{text}”" }
             }
         },
-        SetupTestResultDto::NoSpeech => rsx! {
+        SetupTestResult::NoSpeech => rsx! {
             Banner { tone: Tone::Warning, title: "No speech detected",
                 p { "Speak a little louder or closer to the microphone, or choose another microphone, then test again." }
             }
         },
-        SetupTestResultDto::Cancelled => rsx! {
+        SetupTestResult::Cancelled => rsx! {
             Banner { tone: Tone::Info, title: "Test cancelled — try again",
                 p { "Start the test when you're ready, then say a sentence." }
             }
         },
-        SetupTestResultDto::Failed { error } => rsx! {
+        SetupTestResult::Failed { error } => rsx! {
             Banner { tone: Tone::Error, title: "{error.summary}",
-                p { "{recovery_fix(error.recovery)}" }
+                p { "{setup_fix(error.category)}" }
             }
         },
     }
 }
 
-/// How to fix a failed test, from the desktop's recovery hint.
-const fn recovery_fix(recovery: Option<RecoveryActionDto>) -> &'static str {
-    match recovery {
-        Some(RecoveryActionDto::ChooseDevice) => {
-            "Choose another microphone above, then test again."
-        }
-        Some(RecoveryActionDto::InstallModel) => {
+fn setup_fix(category: whispernow_domain::ErrorCategory) -> &'static str {
+    use whispernow_domain::ErrorCategory;
+    let fix = crate::presentation::category_fix(category);
+    match category {
+        ErrorCategory::Audio => "Choose another microphone above, then test again.",
+        ErrorCategory::Model | ErrorCategory::Recognition => {
             "Go back to the model step and download the speech model."
         }
-        Some(RecoveryActionDto::OpenSettings) => {
+        ErrorCategory::Permission => {
             "Check WhisperNow's permissions in your system settings, then test again."
         }
-        Some(
-            RecoveryActionDto::Retry
-            | RecoveryActionDto::CopyManually
-            | RecoveryActionDto::CheckDestination,
-        )
-        | None => "Test again. If it keeps failing, restart WhisperNow.",
+        _ => fix.map_or(
+            "Test again. If it keeps failing, restart WhisperNow.",
+            |(label, _)| label,
+        ),
     }
 }
 

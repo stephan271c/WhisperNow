@@ -7,6 +7,6 @@ use whispernow_domain::{ModelAvailability, ModelDefinition};
 pub struct ResolvedModel {
     pub definition: ModelDefinition,
     pub root: PathBuf,
-    /// Downloaded or bundled; never `NotInstalled`.
+    /// Never `NotInstalled`.
     pub availability: ModelAvailability,
 }

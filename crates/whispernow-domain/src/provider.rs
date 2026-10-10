@@ -112,7 +112,8 @@ pub enum EndpointError {
 /// fragment.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ProviderEndpoint {
-    url: String,
+    text: String,
+    url: Url,
 }
 
 impl ProviderEndpoint {
@@ -134,24 +135,31 @@ impl ProviderEndpoint {
             return Err(EndpointError::Invalid);
         }
         require_secure_transport(&parsed)?;
-        Ok(Self { url: value })
+        Ok(Self {
+            text: value,
+            url: parsed,
+        })
     }
 
     #[must_use]
     pub fn expose_url(&self) -> &str {
+        &self.text
+    }
+
+    #[must_use]
+    pub fn url(&self) -> &Url {
         &self.url
     }
 
     /// The scheme, host and port, which say where a transcript goes without its path.
     #[must_use]
     pub fn origin(&self) -> String {
-        Url::parse(&self.url)
-            .map_or_else(|_| String::new(), |url| url.origin().ascii_serialization())
+        self.url.origin().ascii_serialization()
     }
 
     #[must_use]
     pub fn is_on_this_computer(&self) -> bool {
-        Url::parse(&self.url).is_ok_and(|url| is_loopback(&url) == Some(true))
+        is_loopback(&self.url) == Some(true)
     }
 }
 
@@ -175,7 +183,7 @@ fn require_secure_transport(url: &Url) -> Result<(), EndpointError> {
 
 impl Serialize for ProviderEndpoint {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.url)
+        serializer.serialize_str(&self.text)
     }
 }
 

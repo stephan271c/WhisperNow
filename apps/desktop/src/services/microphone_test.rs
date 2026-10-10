@@ -6,12 +6,13 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use whispernow_domain::AppError;
 
-use whispernow_api::{ApiErrorDto, ErrorCategoryDto, MicrophoneTestResponse};
 use whispernow_core::audio::{
     AudioBlock, AudioDeviceChoice, AudioEvent, AudioInput, AudioObservation, AudioSink,
-    AudioSinkError, StartCaptureRequest,
+    AudioSinkError,
 };
+use whispernow_domain::ipc::{ErrorCategory, MicrophoneTestResponse};
 
 use super::capture_start_error;
 
@@ -76,10 +77,10 @@ pub(super) fn run(
     device: AudioDeviceChoice,
     duration: Duration,
     cancelled: impl Fn() -> bool,
-) -> Result<MicrophoneTestResponse, ApiErrorDto> {
+) -> Result<MicrophoneTestResponse, AppError> {
     let probe = Arc::new(LevelProbe::default());
     let capture = audio
-        .start(StartCaptureRequest { device }, probe.clone())
+        .start(device, probe.clone())
         .map_err(|error| capture_start_error(&error))?;
     let started = Instant::now();
     while started.elapsed() < duration && !cancelled() && !probe.with(|state| state.lost) {
@@ -88,8 +89,8 @@ pub(super) fn run(
     let _stopped = capture.stop().is_ok();
     let state = probe.with(std::mem::take);
     if state.lost {
-        return Err(ApiErrorDto::new(
-            ErrorCategoryDto::Audio,
+        return Err(AppError::new(
+            ErrorCategory::Audio,
             "microphone_lost",
             "The microphone stopped during the test. Check that it is connected and try again.",
         ));
@@ -109,7 +110,7 @@ mod tests {
 
     use whispernow_core::audio::{
         AudioCapture, AudioDeviceChoice, AudioDeviceDescriptor, AudioInput, AudioInputError,
-        AudioLevelSummary, AudioObservation, AudioSink, StartCaptureRequest,
+        AudioLevelSummary, AudioObservation, AudioSink,
     };
 
     use super::run;
@@ -136,7 +137,7 @@ mod tests {
 
         fn start(
             &self,
-            _request: StartCaptureRequest,
+            _device: AudioDeviceChoice,
             sink: Arc<dyn AudioSink>,
         ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
             self.calls.lock().expect("calls").push("start");
@@ -201,6 +202,6 @@ mod tests {
             || false,
         )
         .expect_err("permission denied");
-        assert_eq!(error.code, "microphone_permission_denied");
+        assert_eq!(error.category, whispernow_domain::ErrorCategory::Permission);
     }
 }

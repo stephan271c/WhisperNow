@@ -4,10 +4,10 @@
 //! actions this platform allows for each.
 
 use std::sync::atomic::{AtomicU8, Ordering};
+use whispernow_domain::{AppError, ErrorCategory};
 
-use whispernow_api::{
-    ApiErrorDto, PasteHelperSetupDto, PermissionDto, PermissionKindDto, PermissionStatusDto,
-    PermissionsResponse,
+use whispernow_domain::ipc::{
+    PasteHelperSetup, Permission, PermissionKind, PermissionStatus, PermissionsResponse,
 };
 
 use super::NativeServices;
@@ -32,7 +32,7 @@ pub(crate) enum WaylandPaste {
     /// The `RemoteDesktop` portal, with its consent and the command that sets
     /// the helper up instead.
     Portal {
-        consent: PermissionStatusDto,
+        consent: PermissionStatus,
         setup_command: Option<String>,
     },
 }
@@ -41,12 +41,12 @@ pub(crate) enum WaylandPaste {
 /// needs are asked for, so a probe never touches another platform's API.
 pub(crate) trait PermissionProbe {
     fn session(&self) -> PermissionSession;
-    fn microphone(&self) -> PermissionStatusDto;
+    fn microphone(&self) -> PermissionStatus;
     /// Whether macOS trusts the app to send the paste keystroke.
     fn accessibility_trusted(&self) -> bool;
     /// Whether the X server accepts synthetic keystrokes.
     fn paste_injection_available(&self) -> bool;
-    fn global_shortcuts_portal(&self) -> PermissionStatusDto;
+    fn global_shortcuts_portal(&self) -> PermissionStatus;
     fn wayland_paste(&self) -> WaylandPaste;
 }
 
@@ -57,46 +57,46 @@ pub(crate) fn permission_states(probe: &dyn PermissionProbe) -> PermissionsRespo
         session,
         PermissionSession::MacOs | PermissionSession::Windows
     );
-    let mut permissions = vec![PermissionDto {
-        kind: PermissionKindDto::Microphone,
+    let mut permissions = vec![Permission {
+        kind: PermissionKind::Microphone,
         status: probe.microphone(),
         can_request: true,
         can_open_settings: settings_page,
     }];
     let mut paste_helper_setup = None;
     match session {
-        PermissionSession::MacOs => permissions.push(PermissionDto {
-            kind: PermissionKindDto::Accessibility,
+        PermissionSession::MacOs => permissions.push(Permission {
+            kind: PermissionKind::Accessibility,
             // macOS reports only whether the app is trusted; until it is, the
             // user grants it in System Settings.
             status: if probe.accessibility_trusted() {
-                PermissionStatusDto::Granted
+                PermissionStatus::Granted
             } else {
-                PermissionStatusDto::NotDetermined
+                PermissionStatus::NotDetermined
             },
             can_request: false,
             can_open_settings: true,
         }),
         PermissionSession::Windows => {}
-        PermissionSession::X11 => permissions.push(PermissionDto {
-            kind: PermissionKindDto::PasteSupport,
+        PermissionSession::X11 => permissions.push(Permission {
+            kind: PermissionKind::PasteSupport,
             status: if probe.paste_injection_available() {
-                PermissionStatusDto::Granted
+                PermissionStatus::Granted
             } else {
-                PermissionStatusDto::Unavailable
+                PermissionStatus::Unavailable
             },
             can_request: false,
             can_open_settings: false,
         }),
         PermissionSession::Wayland => {
             permissions.push(portal_card(
-                PermissionKindDto::GlobalShortcuts,
+                PermissionKind::GlobalShortcuts,
                 probe.global_shortcuts_portal(),
             ));
             permissions.push(match probe.wayland_paste() {
-                WaylandPaste::Helper => PermissionDto {
-                    kind: PermissionKindDto::PasteSupport,
-                    status: PermissionStatusDto::Granted,
+                WaylandPaste::Helper => Permission {
+                    kind: PermissionKind::PasteSupport,
+                    status: PermissionStatus::Granted,
                     can_request: false,
                     can_open_settings: false,
                 },
@@ -104,10 +104,10 @@ pub(crate) fn permission_states(probe: &dyn PermissionProbe) -> PermissionsRespo
                     consent,
                     setup_command,
                 } => {
-                    paste_helper_setup = Some(PasteHelperSetupDto {
+                    paste_helper_setup = Some(PasteHelperSetup {
                         command: setup_command,
                     });
-                    portal_card(PermissionKindDto::RemoteDesktop, consent)
+                    portal_card(PermissionKind::RemoteDesktop, consent)
                 }
             });
         }
@@ -118,14 +118,14 @@ pub(crate) fn permission_states(probe: &dyn PermissionProbe) -> PermissionsRespo
     }
 }
 
-fn portal_card(kind: PermissionKindDto, status: PermissionStatusDto) -> PermissionDto {
-    PermissionDto {
+fn portal_card(kind: PermissionKind, status: PermissionStatus) -> Permission {
+    Permission {
         kind,
         status,
         // An unavailable portal cannot be asked; a granted one needs no asking.
         can_request: matches!(
             status,
-            PermissionStatusDto::NotDetermined | PermissionStatusDto::Denied
+            PermissionStatus::NotDetermined | PermissionStatus::Denied
         ),
         can_open_settings: false,
     }
@@ -133,7 +133,7 @@ fn portal_card(kind: PermissionKindDto, status: PermissionStatusDto) -> Permissi
 
 pub(super) struct SystemPermissions<'a> {
     pub(super) services: &'a NativeServices,
-    pub(super) global_shortcuts: PermissionStatusDto,
+    pub(super) global_shortcuts: PermissionStatus,
 }
 
 impl PermissionProbe for SystemPermissions<'_> {
@@ -149,7 +149,7 @@ impl PermissionProbe for SystemPermissions<'_> {
         }
     }
 
-    fn microphone(&self) -> PermissionStatusDto {
+    fn microphone(&self) -> PermissionStatus {
         self.services.microphone_access.status()
     }
 
@@ -175,7 +175,7 @@ impl PermissionProbe for SystemPermissions<'_> {
         }
     }
 
-    fn global_shortcuts_portal(&self) -> PermissionStatusDto {
+    fn global_shortcuts_portal(&self) -> PermissionStatus {
         self.global_shortcuts
     }
 
@@ -199,20 +199,20 @@ impl MicrophoneAccess {
     const GRANTED: u8 = 1;
     const DENIED: u8 = 2;
 
-    pub(crate) fn status(&self) -> PermissionStatusDto {
+    pub(crate) fn status(&self) -> PermissionStatus {
         match self.0.load(Ordering::Acquire) {
-            Self::GRANTED => PermissionStatusDto::Granted,
-            Self::DENIED => PermissionStatusDto::Denied,
-            _ => PermissionStatusDto::NotDetermined,
+            Self::GRANTED => PermissionStatus::Granted,
+            Self::DENIED => PermissionStatus::Denied,
+            _ => PermissionStatus::NotDetermined,
         }
     }
 
     /// Records what a capture attempt showed. A failure other than a refused
     /// permission, such as a missing device, says nothing about permission.
-    pub(crate) fn observe<T>(&self, result: &Result<T, ApiErrorDto>) {
+    pub(crate) fn observe<T>(&self, result: &Result<T, AppError>) {
         let observed = match result {
             Ok(_) => Self::GRANTED,
-            Err(error) if error.code == "microphone_permission_denied" => Self::DENIED,
+            Err(error) if error.category == ErrorCategory::Permission => Self::DENIED,
             Err(_) => return,
         };
         self.0.store(observed, Ordering::Release);
@@ -221,12 +221,12 @@ impl MicrophoneAccess {
 
 #[cfg(test)]
 mod tests {
-    use whispernow_api::{
-        ErrorCategoryDto, PermissionKindDto as Kind, PermissionStatusDto as Status,
+    use whispernow_domain::ipc::{
+        ErrorCategory, PermissionKind as Kind, PermissionStatus as Status,
     };
 
     use super::{
-        ApiErrorDto, MicrophoneAccess, PasteHelperSetupDto, PermissionProbe, PermissionSession,
+        AppError, MicrophoneAccess, PasteHelperSetup, PermissionProbe, PermissionSession,
         WaylandPaste, permission_states,
     };
 
@@ -371,7 +371,7 @@ mod tests {
         };
         assert_eq!(
             permission_states(&probe).paste_helper_setup,
-            Some(PasteHelperSetupDto {
+            Some(PasteHelperSetup {
                 command: Some(command)
             })
         );
@@ -398,23 +398,18 @@ mod tests {
 
     #[test]
     fn only_a_capture_result_changes_the_microphone_answer() {
-        let error = |code: &str| ApiErrorDto {
-            category: ErrorCategoryDto::Audio,
-            code: code.to_owned(),
-            summary: String::new(),
-            recovery: None,
-        };
+        let error = |category| AppError::new(category, "fixture", "");
         let access = MicrophoneAccess::default();
         assert_eq!(access.status(), Status::NotDetermined);
-        access.observe(&Err::<(), _>(error("microphone_permission_denied")));
+        access.observe(&Err::<(), _>(error(ErrorCategory::Permission)));
         assert_eq!(access.status(), Status::Denied);
-        access.observe(&Err::<(), _>(error("audio_start")));
+        access.observe(&Err::<(), _>(error(ErrorCategory::Audio)));
         assert_eq!(
             access.status(),
             Status::Denied,
             "a device failure is no answer"
         );
-        access.observe(&Ok::<_, ApiErrorDto>(()));
+        access.observe(&Ok::<_, AppError>(()));
         assert_eq!(access.status(), Status::Granted);
     }
 }

@@ -1,34 +1,28 @@
-use whispernow_api::{
-    ApiErrorDto, ErrorCategoryDto, RecoveryActionDto, SetupTestResultDto, TextOutputStatusDto,
-    TranscriptResponse,
-};
 use whispernow_core::{
+    audio::TARGET_SAMPLE_RATE,
     llm::CleanupFallback,
-    workflow::{
-        BATCH_SAMPLE_RATE_HZ, PipelineFailureKind, PreparedTranscription, has_microphone_audio,
-    },
+    workflow::{PipelineFailureKind, PreparedTranscription, has_microphone_audio},
 };
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{ErrorCategory, Phase, SetupTestResult};
 use whispernow_domain::{EntryStatus, NewHistoryEntry};
 
 use super::{Recording, RecordingTrigger, Worker, capture::CaptureInterruption};
-use crate::services::{
-    output::OutputNotice,
-    state::{CancelReason, Phase},
-};
+use crate::services::{output::OutputNotice, state::CancelReason};
 
 pub(super) enum Outcome {
     Delivered {
-        transcript: TranscriptResponse,
+        transcript: String,
         /// The transcript was not pasted.
-        failure: Option<ApiErrorDto>,
+        failure: Option<AppError>,
         /// The transcript was delivered with a problem worth mentioning.
-        warning: Option<ApiErrorDto>,
+        warning: Option<AppError>,
     },
     /// Setup's test dictation heard this text.
     Heard(String),
     /// Setup's test dictation heard no speech, or no audio at all.
     HeardNothing,
-    Failed(ApiErrorDto),
+    Failed(AppError),
     Cancelled,
 }
 
@@ -46,26 +40,26 @@ impl Worker {
             let next = match outcome {
                 Outcome::Cancelled => {
                     if setup_test {
-                        state.setup_test = Some(SetupTestResultDto::Cancelled);
+                        state.setup_test = Some(SetupTestResult::Cancelled);
                     }
                     Phase::Idle
                 }
                 Outcome::HeardNothing => {
-                    state.setup_test = Some(SetupTestResultDto::NoSpeech);
+                    state.setup_test = Some(SetupTestResult::NoSpeech);
                     Phase::Idle
                 }
                 Outcome::Failed(error) if setup_test => {
-                    state.setup_test = Some(SetupTestResultDto::Failed {
+                    state.setup_test = Some(SetupTestResult::Failed {
                         error: Box::new(error),
                     });
                     Phase::Idle
                 }
                 Outcome::Failed(error) => {
                     state.last_error = Some(error.clone());
-                    Phase::Error(error)
+                    Phase::Error { error }
                 }
                 Outcome::Heard(text) => {
-                    state.setup_test = Some(SetupTestResultDto::Heard { text });
+                    state.setup_test = Some(SetupTestResult::Heard { text });
                     Phase::Idle
                 }
                 Outcome::Delivered {
@@ -75,7 +69,7 @@ impl Worker {
                 } => {
                     state.last_transcript = Some(transcript);
                     state.last_error = failure.clone().or(warning);
-                    failure.map_or(Phase::Idle, Phase::Error)
+                    failure.map_or(Phase::Idle, |error| Phase::Error { error })
                 }
             };
             state.phase = if reason == Some(CancelReason::Pause) {
@@ -111,7 +105,7 @@ impl Worker {
         &self,
         recording: &Recording,
         samples: &[f32],
-        error: ApiErrorDto,
+        error: AppError,
     ) -> Outcome {
         self.keep_untranscribed(
             recording,
@@ -188,7 +182,7 @@ pub(super) fn capture_duration_millis(samples: &[f32]) -> u64 {
     u64::try_from(samples.len())
         .unwrap_or(u64::MAX)
         .saturating_mul(1_000)
-        / u64::from(BATCH_SAMPLE_RATE_HZ)
+        / u64::from(TARGET_SAMPLE_RATE)
 }
 
 pub(super) const fn delivery_failure(notice: OutputNotice) -> Option<&'static str> {
@@ -207,35 +201,21 @@ pub(super) const fn delivery_failure(notice: OutputNotice) -> Option<&'static st
     }
 }
 
-pub(super) const fn text_output_status(notice: OutputNotice) -> TextOutputStatusDto {
-    match notice {
-        OutputNotice::PastedAndRestored => TextOutputStatusDto::PastedAndRestored,
-        OutputNotice::PastedClipboardNotRestored => TextOutputStatusDto::PastedClipboardNotRestored,
-        OutputNotice::RestoreSkippedClipboardChanged => {
-            TextOutputStatusDto::RestoreSkippedClipboardChanged
-        }
-        OutputNotice::PermissionDenied
-        | OutputNotice::CapabilityUnavailable
-        | OutputNotice::PasteFailed => TextOutputStatusDto::PasteFailed,
-        OutputNotice::Cancelled => TextOutputStatusDto::Cancelled,
-    }
-}
-
 /// Why the transcript was not pasted, when it was not and the user did not cancel it.
-pub(super) fn delivery_error(notice: OutputNotice) -> Option<ApiErrorDto> {
+pub(super) fn delivery_error(notice: OutputNotice) -> Option<AppError> {
     match notice {
-        OutputNotice::PermissionDenied => Some(ApiErrorDto::new(
-            ErrorCategoryDto::Permission,
+        OutputNotice::PermissionDenied => Some(AppError::new(
+            ErrorCategory::Settings,
             "text_output_permission_denied",
             "Automatic text output needs desktop accessibility or portal permission. Enable it in system settings, then retry.",
         )),
-        OutputNotice::CapabilityUnavailable => Some(ApiErrorDto::new(
-            ErrorCategoryDto::Output,
+        OutputNotice::CapabilityUnavailable => Some(AppError::new(
+            ErrorCategory::Output,
             "wayland_portal_unavailable",
             "Automatic text output is unavailable because the required desktop portal capability could not be started.",
         )),
-        OutputNotice::PasteFailed => Some(ApiErrorDto::new(
-            ErrorCategoryDto::Output,
+        OutputNotice::PasteFailed => Some(AppError::new(
+            ErrorCategory::Output,
             "paste_failed",
             "The text was not pasted; copy it instead",
         )),
@@ -246,7 +226,7 @@ pub(super) fn delivery_error(notice: OutputNotice) -> Option<ApiErrorDto> {
     }
 }
 
-pub(super) fn cleanup_fallback_warning(prepared: &PreparedTranscription) -> Option<ApiErrorDto> {
+pub(super) fn cleanup_fallback_warning(prepared: &PreparedTranscription) -> Option<AppError> {
     let (code, summary) = match prepared.fallback? {
         CleanupFallback::Cancelled => return None,
         CleanupFallback::ProviderFailed(_)
@@ -257,46 +237,38 @@ pub(super) fn cleanup_fallback_warning(prepared: &PreparedTranscription) -> Opti
             "AI cleanup was unavailable, so the transcript was kept as recognized",
         ),
     };
-    Some(ApiErrorDto {
-        recovery: Some(RecoveryActionDto::OpenSettings),
-        ..ApiErrorDto::new(ErrorCategoryDto::Cleanup, code, summary)
-    })
+    Some(AppError::new(ErrorCategory::Cleanup, code, summary))
 }
 
-pub(super) fn interruption_warning(interruption: CaptureInterruption) -> Option<ApiErrorDto> {
+pub(super) fn interruption_warning(interruption: CaptureInterruption) -> Option<AppError> {
     match interruption {
         CaptureInterruption::MaximumDuration => None,
-        CaptureInterruption::DeviceLost | CaptureInterruption::StreamError => {
-            Some(ApiErrorDto::new(
-                ErrorCategoryDto::Audio,
-                "audio_capture_interrupted",
-                "The microphone stopped during the recording; the audio captured before it stopped was transcribed",
-            ))
-        }
+        CaptureInterruption::DeviceLost | CaptureInterruption::StreamError => Some(AppError::new(
+            ErrorCategory::Audio,
+            "audio_capture_interrupted",
+            "The microphone stopped during the recording; the audio captured before it stopped was transcribed",
+        )),
     }
 }
 
 /// A cancelled pipeline ends without one.
-pub(super) fn pipeline_error(kind: PipelineFailureKind) -> Option<ApiErrorDto> {
+pub(super) fn pipeline_error(kind: PipelineFailureKind) -> Option<AppError> {
     Some(match kind {
         PipelineFailureKind::Cancelled => return None,
-        PipelineFailureKind::NoAudio => ApiErrorDto {
-            recovery: Some(RecoveryActionDto::Retry),
-            ..ApiErrorDto::new(
-                ErrorCategoryDto::Audio,
-                "no_microphone_audio",
-                "No microphone audio was detected; check the selected input and try again.",
-            )
-        },
-        PipelineFailureKind::NoSpeech => ApiErrorDto::new(
-            ErrorCategoryDto::Recognition,
+        PipelineFailureKind::NoAudio => AppError::new(
+            ErrorCategory::Audio,
+            "no_microphone_audio",
+            "No microphone audio was detected; check the selected input and try again.",
+        ),
+        PipelineFailureKind::NoSpeech => AppError::new(
+            ErrorCategory::Recognition,
             "no_speech",
             "No speech was detected; check the microphone and try again.",
         ),
         PipelineFailureKind::RecognitionFailed
         | PipelineFailureKind::EmptyTranscription
-        | PipelineFailureKind::UnknownTokens => ApiErrorDto::new(
-            ErrorCategoryDto::Recognition,
+        | PipelineFailureKind::UnknownTokens => AppError::new(
+            ErrorCategory::Recognition,
             "transcription_failed",
             "Speech recognition failed",
         ),

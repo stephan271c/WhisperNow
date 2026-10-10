@@ -1,14 +1,15 @@
 use dioxus::prelude::*;
-use whispernow_api::{
-    ApiErrorDto, ErrorCategoryDto, EventPayload, MainWindowSectionDto, OpenMainWindowRequest,
-    PhaseDto, RecordingMode, RecoveryActionDto,
+use whispernow_domain::AppError;
+use whispernow_domain::RecordingMode;
+use whispernow_domain::ipc::{
+    ErrorCategory, EventPayload, MainWindowSection, Phase, RecordingTrigger,
 };
 
 use serde_json::Value;
 
 use super::{RecordingBar, meter_bars};
-use crate::client::{ClientError, fake};
-use crate::overlay::{OverlayAction, OverlayPhase, format_elapsed};
+use crate::client::fake;
+use crate::overlay::{OverlayPhase, format_elapsed};
 use crate::test_support::{Page, Probe, focused, snapshot, tag};
 use crate::{AppShell, ManagementState, UiState};
 
@@ -24,7 +25,7 @@ fn Surface(initial_state: UiState, settings: bool, probe: Probe) -> Element {
     }
 }
 
-fn phase_event(phase: PhaseDto) -> EventPayload {
+fn phase_event(phase: Phase) -> EventPayload {
     EventPayload::StateChanged {
         state: snapshot(phase),
     }
@@ -38,44 +39,28 @@ fn level(rms: f32, peak: f32, elapsed_ms: u64) -> EventPayload {
     }
 }
 
-const fn listening(mode: RecordingMode) -> PhaseDto {
-    PhaseDto::Recording { mode, session: 1 }
+const fn listening(mode: RecordingMode) -> Phase {
+    Phase::Recording {
+        trigger: match mode {
+            RecordingMode::Hold => RecordingTrigger::Hold,
+            RecordingMode::Toggle => RecordingTrigger::Toggle,
+        },
+        session: 1,
+    }
 }
 
-const TRANSCRIBING: PhaseDto = PhaseDto::Processing { cleaning_up: false };
+const TRANSCRIBING: Phase = Phase::Processing { cleaning_up: false };
 
-/// A failed dictation whose error leads to `action`.
-fn failed(action: Option<OverlayAction>) -> PhaseDto {
-    let (category, recovery) = match action {
-        None => (ErrorCategoryDto::General, None),
-        Some(OverlayAction::CopyTranscript) => (
-            ErrorCategoryDto::Output,
-            Some(RecoveryActionDto::CopyManually),
-        ),
-        Some(OverlayAction::OpenHistory) => (ErrorCategoryDto::Recognition, None),
-        Some(OverlayAction::OpenSettings) => (
-            ErrorCategoryDto::General,
-            Some(RecoveryActionDto::OpenSettings),
-        ),
-        Some(OverlayAction::OpenAiCleanup) => (
-            ErrorCategoryDto::Cleanup,
-            Some(RecoveryActionDto::OpenSettings),
-        ),
-    };
-    PhaseDto::Error {
-        error: ApiErrorDto {
-            category,
-            code: "fixture".to_owned(),
-            summary: "The microphone stopped responding".to_owned(),
-            recovery,
-        },
+fn failed(category: ErrorCategory) -> Phase {
+    Phase::Error {
+        error: AppError::new(category, "fixture", "The microphone stopped responding"),
     }
 }
 
 /// The overlay in `phase`; a recording has delivered samples when `levels`.
-fn state_with(phase: PhaseDto, levels: bool) -> UiState {
+fn state_with(phase: Phase, levels: bool) -> UiState {
     let mut state = UiState::default();
-    let recording = matches!(phase, PhaseDto::Recording { .. });
+    let recording = matches!(phase, Phase::Recording { .. });
     state.hydrate(snapshot(phase));
     if recording && levels {
         state.apply_event(level(0.0, 0.0, 0));
@@ -83,7 +68,7 @@ fn state_with(phase: PhaseDto, levels: bool) -> UiState {
     state
 }
 
-fn state_in(phase: PhaseDto) -> UiState {
+fn state_in(phase: Phase) -> UiState {
     state_with(phase, true)
 }
 
@@ -140,10 +125,10 @@ const OUTCOME: Expected = Expected {
     meter: false,
 };
 
-fn phase_cases() -> [(PhaseDto, bool, Expected); 10] {
+fn phase_cases() -> [(Phase, bool, Expected); 9] {
     [
         (
-            PhaseDto::Idle,
+            Phase::Idle,
             true,
             Expected {
                 status: "",
@@ -162,6 +147,17 @@ fn phase_cases() -> [(PhaseDto, bool, Expected); 10] {
         ),
         (listening(RecordingMode::Hold), true, CAPTURING),
         (
+            Phase::Recording {
+                trigger: RecordingTrigger::SetupTest,
+                session: 1,
+            },
+            true,
+            Expected {
+                stop: true,
+                ..CAPTURING
+            },
+        ),
+        (
             listening(RecordingMode::Toggle),
             true,
             Expected {
@@ -179,7 +175,7 @@ fn phase_cases() -> [(PhaseDto, bool, Expected); 10] {
             },
         ),
         (
-            PhaseDto::Processing { cleaning_up: true },
+            Phase::Processing { cleaning_up: true },
             true,
             Expected {
                 status: "Cleaning up…",
@@ -187,28 +183,12 @@ fn phase_cases() -> [(PhaseDto, bool, Expected); 10] {
                 ..OUTCOME
             },
         ),
-        (failed(None), true, OUTCOME),
+        (failed(ErrorCategory::General), true, OUTCOME),
         (
-            failed(Some(OverlayAction::CopyTranscript)),
-            true,
-            Expected {
-                action: Some("Copy"),
-                ..OUTCOME
-            },
-        ),
-        (
-            failed(Some(OverlayAction::OpenHistory)),
+            failed(ErrorCategory::Output),
             true,
             Expected {
                 action: Some("Open history"),
-                ..OUTCOME
-            },
-        ),
-        (
-            failed(Some(OverlayAction::OpenSettings)),
-            true,
-            Expected {
-                action: Some("Fix"),
                 ..OUTCOME
             },
         ),
@@ -262,7 +242,7 @@ fn a_failure_is_visible_and_meter_updates_do_not_reannounce_it() {
     assert_eq!(announcement(&before), announcement(&after));
     assert_ne!(before, after, "the meter and timer did update");
 
-    state.apply_event(phase_event(failed(Some(OverlayAction::CopyTranscript))));
+    state.apply_event(phase_event(failed(ErrorCategory::Output)));
     let failed = render(state);
     assert_eq!(
         announcement(&failed),
@@ -356,7 +336,7 @@ fn ordinary_speech_scrolls_in_from_the_right_below_loud_speech() {
 fn a_late_hydration_never_replaces_a_newer_phase() {
     let mut state = UiState::default();
     state.apply_event(phase_event(TRANSCRIBING));
-    state.hydrate(snapshot(PhaseDto::Idle));
+    state.hydrate(snapshot(Phase::Idle));
     assert_eq!(state.overlay.phase, OverlayPhase::Transcribing);
 }
 
@@ -397,9 +377,9 @@ fn last_request(command: &str) -> Value {
 
 #[test]
 fn a_cleanup_failure_in_the_overlay_opens_ai_cleanup_settings() {
-    let phase = PhaseDto::Error {
-        error: ApiErrorDto::new(
-            ErrorCategoryDto::Cleanup,
+    let phase = Phase::Error {
+        error: AppError::new(
+            ErrorCategory::Cleanup,
             "cleanup_failed",
             "AI cleanup was unavailable, so the transcript was kept as recognized",
         ),
@@ -409,13 +389,13 @@ fn a_cleanup_failure_in_the_overlay_opens_ai_cleanup_settings() {
     assert_eq!(fake::commands(), ["open_main_window"]);
     assert_eq!(
         last_request("open_main_window"),
-        serde_json::json!({ "section": "ai_cleanup" })
+        serde_json::json!("ai_cleanup")
     );
 }
 
 #[test]
 fn controls_send_the_overlay_commands_and_wait_for_them() {
-    let open = |section| serde_json::to_value(OpenMainWindowRequest { section }).expect("json");
+    let open = |section| serde_json::to_value(section).expect("json");
     let cases = [
         (
             listening(RecordingMode::Toggle),
@@ -436,28 +416,28 @@ fn controls_send_the_overlay_commands_and_wait_for_them() {
             Value::Null,
         ),
         (
-            failed(None),
+            failed(ErrorCategory::General),
             "overlay-close",
             "dismiss_recording_overlay",
             Value::Null,
         ),
         (
-            failed(Some(OverlayAction::CopyTranscript)),
-            "overlay-action",
-            "copy_last_transcript",
-            Value::Null,
-        ),
-        (
-            failed(Some(OverlayAction::OpenHistory)),
+            failed(ErrorCategory::Output),
             "overlay-action",
             "open_main_window",
-            open(MainWindowSectionDto::History),
+            open(MainWindowSection::History),
         ),
         (
-            failed(Some(OverlayAction::OpenSettings)),
+            failed(ErrorCategory::Recognition),
             "overlay-action",
             "open_main_window",
-            open(MainWindowSectionDto::Settings),
+            open(MainWindowSection::SpeechModels),
+        ),
+        (
+            failed(ErrorCategory::Settings),
+            "overlay-action",
+            "open_main_window",
+            open(MainWindowSection::Settings),
         ),
     ];
     for (phase, target, command, request) in cases {
@@ -482,28 +462,24 @@ fn a_pending_stop_leaves_cancel_and_the_published_failure_usable() {
     assert_eq!(fake::commands(), ["stop_recording", "cancel_recording"]);
     assert!(!enabled(&bar, "overlay-close"), "one cancel at a time");
 
-    show(
-        &mut bar,
-        phase_event(failed(Some(OverlayAction::CopyTranscript))),
-    );
+    show(&mut bar, phase_event(failed(ErrorCategory::Output)));
     assert!(enabled(&bar, "overlay-action"));
     assert!(enabled(&bar, "overlay-close"));
     bar.click("overlay-action");
     assert_eq!(
         fake::commands(),
-        ["stop_recording", "cancel_recording", "copy_last_transcript"]
+        ["stop_recording", "cancel_recording", "open_main_window"]
     );
 }
 
 #[test]
 fn a_late_stop_or_cancel_failure_never_replaces_the_published_outcome() {
     let no_speech = || {
-        Err::<(), _>(ClientError::Api(ApiErrorDto {
-            category: ErrorCategoryDto::Recognition,
+        Err::<(), _>(AppError {
+            category: ErrorCategory::Recognition,
             code: "no_speech".to_owned(),
             summary: "No speech was recognized".to_owned(),
-            recovery: None,
-        }))
+        })
     };
     let fail = |bar: &mut Page, command: &str| {
         bar.act(|actions| {
@@ -522,7 +498,7 @@ fn a_late_stop_or_cancel_failure_never_replaces_the_published_outcome() {
         );
     };
     for command in ["stop_recording", "cancel_recording"] {
-        let mut bar = mount_bar(state_in(failed(Some(OverlayAction::OpenHistory))));
+        let mut bar = mount_bar(state_in(failed(ErrorCategory::Recognition)));
         let published = announced(&bar);
         fail(&mut bar, command);
         assert_eq!(
@@ -565,16 +541,15 @@ fn listening_reads_as_starting_until_the_microphone_delivers_samples() {
 
 #[test]
 fn a_failed_overlay_action_is_announced_until_the_next_phase() {
-    let mut bar = mount_bar(state_in(failed(Some(OverlayAction::CopyTranscript))));
+    let mut bar = mount_bar(state_in(failed(ErrorCategory::Output)));
     bar.click("overlay-action");
     bar.answer(
-        "copy_last_transcript",
-        Err::<(), _>(ClientError::Api(ApiErrorDto {
-            category: ErrorCategoryDto::Output,
-            code: "copy_unavailable".to_owned(),
-            summary: "The transcript could not be copied; open History to copy it".to_owned(),
-            recovery: None,
-        })),
+        "open_main_window",
+        Err::<(), _>(AppError {
+            category: ErrorCategory::Output,
+            code: "history_open_failed".to_owned(),
+            summary: "History could not be opened".to_owned(),
+        }),
     );
     let management = bar.context().management;
     assert_eq!(
@@ -582,10 +557,7 @@ fn a_failed_overlay_action_is_announced_until_the_next_phase() {
         None,
         "the overlay reports its own failures"
     );
-    assert_eq!(
-        announced(&bar),
-        "The transcript could not be copied; open History to copy it"
-    );
+    assert_eq!(announced(&bar), "History could not be opened");
 
     show(&mut bar, phase_event(listening(RecordingMode::Toggle)));
     assert_eq!(announced(&bar), "Starting…");
@@ -594,7 +566,7 @@ fn a_failed_overlay_action_is_announced_until_the_next_phase() {
 #[test]
 fn an_overlay_navigation_request_opens_its_route_and_moves_focus() {
     let mut idle = UiState::default();
-    idle.hydrate(snapshot(PhaseDto::Idle));
+    idle.hydrate(snapshot(Phase::Idle));
     let mut page = Page::new(|probe| {
         VirtualDom::new_with_props(
             Surface,
@@ -616,18 +588,24 @@ fn an_overlay_navigation_request_opens_its_route_and_moves_focus() {
     assert_eq!(focused(), None);
 
     for (section, id, title) in [
-        (MainWindowSectionDto::History, "history", "History"),
+        (MainWindowSection::History, "history", "History"),
         (
-            MainWindowSectionDto::Settings,
+            MainWindowSection::Settings,
             "settings-general",
             "General &#38; Shortcuts",
         ),
+        (MainWindowSection::Audio, "settings-audio", "Audio"),
         (
-            MainWindowSectionDto::AiCleanup,
+            MainWindowSection::SpeechModels,
+            "settings-models",
+            "Speech models",
+        ),
+        (
+            MainWindowSection::AiCleanup,
             "settings-ai-cleanup",
             "AI cleanup",
         ),
-        (MainWindowSectionDto::History, "history", "History"),
+        (MainWindowSection::History, "history", "History"),
     ] {
         page.publish(EventPayload::NavigationRequested { section });
         assert!(selected(&page, id), "{section:?}");

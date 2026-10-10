@@ -1,6 +1,6 @@
-use whispernow_api::{
-    ApiErrorDto, EntryId, ErrorCategoryDto, HistoryEntry, HistoryFilter, HistoryPage,
-};
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::ErrorCategory;
+use whispernow_domain::{EntryId, HistoryEntry, HistoryFilter, HistoryPage};
 
 use super::ManagementState;
 use crate::NoticeScope;
@@ -61,17 +61,13 @@ impl ManagementState {
     }
 
     /// Reports a failed window read made with `filter`, unless the filter has changed since.
-    pub fn fail_history_refresh(&mut self, filter: &HistoryFilter, error: Option<&ApiErrorDto>) {
+    pub fn fail_history_refresh(&mut self, filter: &HistoryFilter, error: &AppError) {
         if *filter != self.history_filter {
             return;
         }
         self.history_refresh_failed = true;
-        let summary = error.map_or_else(
-            || "History could not be loaded".to_owned(),
-            |error| error.summary.clone(),
-        );
-        let unreadable =
-            error.is_some_and(|error| error.category == ErrorCategoryDto::HistoryUnavailable);
+        let summary = error.summary.clone();
+        let unreadable = error.category == ErrorCategory::HistoryUnavailable;
         if !self.history_loaded() || unreadable {
             // Degraded mode: show the reason instead of rows that can no longer be confirmed.
             self.history.clear();

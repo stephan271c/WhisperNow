@@ -8,7 +8,7 @@ pub use level::AudioLevelSummary;
 pub use pipeline::AudioProcessor;
 pub use ports::{
     AudioCapture, AudioDeviceChoice, AudioDeviceDescriptor, AudioDeviceId, AudioEvent, AudioInput,
-    AudioInputError, AudioObservation, AudioSink, AudioSinkError, StartCaptureRequest,
+    AudioInputError, AudioObservation, AudioSink, AudioSinkError,
 };
 pub use processing::{AudioBlock, TARGET_SAMPLE_RATE};
 use processing::{AudioProcessingError, StreamingResampler, convert_interleaved_to_mono};

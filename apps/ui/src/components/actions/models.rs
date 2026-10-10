@@ -1,4 +1,4 @@
-use whispernow_api::ModelId;
+use whispernow_domain::ModelId;
 
 use super::UiActions;
 use crate::client;

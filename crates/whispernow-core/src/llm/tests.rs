@@ -12,13 +12,6 @@ fn config() -> LlmProviderConfig {
     }
 }
 
-fn request<'a>(deterministic_text: &'a str, config: &'a LlmProviderConfig) -> CleanupRequest<'a> {
-    CleanupRequest {
-        deterministic_text,
-        config,
-    }
-}
-
 #[derive(Clone, Copy)]
 enum Behavior {
     Text(&'static str),
@@ -81,12 +74,7 @@ fn fake_response(text: &str, finish_reason: LlmFinishReason) -> LlmResponse {
 async fn clean_up_once(behavior: Behavior, text: &str) -> Result<String, CleanupFallback> {
     let service = FakeService::new([behavior]);
     let config = config();
-    clean_up(
-        &service,
-        request(text, &config),
-        &CancellationToken::default(),
-    )
-    .await
+    clean_up(&service, text, &config, &CancellationToken::default()).await
 }
 
 #[test]
@@ -138,7 +126,8 @@ async fn a_transient_failure_is_retried() {
     let config = config();
     let result = clean_up(
         &service,
-        request("hello world", &config),
+        "hello world",
+        &config,
         &CancellationToken::default(),
     )
     .await;
@@ -152,7 +141,8 @@ async fn transient_failures_are_retried_at_most_twice() {
     let config = config();
     let result = clean_up(
         &service,
-        request("hello world", &config),
+        "hello world",
+        &config,
         &CancellationToken::default(),
     )
     .await;
@@ -175,10 +165,7 @@ async fn cancelling_during_a_call_ends_it_promptly() {
             cancellation.cancel();
         }
     };
-    let (result, ()) = tokio::join!(
-        clean_up(&service, request("hello", &config), &cancellation,),
-        cancel
-    );
+    let (result, ()) = tokio::join!(clean_up(&service, "hello", &config, &cancellation), cancel);
     assert_eq!(result, Err(CleanupFallback::Cancelled));
     assert_eq!(service.calls(), 1);
 }
@@ -274,14 +261,20 @@ fn local_cleanup_request_matches_the_training_golden_fixture() {
             "{name}"
         );
 
-        let decoding = LlmDecoding::local_cleanup(transcript);
+        let LlmDecoding::LocalCleanup {
+            max_output_tokens,
+            draft,
+        } = LlmDecoding::local_cleanup(transcript)
+        else {
+            panic!("local decoding parameters");
+        };
         assert_eq!(
-            decoding.max_output_tokens,
+            Some(max_output_tokens),
             case["max_tokens"].as_u64(),
             "{name}"
         );
         assert_eq!(
-            decoding.draft.as_ref().map(DraftText::as_str),
+            draft.as_ref().map(DraftText::as_str),
             case["draft_text"].as_str(),
             "{name}"
         );
@@ -290,7 +283,7 @@ fn local_cleanup_request_matches_the_training_golden_fixture() {
     assert_eq!(decoding["temperature"], 0.0);
     assert_eq!(
         Some(local::REPEAT_PENALTY),
-        decoding["repeat_penalty"].as_f64()
+        serde_json::from_value::<f32>(decoding["repeat_penalty"].clone()).ok()
     );
     assert_eq!(
         u64::try_from(local::REPEAT_LAST_N).ok(),
@@ -310,7 +303,8 @@ async fn the_local_cleanup_model_gets_only_the_transcript_and_its_own_decoding()
     for config in [&local, &hosted] {
         let result = clean_up(
             &service,
-            request(" hello world ", config),
+            " hello world ",
+            config,
             &CancellationToken::default(),
         )
         .await;
@@ -322,8 +316,8 @@ async fn the_local_cleanup_model_gets_only_the_transcript_and_its_own_decoding()
     assert_eq!(local_prompt.user(), "hello world");
     assert_eq!(
         *local_decoding,
-        LlmDecoding {
-            max_output_tokens: Some(64),
+        LlmDecoding::LocalCleanup {
+            max_output_tokens: 64,
             draft: Some(DraftText("Hello world".to_owned())),
         }
     );

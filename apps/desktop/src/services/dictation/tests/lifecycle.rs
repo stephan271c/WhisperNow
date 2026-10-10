@@ -13,7 +13,7 @@ use crate::{
     },
     tray::TrayController,
 };
-use whispernow_platform::{DataCleaner, LocalCleanupService};
+use whispernow_platform::LocalCleanupService;
 
 struct Registrar;
 
@@ -47,12 +47,12 @@ fn a_failed_tray_pause_does_not_leave_a_settings_warning() {
         .expect("runtime");
     let fixture = Fixture::new();
     let paths = AppPaths::from_base_dirs(
-        fixture._root.path().join("config"),
-        fixture._root.path().join("data"),
+        fixture.root.path().join("config"),
+        fixture.root.path().join("data"),
     );
-    let store = Arc::new(ModelStore::new(paths.clone(), Vec::new()));
+    let store = Arc::new(ModelStore::new(paths.clone()));
     let local_cleanup = Arc::new(LocalCleanupService::new(
-        fixture._root.path().join("llama"),
+        fixture.root.path().join("llama"),
         Arc::new(|_| None),
         Arc::new(|| None),
     ));
@@ -67,7 +67,7 @@ fn a_failed_tray_pause_does_not_leave_a_settings_warning() {
         )),
         state: fixture.state,
         dictation: fixture.dictation,
-        clear_data: DataCleaner::new(paths.clone()),
+        paths: paths.clone(),
         output: Arc::new(OutputCoordinator::native(None)),
         paste_helper_setup_dir: paths.paste_helper_setup_dir(),
         microphone_access: MicrophoneAccess::default(),

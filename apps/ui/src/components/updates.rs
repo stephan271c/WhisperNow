@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use whispernow_api::{ManualUpdatePackageDto, UpdateErrorCodeDto, UpdatePhaseDto};
+use whispernow_domain::ipc::{ManualUpdatePackage, UpdateError, UpdatePhase};
 
 use super::NoticeRegion;
 use super::actions::{DisabledReason, use_actions};
@@ -18,8 +18,8 @@ pub(super) fn AboutPage() -> Element {
         .update_snapshot
         .as_ref()
         .map(|snapshot| snapshot.phase);
-    let checking = phase == Some(UpdatePhaseDto::Checking);
-    let updates_disabled = phase == Some(UpdatePhaseDto::Disabled);
+    let checking = phase == Some(UpdatePhase::Checking);
+    let updates_disabled = phase == Some(UpdatePhase::Disabled);
     rsx! { div { class: "settings-stack",
         Card { aria_labelledby: "about-title",
             h2 { id: "about-title", "WhisperNow" }
@@ -70,13 +70,13 @@ pub(super) fn UpdateStatus() -> Element {
         .as_deref()
         .map_or_else(|| "the latest version".to_owned(), display_version);
     match snapshot.phase {
-        UpdatePhaseDto::Disabled | UpdatePhaseDto::Idle => rsx! {},
-        UpdatePhaseDto::Checking => {
+        UpdatePhase::Disabled | UpdatePhase::Idle => rsx! {},
+        UpdatePhase::Checking => {
             rsx! { section { class: "update-banner", role: "status", aria_live: "polite",
                 h3 { "Checking for updates…" }
             } }
         }
-        UpdatePhaseDto::Downloading => {
+        UpdatePhase::Downloading => {
             let progress = snapshot.progress;
             let downloaded = progress.map_or(0, |progress| progress.downloaded_bytes);
             let total = progress.and_then(|progress| progress.total_bytes);
@@ -97,7 +97,7 @@ pub(super) fn UpdateStatus() -> Element {
                 p { "{progress_label}" }
             } }
         }
-        UpdatePhaseDto::ReadyToRestart if snapshot.notification_dismissed => rsx! {
+        UpdatePhase::ReadyToRestart if snapshot.notification_dismissed => rsx! {
             section { class: "update-banner update-secondary", role: "status", aria_live: "polite",
                 div {
                     strong { "Update {version} is ready" }
@@ -110,7 +110,7 @@ pub(super) fn UpdateStatus() -> Element {
                 DisabledReason { id: "restart-disabled-reason", reason: restart_blocked }
             }
         },
-        UpdatePhaseDto::ReadyToRestart => rsx! {
+        UpdatePhase::ReadyToRestart => rsx! {
             section { class: "update-banner update-ready", role: "status", aria_live: "polite",
                 div {
                     h3 { "Restart to update to {version}" }
@@ -133,16 +133,16 @@ pub(super) fn UpdateStatus() -> Element {
                 DisabledReason { id: "restart-disabled-reason", reason: restart_blocked }
             }
         },
-        UpdatePhaseDto::ManualInstallAvailable if snapshot.notification_dismissed => rsx! {
+        UpdatePhase::ManualInstallAvailable if snapshot.notification_dismissed => rsx! {
             section { class: "update-banner update-secondary", role: "status", aria_live: "polite",
                 div { strong { "WhisperNow {version} is available" } }
                 Button { disabled: open_page_blocked.is_some(),
                     onclick: move |_| actions.open_update_release_page(), "Open release page" }
             }
         },
-        UpdatePhaseDto::ManualInstallAvailable => {
+        UpdatePhase::ManualInstallAvailable => {
             let package = manual_package_label(snapshot.manual_package);
-            let opener_error = snapshot.error.map(|error| update_error_message(error.code));
+            let opener_error = snapshot.error.map(update_error_message);
             rsx! { section { class: "update-banner update-ready", role: "status", aria_live: "polite",
                 div {
                     h3 { "WhisperNow {version} is available" }
@@ -163,22 +163,22 @@ pub(super) fn UpdateStatus() -> Element {
                 }
             } }
         }
-        UpdatePhaseDto::Installing => {
+        UpdatePhase::Installing => {
             rsx! { section { class: "update-banner", role: "status", aria_live: "polite",
                 h3 { "Installing update {version}…" }
                 p { "WhisperNow restarts when the installation finishes." }
             } }
         }
-        UpdatePhaseDto::UpToDate => {
+        UpdatePhase::UpToDate => {
             rsx! { Banner { tone: Tone::Success, title: "WhisperNow is up to date",
                 p { "No newer stable release is available." }
             } }
         }
-        UpdatePhaseDto::Error => {
+        UpdatePhase::Error => {
             let error = snapshot.error;
             let (message, recoverable) = error
                 .map_or(("The update could not be completed.", true), |error| {
-                    (update_error_message(error.code), error.recoverable)
+                    (update_error_message(error), error.is_recoverable())
                 });
             rsx! { section { class: "update-banner update-error", role: "alert",
                 h3 { "Update needs attention" }
@@ -193,10 +193,10 @@ pub(super) fn UpdateStatus() -> Element {
     }
 }
 
-const fn manual_package_label(package: Option<ManualUpdatePackageDto>) -> &'static str {
+const fn manual_package_label(package: Option<ManualUpdatePackage>) -> &'static str {
     match package {
-        Some(ManualUpdatePackageDto::Deb) => "the .deb package",
-        Some(ManualUpdatePackageDto::Rpm) => "the .rpm package",
+        Some(ManualUpdatePackage::Deb) => "the .deb package",
+        Some(ManualUpdatePackage::Rpm) => "the .rpm package",
         None => "the package for your system",
     }
 }
@@ -209,34 +209,32 @@ fn display_version(version: &str) -> String {
     }
 }
 
-const fn update_error_message(code: UpdateErrorCodeDto) -> &'static str {
+const fn update_error_message(code: UpdateError) -> &'static str {
     match code {
-        UpdateErrorCodeDto::Offline => "You appear to be offline. Reconnect and try again.",
-        UpdateErrorCodeDto::ServerUnavailable => {
-            "The update service is unavailable. Try again later."
-        }
-        UpdateErrorCodeDto::MalformedMetadata => "The release information could not be verified.",
-        UpdateErrorCodeDto::UnsupportedTarget => {
+        UpdateError::Offline => "You appear to be offline. Reconnect and try again.",
+        UpdateError::ServerUnavailable => "The update service is unavailable. Try again later.",
+        UpdateError::MalformedMetadata => "The release information could not be verified.",
+        UpdateError::UnsupportedTarget => {
             "This installation type is not supported by automatic updates."
         }
-        UpdateErrorCodeDto::InvalidSignature => {
+        UpdateError::InvalidSignature => {
             "The downloaded update could not be verified and will not be installed."
         }
-        UpdateErrorCodeDto::DownloadInterrupted => {
+        UpdateError::DownloadInterrupted => {
             "The update download was interrupted. You can try again."
         }
-        UpdateErrorCodeDto::InstallFailed => {
+        UpdateError::InstallFailed => {
             "The verified update could not be installed. You can retry it."
         }
-        UpdateErrorCodeDto::InsufficientPrivileges => {
+        UpdateError::InsufficientPrivileges => {
             "The system did not grant permission to install this update."
         }
-        UpdateErrorCodeDto::ReadOnlyFilesystem => {
+        UpdateError::ReadOnlyFilesystem => {
             "This installation is on a read-only filesystem and cannot be updated in place."
         }
-        UpdateErrorCodeDto::ReleasePageUnavailable => {
+        UpdateError::ReleasePageUnavailable => {
             "Your web browser could not be opened. Download the update from the WhisperNow releases page on GitHub."
         }
-        UpdateErrorCodeDto::Internal => "WhisperNow could not complete the update. Try again.",
+        UpdateError::Internal => "WhisperNow could not complete the update. Try again.",
     }
 }

@@ -7,7 +7,7 @@ use std::{
 };
 
 use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, Shortcut as GlobalShortcut};
-use whispernow_api::{RecordingMode, Settings, Shortcut, ShortcutModifier};
+use whispernow_domain::{RecordingMode, Settings, Shortcut, ShortcutModifier};
 
 use crate::services::RecordingTrigger;
 

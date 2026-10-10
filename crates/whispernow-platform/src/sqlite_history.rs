@@ -5,22 +5,22 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
 };
+use whispernow_domain::AppError;
 
 use hound::{SampleFormat, WavSpec, WavWriter};
 use rusqlite::{
     Connection, OptionalExtension, Row, params, params_from_iter,
     types::{Type, Value},
 };
+use whispernow_core::audio::TARGET_SAMPLE_RATE;
 use whispernow_domain::{
-    AppError, EntryId, EntryStatus, HistoryCursor, HistoryEntry, HistoryLimit, HistoryPage,
+    EntryId, EntryStatus, ErrorCategory, HistoryCursor, HistoryEntry, HistoryLimit, HistoryPage,
     HistoryPageRequest, ModelId, NewHistoryEntry, UtcMillis,
 };
 
 use crate::AppPaths;
 
 mod legacy;
-
-const SAMPLE_RATE_HZ: u32 = 16_000;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries (
@@ -52,16 +52,24 @@ impl SqliteHistoryRepository {
     /// and deletes audio files that no entry owns. Also returns any non-fatal diagnostic, such
     /// as a malformed `history.json` that was quarantined rather than imported.
     pub fn open(paths: &AppPaths) -> Result<(Self, Option<AppError>), AppError> {
+        let open_error = |code: &str| {
+            tracing::warn!(code, "transcription history did not open");
+            AppError::new(
+                ErrorCategory::HistoryUnavailable,
+                "history_unavailable",
+                "Transcription history is unavailable",
+            )
+        };
         let database = paths.history_database_file();
         if let Some(parent) = database.parent() {
-            fs::create_dir_all(parent).map_err(|_| history_error("history_open"))?;
+            fs::create_dir_all(parent).map_err(|_| open_error("history_open"))?;
         }
-        let mut connection =
-            Connection::open(&database).map_err(|_| history_error("history_open"))?;
+        let mut connection = Connection::open(&database).map_err(|_| open_error("history_open"))?;
         connection
             .execute_batch(SCHEMA)
-            .map_err(|_| history_error("history_schema"))?;
-        let diagnostic = legacy::import_legacy(&mut connection, &paths.history_file())?;
+            .map_err(|_| open_error("history_schema"))?;
+        let diagnostic = legacy::import_legacy(&mut connection, &paths.history_file())
+            .map_err(|error| open_error(&error.code))?;
         let audio_dir = paths.recordings_dir();
         remove_orphan_audio(&connection, &audio_dir);
         Ok((
@@ -111,14 +119,11 @@ impl SqliteHistoryRepository {
                 ],
             )
             .map_err(|_| history_error("history_insert"))?;
-        let id = entry_id(connection.last_insert_rowid())?;
+        let id = EntryId(connection.last_insert_rowid());
         if (keep_audio || status.always_keeps_audio()) && !audio.is_empty() {
             if write_wav(&self.audio_dir, id, audio).is_ok() {
                 connection
-                    .execute(
-                        "UPDATE entries SET has_audio = 1 WHERE id = ?1",
-                        [sql_id(id)?],
-                    )
+                    .execute("UPDATE entries SET has_audio = 1 WHERE id = ?1", [id.0])
                     .map_err(|_| history_error("history_insert"))?;
             } else {
                 tracing::warn!(
@@ -135,7 +140,7 @@ impl SqliteHistoryRepository {
         self.connection
             .execute(
                 "UPDATE entries SET status = ?1, error = ?2 WHERE id = ?3",
-                params![status_text(EntryStatus::NotDelivered), error, sql_id(id)?],
+                params![status_text(EntryStatus::NotDelivered), error, id.0],
             )
             .map(drop)
             .map_err(|_| history_error("history_update"))
@@ -150,7 +155,7 @@ impl SqliteHistoryRepository {
             clauses.push("(created_at_ms < ? OR (created_at_ms = ? AND id < ?))");
             values.push(Value::Integer(cursor.created_at.get()));
             values.push(Value::Integer(cursor.created_at.get()));
-            values.push(Value::Integer(sql_id(cursor.id)?));
+            values.push(Value::Integer(cursor.id.0));
         }
         if let Some(text) = request.filter.search_text() {
             clauses.push("(raw_text LIKE ? ESCAPE '\\' OR cleaned_text LIKE ? ESCAPE '\\')");
@@ -217,7 +222,7 @@ impl SqliteHistoryRepository {
     pub fn delete(&self, id: EntryId) -> Result<bool, AppError> {
         let deleted = self
             .connection
-            .execute("DELETE FROM entries WHERE id = ?1", [sql_id(id)?])
+            .execute("DELETE FROM entries WHERE id = ?1", [id.0])
             .map_err(|_| history_error("history_delete"))?;
         remove_audio(&self.audio_dir, id);
         Ok(deleted > 0)
@@ -250,7 +255,7 @@ fn get(connection: &Connection, id: EntryId) -> Result<Option<HistoryEntry>, App
     connection
         .query_row(
             &format!("SELECT {COLUMNS} FROM entries WHERE id = ?1"),
-            [sql_id(id)?],
+            [id.0],
             entry_from_row,
         )
         .optional()
@@ -277,7 +282,7 @@ fn prune(
         connection
             .execute("DELETE FROM entries WHERE id = ?1", [id])
             .map_err(|_| history_error("history_prune"))?;
-        remove_audio(audio_dir, EntryId(id.unsigned_abs()));
+        remove_audio(audio_dir, EntryId(*id));
     }
     Ok(pruned.len())
 }
@@ -319,7 +324,7 @@ fn entry_from_row(row: &Row<'_>) -> rusqlite::Result<HistoryEntry> {
         .transpose()
         .map_err(|error| rusqlite::Error::FromSqlConversionFailure(8, Type::Text, error.into()))?;
     Ok(HistoryEntry {
-        id: EntryId(row.get::<_, i64>(0)?.unsigned_abs()),
+        id: EntryId(row.get(0)?),
         created_at: UtcMillis(row.get(1)?),
         duration_millis: row.get::<_, Option<i64>>(2)?.map(i64::unsigned_abs),
         raw_text: row.get(3)?,
@@ -363,7 +368,7 @@ fn write_wav(audio_dir: &Path, id: EntryId, samples: &[f32]) -> io::Result<()> {
             io::BufWriter::new(temporary.as_file()),
             WavSpec {
                 channels: 1,
-                sample_rate: SAMPLE_RATE_HZ,
+                sample_rate: TARGET_SAMPLE_RATE,
                 bits_per_sample: 16,
                 sample_format: SampleFormat::Int,
             },
@@ -412,22 +417,16 @@ fn escape_like(text: &str) -> String {
     escaped
 }
 
-fn sql_id(id: EntryId) -> Result<i64, AppError> {
-    i64::try_from(id.0).map_err(|_| history_error("history_id"))
-}
-
-fn entry_id(row_id: i64) -> Result<EntryId, AppError> {
-    u64::try_from(row_id)
-        .map(EntryId)
-        .map_err(|_| history_error("history_id"))
-}
-
 fn sql_u64(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 fn history_error(code: &'static str) -> AppError {
-    AppError::redacted(code, "Transcription history is unavailable")
+    AppError::new(
+        ErrorCategory::General,
+        code,
+        "Transcription history is unavailable",
+    )
 }
 
 #[cfg(test)]

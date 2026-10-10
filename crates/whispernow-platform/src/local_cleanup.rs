@@ -18,8 +18,8 @@ use std::{
 
 use tokio::sync::oneshot;
 use whispernow_core::llm::{
-    LlmDecoding, LlmError, LlmFinishReason, LlmFuture, LlmPrompt, LlmRequest, LlmResponse,
-    LlmService,
+    DraftText, LlmDecoding, LlmError, LlmFinishReason, LlmFuture, LlmPrompt, LlmRequest,
+    LlmResponse, LlmService,
     local::{LocalDecodeError, LocalDecodeOutput, LocalFinish},
 };
 
@@ -44,7 +44,8 @@ enum Command {
 struct Job {
     model: String,
     prompt: LlmPrompt,
-    decoding: LlmDecoding,
+    max_output_tokens: u64,
+    draft: Option<DraftText>,
     /// Closed when the caller stops waiting, as on cancellation or timeout.
     reply: oneshot::Sender<Result<LocalDecodeOutput, EngineError>>,
 }
@@ -191,11 +192,19 @@ impl Drop for LocalCleanupService {
 impl LlmService for LocalCleanupService {
     fn complete(&self, request: LlmRequest) -> LlmFuture<'_> {
         Box::pin(async move {
+            let LlmDecoding::LocalCleanup {
+                max_output_tokens,
+                draft,
+            } = request.decoding
+            else {
+                return Err(LlmError::InvalidRequest);
+            };
             let (reply, replied) = oneshot::channel();
             self.send(Command::Decode(Job {
                 model: request.config.model,
                 prompt: request.prompt,
-                decoding: request.decoding,
+                max_output_tokens,
+                draft,
                 reply,
             }))?;
             match replied.await {
@@ -284,13 +293,18 @@ fn run(commands: &mpsc::Receiver<Command>, shared: &Shared) {
                     continue;
                 }
                 let result = match load(shared, &mut engine, &job.model) {
-                    Ok(loaded) => loaded.decode(&job.prompt, &job.decoding, |_| {
-                        if stopped() {
-                            ControlFlow::Break(())
-                        } else {
-                            ControlFlow::Continue(())
-                        }
-                    }),
+                    Ok(loaded) => loaded.decode(
+                        &job.prompt,
+                        job.max_output_tokens,
+                        job.draft.as_ref(),
+                        |_| {
+                            if stopped() {
+                                ControlFlow::Break(())
+                            } else {
+                                ControlFlow::Continue(())
+                            }
+                        },
+                    ),
                     Err(error) => Err(EngineError::Load(error)),
                 };
                 if let Err(EngineError::Decode(

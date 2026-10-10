@@ -1,9 +1,8 @@
 use std::sync::Arc;
+use whispernow_domain::AppError;
 
-use whispernow_api::{
-    ApiErrorDto, ClearDataCategory, ClearDataRequest, ClearDataResult, ErrorCategoryDto,
-    SaveSettingsResponse, Settings, SettingsView, SetupCheckpoint, UpdateSettingsRequest,
-};
+use whispernow_domain::ipc::{ClearDataResult, ErrorCategory, SaveSettingsResponse, SettingsView};
+use whispernow_domain::{ClearDataCategory, Settings, SetupCheckpoint};
 
 use whispernow_domain::WindowGeometry;
 
@@ -21,7 +20,7 @@ impl Gateway {
     /// Reads the saved settings and adds warnings for native side effects that are not
     /// currently in effect: an inactive recording shortcut, a cancel shortcut the last
     /// dictation could not register, and start-on-login drift.
-    pub(crate) async fn settings_view(&self) -> Result<SettingsView, ApiErrorDto> {
+    pub(crate) async fn settings_view(&self) -> Result<SettingsView, AppError> {
         let mut view = self
             .run_command("get_settings", Failure::Published, |services, _| {
                 services.settings.get()
@@ -66,13 +65,13 @@ impl Gateway {
     /// saved in its place, so the saved settings name the shortcuts in effect.
     pub(crate) async fn update_settings(
         &self,
-        request: UpdateSettingsRequest,
-    ) -> Result<SaveSettingsResponse, ApiErrorDto> {
+        request: Settings,
+    ) -> Result<SaveSettingsResponse, AppError> {
         let _native_settings = self.native_settings.lock().await;
         let saved = self
             .saved_settings("update_settings", Failure::Local)
             .await?;
-        let mut edited = request.settings;
+        let mut edited = request;
         let (refused, registered) = self.register_shortcuts(&saved, &mut edited).await;
         let saving = self
             .run_command("update_settings", Failure::Local, move |services, _| {
@@ -88,11 +87,14 @@ impl Gateway {
                 return Err(error);
             }
         };
-        response.warnings.extend(refused);
+        response
+            .warnings
+            .extend(refused.map(|warning| warning.summary));
         let effects = NativeEffects::between(&before, &response.settings.settings);
         response.warnings.extend(
             self.apply_native_settings(&response.settings.settings, effects)
-                .await,
+                .await
+                .map(|warning| warning.summary),
         );
         Ok(response)
     }
@@ -102,7 +104,7 @@ impl Gateway {
     pub(super) async fn complete_setup(
         &self,
         mut checkpoint: SetupCheckpoint,
-    ) -> Result<SaveSettingsResponse, ApiErrorDto> {
+    ) -> Result<SaveSettingsResponse, AppError> {
         let _native_settings = self.native_settings.lock().await;
         let saved = self
             .saved_settings("complete_setup", Failure::Published)
@@ -129,10 +131,11 @@ impl Gateway {
                 return Err(error);
             }
         };
-        let mut warnings: Vec<_> = refused.into_iter().collect();
+        let mut warnings: Vec<_> = refused.into_iter().map(|warning| warning.summary).collect();
         warnings.extend(
             self.apply_native_settings(&settings.settings, NativeEffects::SETUP)
-                .await,
+                .await
+                .map(|warning| warning.summary),
         );
         Ok(SaveSettingsResponse { settings, warnings })
     }
@@ -141,7 +144,7 @@ impl Gateway {
         &self,
         operation: &'static str,
         failure: Failure,
-    ) -> Result<Settings, ApiErrorDto> {
+    ) -> Result<Settings, AppError> {
         self.run_command(operation, failure, |services, _| {
             Ok(services.settings.get()?.settings)
         })
@@ -157,7 +160,7 @@ impl Gateway {
         &self,
         saved: &Settings,
         chosen: &mut Settings,
-    ) -> (Option<ApiErrorDto>, bool) {
+    ) -> (Option<AppError>, bool) {
         let previous = PersistedShortcuts::of(saved);
         if previous == PersistedShortcuts::of(chosen) {
             return (None, false);
@@ -179,7 +182,7 @@ impl Gateway {
     /// Suspends or restores global shortcuts while the settings UI captures a
     /// new combination. Serialized with settings saves so a capture never
     /// observes a half-applied shortcut update.
-    pub(crate) async fn set_shortcut_capture(&self, capturing: bool) -> Result<(), ApiErrorDto> {
+    pub(crate) async fn set_shortcut_capture(&self, capturing: bool) -> Result<(), AppError> {
         let _native_settings = self.native_settings.lock().await;
         let shortcuts = Arc::clone(&self.shortcuts);
         let changed = run_blocking(move || {
@@ -207,7 +210,7 @@ impl Gateway {
         &self,
         settings: &Settings,
         effects: NativeEffects,
-    ) -> Option<ApiErrorDto> {
+    ) -> Option<AppError> {
         if effects.cancel_shortcut {
             self.apply_cancel_shortcut(cancel_binding(settings)).await;
         }
@@ -232,7 +235,7 @@ impl Gateway {
     async fn apply_shortcuts(
         &self,
         recording: Result<RecordingBinding, ShortcutRegistrationError>,
-    ) -> Option<ApiErrorDto> {
+    ) -> Option<AppError> {
         let shortcuts = Arc::clone(&self.shortcuts);
         match run_blocking(move || shortcuts.apply_update(recording)).await {
             Ok(Ok(())) => None,
@@ -253,7 +256,7 @@ impl Gateway {
         }
     }
 
-    async fn apply_autostart(&self, desired: bool) -> Option<ApiErrorDto> {
+    async fn apply_autostart(&self, desired: bool) -> Option<AppError> {
         let registration = Arc::clone(&self.autostart);
         match run_blocking(move || autostart::reconcile(registration.as_ref(), desired)).await {
             Ok(Ok(())) => None,
@@ -267,10 +270,10 @@ impl Gateway {
     /// error; the data is already gone.
     pub(super) async fn clear_data(
         &self,
-        request: ClearDataRequest,
-    ) -> Result<ClearDataResult, ApiErrorDto> {
+        request: Vec<ClearDataCategory>,
+    ) -> Result<ClearDataResult, AppError> {
         let _native_settings = self.native_settings.lock().await;
-        let clears_settings = request.categories.contains(&ClearDataCategory::Settings);
+        let clears_settings = request.contains(&ClearDataCategory::Settings);
         let result = self
             .run_command("clear_data", Failure::Published, move |services, _| {
                 services.clear_data(&request)
@@ -282,7 +285,7 @@ impl Gateway {
         Ok(result)
     }
 
-    pub(crate) fn save_window_geometry(&self, geometry: WindowGeometry) -> Result<(), ApiErrorDto> {
+    pub(crate) fn save_window_geometry(&self, geometry: WindowGeometry) -> Result<(), AppError> {
         self.services.settings.save_window_geometry(geometry)
     }
 }
@@ -309,9 +312,9 @@ impl NativeEffects {
     }
 }
 
-pub(crate) fn autostart_error(error: AutostartError) -> ApiErrorDto {
-    ApiErrorDto {
-        category: ErrorCategoryDto::General,
+pub(crate) fn autostart_error(error: AutostartError) -> AppError {
+    AppError {
+        category: ErrorCategory::Settings,
         code: match error {
             AutostartError::Query => "autostart_query_failed",
             AutostartError::Update => "autostart_update_failed",
@@ -319,13 +322,12 @@ pub(crate) fn autostart_error(error: AutostartError) -> ApiErrorDto {
         }
         .to_owned(),
         summary: "The start-on-login registration could not be synchronized".to_owned(),
-        recovery: Some(whispernow_api::RecoveryActionDto::OpenSettings),
     }
 }
 
-pub(crate) fn shortcut_error(error: ShortcutRegistrationError) -> ApiErrorDto {
-    ApiErrorDto {
-        category: ErrorCategoryDto::General,
+pub(crate) fn shortcut_error(error: ShortcutRegistrationError) -> AppError {
+    AppError {
+        category: ErrorCategory::Settings,
         code: match error {
             ShortcutRegistrationError::ConflictOrUnsupported => "shortcut_registration_failed",
             ShortcutRegistrationError::PermissionDenied => "wayland_shortcut_permission_denied",
@@ -335,6 +337,5 @@ pub(crate) fn shortcut_error(error: ShortcutRegistrationError) -> ApiErrorDto {
         .to_owned(),
         summary: "The recording shortcut could not be activated; choose a different combination"
             .to_owned(),
-        recovery: Some(whispernow_api::RecoveryActionDto::OpenSettings),
     }
 }

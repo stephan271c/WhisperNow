@@ -4,7 +4,7 @@ mod row;
 
 use dioxus::core::Task;
 use dioxus::prelude::*;
-use whispernow_api::{HistoryFilter, RecordingMode};
+use whispernow_domain::{HistoryFilter, RecordingMode};
 
 pub(crate) use format::LocalClock;
 use format::{group_by_day, retention_summary};

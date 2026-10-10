@@ -8,7 +8,7 @@ use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
-use whispernow_api::{AppStateDto, ModelStateDto, PhaseDto};
+use whispernow_domain::ipc::{AppState, ModelState, Phase};
 
 pub(crate) const SETTINGS_MENU_ID: &str = "tray-settings";
 pub(crate) const CHECK_UPDATES_MENU_ID: &str = "tray-check-updates";
@@ -95,20 +95,20 @@ impl TrayState {
     }
 }
 
-pub(crate) fn tray_state(snapshot: &AppStateDto) -> TrayState {
+pub(crate) fn tray_state(snapshot: &AppState) -> TrayState {
     let failed = snapshot.error.is_some()
-        || snapshot.model_state == ModelStateDto::Failed
-        || matches!(snapshot.phase, PhaseDto::Error { .. });
+        || snapshot.model_state == ModelState::Failed
+        || matches!(snapshot.phase, Phase::Error { .. });
     match snapshot.phase {
-        PhaseDto::Paused if failed => TrayState::ErrorPaused,
-        PhaseDto::Paused => TrayState::Paused,
-        PhaseDto::Recording { .. } if failed => TrayState::RecordingError,
+        Phase::Paused if failed => TrayState::ErrorPaused,
+        Phase::Paused => TrayState::Paused,
+        Phase::Recording { .. } if failed => TrayState::RecordingError,
         _ if failed => TrayState::Error,
-        PhaseDto::Recording { .. } => TrayState::Recording,
-        PhaseDto::Processing { .. } => TrayState::Processing,
+        Phase::Recording { .. } => TrayState::Recording,
+        Phase::Processing { .. } => TrayState::Processing,
         _ if matches!(
             snapshot.model_state,
-            ModelStateDto::Downloading | ModelStateDto::Loading
+            ModelState::Downloading | ModelState::Loading
         ) =>
         {
             TrayState::Loading
@@ -159,10 +159,10 @@ impl TrayMenu {
 }
 
 /// `copy_capable` is whether this session can copy a transcript at all.
-pub(crate) fn tray_menu(snapshot: &AppStateDto, copy_capable: bool) -> TrayMenu {
+pub(crate) fn tray_menu(snapshot: &AppState, copy_capable: bool) -> TrayMenu {
     let (pause_intent, pause_enabled) = match snapshot.phase {
-        PhaseDto::Paused => (PauseIntent::Resume, true),
-        PhaseDto::Updating => (PauseIntent::Pause, false),
+        Phase::Paused => (PauseIntent::Resume, true),
+        Phase::Updating => (PauseIntent::Pause, false),
         _ => (PauseIntent::Pause, true),
     };
     TrayMenu {
@@ -173,7 +173,7 @@ pub(crate) fn tray_menu(snapshot: &AppStateDto, copy_capable: bool) -> TrayMenu 
                 && snapshot
                     .last_transcript
                     .as_ref()
-                    .is_some_and(|transcript| !transcript.final_text.is_empty()),
+                    .is_some_and(|transcript| !transcript.is_empty()),
             cancel: snapshot.phase.is_busy(),
         },
     }
@@ -195,7 +195,7 @@ impl TrayDesired {
     };
 }
 
-pub(crate) fn tray_desired(snapshot: &AppStateDto, copy_capable: bool) -> TrayDesired {
+pub(crate) fn tray_desired(snapshot: &AppState, copy_capable: bool) -> TrayDesired {
     TrayDesired {
         state: tray_state(snapshot),
         menu: tray_menu(snapshot, copy_capable),
@@ -318,7 +318,7 @@ impl TrayController {
 
     /// Derives the tray from a published snapshot. Snapshots arrive in
     /// publication order, so the latest one always wins.
-    pub(crate) fn apply_snapshot(&self, snapshot: &AppStateDto) {
+    pub(crate) fn apply_snapshot(&self, snapshot: &AppState) {
         self.apply(tray_desired(
             snapshot,
             self.copy_capable.load(Ordering::Acquire),
@@ -457,22 +457,20 @@ fn dot(x: f32, y: f32, center_x: f32, center_y: f32, radius: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use whispernow_api::TranscriptResponse;
 
     use super::*;
     use crate::tests::{recording, snapshot};
 
-    fn transcription_failed() -> whispernow_api::ApiErrorDto {
-        whispernow_api::ApiErrorDto {
-            category: whispernow_api::ErrorCategoryDto::Recognition,
+    fn transcription_failed() -> whispernow_domain::ipc::AppError {
+        whispernow_domain::ipc::AppError {
+            category: whispernow_domain::ipc::ErrorCategory::Recognition,
             code: "transcription_failed".to_owned(),
             summary: "The recording could not be transcribed".to_owned(),
-            recovery: None,
         }
     }
 
-    fn failed() -> PhaseDto {
-        PhaseDto::Error {
+    fn failed() -> Phase {
+        Phase::Error {
             error: transcription_failed(),
         }
     }
@@ -480,19 +478,19 @@ mod tests {
     #[test]
     fn phases_map_to_shape_distinct_tray_states() {
         for (phase, background_error, expected) in [
-            (PhaseDto::Idle, false, TrayState::Idle),
+            (Phase::Idle, false, TrayState::Idle),
             (recording(), false, TrayState::Recording),
             (
-                PhaseDto::Processing { cleaning_up: true },
+                Phase::Processing { cleaning_up: true },
                 false,
                 TrayState::Processing,
             ),
-            (PhaseDto::Paused, false, TrayState::Paused),
-            (PhaseDto::Updating, false, TrayState::Idle),
+            (Phase::Paused, false, TrayState::Paused),
+            (Phase::Updating, false, TrayState::Idle),
             (failed(), false, TrayState::Error),
-            (PhaseDto::Idle, true, TrayState::Error),
+            (Phase::Idle, true, TrayState::Error),
             (recording(), true, TrayState::RecordingError),
-            (PhaseDto::Paused, true, TrayState::ErrorPaused),
+            (Phase::Paused, true, TrayState::ErrorPaused),
         ] {
             let mut snapshot = snapshot(phase.clone());
             if background_error {
@@ -500,8 +498,8 @@ mod tests {
             }
             assert_eq!(tray_state(&snapshot), expected, "{phase:?}");
         }
-        let mut loading = snapshot(PhaseDto::Idle);
-        loading.model_state = ModelStateDto::Loading;
+        let mut loading = snapshot(Phase::Idle);
+        loading.model_state = ModelState::Loading;
         assert_eq!(tray_state(&loading), TrayState::Loading);
     }
 
@@ -537,7 +535,7 @@ mod tests {
     #[test]
     fn tray_menu_follows_the_phase() {
         assert_eq!(
-            tray_menu(&snapshot(PhaseDto::Idle), true),
+            tray_menu(&snapshot(Phase::Idle), true),
             TrayMenu {
                 pause_intent: PauseIntent::Pause,
                 pause_enabled: true,
@@ -547,38 +545,28 @@ mod tests {
                 },
             }
         );
-        for busy in [recording(), PhaseDto::Processing { cleaning_up: false }] {
+        for busy in [recording(), Phase::Processing { cleaning_up: false }] {
             assert!(tray_menu(&snapshot(busy), true).quick.cancel);
         }
-        let paused = tray_menu(&snapshot(PhaseDto::Paused), true);
+        let paused = tray_menu(&snapshot(Phase::Paused), true);
         assert_eq!(paused.pause_intent, PauseIntent::Resume);
         assert!(paused.pause_enabled);
-        let updating = tray_menu(&snapshot(PhaseDto::Updating), true);
+        let updating = tray_menu(&snapshot(Phase::Updating), true);
         assert_eq!(updating.pause_intent, PauseIntent::Pause);
         assert!(!updating.pause_enabled);
         assert!(!tray_menu(&snapshot(failed()), true).quick.cancel);
     }
 
-    fn transcript(final_text: &str) -> TranscriptResponse {
-        TranscriptResponse {
-            raw_text: final_text.to_owned(),
-            final_text: final_text.to_owned(),
-            text_output_status: None,
-            cleanup_failed: false,
-            history_save_failed: false,
-        }
-    }
-
     #[test]
     fn copy_last_transcript_needs_text_and_a_session_that_can_copy() {
-        let copied = AppStateDto {
-            last_transcript: Some(transcript("hello")),
-            ..snapshot(PhaseDto::Idle)
+        let copied = AppState {
+            last_transcript: Some("hello".to_owned()),
+            ..snapshot(Phase::Idle)
         };
         assert!(tray_desired(&copied, true).menu.quick.copy_last);
-        let silent = AppStateDto {
-            last_transcript: Some(transcript("")),
-            ..snapshot(PhaseDto::Idle)
+        let silent = AppState {
+            last_transcript: Some(String::new()),
+            ..snapshot(Phase::Idle)
         };
         assert!(!tray_desired(&silent, true).menu.quick.copy_last);
         assert!(
@@ -590,18 +578,18 @@ mod tests {
     #[test]
     fn a_session_that_cannot_copy_keeps_copy_last_transcript_disabled() {
         let tray = TrayController::default();
-        let copied = AppStateDto {
-            last_transcript: Some(transcript("hello")),
-            ..snapshot(PhaseDto::Idle)
+        let copied = AppState {
+            last_transcript: Some("hello".to_owned()),
+            ..snapshot(Phase::Idle)
         };
         tray.apply_snapshot(&copied);
         assert!(tray.desired.lock().expect("desired").menu.quick.copy_last);
 
         tray.mark_copy_unavailable();
         assert!(!tray.desired.lock().expect("desired").menu.quick.copy_last);
-        tray.apply_snapshot(&AppStateDto {
-            last_transcript: Some(transcript("again")),
-            ..snapshot(PhaseDto::Idle)
+        tray.apply_snapshot(&AppState {
+            last_transcript: Some("again".to_owned()),
+            ..snapshot(Phase::Idle)
         });
         let desired = *tray.desired.lock().expect("desired");
         assert!(!desired.menu.quick.copy_last);

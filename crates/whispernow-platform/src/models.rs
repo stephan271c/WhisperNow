@@ -3,7 +3,7 @@ use std::{
     fs::{self, File},
     io::{self, BufReader, Read, Write},
     path::{Component, Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
 
@@ -30,19 +30,6 @@ pub struct DownloadProgress {
     pub phase: DownloadPhase,
     pub downloaded_bytes: u64,
     pub total_bytes: Option<u64>,
-}
-
-pub trait DownloadObserver: Send + Sync {
-    fn report(&self, progress: DownloadProgress);
-}
-
-impl<F> DownloadObserver for F
-where
-    F: Fn(DownloadProgress) + Send + Sync,
-{
-    fn report(&self, progress: DownloadProgress) {
-        self(progress);
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,7 +91,6 @@ impl Default for DownloadTimeouts {
 pub struct ModelStore {
     registry: ModelRegistry,
     paths: AppPaths,
-    bundled_roots: Vec<PathBuf>,
     http: ModelHttp,
     mutation: Mutex<()>,
     cuda_pack: &'static [CudaPackArchive],
@@ -117,11 +103,10 @@ struct ModelHttp {
 
 impl ModelStore {
     #[must_use]
-    pub fn new(paths: AppPaths, bundled_roots: Vec<PathBuf>) -> Self {
+    pub fn new(paths: AppPaths) -> Self {
         Self::with_registry_and_timeouts(
             ModelRegistry::builtin(),
             paths,
-            bundled_roots,
             DownloadTimeouts::default(),
         )
     }
@@ -131,7 +116,6 @@ impl ModelStore {
     pub fn with_registry_and_timeouts(
         registry: ModelRegistry,
         paths: AppPaths,
-        bundled_roots: Vec<PathBuf>,
         timeouts: DownloadTimeouts,
     ) -> Self {
         let client = reqwest::Client::builder()
@@ -147,17 +131,14 @@ impl ModelStore {
         Self {
             registry,
             paths,
-            bundled_roots,
             http: ModelHttp { runtime, client },
             mutation: Mutex::new(()),
             cuda_pack: cuda_pack::CUDA_PACK,
         }
     }
 
-    fn lock_store(&self) -> Result<MutexGuard<'_, ()>, ModelStoreError> {
-        self.mutation
-            .lock()
-            .map_err(|_| filesystem("lock model store"))
+    fn lock_store(&self) -> MutexGuard<'_, ()> {
+        self.mutation.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn definition(&self, model_id: &ModelId) -> Result<&ModelDefinition, ModelStoreError> {
@@ -178,34 +159,7 @@ impl ModelStore {
                 availability: ModelAvailability::Downloaded,
             }));
         }
-        for bundled_base in &self.bundled_roots {
-            let bundled_root = bundled_base.join(definition.id.as_str());
-            if validate_model_root(definition, &bundled_root)? {
-                return Ok(Some(ResolvedModel {
-                    definition: definition.clone(),
-                    root: bundled_root,
-                    availability: ModelAvailability::Bundled,
-                }));
-            }
-        }
         Ok(None)
-    }
-
-    fn download_archive(
-        &self,
-        definition: &ModelDefinition,
-        destination: &mut NamedTempFile,
-        cancellation: &CancellationToken,
-        observer: &dyn DownloadObserver,
-    ) -> Result<(), ModelStoreError> {
-        check_cancelled(cancellation)?;
-        self.http.runtime.block_on(download_archive(
-            &self.http.client,
-            definition,
-            destination,
-            cancellation,
-            observer,
-        ))
     }
 
     /// Extracts the required files, which the archive holds under a directory named after
@@ -217,49 +171,25 @@ impl ModelStore {
         cancellation: &CancellationToken,
     ) -> Result<PathBuf, ModelStoreError> {
         let file = File::open(archive_file).map_err(|_| filesystem("open model archive"))?;
-        let mut archive = Archive::new(BzDecoder::new(BufReader::new(file)));
         let archive_root = Path::new(definition.source.archive_root());
         let staged_root = staging_base.join(definition.id.as_str());
-        let mut missing = definition.layout.required_artifacts();
-        let entries = archive
-            .entries()
-            .map_err(|_| ModelStoreError::InvalidArchive)?;
-        for entry in entries {
-            check_cancelled(cancellation)?;
-            let mut entry = entry.map_err(|_| ModelStoreError::InvalidArchive)?;
-            if !entry.header().entry_type().is_file() {
-                continue;
-            }
-            let path = entry
-                .path()
-                .map_err(|_| ModelStoreError::InvalidArchive)?
-                .into_owned();
-            // Some upstream archives name their entries `./<model>/…`.
-            let path = path.strip_prefix(".").unwrap_or(&path);
-            let Some(index) = missing
-                .iter()
-                .position(|artifact| path == archive_root.join(artifact))
-            else {
-                continue;
-            };
-            let destination = staged_root.join(missing.swap_remove(index));
-            if let Some(parent) = destination.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|_| filesystem("create model staging directory"))?;
-            }
-            let mut output = File::options()
-                .create_new(true)
-                .write(true)
-                .open(&destination)
-                .map_err(|_| filesystem("create staged model artifact"))?;
-            copy_entry(&mut entry, &mut output, cancellation)?;
-            output
-                .flush()
-                .and_then(|()| output.sync_all())
-                .map_err(|_| filesystem("sync staged model artifact"))?;
-        }
-        if !missing.is_empty() {
-            let mut artifacts: Vec<String> = missing.into_iter().map(str::to_owned).collect();
+        let mut members: Vec<_> = definition
+            .layout
+            .required_artifacts()
+            .into_iter()
+            .map(|artifact| (archive_root.join(artifact), artifact))
+            .collect();
+        extract_tar(
+            BzDecoder::new(BufReader::new(file)),
+            &staged_root,
+            &mut members,
+            cancellation,
+        )?;
+        if !members.is_empty() {
+            let mut artifacts: Vec<String> = members
+                .into_iter()
+                .map(|(_, artifact)| artifact.to_owned())
+                .collect();
             artifacts.sort();
             return Err(ModelStoreError::MissingArtifacts { artifacts });
         }
@@ -303,27 +233,6 @@ impl ModelStore {
     }
 }
 
-async fn download_archive(
-    client: &reqwest::Client,
-    definition: &ModelDefinition,
-    destination: &mut NamedTempFile,
-    cancellation: &CancellationToken,
-    observer: &dyn DownloadObserver,
-) -> Result<(), ModelStoreError> {
-    download_file(
-        client,
-        &PinnedFile {
-            url: &definition.source.url,
-            size_bytes: definition.source.archive_size_bytes,
-            sha256: &definition.source.sha256,
-        },
-        destination,
-        cancellation,
-        observer,
-    )
-    .await
-}
-
 struct PinnedFile<'a> {
     url: &'a str,
     size_bytes: u64,
@@ -335,7 +244,7 @@ async fn download_file(
     file: &PinnedFile<'_>,
     destination: &mut NamedTempFile,
     cancellation: &CancellationToken,
-    observer: &dyn DownloadObserver,
+    observer: &dyn Fn(DownloadProgress),
 ) -> Result<(), ModelStoreError> {
     check_cancelled(cancellation)?;
     let mut response = client
@@ -359,7 +268,7 @@ async fn download_file(
 
     let mut received = 0_u64;
     let mut hasher = Sha256::new();
-    observer.report(DownloadProgress {
+    observer(DownloadProgress {
         phase: DownloadPhase::Downloading,
         downloaded_bytes: 0,
         total_bytes: Some(expected),
@@ -389,7 +298,7 @@ async fn download_file(
             .write_all(&chunk)
             .map_err(|_| filesystem("write download staging file"))?;
         hasher.update(&chunk);
-        observer.report(DownloadProgress {
+        observer(DownloadProgress {
             phase: DownloadPhase::Downloading,
             downloaded_bytes: received,
             total_bytes: Some(expected),
@@ -413,15 +322,14 @@ async fn download_file(
 }
 
 impl ModelStore {
-    /// Resolves a usable model, preferring downloaded data over bundled data.
     pub fn resolve(&self, model_id: &ModelId) -> Result<Option<ResolvedModel>, ModelStoreError> {
-        let _guard = self.lock_store()?;
+        let _guard = self.lock_store();
         self.resolve_unlocked(self.definition(model_id)?)
     }
 
     /// Lists the complete supported registry with current availability.
     pub fn list(&self) -> Result<Vec<ModelListEntry>, ModelStoreError> {
-        let _guard = self.lock_store()?;
+        let _guard = self.lock_store();
         self.registry
             .models()
             .iter()
@@ -439,7 +347,7 @@ impl ModelStore {
 
     /// Removes only the downloaded model selected by a registry identifier.
     pub fn remove(&self, model_id: &ModelId) -> Result<(), ModelStoreError> {
-        let _guard = self.lock_store()?;
+        let _guard = self.lock_store();
         let definition = self.definition(model_id)?;
         let destination = self.paths.models_dir().join(definition.id.as_str());
         remove_path(&destination).map_err(|error| {
@@ -455,7 +363,7 @@ impl ModelStore {
         &self,
         model_id: &ModelId,
         cancellation: &CancellationToken,
-        observer: &dyn DownloadObserver,
+        observer: &dyn Fn(DownloadProgress),
     ) -> Result<ResolvedModel, ModelStoreError> {
         let definition = self.definition(model_id)?.clone();
         fs::create_dir_all(self.paths.models_dir())
@@ -465,8 +373,18 @@ impl ModelStore {
             .suffix(".part")
             .tempfile_in(self.paths.models_dir())
             .map_err(|_| filesystem("create download staging file"))?;
-        self.download_archive(&definition, &mut archive_file, cancellation, observer)?;
-        observer.report(DownloadProgress {
+        self.http.runtime.block_on(download_file(
+            &self.http.client,
+            &PinnedFile {
+                url: &definition.source.url,
+                size_bytes: definition.source.archive_size_bytes,
+                sha256: &definition.source.sha256,
+            },
+            &mut archive_file,
+            cancellation,
+            observer,
+        ))?;
+        observer(DownloadProgress {
             phase: DownloadPhase::ValidatingArchive,
             downloaded_bytes: definition.source.archive_size_bytes,
             total_bytes: Some(definition.source.archive_size_bytes),
@@ -476,7 +394,7 @@ impl ModelStore {
             .prefix(".model-stage-")
             .tempdir_in(self.paths.models_dir())
             .map_err(|_| filesystem("create model staging directory"))?;
-        observer.report(DownloadProgress {
+        observer(DownloadProgress {
             phase: DownloadPhase::Extracting,
             downloaded_bytes: definition.source.archive_size_bytes,
             total_bytes: Some(definition.source.archive_size_bytes),
@@ -492,16 +410,16 @@ impl ModelStore {
                 Self::stage_single_file(&definition, archive_file, staging.path())?
             }
         };
-        observer.report(DownloadProgress {
+        observer(DownloadProgress {
             phase: DownloadPhase::Installing,
             downloaded_bytes: definition.source.archive_size_bytes,
             total_bytes: Some(definition.source.archive_size_bytes),
         });
         let root = {
-            let _guard = self.lock_store()?;
+            let _guard = self.lock_store();
             self.install_staged(&definition, &staged_root, cancellation)?
         };
-        observer.report(DownloadProgress {
+        observer(DownloadProgress {
             phase: DownloadPhase::Complete,
             downloaded_bytes: definition.source.archive_size_bytes,
             total_bytes: Some(definition.source.archive_size_bytes),
@@ -564,6 +482,57 @@ fn remove_path(path: &Path) -> io::Result<()> {
     } else {
         fs::remove_dir_all(path)
     }
+}
+
+fn extract_tar(
+    input: impl Read,
+    into: &Path,
+    members: &mut Vec<(PathBuf, &str)>,
+    cancellation: &CancellationToken,
+) -> Result<(), ModelStoreError> {
+    let mut archive = Archive::new(input);
+    let entries = archive
+        .entries()
+        .map_err(|_| ModelStoreError::InvalidArchive)?;
+    for entry in entries {
+        check_cancelled(cancellation)?;
+        let mut entry = entry.map_err(|_| ModelStoreError::InvalidArchive)?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let path = entry
+            .path()
+            .map_err(|_| ModelStoreError::InvalidArchive)?
+            .into_owned();
+        // Some upstream archives name their entries `./<model>/…`.
+        let path = path.strip_prefix(".").unwrap_or(&path);
+        let Some(index) = members.iter().position(|(member, _)| path == member) else {
+            continue;
+        };
+        let (_, name) = members.swap_remove(index);
+        write_member(&mut entry, &into.join(name), cancellation)?;
+    }
+    Ok(())
+}
+
+fn write_member(
+    input: &mut impl Read,
+    destination: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), ModelStoreError> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|_| filesystem("create model staging directory"))?;
+    }
+    let mut output = File::options()
+        .create_new(true)
+        .write(true)
+        .open(destination)
+        .map_err(|_| filesystem("create staged model artifact"))?;
+    copy_entry(input, &mut output, cancellation)?;
+    output
+        .flush()
+        .and_then(|()| output.sync_all())
+        .map_err(|_| filesystem("sync staged model artifact"))
 }
 
 fn copy_entry(

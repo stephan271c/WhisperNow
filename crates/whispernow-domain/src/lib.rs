@@ -1,5 +1,6 @@
 mod data;
 mod history;
+pub mod ipc;
 mod models;
 mod provider;
 mod settings;
@@ -28,9 +29,26 @@ pub use settings::{
 pub use shortcut::{RecordingMode, Shortcut, ShortcutKey, ShortcutModifier};
 pub use validation::SettingsError;
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCategory {
+    General,
+    NotFound,
+    Audio,
+    Permission,
+    Model,
+    Recognition,
+    Cleanup,
+    Output,
+    HistoryUnavailable,
+    Settings,
+}
+
 #[derive(Clone, Debug, Deserialize, Error, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[error("{code}: {summary}")]
 pub struct AppError {
+    pub category: ErrorCategory,
     pub code: String,
     /// Must not contain captured or secret data.
     pub summary: String,
@@ -38,8 +56,13 @@ pub struct AppError {
 
 impl AppError {
     #[must_use]
-    pub fn redacted(code: impl Into<String>, summary: impl Into<String>) -> Self {
+    pub fn new(
+        category: ErrorCategory,
+        code: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> Self {
         Self {
+            category,
             code: code.into(),
             summary: summary.into(),
         }

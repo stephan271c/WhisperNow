@@ -23,7 +23,7 @@ use tokio::{
     sync::mpsc,
     task::JoinHandle,
 };
-use whispernow_core::{CancellationToken, text_output::PasteDelays};
+use whispernow_core::{CancellationToken, text_output::PASTE_RESTORE_DELAY};
 
 use crate::PasteKeys;
 
@@ -314,7 +314,7 @@ impl WaylandOutput {
             inject_balanced_paste(output, keys).await?;
             // Once the keystroke is sent, the target always gets the whole
             // restore delay; restoring earlier can make it paste the old value.
-            serve_for(output, PasteDelays::default().restore()).await
+            serve_for(output, PASTE_RESTORE_DELAY).await
         }
         .await;
         // A failed delivery still puts the previous clipboard back.

@@ -1,10 +1,12 @@
 use std::future::Future;
+use whispernow_domain::AppError;
 
-use whispernow_api::UpdateStateDto;
+use whispernow_domain::ipc::UpdateState;
 
 use super::UiActions;
 use crate::UiOperation;
-use crate::client::{self, ClientError};
+use crate::client;
+
 use dioxus::prelude::*;
 
 impl UiActions {
@@ -12,14 +14,14 @@ impl UiActions {
     fn update_command(
         self,
         operation: UiOperation,
-        call: impl Future<Output = Result<UpdateStateDto, ClientError>> + 'static,
+        call: impl Future<Output = Result<UpdateState, AppError>> + 'static,
     ) {
         self.run(operation, call, |actions, answer| match answer {
             Ok(update) => actions.state().write().hydrate_update(update),
             Err(error) => actions
                 .state()
                 .write()
-                .report_update_command_failure(Some(error.summary())),
+                .report_update_command_failure(error.summary),
         });
     }
 

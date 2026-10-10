@@ -1,4 +1,4 @@
-use whispernow_api::{ModelStateDto, PhaseDto};
+use whispernow_domain::ipc::{ModelState, Phase};
 
 use crate::{EventStreamHealth, Route, SettingsRoute, UiState};
 
@@ -51,19 +51,19 @@ impl HomeStatus {
         let Some(snapshot) = &state.snapshot else {
             return status(HomeStatusKind::Waiting, "Connecting to WhisperNow", None);
         };
-        if snapshot.model_state == ModelStateDto::Failed {
+        if snapshot.model_state == ModelState::Failed {
             return problem(
                 "Dictation is unavailable",
                 "The speech model could not be loaded.",
             );
         }
         match snapshot.phase {
-            PhaseDto::Paused => status(
+            Phase::Paused => status(
                 HomeStatusKind::Paused,
                 "Paused",
                 Some("Resume WhisperNow from the system tray to record again."),
             ),
-            PhaseDto::Updating => status(
+            Phase::Updating => status(
                 HomeStatusKind::Waiting,
                 "Installing an update",
                 Some("WhisperNow will be ready after the update finishes."),
@@ -71,8 +71,8 @@ impl HomeStatus {
             _ if state.is_loading_model() => {
                 status(HomeStatusKind::Waiting, "Loading speech model", None)
             }
-            PhaseDto::Recording { .. } => status(HomeStatusKind::Recording, "Recording", None),
-            PhaseDto::Processing { cleaning_up } => status(
+            Phase::Recording { .. } => status(HomeStatusKind::Recording, "Recording", None),
+            Phase::Processing { cleaning_up } => status(
                 HomeStatusKind::Working,
                 if cleaning_up {
                     "Cleaning up transcript"
@@ -81,35 +81,80 @@ impl HomeStatus {
                 },
                 None,
             ),
-            PhaseDto::Idle | PhaseDto::Error { .. } => status(HomeStatusKind::Ready, "Ready", None),
+            Phase::Idle | Phase::Error { .. } => status(HomeStatusKind::Ready, "Ready", None),
         }
     }
 }
 
-/// The page that resolves the current problem, if one does.
 fn problem_fix(state: &UiState) -> Option<(&'static str, Route)> {
-    use whispernow_api::ErrorCategoryDto as Category;
-    let model_failed = state
+    if let Some(error) = &state.error {
+        return category_fix(error.category);
+    }
+    state
         .snapshot
         .as_ref()
-        .is_some_and(|snapshot| snapshot.model_state == ModelStateDto::Failed);
-    if model_failed {
-        return Some((
-            "Open speech models",
-            Route::Settings(SettingsRoute::SpeechModels),
-        ));
-    }
-    match state.error.as_ref()?.category {
-        Category::Audio | Category::Permission => Some((
+        .filter(|snapshot| snapshot.model_state == ModelState::Failed)
+        .and_then(|_| category_fix(whispernow_domain::ErrorCategory::Model))
+}
+
+pub(crate) const fn category_fix(
+    category: whispernow_domain::ErrorCategory,
+) -> Option<(&'static str, Route)> {
+    use whispernow_domain::ErrorCategory;
+    match category {
+        ErrorCategory::Audio | ErrorCategory::Permission => Some((
             "Check audio settings",
             Route::Settings(SettingsRoute::Audio),
         )),
-        Category::Model | Category::Recognition => Some((
+        ErrorCategory::Model | ErrorCategory::Recognition => Some((
             "Open speech models",
             Route::Settings(SettingsRoute::SpeechModels),
         )),
-        Category::Cleanup => Some(("Open AI cleanup", Route::Settings(SettingsRoute::AiCleanup))),
-        Category::Output => Some(("Open history", Route::History)),
-        _ => None,
+        ErrorCategory::Cleanup => {
+            Some(("Open AI cleanup", Route::Settings(SettingsRoute::AiCleanup)))
+        }
+        ErrorCategory::Settings => Some(("Open settings", Route::Settings(SettingsRoute::General))),
+        ErrorCategory::Output => Some(("Open history", Route::History)),
+        ErrorCategory::General | ErrorCategory::NotFound | ErrorCategory::HistoryUnavailable => {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::category_fix;
+    use crate::{Route, SettingsRoute};
+    use whispernow_domain::ErrorCategory;
+
+    #[test]
+    fn each_error_category_has_one_fix() {
+        let audio = Some((
+            "Check audio settings",
+            Route::Settings(SettingsRoute::Audio),
+        ));
+        let model = Some((
+            "Open speech models",
+            Route::Settings(SettingsRoute::SpeechModels),
+        ));
+        let cleanup = Some(("Open AI cleanup", Route::Settings(SettingsRoute::AiCleanup)));
+        let settings = Some(("Open settings", Route::Settings(SettingsRoute::General)));
+        for (category, fix) in [
+            (ErrorCategory::General, None),
+            (ErrorCategory::NotFound, None),
+            (ErrorCategory::Audio, audio),
+            (ErrorCategory::Permission, audio),
+            (ErrorCategory::Model, model),
+            (ErrorCategory::Recognition, model),
+            (ErrorCategory::Cleanup, cleanup),
+            (
+                ErrorCategory::Output,
+                Some(("Open history", Route::History)),
+            ),
+            (ErrorCategory::HistoryUnavailable, None),
+            (ErrorCategory::Settings, settings),
+        ] {
+            assert_eq!(category_fix(category), fix, "{category:?}");
+        }
     }
 }

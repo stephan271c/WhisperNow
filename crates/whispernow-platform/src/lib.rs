@@ -22,15 +22,17 @@ pub mod wayland;
 
 pub use asr::SherpaAsrEngine;
 pub use audio::CpalAudioInput;
-pub use clear_data::{ClearDataCategory, ClearDataError, DataCleaner};
-pub use credential_store::{CredentialStore, CredentialStoreUnavailable, MemoryCredentialStore};
+pub use clear_data::{ClearDataCategory, ClearDataError};
+#[cfg(any(test, feature = "test-support"))]
+pub use credential_store::MemoryCredentialStore;
+pub use credential_store::{CredentialStore, CredentialStoreUnavailable};
 pub use file_manager::{PrivacySettingsPage, open_in_file_manager, open_privacy_settings};
 pub use llama::{CUDA_LIBRARIES, Llama};
-pub use llm::{RemoteProvider, RigLlmService};
+pub use llm::complete;
 pub use local_cleanup::{CleanupModelLocator, CudaPackLocator, LocalCleanupService};
 pub use models::{
-    CudaPackArchive, CudaPackFormat, CudaPackState, DownloadObserver, DownloadProgress,
-    DownloadTimeouts, ModelListEntry, ModelStore, ModelStoreError,
+    CudaPackArchive, CudaPackFormat, CudaPackState, DownloadProgress, DownloadTimeouts,
+    ModelListEntry, ModelStore, ModelStoreError,
 };
 #[cfg(target_os = "macos")]
 pub use paste_delivery::accessibility_trusted;
@@ -44,7 +46,7 @@ pub use paths::AppPaths;
 pub use settings_store::{SettingsNotice, SettingsStore};
 pub use sqlite_history::SqliteHistoryRepository;
 use tracing_subscriber::EnvFilter;
-pub use voice_activity::{SileroVoiceActivitySource, silero_vad_model_path};
+pub use voice_activity::{silero_vad_model_path, silero_voice_activity};
 
 pub fn init_logging() {
     let mut filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));

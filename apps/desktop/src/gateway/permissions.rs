@@ -1,6 +1,5 @@
-use whispernow_api::{
-    ApiErrorDto, PermissionKindDto, PermissionRequest, PermissionStatusDto, PermissionsResponse,
-};
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{PermissionKind, PermissionStatus, PermissionsResponse};
 
 use std::sync::Arc;
 
@@ -8,7 +7,7 @@ use super::{Failure, Gateway, run_blocking, settings::shortcut_error};
 use crate::shortcuts::ShortcutRegistrationError;
 
 impl Gateway {
-    pub(crate) async fn permissions(&self) -> Result<PermissionsResponse, ApiErrorDto> {
+    pub(crate) async fn permissions(&self) -> Result<PermissionsResponse, AppError> {
         let global_shortcuts = self.global_shortcuts_consent();
         self.run_command("get_permissions", Failure::Local, move |services, _| {
             Ok(services.permissions(global_shortcuts))
@@ -20,9 +19,9 @@ impl Gateway {
     /// is an answer, shown on its card; only a failure to ask is an error.
     pub(crate) async fn request_permission(
         &self,
-        request: PermissionRequest,
-    ) -> Result<PermissionsResponse, ApiErrorDto> {
-        if request.kind == PermissionKindDto::GlobalShortcuts {
+        request: PermissionKind,
+    ) -> Result<PermissionsResponse, AppError> {
+        if request == PermissionKind::GlobalShortcuts {
             let shortcuts = Arc::clone(&self.shortcuts);
             self.services.state.lock().phase.require_idle()?;
             // Registering the saved shortcuts again opens the compositor's consent
@@ -39,14 +38,14 @@ impl Gateway {
             }
         } else {
             self.run_command("request_permission", Failure::Local, move |services, _| {
-                services.request_permission(request.kind)
+                services.request_permission(request)
             })
             .await?;
         }
         self.permissions().await
     }
 
-    fn global_shortcuts_consent(&self) -> PermissionStatusDto {
+    fn global_shortcuts_consent(&self) -> PermissionStatus {
         shortcut_portal_consent(
             self.shortcuts.registration_active(),
             self.shortcuts.registration_diagnostic(),
@@ -60,24 +59,24 @@ impl Gateway {
 const fn shortcut_portal_consent(
     registered: bool,
     diagnostic: Option<ShortcutRegistrationError>,
-) -> PermissionStatusDto {
+) -> PermissionStatus {
     if registered {
-        return PermissionStatusDto::Granted;
+        return PermissionStatus::Granted;
     }
     match diagnostic {
-        Some(ShortcutRegistrationError::PermissionDenied) => PermissionStatusDto::Denied,
-        Some(ShortcutRegistrationError::PortalUnavailable) => PermissionStatusDto::Unavailable,
+        Some(ShortcutRegistrationError::PermissionDenied) => PermissionStatus::Denied,
+        Some(ShortcutRegistrationError::PortalUnavailable) => PermissionStatus::Unavailable,
         Some(
             ShortcutRegistrationError::ConflictOrUnsupported
             | ShortcutRegistrationError::SessionClosed,
         )
-        | None => PermissionStatusDto::NotDetermined,
+        | None => PermissionStatus::NotDetermined,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use whispernow_api::PermissionStatusDto as Status;
+    use whispernow_domain::ipc::PermissionStatus as Status;
 
     use super::shortcut_portal_consent;
     use crate::shortcuts::ShortcutRegistrationError as Error;

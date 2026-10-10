@@ -6,44 +6,29 @@
 )]
 
 use serde::{Serialize, de::DeserializeOwned};
-use whispernow_api::{
-    ApiErrorDto, AppStateDto, ClearApiKeyRequest, ClearDataRequest, ClearDataResult,
-    DataLocationDto, DeleteHistoryEntryRequest, HistoryFilter, HistoryPage, HistoryPageRequest,
-    ListAudioDevicesResponse, ListModelsResponse, MicrophoneTestResponse, ModelId,
-    OpenMainWindowRequest, PermissionRequest, PermissionsResponse, SaveSettingsResponse,
-    SetApiKeyRequest, SettingsView, SetupCheckpoint, SetupStateView, UpdateSettingsRequest,
-    UpdateStateDto,
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{
+    AppState, AudioDevice, ClearDataResult, DataLocation, MainWindowSection,
+    MicrophoneTestResponse, ModelSummary, PermissionKind, PermissionsResponse,
+    SaveSettingsResponse, SetApiKeyRequest, SettingsView, SetupStateView, UpdateState,
+};
+use whispernow_domain::{
+    ClearDataCategory, EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, LlmProvider,
+    ModelId, Settings, SetupCheckpoint,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod fake;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ClientError {
-    Api(ApiErrorDto),
-    /// The call or its answer could not cross the bridge.
-    Transport,
+pub(crate) fn connection_error() -> AppError {
+    AppError::new(
+        whispernow_domain::ErrorCategory::General,
+        "desktop_unreachable",
+        "The desktop connection failed",
+    )
 }
 
-impl ClientError {
-    #[must_use]
-    pub const fn api_error(&self) -> Option<&ApiErrorDto> {
-        match self {
-            Self::Api(error) => Some(error),
-            Self::Transport => None,
-        }
-    }
-
-    #[must_use]
-    pub fn summary(&self) -> String {
-        match self {
-            Self::Api(error) => error.summary.clone(),
-            Self::Transport => "The desktop connection failed".to_owned(),
-        }
-    }
-}
-
-type Answer<R> = Result<R, ClientError>;
+type Answer<R> = Result<R, AppError>;
 
 /// Invokes `command` with `request`, or with no input when it takes none.
 async fn invoke<Q, R>(command: &'static str, request: Option<&Q>) -> Answer<R>
@@ -57,9 +42,12 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let request = request.map(|request| serde_json::to_value(request).unwrap_or_default());
+        let request = request
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|_| connection_error())?;
         let answer = fake::invoke(command, request).await?;
-        serde_json::from_value(answer).map_err(|_| ClientError::Transport)
+        serde_json::from_value(answer).map_err(|_| connection_error())
     }
 }
 
@@ -67,7 +55,7 @@ async fn call<R: DeserializeOwned>(command: &'static str) -> Answer<R> {
     invoke::<(), R>(command, None).await
 }
 
-pub(crate) async fn get_state() -> Answer<AppStateDto> {
+pub(crate) async fn get_state() -> Answer<AppState> {
     call("get_state").await
 }
 
@@ -75,9 +63,7 @@ pub(crate) async fn get_settings() -> Answer<SettingsView> {
     call("get_settings").await
 }
 
-pub(crate) async fn update_settings(
-    request: &UpdateSettingsRequest,
-) -> Answer<SaveSettingsResponse> {
+pub(crate) async fn update_settings(request: &Settings) -> Answer<SaveSettingsResponse> {
     invoke("update_settings", Some(request)).await
 }
 
@@ -85,11 +71,11 @@ pub(crate) async fn set_api_key(request: &SetApiKeyRequest) -> Answer<SettingsVi
     invoke("set_api_key", Some(request)).await
 }
 
-pub(crate) async fn clear_api_key(request: &ClearApiKeyRequest) -> Answer<SettingsView> {
+pub(crate) async fn clear_api_key(request: &LlmProvider) -> Answer<SettingsView> {
     invoke("clear_api_key", Some(request)).await
 }
 
-pub(crate) async fn list_audio_devices() -> Answer<ListAudioDevicesResponse> {
+pub(crate) async fn list_audio_devices() -> Answer<Vec<AudioDevice>> {
     call("list_audio_devices").await
 }
 
@@ -97,7 +83,7 @@ pub(crate) async fn test_microphone() -> Answer<MicrophoneTestResponse> {
     call("test_microphone").await
 }
 
-pub(crate) async fn list_models() -> Answer<ListModelsResponse> {
+pub(crate) async fn list_models() -> Answer<Vec<ModelSummary>> {
     call("list_models").await
 }
 
@@ -137,11 +123,11 @@ pub(crate) async fn get_permissions() -> Answer<PermissionsResponse> {
     call("get_permissions").await
 }
 
-pub(crate) async fn request_permission(request: &PermissionRequest) -> Answer<PermissionsResponse> {
+pub(crate) async fn request_permission(request: &PermissionKind) -> Answer<PermissionsResponse> {
     invoke("request_permission", Some(request)).await
 }
 
-pub(crate) async fn open_permission_settings(request: &PermissionRequest) -> Answer<()> {
+pub(crate) async fn open_permission_settings(request: &PermissionKind) -> Answer<()> {
     invoke("open_permission_settings", Some(request)).await
 }
 
@@ -161,11 +147,7 @@ pub(crate) async fn dismiss_recording_overlay() -> Answer<()> {
     call("dismiss_recording_overlay").await
 }
 
-pub(crate) async fn copy_last_transcript() -> Answer<()> {
-    call("copy_last_transcript").await
-}
-
-pub(crate) async fn open_main_window(request: &OpenMainWindowRequest) -> Answer<()> {
+pub(crate) async fn open_main_window(request: &MainWindowSection) -> Answer<()> {
     invoke("open_main_window", Some(request)).await
 }
 
@@ -186,7 +168,7 @@ pub(crate) async fn open_recordings_folder() -> Answer<()> {
     call("open_recordings_folder").await
 }
 
-pub(crate) async fn delete_history_entry(request: &DeleteHistoryEntryRequest) -> Answer<()> {
+pub(crate) async fn delete_history_entry(request: &EntryId) -> Answer<()> {
     invoke("delete_history_entry", Some(request)).await
 }
 
@@ -194,12 +176,12 @@ pub(crate) async fn clear_history() -> Answer<()> {
     call("clear_history").await
 }
 
-pub(crate) async fn data_locations() -> Answer<Vec<DataLocationDto>> {
+pub(crate) async fn data_locations() -> Answer<Vec<DataLocation>> {
     call("data_locations").await
 }
 
-pub(crate) async fn clear_data(request: &ClearDataRequest) -> Answer<ClearDataResult> {
-    invoke("clear_data", Some(request)).await
+pub(crate) async fn clear_data(request: &[ClearDataCategory]) -> Answer<ClearDataResult> {
+    invoke("clear_data", Some(&request)).await
 }
 
 pub(crate) async fn suspend_shortcuts() -> Answer<()> {
@@ -210,23 +192,23 @@ pub(crate) async fn resume_shortcuts() -> Answer<()> {
     call("resume_shortcuts").await
 }
 
-pub(crate) async fn get_update_state() -> Answer<UpdateStateDto> {
+pub(crate) async fn get_update_state() -> Answer<UpdateState> {
     call("get_update_state").await
 }
 
-pub(crate) async fn check_for_updates() -> Answer<UpdateStateDto> {
+pub(crate) async fn check_for_updates() -> Answer<UpdateState> {
     call("check_for_updates").await
 }
 
-pub(crate) async fn dismiss_update() -> Answer<UpdateStateDto> {
+pub(crate) async fn dismiss_update() -> Answer<UpdateState> {
     call("dismiss_update").await
 }
 
-pub(crate) async fn restart_to_update() -> Answer<UpdateStateDto> {
+pub(crate) async fn restart_to_update() -> Answer<UpdateState> {
     call("restart_to_update").await
 }
 
-pub(crate) async fn open_update_release_page() -> Answer<UpdateStateDto> {
+pub(crate) async fn open_update_release_page() -> Answer<UpdateState> {
     call("open_update_release_page").await
 }
 
@@ -260,9 +242,10 @@ mod wasm {
     use js_sys::Function;
     use serde::{Serialize, de::DeserializeOwned};
     use wasm_bindgen::{JsCast as _, closure::Closure, prelude::*};
-    use whispernow_api::{EventPayload, GetHistoryAudioRequest};
+    use whispernow_domain::EntryId;
+    use whispernow_domain::ipc::EventPayload;
 
-    use super::{Answer, ClientError};
+    use super::{Answer, AppError, connection_error};
 
     #[wasm_bindgen(module = "/public/tauri_bridge.js")]
     extern "C" {
@@ -315,8 +298,8 @@ mod wasm {
         async fn listen_maximized_js(callback: &Function) -> Result<u32, JsValue>;
     }
 
-    fn from_js(value: JsValue) -> ClientError {
-        serde_wasm_bindgen::from_value(value).map_or(ClientError::Transport, ClientError::Api)
+    fn from_js(value: JsValue) -> AppError {
+        serde_wasm_bindgen::from_value(value).unwrap_or_else(|_| connection_error())
     }
 
     pub(super) async fn invoke<Q, R>(command: &str, request: Option<&Q>) -> Answer<R>
@@ -326,12 +309,12 @@ mod wasm {
     {
         let request = match request {
             Some(request) => {
-                serde_wasm_bindgen::to_value(request).map_err(|_| ClientError::Transport)?
+                serde_wasm_bindgen::to_value(request).map_err(|_| connection_error())?
             }
             None => JsValue::UNDEFINED,
         };
         let response = invoke_typed(command, request).await.map_err(from_js)?;
-        serde_wasm_bindgen::from_value(response).map_err(|_| ClientError::Transport)
+        serde_wasm_bindgen::from_value(response).map_err(|_| connection_error())
     }
 
     pub(super) async fn write_clipboard_text(text: &str) -> Answer<()> {
@@ -352,8 +335,8 @@ mod wasm {
         }
     }
 
-    pub async fn history_audio(request: &GetHistoryAudioRequest) -> Answer<RecordingAudio> {
-        let request = serde_wasm_bindgen::to_value(request).map_err(|_| ClientError::Transport)?;
+    pub async fn history_audio(request: &EntryId) -> Answer<RecordingAudio> {
+        let request = serde_wasm_bindgen::to_value(request).map_err(|_| connection_error())?;
         audio_blob("get_history_audio", request)
             .await
             .map(RecordingAudio)
@@ -363,7 +346,7 @@ mod wasm {
     pub async fn listen_all(
         event_names: &[&str],
         callback: impl FnMut(EventPayload) + 'static,
-    ) -> Result<ListenerOwner, ClientError> {
+    ) -> Result<ListenerOwner, AppError> {
         let mut callback = callback;
         let closure = Closure::wrap(Box::new(move |value: JsValue| {
             if let Ok(event) = serde_wasm_bindgen::from_value::<EventPayload>(value) {
@@ -409,7 +392,7 @@ mod wasm {
     /// Reports whether this window is maximized, now and after each resize.
     pub(crate) async fn listen_maximized(
         callback: impl FnMut(bool) + 'static,
-    ) -> Result<ListenerOwner, ClientError> {
+    ) -> Result<ListenerOwner, AppError> {
         let mut callback = callback;
         let closure = Closure::wrap(Box::new(move |value: JsValue| {
             if let Some(maximized) = value.as_bool() {

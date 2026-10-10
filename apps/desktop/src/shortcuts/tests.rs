@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use whispernow_api::ShortcutKey;
+use whispernow_domain::{ShortcutKey};
 
 use super::*;
 

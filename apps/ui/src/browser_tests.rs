@@ -2,7 +2,8 @@ use dioxus::prelude::*;
 use wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::*;
-use whispernow_api::{AppStateDto, ModelAvailability, ModelDto, ModelId, ModelStateDto, PhaseDto};
+use whispernow_domain::ipc::{AppState, ModelState, ModelSummary, Phase};
+use whispernow_domain::{ModelAvailability, ModelId};
 
 use crate::{AppShell, ManagementState, Navigator, Route, UiContext, UiState};
 
@@ -164,11 +165,11 @@ fn model_id() -> ModelId {
     ModelId::new("current-model").expect("fixture model id")
 }
 
-fn idle_snapshot() -> AppStateDto {
-    AppStateDto {
-        phase: PhaseDto::Idle,
+fn idle_snapshot() -> AppState {
+    AppState {
+        phase: Phase::Idle,
         selected_model_id: model_id(),
-        model_state: ModelStateDto::Ready,
+        model_state: ModelState::Ready,
         last_transcript: None,
         error: None,
         active_downloads: Vec::new(),
@@ -178,19 +179,19 @@ fn idle_snapshot() -> AppStateDto {
 
 fn management_with_history() -> ManagementState {
     let mut management = ManagementState::default();
-    management.history_rows_filter = Some(whispernow_api::HistoryFilter::default());
+    management.history_rows_filter = Some(whispernow_domain::HistoryFilter::default());
     let mut entry = crate::test_support::history_entry(7, "raw 7");
     entry.cleaned_text = Some("cleaned 7".to_owned());
     management.history = vec![entry];
-    management.models = vec![ModelDto {
+    management.models = vec![ModelSummary {
         id: model_id(),
         display_name: "Current model".to_owned(),
-        family: whispernow_api::ModelFamily::Whisper,
+        family: whispernow_domain::ModelFamily::Whisper,
         availability: ModelAvailability::Downloaded,
         languages: vec!["en".to_owned()],
         size_bytes: 116_204_861,
-        speed: whispernow_api::Rating::new(5),
-        accuracy: whispernow_api::Rating::new(1),
+        speed: whispernow_domain::Rating::new(5),
+        accuracy: whispernow_domain::Rating::new(1),
         benchmark: None,
         recommended: false,
     }];

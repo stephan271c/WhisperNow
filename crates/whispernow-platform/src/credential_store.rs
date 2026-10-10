@@ -1,5 +1,6 @@
 //! Operating-system credential store for LLM provider API keys.
 
+#[cfg(any(test, feature = "test-support"))]
 use std::{
     collections::BTreeMap,
     sync::{Mutex, PoisonError},
@@ -70,13 +71,14 @@ fn unavailable(operation: &'static str) -> CredentialStoreUnavailable {
     CredentialStoreUnavailable
 }
 
-/// A store in memory, for tests. Every call fails while it is unavailable.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default)]
 pub struct MemoryCredentialStore {
     entries: Mutex<BTreeMap<String, ApiKey>>,
     unavailable: std::sync::atomic::AtomicBool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl MemoryCredentialStore {
     pub fn set_available(&self, available: bool) {
         self.unavailable
@@ -94,6 +96,7 @@ impl MemoryCredentialStore {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl CredentialStore for MemoryCredentialStore {
     fn read(&self, account: &str) -> Result<Option<ApiKey>, CredentialStoreUnavailable> {
         Ok(self.entries()?.get(account).cloned())

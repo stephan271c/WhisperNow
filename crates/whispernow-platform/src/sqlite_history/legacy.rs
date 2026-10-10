@@ -3,11 +3,12 @@ use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
 };
+use whispernow_domain::AppError;
 
 use rusqlite::{Connection, Transaction, params};
 use serde::Deserialize;
 use time::{OffsetDateTime, PrimitiveDateTime, format_description::well_known::Rfc3339};
-use whispernow_domain::{AppError, EntryStatus, UtcMillis};
+use whispernow_domain::{EntryStatus, ErrorCategory, UtcMillis};
 
 use super::{history_error, status_text};
 
@@ -37,7 +38,8 @@ pub(super) fn import_legacy(
             code = "history_import_invalid",
             "legacy transcription history was quarantined"
         );
-        return Ok(Some(AppError::redacted(
+        return Ok(Some(AppError::new(
+            ErrorCategory::General,
             "history_import_invalid",
             "Legacy transcription history could not be imported",
         )));

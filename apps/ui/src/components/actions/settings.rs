@@ -1,9 +1,10 @@
-use whispernow_api::{
-    ApiKey, ClearApiKeyRequest, LlmProvider, SetApiKeyRequest, Settings, SettingsView,
-};
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{SetApiKeyRequest, SettingsView};
+use whispernow_domain::{ApiKey, LlmProvider, Settings};
 
 use super::UiActions;
-use crate::client::{self, ClientError};
+use crate::client;
+
 use crate::{SettingKey, UiOperation};
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
@@ -27,7 +28,7 @@ impl UiActions {
             let answer = client::update_settings(&request).await;
             self.management()
                 .write()
-                .finish_settings_update(answer.map_err(|error| error.summary()));
+                .finish_settings_update(answer.map_err(|error| error.summary.clone()));
             self.send_settings_changes();
         });
     }
@@ -42,15 +43,14 @@ impl UiActions {
     }
 
     pub(crate) fn clear_credential(self, provider: LlmProvider) {
-        let request = ClearApiKeyRequest { provider };
         self.run(
             UiOperation::CredentialMutation,
-            async move { client::clear_api_key(&request).await },
+            async move { client::clear_api_key(&provider).await },
             Self::finish_credential_mutation,
         );
     }
 
-    fn finish_credential_mutation(self, answer: Result<SettingsView, ClientError>) {
+    fn finish_credential_mutation(self, answer: Result<SettingsView, AppError>) {
         match answer {
             Ok(settings) => self
                 .management()

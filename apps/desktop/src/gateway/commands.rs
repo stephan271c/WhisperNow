@@ -1,9 +1,12 @@
-use whispernow_api::{
-    ApiErrorDto, AppStateDto, ClearApiKeyRequest, ClearDataRequest, ClearDataResult,
-    DataLocationDto, DeleteHistoryEntryRequest, GetHistoryAudioRequest, HistoryPage,
-    HistoryPageRequest, ListAudioDevicesResponse, ListModelsResponse, MicrophoneTestResponse,
-    ModelId, OpenMainWindowRequest, PermissionRequest, PermissionsResponse, SaveSettingsResponse,
-    SetApiKeyRequest, SettingsView, SetupCheckpoint, SetupStateView, UpdateSettingsRequest,
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{
+    AppState, AudioDevice, ClearDataResult, DataLocation, MainWindowSection,
+    MicrophoneTestResponse, ModelSummary, PermissionKind, PermissionsResponse,
+    SaveSettingsResponse, SetApiKeyRequest, SettingsView, SetupStateView,
+};
+use whispernow_domain::{
+    ClearDataCategory, EntryId, HistoryPage, HistoryPageRequest, LlmProvider, ModelId, Settings,
+    SetupCheckpoint,
 };
 
 use super::{Failure, Gateway, run_blocking};
@@ -12,25 +15,25 @@ use crate::services::{NativeServices, RecordingTrigger};
 #[tauri::command]
 pub(crate) async fn get_settings(
     state: tauri::State<'_, Gateway>,
-) -> Result<SettingsView, ApiErrorDto> {
+) -> Result<SettingsView, AppError> {
     state.settings_view().await
 }
 
 #[tauri::command]
 pub(crate) async fn update_settings(
-    request: UpdateSettingsRequest,
+    request: Settings,
     state: tauri::State<'_, Gateway>,
-) -> Result<SaveSettingsResponse, ApiErrorDto> {
+) -> Result<SaveSettingsResponse, AppError> {
     state.update_settings(request).await
 }
 
 #[tauri::command]
-pub(crate) async fn suspend_shortcuts(state: tauri::State<'_, Gateway>) -> Result<(), ApiErrorDto> {
+pub(crate) async fn suspend_shortcuts(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state.set_shortcut_capture(true).await
 }
 
 #[tauri::command]
-pub(crate) async fn resume_shortcuts(state: tauri::State<'_, Gateway>) -> Result<(), ApiErrorDto> {
+pub(crate) async fn resume_shortcuts(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state.set_shortcut_capture(false).await
 }
 
@@ -38,7 +41,7 @@ pub(crate) async fn resume_shortcuts(state: tauri::State<'_, Gateway>) -> Result
 pub(crate) async fn set_api_key(
     request: SetApiKeyRequest,
     state: tauri::State<'_, Gateway>,
-) -> Result<SettingsView, ApiErrorDto> {
+) -> Result<SettingsView, AppError> {
     state
         .run_command("set_api_key", Failure::Local, move |services, _| {
             services.settings.set_api_key(&request)
@@ -48,9 +51,9 @@ pub(crate) async fn set_api_key(
 
 #[tauri::command]
 pub(crate) async fn clear_api_key(
-    request: ClearApiKeyRequest,
+    request: LlmProvider,
     state: tauri::State<'_, Gateway>,
-) -> Result<SettingsView, ApiErrorDto> {
+) -> Result<SettingsView, AppError> {
     state
         .run_command("clear_api_key", Failure::Local, move |services, _| {
             services.settings.clear_api_key(request)
@@ -61,7 +64,7 @@ pub(crate) async fn clear_api_key(
 #[tauri::command]
 pub(crate) async fn list_audio_devices(
     state: tauri::State<'_, Gateway>,
-) -> Result<ListAudioDevicesResponse, ApiErrorDto> {
+) -> Result<Vec<AudioDevice>, AppError> {
     state
         .run_command("list_audio_devices", Failure::Published, |services, _| {
             Ok(services.list_audio_devices())
@@ -72,7 +75,7 @@ pub(crate) async fn list_audio_devices(
 #[tauri::command]
 pub(crate) async fn test_microphone(
     state: tauri::State<'_, Gateway>,
-) -> Result<MicrophoneTestResponse, ApiErrorDto> {
+) -> Result<MicrophoneTestResponse, AppError> {
     state
         .run_command("test_microphone", Failure::Local, |services, _| {
             services.test_microphone()
@@ -83,7 +86,7 @@ pub(crate) async fn test_microphone(
 #[tauri::command]
 pub(crate) async fn list_models(
     state: tauri::State<'_, Gateway>,
-) -> Result<ListModelsResponse, ApiErrorDto> {
+) -> Result<Vec<ModelSummary>, AppError> {
     state
         .run_command("list_models", Failure::Published, |services, _| {
             services.models.list()
@@ -94,7 +97,7 @@ pub(crate) async fn list_models(
 #[tauri::command]
 pub(crate) async fn get_setup_state(
     state: tauri::State<'_, Gateway>,
-) -> Result<SetupStateView, ApiErrorDto> {
+) -> Result<SetupStateView, AppError> {
     state
         .run_command("get_setup_state", Failure::Published, |services, _| {
             services.settings.get_setup_state()
@@ -105,7 +108,7 @@ pub(crate) async fn get_setup_state(
 #[tauri::command]
 pub(crate) async fn data_locations(
     state: tauri::State<'_, Gateway>,
-) -> Result<Vec<DataLocationDto>, ApiErrorDto> {
+) -> Result<Vec<DataLocation>, AppError> {
     state
         .run_command("data_locations", Failure::Published, |services, _| {
             services.data_locations()
@@ -117,7 +120,7 @@ pub(crate) async fn data_locations(
 #[tauri::command]
 pub(crate) async fn dismiss_recording_overlay(
     state: tauri::State<'_, Gateway>,
-) -> Result<(), ApiErrorDto> {
+) -> Result<(), AppError> {
     state.services.state.dismiss_error();
     Ok(())
 }
@@ -125,9 +128,7 @@ pub(crate) async fn dismiss_recording_overlay(
 /// Copies the last transcript for a manual paste and dismisses the "not pasted" failure it
 /// recovers from.
 #[tauri::command]
-pub(crate) async fn copy_last_transcript(
-    state: tauri::State<'_, Gateway>,
-) -> Result<(), ApiErrorDto> {
+pub(crate) async fn copy_last_transcript(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
         .run_command("copy_last_transcript", Failure::Published, |services, _| {
             services.copy_last_transcript()
@@ -141,20 +142,18 @@ pub(crate) async fn copy_last_transcript(
 /// it came from.
 #[tauri::command]
 pub(crate) async fn open_main_window(
-    request: OpenMainWindowRequest,
+    request: MainWindowSection,
     app: tauri::AppHandle,
     state: tauri::State<'_, Gateway>,
-) -> Result<(), ApiErrorDto> {
-    state.request_navigation(request.section);
+) -> Result<(), AppError> {
+    state.request_navigation(request);
     crate::show_settings_window(&app);
     state.services.state.dismiss_error();
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) async fn get_state(
-    state: tauri::State<'_, Gateway>,
-) -> Result<AppStateDto, ApiErrorDto> {
+pub(crate) async fn get_state(state: tauri::State<'_, Gateway>) -> Result<AppState, AppError> {
     state
         .run_command("get_state", Failure::Published, |services, _| {
             Ok(services.state.snapshot())
@@ -166,7 +165,7 @@ pub(crate) async fn get_state(
 pub(crate) async fn get_history(
     request: HistoryPageRequest,
     state: tauri::State<'_, Gateway>,
-) -> Result<HistoryPage, ApiErrorDto> {
+) -> Result<HistoryPage, AppError> {
     state
         .run_command("get_history", Failure::Local, move |services, _| {
             services.history(&request)
@@ -177,12 +176,12 @@ pub(crate) async fn get_history(
 /// Returns an entry's kept audio as raw WAV bytes, never as a path.
 #[tauri::command]
 pub(crate) async fn get_history_audio(
-    request: GetHistoryAudioRequest,
+    request: EntryId,
     state: tauri::State<'_, Gateway>,
-) -> Result<tauri::ipc::Response, ApiErrorDto> {
+) -> Result<tauri::ipc::Response, AppError> {
     state
         .run_command("get_history_audio", Failure::Local, move |services, _| {
-            services.history.audio(request.id)
+            services.history.audio(request)
         })
         .await
         .map(tauri::ipc::Response::new)
@@ -191,7 +190,7 @@ pub(crate) async fn get_history_audio(
 #[tauri::command]
 pub(crate) async fn open_recordings_folder(
     state: tauri::State<'_, Gateway>,
-) -> Result<(), ApiErrorDto> {
+) -> Result<(), AppError> {
     state
         .run_command("open_recordings_folder", Failure::Local, |services, _| {
             services.open_recordings_folder()
@@ -201,9 +200,9 @@ pub(crate) async fn open_recordings_folder(
 
 #[tauri::command]
 pub(crate) async fn delete_history_entry(
-    request: DeleteHistoryEntryRequest,
+    request: EntryId,
     state: tauri::State<'_, Gateway>,
-) -> Result<(), ApiErrorDto> {
+) -> Result<(), AppError> {
     state
         .run_command(
             "delete_history_entry",
@@ -214,7 +213,7 @@ pub(crate) async fn delete_history_entry(
 }
 
 #[tauri::command]
-pub(crate) async fn clear_history(state: tauri::State<'_, Gateway>) -> Result<(), ApiErrorDto> {
+pub(crate) async fn clear_history(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
         .run_command("clear_history", Failure::Published, |services, _| {
             services.clear_history()
@@ -224,9 +223,9 @@ pub(crate) async fn clear_history(state: tauri::State<'_, Gateway>) -> Result<()
 
 #[tauri::command]
 pub(crate) async fn clear_data(
-    request: ClearDataRequest,
+    request: Vec<ClearDataCategory>,
     state: tauri::State<'_, Gateway>,
-) -> Result<ClearDataResult, ApiErrorDto> {
+) -> Result<ClearDataResult, AppError> {
     state.clear_data(request).await
 }
 
@@ -234,7 +233,7 @@ pub(crate) async fn clear_data(
 pub(crate) async fn download_model(
     request: ModelId,
     state: tauri::State<'_, Gateway>,
-) -> Result<(), ApiErrorDto> {
+) -> Result<(), AppError> {
     state
         .run_command(
             "download_model",
@@ -248,7 +247,7 @@ pub(crate) async fn download_model(
 pub(crate) async fn cancel_download(
     request: ModelId,
     state: tauri::State<'_, Gateway>,
-) -> Result<(), ApiErrorDto> {
+) -> Result<(), AppError> {
     state
         .run_command("cancel_download", Failure::Published, move |services, _| {
             services.models.cancel_download(&request)
@@ -260,7 +259,7 @@ pub(crate) async fn cancel_download(
 pub(crate) async fn select_model(
     request: ModelId,
     state: tauri::State<'_, Gateway>,
-) -> Result<(), ApiErrorDto> {
+) -> Result<(), AppError> {
     state
         .run_command("select_model", Failure::Published, move |services, _| {
             services
@@ -274,7 +273,7 @@ pub(crate) async fn select_model(
 pub(crate) async fn delete_model(
     request: ModelId,
     state: tauri::State<'_, Gateway>,
-) -> Result<(), ApiErrorDto> {
+) -> Result<(), AppError> {
     state
         .run_command("delete_model", Failure::Published, move |services, _| {
             services.models.delete(&request, &services.settings)
@@ -286,7 +285,7 @@ pub(crate) async fn delete_model(
 pub(crate) async fn save_setup_checkpoint(
     request: SetupCheckpoint,
     state: tauri::State<'_, Gateway>,
-) -> Result<SetupStateView, ApiErrorDto> {
+) -> Result<SetupStateView, AppError> {
     state
         .run_command(
             "save_setup_checkpoint",
@@ -304,14 +303,14 @@ pub(crate) async fn save_setup_checkpoint(
 pub(crate) async fn complete_setup(
     request: SetupCheckpoint,
     state: tauri::State<'_, Gateway>,
-) -> Result<SaveSettingsResponse, ApiErrorDto> {
+) -> Result<SaveSettingsResponse, AppError> {
     state.complete_setup(request).await
 }
 
 #[tauri::command]
 pub(crate) async fn restart_setup(
     state: tauri::State<'_, Gateway>,
-) -> Result<SetupStateView, ApiErrorDto> {
+) -> Result<SetupStateView, AppError> {
     state
         .run_command("restart_setup", Failure::Local, |services, _| {
             services.settings.restart_setup()
@@ -322,30 +321,26 @@ pub(crate) async fn restart_setup(
 #[tauri::command]
 pub(crate) async fn get_permissions(
     state: tauri::State<'_, Gateway>,
-) -> Result<PermissionsResponse, ApiErrorDto> {
+) -> Result<PermissionsResponse, AppError> {
     state.permissions().await
 }
 
 #[tauri::command]
 pub(crate) async fn request_permission(
-    request: PermissionRequest,
+    request: PermissionKind,
     state: tauri::State<'_, Gateway>,
-) -> Result<PermissionsResponse, ApiErrorDto> {
+) -> Result<PermissionsResponse, AppError> {
     state.request_permission(request).await
 }
 
 #[tauri::command]
-pub(crate) async fn open_permission_settings(
-    request: PermissionRequest,
-) -> Result<(), ApiErrorDto> {
-    run_blocking(move || NativeServices::open_permission_settings(request.kind)).await?
+pub(crate) async fn open_permission_settings(request: PermissionKind) -> Result<(), AppError> {
+    run_blocking(move || NativeServices::open_permission_settings(request)).await?
 }
 
 /// `stop_recording` ends it, and its transcript is neither pasted nor kept.
 #[tauri::command]
-pub(crate) async fn start_test_dictation(
-    state: tauri::State<'_, Gateway>,
-) -> Result<(), ApiErrorDto> {
+pub(crate) async fn start_test_dictation(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
         .run_command("start_test_dictation", Failure::Local, |services, _| {
             services
@@ -357,7 +352,7 @@ pub(crate) async fn start_test_dictation(
 }
 
 #[tauri::command]
-pub(crate) async fn stop_recording(state: tauri::State<'_, Gateway>) -> Result<(), ApiErrorDto> {
+pub(crate) async fn stop_recording(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
         .run_command("stop_recording", Failure::Published, |services, _| {
             services.dictation.stop()
@@ -366,7 +361,7 @@ pub(crate) async fn stop_recording(state: tauri::State<'_, Gateway>) -> Result<(
 }
 
 #[tauri::command]
-pub(crate) async fn cancel_recording(state: tauri::State<'_, Gateway>) -> Result<(), ApiErrorDto> {
+pub(crate) async fn cancel_recording(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
         .run_command("cancel_recording", Failure::Published, |services, _| {
             services.dictation.cancel()

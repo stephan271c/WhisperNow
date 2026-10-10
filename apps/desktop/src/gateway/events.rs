@@ -1,7 +1,7 @@
 use std::sync::{Arc, mpsc};
 
 use tauri::{Emitter as _, Manager as _};
-use whispernow_api::{AppStateDto, EventPayload, PhaseDto};
+use whispernow_domain::ipc::{AppState, EventPayload, Phase};
 
 use super::Gateway;
 use crate::overlay::RecordingOverlay;
@@ -41,14 +41,14 @@ impl Default for Followed {
 }
 
 impl Followed {
-    fn observe(&mut self, app: &tauri::AppHandle, overlay: &RecordingOverlay, state: &AppStateDto) {
+    fn observe(&mut self, app: &tauri::AppHandle, overlay: &RecordingOverlay, state: &AppState) {
         overlay.observe(state);
         let Some(app_state) = app.try_state::<Gateway>() else {
             return;
         };
         app_state.tray.apply_snapshot(state);
         app_state.observe_dictation(state.phase.is_busy());
-        let shortcuts_enabled = !matches!(state.phase, PhaseDto::Paused | PhaseDto::Updating);
+        let shortcuts_enabled = !matches!(state.phase, Phase::Paused | Phase::Updating);
         if shortcuts_enabled != self.shortcuts_enabled {
             self.shortcuts_enabled = shortcuts_enabled;
             let app = app.clone();

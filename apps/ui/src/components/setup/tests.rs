@@ -1,29 +1,29 @@
 use dioxus::prelude::*;
-use whispernow_api::{
-    ApiErrorDto, AppStateDto, ErrorCategoryDto, EventPayload, ListModelsResponse,
-    ModelAvailability, PasteHelperSetupDto, PermissionDto, PermissionKindDto, PermissionRequest,
-    PermissionStatusDto, PermissionsResponse, PhaseDto, RecordingMode, RecoveryActionDto,
-    SetupCheckpoint, SetupStateView, SetupStep, SetupTestResultDto, Shortcut, ShortcutKey,
-    ShortcutModifier, TranscriptResponse,
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{
+    AppState, ErrorCategory, EventPayload, PasteHelperSetup, Permission, PermissionKind,
+    PermissionStatus, PermissionsResponse, Phase, SetupStateView, SetupTestResult,
+};
+use whispernow_domain::{
+    ModelAvailability, RecordingMode, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
+    ShortcutModifier,
 };
 
 use super::super::actions::PERMISSION_POLLS;
 use super::super::tests::{loaded, model, shell};
-use crate::client::{ClientError, fake};
+use crate::client::fake;
 use crate::test_support::{Page, focused, snapshot, tag, text};
 use crate::{ManagementState, SetupTest};
 
 /// Setup saved at `step`, with its model in `availability`.
 fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState {
     let mut management = loaded();
-    management.install_models(ListModelsResponse {
-        models: vec![model("base", "Base", availability)],
-    });
+    management.install_models(vec![model("base", "Base", availability)]);
     management.install_setup(SetupStateView {
         first_run_complete: false,
         checkpoint: SetupCheckpoint {
             step,
-            model_id: whispernow_api::ModelId::new("base").expect("fixture model id"),
+            model_id: whispernow_domain::ModelId::new("base").expect("fixture model id"),
             input_device: None,
             recording_shortcut: Shortcut {
                 modifiers: [
@@ -41,7 +41,7 @@ fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState
 }
 
 fn home(management: ManagementState) -> Page {
-    shell(snapshot(PhaseDto::Idle), management)
+    shell(snapshot(Phase::Idle), management)
 }
 
 /// Setup opened from the Home checklist.
@@ -69,7 +69,7 @@ fn saved_at(page: &Page, step: SetupStep) -> SetupStateView {
     setup
 }
 
-fn outcome(page: &Page) -> Option<SetupTestResultDto> {
+fn outcome(page: &Page) -> Option<SetupTestResult> {
     let management = page.context().management;
     match management.read().setup_test.clone() {
         Some(SetupTest::Finished(outcome)) => Some(outcome),
@@ -90,17 +90,17 @@ fn saved_step() -> SetupStep {
         .step
 }
 
-fn cards(microphone: PermissionStatusDto, shortcuts: PermissionStatusDto) -> PermissionsResponse {
-    let card = |kind, status| PermissionDto {
+fn cards(microphone: PermissionStatus, shortcuts: PermissionStatus) -> PermissionsResponse {
+    let card = |kind, status| Permission {
         kind,
         status,
-        can_request: status != PermissionStatusDto::Granted,
+        can_request: status != PermissionStatus::Granted,
         can_open_settings: false,
     };
     PermissionsResponse {
         permissions: vec![
-            card(PermissionKindDto::Microphone, microphone),
-            card(PermissionKindDto::GlobalShortcuts, shortcuts),
+            card(PermissionKind::Microphone, microphone),
+            card(PermissionKind::GlobalShortcuts, shortcuts),
         ],
         paste_helper_setup: None,
     }
@@ -114,20 +114,15 @@ fn current_step(html: &str) -> usize {
     stepper[..current].matches("<li").count()
 }
 
-fn state_event(phase: PhaseDto, change: impl FnOnce(&mut AppStateDto)) -> EventPayload {
-    let mut state = snapshot(PhaseDto::Idle);
+fn state_event(phase: Phase, change: impl FnOnce(&mut AppState)) -> EventPayload {
+    let mut state = snapshot(Phase::Idle);
     state.phase = phase;
     change(&mut state);
     EventPayload::StateChanged { state }
 }
 
-fn error(code: &str, summary: &str, recovery: Option<RecoveryActionDto>) -> ApiErrorDto {
-    ApiErrorDto {
-        category: ErrorCategoryDto::Recognition,
-        code: code.to_owned(),
-        summary: summary.to_owned(),
-        recovery,
-    }
+fn error(code: &str, summary: &str, category: ErrorCategory) -> AppError {
+    AppError::new(category, code, summary)
 }
 
 #[test]
@@ -152,8 +147,8 @@ fn granted_permissions_move_setup_on_after_a_request() {
     setup.answer(
         "get_permissions",
         Ok(cards(
-            PermissionStatusDto::NotDetermined,
-            PermissionStatusDto::NotDetermined,
+            PermissionStatus::NotDetermined,
+            PermissionStatus::NotDetermined,
         )),
     );
     assert!(
@@ -166,14 +161,14 @@ fn granted_permissions_move_setup_on_after_a_request() {
     setup.click("permission-microphone-grant");
     assert_eq!(setup.sent(), ["request_permission"]);
     assert_eq!(
-        fake::requests::<PermissionRequest>("request_permission")[0].kind,
-        PermissionKindDto::Microphone
+        fake::requests::<PermissionKind>("request_permission")[0],
+        PermissionKind::Microphone
     );
     setup.answer(
         "request_permission",
         Ok(cards(
-            PermissionStatusDto::Granted,
-            PermissionStatusDto::NotDetermined,
+            PermissionStatus::Granted,
+            PermissionStatus::NotDetermined,
         )),
     );
     assert!(setup.sent().is_empty(), "one card still waits");
@@ -193,10 +188,7 @@ fn granted_permissions_move_setup_on_after_a_request() {
     );
     setup.answer(
         "get_permissions",
-        Ok(cards(
-            PermissionStatusDto::Granted,
-            PermissionStatusDto::Granted,
-        )),
+        Ok(cards(PermissionStatus::Granted, PermissionStatus::Granted)),
     );
     assert_eq!(
         setup.sent(),
@@ -226,8 +218,8 @@ fn requested(answer: PermissionsResponse) -> (Page, Vec<&'static str>) {
     setup.answer(
         "get_permissions",
         Ok(cards(
-            PermissionStatusDto::NotDetermined,
-            PermissionStatusDto::NotDetermined,
+            PermissionStatus::NotDetermined,
+            PermissionStatus::NotDetermined,
         )),
     );
     setup.click("permission-microphone-grant");
@@ -240,8 +232,8 @@ fn requested(answer: PermissionsResponse) -> (Page, Vec<&'static str>) {
 #[test]
 fn a_card_this_session_cannot_provide_does_not_hold_setup_back() {
     let (mut setup, follow_up) = requested(cards(
-        PermissionStatusDto::Granted,
-        PermissionStatusDto::Unavailable,
+        PermissionStatus::Granted,
+        PermissionStatus::Unavailable,
     ));
     assert_eq!(
         follow_up,
@@ -254,7 +246,7 @@ fn a_card_this_session_cannot_provide_does_not_hold_setup_back() {
 
 #[test]
 fn a_final_denial_ends_the_watch_without_moving_on() {
-    let mut denied = cards(PermissionStatusDto::Denied, PermissionStatusDto::Granted);
+    let mut denied = cards(PermissionStatus::Denied, PermissionStatus::Granted);
     denied.permissions[0].can_request = false;
     let (mut setup, follow_up) = requested(denied);
     assert!(
@@ -271,8 +263,8 @@ fn a_final_denial_ends_the_watch_without_moving_on() {
 #[test]
 fn an_unanswered_permission_watch_gives_up_after_its_polls() {
     let (mut setup, _) = requested(cards(
-        PermissionStatusDto::NotDetermined,
-        PermissionStatusDto::NotDetermined,
+        PermissionStatus::NotDetermined,
+        PermissionStatus::NotDetermined,
     ));
     for _ in 1..PERMISSION_POLLS {
         assert!(poll(&mut setup));
@@ -349,14 +341,14 @@ fn try_it_shows_what_the_test_dictation_heard() {
     );
     assert!(tag(&html, "setup-test-stop").is_some());
 
-    setup.publish(state_event(PhaseDto::Idle, |state| {
-        state.setup_test = Some(SetupTestResultDto::Heard {
+    setup.publish(state_event(Phase::Idle, |state| {
+        state.setup_test = Some(SetupTestResult::Heard {
             text: "Hello world.".to_owned(),
         });
     }));
     assert_eq!(
         outcome(&setup),
-        Some(SetupTestResultDto::Heard {
+        Some(SetupTestResult::Heard {
             text: "Hello world.".to_owned()
         })
     );
@@ -378,10 +370,10 @@ fn try_it_reports_no_speech_when_the_stop_heard_nothing() {
     setup.click("setup-test-stop");
     assert_eq!(setup.sent(), ["stop_recording"]);
     setup.answer("stop_recording", Ok(()));
-    setup.publish(state_event(PhaseDto::Idle, |state| {
-        state.setup_test = Some(SetupTestResultDto::NoSpeech);
+    setup.publish(state_event(Phase::Idle, |state| {
+        state.setup_test = Some(SetupTestResult::NoSpeech);
     }));
-    assert_eq!(outcome(&setup), Some(SetupTestResultDto::NoSpeech));
+    assert_eq!(outcome(&setup), Some(SetupTestResult::NoSpeech));
     assert!(!text(&setup.html(), "setup-test-result").trim().is_empty());
 }
 
@@ -392,48 +384,42 @@ fn a_cancelled_test_reads_as_cancelled_not_as_no_speech() {
     setup.answer("start_test_dictation", Ok(()));
     setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
     // An earlier dictation's transcript is still the last one; it is not the test's result.
-    setup.publish(state_event(PhaseDto::Idle, |state| {
-        state.last_transcript = Some(TranscriptResponse {
-            raw_text: "earlier".to_owned(),
-            final_text: "Earlier.".to_owned(),
-            text_output_status: None,
-            cleanup_failed: false,
-            history_save_failed: false,
-        });
-        state.setup_test = Some(SetupTestResultDto::Cancelled);
+    setup.publish(state_event(Phase::Idle, |state| {
+        state.last_transcript = Some("Earlier.".to_owned());
+        state.setup_test = Some(SetupTestResult::Cancelled);
     }));
-    assert_eq!(outcome(&setup), Some(SetupTestResultDto::Cancelled));
+    assert_eq!(outcome(&setup), Some(SetupTestResult::Cancelled));
     assert!(!text(&setup.html(), "setup-test-result").contains("Earlier."));
 
     // A stop sent as the test was cancelled fails; the reported result stands.
     let mut management = setup.context().management;
-    management.write().fail_setup_test(&ClientError::Api(error(
+    management.write().fail_setup_test(&error(
         "not_recording",
         "Nothing is recording",
-        None,
-    )));
+        ErrorCategory::General,
+    ));
     setup.settle();
-    assert_eq!(outcome(&setup), Some(SetupTestResultDto::Cancelled));
+    assert_eq!(outcome(&setup), Some(SetupTestResult::Cancelled));
     assert!(tag(&setup.html(), "setup-test-start").is_some());
 }
 
 #[test]
-fn try_it_shows_a_failure_with_its_fix() {
+fn try_it_reports_a_failed_start() {
     let mut setup = at(SetupStep::TryIt);
     start_test(&mut setup);
     setup.answer(
         "start_test_dictation",
-        Err::<(), _>(ClientError::Api(error(
+        Err::<(), _>(error(
             "audio_start",
             "The microphone could not be opened",
-            Some(RecoveryActionDto::ChooseDevice),
-        ))),
+            ErrorCategory::Audio,
+        )),
     );
-    let Some(SetupTestResultDto::Failed { error }) = outcome(&setup) else {
+    let Some(SetupTestResult::Failed { error }) = outcome(&setup) else {
         panic!("the test failed");
     };
     assert_eq!(error.summary, "The microphone could not be opened");
-    assert_eq!(error.recovery, Some(RecoveryActionDto::ChooseDevice));
+    assert_eq!(error.category, ErrorCategory::Audio);
     assert!(
         text(&setup.html(), "setup-test-result").contains("The microphone could not be opened")
     );
@@ -519,8 +505,8 @@ fn settings_explain_how_to_paste_without_the_portal_indicator() {
     assert!(tag(&window.html(), "paste-helper-notice").is_none());
 
     let command = "sudo sh /setup/install_input_helper.sh";
-    let mut answer = cards(PermissionStatusDto::Granted, PermissionStatusDto::Granted);
-    answer.paste_helper_setup = Some(PasteHelperSetupDto {
+    let mut answer = cards(PermissionStatus::Granted, PermissionStatus::Granted);
+    answer.paste_helper_setup = Some(PasteHelperSetup {
         command: Some(command.to_owned()),
     });
     window.answer("get_permissions", Ok(answer));

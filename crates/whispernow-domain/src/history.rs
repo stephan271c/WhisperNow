@@ -7,7 +7,7 @@ use crate::ModelId;
 /// Never reused, so an entry's audio file name is unique.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
-pub struct EntryId(pub u64);
+pub struct EntryId(pub i64);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]

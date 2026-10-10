@@ -6,19 +6,19 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
+use whispernow_domain::AppError;
 
 use semver::Version;
 use tauri::{AppHandle, Manager as _};
 use tauri_plugin_updater::{Update, UpdaterExt as _};
-use whispernow_api::{
-    ApiErrorDto, ManualUpdatePackageDto, UpdateErrorCodeDto, UpdateErrorDto, UpdatePhaseDto,
-    UpdateProgressDto, UpdateStateDto,
+use whispernow_domain::ipc::{
+    ManualUpdatePackage, UpdateError, UpdatePhase, UpdateProgress, UpdateState,
 };
 
 pub(crate) const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_hours(6);
 const MAX_RELEASE_NOTES_BYTES: usize = 8 * 1024;
 
-type StateCallback = Arc<dyn Fn(UpdateStateDto) + Send + Sync>;
+type StateCallback = Arc<dyn Fn(UpdateState) + Send + Sync>;
 
 /// The plugin's version comparator: only a stable release newer than the running one.
 pub(crate) fn is_newer_stable(current: &Version, release: &Version) -> bool {
@@ -30,19 +30,19 @@ enum UpdateDelivery {
     /// The plugin replaces the running bundle after the user restarts.
     InPlace,
     /// The user installs the release's package with the system package manager.
-    Manual(ManualUpdatePackageDto),
+    Manual(ManualUpdatePackage),
 }
 
 /// A newer release the user installs by hand from its release page.
 struct ManualUpdate {
     version: String,
     notes: Option<String>,
-    package: ManualUpdatePackageDto,
+    package: ManualUpdatePackage,
 }
 
 impl ManualUpdate {
-    fn publish(&self, state: &mut UpdateStateDto) {
-        state.phase = UpdatePhaseDto::ManualInstallAvailable;
+    fn publish(&self, state: &mut UpdateState) {
+        state.phase = UpdatePhase::ManualInstallAvailable;
         state.available_version = Some(self.version.clone());
         state.release_notes.clone_from(&self.notes);
         state.manual_package = Some(self.package);
@@ -59,16 +59,6 @@ impl ManualUpdate {
     }
 }
 
-fn error_dto(code: UpdateErrorCodeDto) -> UpdateErrorDto {
-    UpdateErrorDto {
-        code,
-        recoverable: !matches!(
-            code,
-            UpdateErrorCodeDto::InvalidSignature | UpdateErrorCodeDto::MalformedMetadata
-        ),
-    }
-}
-
 /// A downloaded update and its signed bytes.
 #[derive(Debug, PartialEq)]
 struct ReadyUpdate<U> {
@@ -79,7 +69,7 @@ struct ReadyUpdate<U> {
 /// The published update state and what it holds. `U` is the downloaded update, so the
 /// transitions are tested without the plugin.
 struct Updates<U> {
-    state: UpdateStateDto,
+    state: UpdateState,
     ready: Option<ReadyUpdate<U>>,
     manual: Option<ManualUpdate>,
     /// Whether the user asked for the running check, which then reports its result.
@@ -89,11 +79,11 @@ struct Updates<U> {
 impl<U> Updates<U> {
     fn new(enabled: bool) -> Self {
         Self {
-            state: UpdateStateDto {
+            state: UpdateState {
                 phase: if enabled {
-                    UpdatePhaseDto::Idle
+                    UpdatePhase::Idle
                 } else {
-                    UpdatePhaseDto::Disabled
+                    UpdatePhase::Disabled
                 },
                 available_version: None,
                 release_notes: None,
@@ -112,16 +102,14 @@ impl<U> Updates<U> {
     /// Whether a check starts. A check asked while one runs joins it.
     fn begin_check(&mut self, manual: bool) -> bool {
         match self.state.phase {
-            UpdatePhaseDto::Disabled
-            | UpdatePhaseDto::ReadyToRestart
-            | UpdatePhaseDto::Installing => false,
-            UpdatePhaseDto::Checking | UpdatePhaseDto::Downloading => {
+            UpdatePhase::Disabled | UpdatePhase::ReadyToRestart | UpdatePhase::Installing => false,
+            UpdatePhase::Checking | UpdatePhase::Downloading => {
                 self.check_is_manual |= manual;
                 false
             }
             _ => {
                 self.check_is_manual = manual;
-                self.state.phase = UpdatePhaseDto::Checking;
+                self.state.phase = UpdatePhase::Checking;
                 self.state.progress = None;
                 self.state.error = None;
                 self.state.restart_deferred = false;
@@ -135,9 +123,9 @@ impl<U> Updates<U> {
 
     fn up_to_date(&mut self) {
         self.state.phase = if self.check_is_manual {
-            UpdatePhaseDto::UpToDate
+            UpdatePhase::UpToDate
         } else {
-            UpdatePhaseDto::Idle
+            UpdatePhase::Idle
         };
         self.state.available_version = None;
         self.state.release_notes = None;
@@ -161,18 +149,18 @@ impl<U> Updates<U> {
     }
 
     fn downloading(&mut self, version: String, notes: Option<String>) {
-        self.state.phase = UpdatePhaseDto::Downloading;
+        self.state.phase = UpdatePhase::Downloading;
         self.state.available_version = Some(version);
         self.state.release_notes = notes;
-        self.state.progress = Some(UpdateProgressDto {
+        self.state.progress = Some(UpdateProgress {
             downloaded_bytes: 0,
             total_bytes: None,
         });
     }
 
     fn progress(&mut self, downloaded_bytes: u64, total_bytes: Option<u64>) {
-        if self.state.phase == UpdatePhaseDto::Downloading {
-            self.state.progress = Some(UpdateProgressDto {
+        if self.state.phase == UpdatePhase::Downloading {
+            self.state.progress = Some(UpdateProgress {
                 downloaded_bytes,
                 total_bytes,
             });
@@ -181,23 +169,23 @@ impl<U> Updates<U> {
 
     fn downloaded(&mut self, update: U, bytes: Vec<u8>) {
         self.ready = Some(ReadyUpdate { update, bytes });
-        self.state.phase = UpdatePhaseDto::ReadyToRestart;
+        self.state.phase = UpdatePhase::ReadyToRestart;
         self.state.progress = None;
         self.state.error = None;
         self.state.notification_dismissed = false;
     }
 
     /// A scheduled check fails quietly and keeps offering a manual release it found before.
-    fn failed(&mut self, code: UpdateErrorCodeDto) {
+    fn failed(&mut self, code: UpdateError) {
         let manual = self.check_is_manual;
         self.state.phase = if manual {
-            UpdatePhaseDto::Error
+            UpdatePhase::Error
         } else {
-            UpdatePhaseDto::Idle
+            UpdatePhase::Idle
         };
         self.state.manual_package = None;
         self.state.progress = None;
-        self.state.error = manual.then(|| error_dto(code));
+        self.state.error = manual.then_some(code);
         if let (false, Some(update)) = (manual, &self.manual) {
             update.publish(&mut self.state);
         }
@@ -209,14 +197,14 @@ impl<U> Updates<U> {
     fn dismiss(&mut self) {
         if matches!(
             self.state.phase,
-            UpdatePhaseDto::ReadyToRestart | UpdatePhaseDto::ManualInstallAvailable
+            UpdatePhase::ReadyToRestart | UpdatePhase::ManualInstallAvailable
         ) {
             self.state.notification_dismissed = true;
         }
     }
 
     fn release_page(&self) -> Option<String> {
-        (self.state.phase == UpdatePhaseDto::ManualInstallAvailable)
+        (self.state.phase == UpdatePhase::ManualInstallAvailable)
             .then(|| self.manual.as_ref().map(ManualUpdate::release_page))
             .flatten()
     }
@@ -224,7 +212,7 @@ impl<U> Updates<U> {
     /// Takes the downloaded update for installing. `dictating` tells the user the restart
     /// waits for the dictation in flight.
     fn take_ready(&mut self, dictating: bool) -> Option<ReadyUpdate<U>> {
-        if self.state.phase != UpdatePhaseDto::ReadyToRestart {
+        if self.state.phase != UpdatePhase::ReadyToRestart {
             return None;
         }
         let ready = self.ready.take()?;
@@ -234,14 +222,14 @@ impl<U> Updates<U> {
     }
 
     fn installing(&mut self) {
-        self.state.phase = UpdatePhaseDto::Installing;
+        self.state.phase = UpdatePhase::Installing;
         self.state.restart_deferred = false;
     }
 
-    fn restore_ready(&mut self, ready: ReadyUpdate<U>, error: Option<UpdateErrorCodeDto>) {
+    fn restore_ready(&mut self, ready: ReadyUpdate<U>, error: Option<UpdateError>) {
         self.ready = Some(ready);
-        self.state.phase = UpdatePhaseDto::ReadyToRestart;
-        self.state.error = error.map(error_dto);
+        self.state.phase = UpdatePhase::ReadyToRestart;
+        self.state.error = error;
         self.state.restart_deferred = false;
     }
 }
@@ -261,7 +249,7 @@ impl UpdateController {
         })
     }
 
-    pub(crate) fn snapshot(&self) -> UpdateStateDto {
+    pub(crate) fn snapshot(&self) -> UpdateState {
         self.lock().state.clone()
     }
 
@@ -282,7 +270,7 @@ impl UpdateController {
 
     /// Checks for a newer release and downloads it. Only one check runs at a time: a check
     /// asked while one runs joins it and returns the current state.
-    pub(crate) async fn check(&self, manual: bool) -> UpdateStateDto {
+    pub(crate) async fn check(&self, manual: bool) -> UpdateState {
         if self.update(|updates| updates.begin_check(manual))
             && let Err(code) = self.check_and_download().await
         {
@@ -291,7 +279,7 @@ impl UpdateController {
         self.snapshot()
     }
 
-    async fn check_and_download(&self) -> Result<(), UpdateErrorCodeDto> {
+    async fn check_and_download(&self) -> Result<(), UpdateError> {
         let route = update_route(
             std::env::consts::OS,
             std::env::consts::ARCH,
@@ -347,23 +335,23 @@ impl UpdateController {
         Ok(())
     }
 
-    pub(crate) fn dismiss(&self) -> UpdateStateDto {
+    pub(crate) fn dismiss(&self) -> UpdateState {
         self.update(Updates::dismiss);
         self.snapshot()
     }
 
     /// The page address never crosses the webview boundary; it is derived here from the
     /// release's version.
-    pub(crate) fn open_release_page(&self) -> UpdateStateDto {
+    pub(crate) fn open_release_page(&self) -> UpdateState {
         let Some(release_page) = self.lock().release_page() else {
             return self.snapshot();
         };
         let error = open_in_browser(&release_page).err();
-        self.update(|updates| updates.state.error = error.map(error_dto));
+        self.update(|updates| updates.state.error = error);
         self.snapshot()
     }
 
-    pub(crate) async fn restart_to_update(self: &Arc<Self>) -> Result<UpdateStateDto, ApiErrorDto> {
+    pub(crate) async fn restart_to_update(self: &Arc<Self>) -> Result<UpdateState, AppError> {
         let dictating = self
             .app
             .state::<crate::gateway::Gateway>()
@@ -385,7 +373,7 @@ impl UpdateController {
 
     /// Runs on a blocking worker: waiting for the dictation in flight, installing, and shutting
     /// down all block on native, filesystem, and process work.
-    fn install(&self, ready: ReadyUpdate<Update>) -> Result<(), ApiErrorDto> {
+    fn install(&self, ready: ReadyUpdate<Update>) -> Result<(), AppError> {
         let state = self.app.state::<crate::gateway::Gateway>();
         if let Err(error) = state.services.dictation.begin_update() {
             self.update(|updates| updates.restore_ready(ready, None));
@@ -438,7 +426,7 @@ fn update_route(
     os: &str,
     architecture: &str,
     bundle: Option<&tauri::utils::config::BundleType>,
-) -> Result<UpdateRoute, UpdateErrorCodeDto> {
+) -> Result<UpdateRoute, UpdateError> {
     use tauri::utils::config::BundleType;
 
     if os != "linux" {
@@ -449,13 +437,13 @@ fn update_route(
     }
     // The release matrix builds Linux packages for x86-64 only.
     if architecture != "x86_64" {
-        return Err(UpdateErrorCodeDto::UnsupportedTarget);
+        return Err(UpdateError::UnsupportedTarget);
     }
     let (format, delivery) = match bundle {
         Some(BundleType::AppImage) => ("appimage", UpdateDelivery::InPlace),
-        Some(BundleType::Deb) => ("deb", UpdateDelivery::Manual(ManualUpdatePackageDto::Deb)),
-        Some(BundleType::Rpm) => ("rpm", UpdateDelivery::Manual(ManualUpdatePackageDto::Rpm)),
-        _ => return Err(UpdateErrorCodeDto::UnsupportedTarget),
+        Some(BundleType::Deb) => ("deb", UpdateDelivery::Manual(ManualUpdatePackage::Deb)),
+        Some(BundleType::Rpm) => ("rpm", UpdateDelivery::Manual(ManualUpdatePackage::Rpm)),
+        _ => return Err(UpdateError::UnsupportedTarget),
     };
     Ok(UpdateRoute {
         target: Some(format!("linux-{architecture}-{format}")),
@@ -465,7 +453,7 @@ fn update_route(
 
 /// Hands the release page to the desktop's default browser. Manual delivery exists only for
 /// Linux packages, so other platforms have no opener.
-fn open_in_browser(url: &str) -> Result<(), UpdateErrorCodeDto> {
+fn open_in_browser(url: &str) -> Result<(), UpdateError> {
     #[cfg(target_os = "linux")]
     {
         let mut opener = std::process::Command::new("xdg-open")
@@ -474,7 +462,7 @@ fn open_in_browser(url: &str) -> Result<(), UpdateErrorCodeDto> {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map_err(|_| UpdateErrorCodeDto::ReleasePageUnavailable)?;
+            .map_err(|_| UpdateError::ReleasePageUnavailable)?;
         std::thread::spawn(move || {
             if !opener.wait().is_ok_and(|status| status.success()) {
                 tracing::warn!("release page opener failed");
@@ -485,7 +473,7 @@ fn open_in_browser(url: &str) -> Result<(), UpdateErrorCodeDto> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = url;
-        Err(UpdateErrorCodeDto::ReleasePageUnavailable)
+        Err(UpdateError::ReleasePageUnavailable)
     }
 }
 
@@ -494,9 +482,7 @@ fn open_in_browser(url: &str) -> Result<(), UpdateErrorCodeDto> {
     clippy::needless_pass_by_value,
     reason = "Tauri command state injection requires an owned State wrapper"
 )]
-pub(crate) fn get_update_state(
-    controller: tauri::State<'_, Arc<UpdateController>>,
-) -> UpdateStateDto {
+pub(crate) fn get_update_state(controller: tauri::State<'_, Arc<UpdateController>>) -> UpdateState {
     controller.snapshot()
 }
 
@@ -504,7 +490,7 @@ pub(crate) fn get_update_state(
 pub(crate) async fn check_for_updates(
     app: AppHandle,
     controller: tauri::State<'_, Arc<UpdateController>>,
-) -> Result<UpdateStateDto, ApiErrorDto> {
+) -> Result<UpdateState, AppError> {
     app.state::<crate::gateway::Gateway>()
         .refuse_while_updating()?;
     Ok(controller.inner().check(true).await)
@@ -515,16 +501,14 @@ pub(crate) async fn check_for_updates(
     clippy::needless_pass_by_value,
     reason = "Tauri command state injection requires an owned State wrapper"
 )]
-pub(crate) fn dismiss_update(
-    controller: tauri::State<'_, Arc<UpdateController>>,
-) -> UpdateStateDto {
+pub(crate) fn dismiss_update(controller: tauri::State<'_, Arc<UpdateController>>) -> UpdateState {
     controller.dismiss()
 }
 
 #[tauri::command]
 pub(crate) async fn restart_to_update(
     controller: tauri::State<'_, Arc<UpdateController>>,
-) -> Result<UpdateStateDto, ApiErrorDto> {
+) -> Result<UpdateState, AppError> {
     Arc::clone(controller.inner()).restart_to_update().await
 }
 
@@ -545,7 +529,7 @@ fn shut_down_for_update(app: &AppHandle) {
 )]
 pub(crate) fn open_update_release_page(
     controller: tauri::State<'_, Arc<UpdateController>>,
-) -> UpdateStateDto {
+) -> UpdateState {
     controller.open_release_page()
 }
 
@@ -556,42 +540,42 @@ enum UpdaterPhase {
     Install,
 }
 
-fn updater_error(error: tauri_plugin_updater::Error, phase: UpdaterPhase) -> UpdateErrorCodeDto {
+fn updater_error(error: tauri_plugin_updater::Error, phase: UpdaterPhase) -> UpdateError {
     use tauri_plugin_updater::Error;
 
     match error {
         Error::Minisign(_) | Error::Base64(_) | Error::SignatureUtf8(_) => {
-            UpdateErrorCodeDto::InvalidSignature
+            UpdateError::InvalidSignature
         }
         Error::TargetNotFound(_)
         | Error::TargetsNotFound(_)
         | Error::UnsupportedArch
-        | Error::UnsupportedOs => UpdateErrorCodeDto::UnsupportedTarget,
+        | Error::UnsupportedOs => UpdateError::UnsupportedTarget,
         Error::Serialization(_) | Error::Semver(_) | Error::UrlParse(_) => {
-            UpdateErrorCodeDto::MalformedMetadata
+            UpdateError::MalformedMetadata
         }
-        Error::ReleaseNotFound => UpdateErrorCodeDto::ServerUnavailable,
-        Error::Reqwest(error) if error.is_connect() => UpdateErrorCodeDto::Offline,
+        Error::ReleaseNotFound => UpdateError::ServerUnavailable,
+        Error::Reqwest(error) if error.is_connect() => UpdateError::Offline,
         Error::Reqwest(_) | Error::Network(_) => match phase {
-            UpdaterPhase::Check => UpdateErrorCodeDto::ServerUnavailable,
-            UpdaterPhase::Download => UpdateErrorCodeDto::DownloadInterrupted,
-            UpdaterPhase::Install => UpdateErrorCodeDto::InstallFailed,
+            UpdaterPhase::Check => UpdateError::ServerUnavailable,
+            UpdaterPhase::Download => UpdateError::DownloadInterrupted,
+            UpdaterPhase::Install => UpdateError::InstallFailed,
         },
         Error::Io(error) => match phase {
             UpdaterPhase::Install => match error.kind() {
-                std::io::ErrorKind::PermissionDenied => UpdateErrorCodeDto::InsufficientPrivileges,
-                std::io::ErrorKind::ReadOnlyFilesystem => UpdateErrorCodeDto::ReadOnlyFilesystem,
-                _ => UpdateErrorCodeDto::InstallFailed,
+                std::io::ErrorKind::PermissionDenied => UpdateError::InsufficientPrivileges,
+                std::io::ErrorKind::ReadOnlyFilesystem => UpdateError::ReadOnlyFilesystem,
+                _ => UpdateError::InstallFailed,
             },
-            UpdaterPhase::Download => UpdateErrorCodeDto::DownloadInterrupted,
-            UpdaterPhase::Check => UpdateErrorCodeDto::Internal,
+            UpdaterPhase::Download => UpdateError::DownloadInterrupted,
+            UpdaterPhase::Check => UpdateError::Internal,
         },
         Error::DebInstallFailed | Error::PackageInstallFailed | Error::InvalidUpdaterFormat => {
-            UpdateErrorCodeDto::InstallFailed
+            UpdateError::InstallFailed
         }
         _ => match phase {
-            UpdaterPhase::Install => UpdateErrorCodeDto::InstallFailed,
-            UpdaterPhase::Check | UpdaterPhase::Download => UpdateErrorCodeDto::Internal,
+            UpdaterPhase::Install => UpdateError::InstallFailed,
+            UpdaterPhase::Check | UpdaterPhase::Download => UpdateError::Internal,
         },
     }
 }
@@ -623,7 +607,7 @@ mod tests {
         ManualUpdate {
             version: version.to_owned(),
             notes: Some("notes".to_owned()),
-            package: ManualUpdatePackageDto::Deb,
+            package: ManualUpdatePackage::Deb,
         }
     }
 
@@ -656,14 +640,14 @@ mod tests {
             update_route("linux", "x86_64", Some(&BundleType::Deb)),
             route(
                 "linux-x86_64-deb",
-                UpdateDelivery::Manual(ManualUpdatePackageDto::Deb)
+                UpdateDelivery::Manual(ManualUpdatePackage::Deb)
             )
         );
         assert_eq!(
             update_route("linux", "x86_64", Some(&BundleType::Rpm)),
             route(
                 "linux-x86_64-rpm",
-                UpdateDelivery::Manual(ManualUpdatePackageDto::Rpm)
+                UpdateDelivery::Manual(ManualUpdatePackage::Rpm)
             )
         );
         assert_eq!(
@@ -691,7 +675,7 @@ mod tests {
         ] {
             assert_eq!(
                 update_route("linux", architecture, bundle.as_ref()),
-                Err(UpdateErrorCodeDto::UnsupportedTarget),
+                Err(UpdateError::UnsupportedTarget),
                 "{architecture} {bundle:?}"
             );
         }
@@ -702,13 +686,10 @@ mod tests {
         let mut updates = updates();
         assert!(updates.begin_check(true));
         updates.found_manual(manual("0.2.1"));
-        assert_eq!(updates.state.phase, UpdatePhaseDto::ManualInstallAvailable);
+        assert_eq!(updates.state.phase, UpdatePhase::ManualInstallAvailable);
         assert_eq!(updates.state.available_version.as_deref(), Some("0.2.1"));
         assert_eq!(updates.state.release_notes.as_deref(), Some("notes"));
-        assert_eq!(
-            updates.state.manual_package,
-            Some(ManualUpdatePackageDto::Deb)
-        );
+        assert_eq!(updates.state.manual_package, Some(ManualUpdatePackage::Deb));
         assert_eq!(
             updates.release_page().as_deref(),
             Some("https://github.com/stephan271c/WhisperNow/releases/tag/v0.2.1")
@@ -731,7 +712,7 @@ mod tests {
 
         assert!(updates.begin_check(true));
         updates.up_to_date();
-        assert_eq!(updates.state.phase, UpdatePhaseDto::UpToDate);
+        assert_eq!(updates.state.phase, UpdatePhase::UpToDate);
         assert_eq!(updates.state.manual_package, None);
         assert_eq!(updates.release_page(), None);
     }
@@ -740,27 +721,28 @@ mod tests {
     fn a_scheduled_failure_is_quiet_and_keeps_the_offer_but_a_manual_one_is_visible() {
         let mut updates = updates();
         updates.begin_check(false);
-        updates.failed(UpdateErrorCodeDto::Offline);
-        assert_eq!(updates.state.phase, UpdatePhaseDto::Idle);
+        updates.failed(UpdateError::Offline);
+        assert_eq!(updates.state.phase, UpdatePhase::Idle);
         assert_eq!(updates.state.error, None);
 
         updates.begin_check(false);
         updates.found_manual(manual("0.2.1"));
         updates.begin_check(false);
-        updates.failed(UpdateErrorCodeDto::ServerUnavailable);
-        assert_eq!(updates.state.phase, UpdatePhaseDto::ManualInstallAvailable);
+        updates.failed(UpdateError::ServerUnavailable);
+        assert_eq!(updates.state.phase, UpdatePhase::ManualInstallAvailable);
         assert_eq!(updates.state.available_version.as_deref(), Some("0.2.1"));
 
         updates.begin_check(true);
-        updates.failed(UpdateErrorCodeDto::InvalidSignature);
-        assert_eq!(updates.state.phase, UpdatePhaseDto::Error);
+        updates.failed(UpdateError::InvalidSignature);
+        assert_eq!(updates.state.phase, UpdatePhase::Error);
         assert_eq!(updates.state.manual_package, None);
-        assert_eq!(
-            updates.state.error,
-            Some(UpdateErrorDto {
-                code: UpdateErrorCodeDto::InvalidSignature,
-                recoverable: false,
-            })
+        assert_eq!(updates.state.error, Some(UpdateError::InvalidSignature));
+        assert!(
+            !updates
+                .state
+                .error
+                .expect("manual failure")
+                .is_recoverable()
         );
         assert_eq!(updates.release_page(), None);
     }
@@ -770,12 +752,9 @@ mod tests {
         let mut updates = updates();
         assert!(updates.begin_check(false));
         assert!(!updates.begin_check(true), "the running check is joined");
-        updates.failed(UpdateErrorCodeDto::Offline);
-        assert_eq!(updates.state.phase, UpdatePhaseDto::Error);
-        assert_eq!(
-            updates.state.error.map(|error| error.code),
-            Some(UpdateErrorCodeDto::Offline)
-        );
+        updates.failed(UpdateError::Offline);
+        assert_eq!(updates.state.phase, UpdatePhase::Error);
+        assert_eq!(updates.state.error, Some(UpdateError::Offline));
     }
 
     #[test]
@@ -786,13 +765,13 @@ mod tests {
         updates.progress(2, Some(4));
         assert_eq!(
             updates.state.progress,
-            Some(UpdateProgressDto {
+            Some(UpdateProgress {
                 downloaded_bytes: 2,
                 total_bytes: Some(4),
             })
         );
         updates.downloaded("update", vec![1, 2, 3, 4]);
-        assert_eq!(updates.state.phase, UpdatePhaseDto::ReadyToRestart);
+        assert_eq!(updates.state.phase, UpdatePhase::ReadyToRestart);
         updates.dismiss();
         assert!(updates.state.notification_dismissed);
         assert!(
@@ -802,14 +781,11 @@ mod tests {
 
         let ready = updates.take_ready(false).expect("ready update");
         updates.installing();
-        assert_eq!(updates.state.phase, UpdatePhaseDto::Installing);
+        assert_eq!(updates.state.phase, UpdatePhase::Installing);
         assert!(!updates.begin_check(true), "no check runs while installing");
-        updates.restore_ready(ready, Some(UpdateErrorCodeDto::InstallFailed));
-        assert_eq!(updates.state.phase, UpdatePhaseDto::ReadyToRestart);
-        assert_eq!(
-            updates.state.error.map(|error| error.code),
-            Some(UpdateErrorCodeDto::InstallFailed)
-        );
+        updates.restore_ready(ready, Some(UpdateError::InstallFailed));
+        assert_eq!(updates.state.phase, UpdatePhase::ReadyToRestart);
+        assert_eq!(updates.state.error, Some(UpdateError::InstallFailed));
         assert_eq!(
             updates.take_ready(false),
             Some(ReadyUpdate {
@@ -832,17 +808,17 @@ mod tests {
     }
 
     #[test]
-    fn install_io_errors_have_install_specific_recovery_codes() {
+    fn install_io_errors_have_install_specific_codes() {
         for (kind, expected) in [
             (
                 std::io::ErrorKind::PermissionDenied,
-                UpdateErrorCodeDto::InsufficientPrivileges,
+                UpdateError::InsufficientPrivileges,
             ),
             (
                 std::io::ErrorKind::ReadOnlyFilesystem,
-                UpdateErrorCodeDto::ReadOnlyFilesystem,
+                UpdateError::ReadOnlyFilesystem,
             ),
-            (std::io::ErrorKind::Other, UpdateErrorCodeDto::InstallFailed),
+            (std::io::ErrorKind::Other, UpdateError::InstallFailed),
         ] {
             let error = tauri_plugin_updater::Error::Io(std::io::Error::from(kind));
             assert_eq!(updater_error(error, UpdaterPhase::Install), expected);
@@ -852,7 +828,7 @@ mod tests {
                 tauri_plugin_updater::Error::Io(std::io::Error::other("download")),
                 UpdaterPhase::Download,
             ),
-            UpdateErrorCodeDto::DownloadInterrupted
+            UpdateError::DownloadInterrupted
         );
     }
 

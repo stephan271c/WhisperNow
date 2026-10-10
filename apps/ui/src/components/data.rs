@@ -36,7 +36,7 @@ pub(super) fn ClearDataCard() -> Element {
                                 for location in locations.iter() {
                                     li {
                                         strong { "{labels::clear_category(location.category)}: " }
-                                        code { "{location.path}" }
+                                        code { "{location.path.display()}" }
                                     }
                                 }
                             }

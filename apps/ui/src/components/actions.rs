@@ -13,13 +13,16 @@ mod updates;
 pub(crate) use setup::PERMISSION_POLLS;
 
 use std::future::Future;
+use whispernow_domain::AppError;
 
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use whispernow_api::{EventPayload, PermissionKindDto};
+use whispernow_domain::ClearDataCategory;
+use whispernow_domain::ipc::{EventPayload, PermissionKind};
 
 use super::ui::Tone;
-use crate::client::{self, ClientError};
+use crate::client;
+
 use crate::{BlockedReason, ManagementState, NoticeScope, Route, UiContext, UiOperation, UiState};
 
 /// The window's command facade; cheap to copy into event handlers.
@@ -54,7 +57,7 @@ impl UiActions {
     }
 
     /// Whether a request for permission `kind` is waiting for the system's answer.
-    pub(crate) fn permission_requested(self, kind: PermissionKindDto) -> bool {
+    pub(crate) fn permission_requested(self, kind: PermissionKind) -> bool {
         self.context.management.read().requested_permission == Some(kind)
     }
 
@@ -65,8 +68,8 @@ impl UiActions {
     fn run<R: 'static>(
         self,
         operation: UiOperation,
-        call: impl Future<Output = Result<R, ClientError>> + 'static,
-        finish: impl FnOnce(Self, Result<R, ClientError>) + 'static,
+        call: impl Future<Output = Result<R, AppError>> + 'static,
+        finish: impl FnOnce(Self, Result<R, AppError>) + 'static,
     ) {
         self.management().write().begin_busy(operation);
         spawn_forever(async move {
@@ -76,10 +79,12 @@ impl UiActions {
         });
     }
 
-    fn report(self, operation: UiOperation, error: &ClientError) {
-        self.management()
-            .write()
-            .notify(Tone::Error, operation.notice_scope(), error.summary());
+    fn report(self, operation: UiOperation, error: &AppError) {
+        self.management().write().notify(
+            Tone::Error,
+            operation.notice_scope(),
+            error.summary.clone(),
+        );
     }
 
     /// Reads everything this window shows: the state snapshot, settings, setup, models and
@@ -94,10 +99,7 @@ impl UiActions {
                     }
                     self.state().write().hydrate(snapshot);
                 }
-                Err(error) => self
-                    .state()
-                    .write()
-                    .report_client_error(error.api_error().cloned()),
+                Err(error) => self.state().write().report_client_error(error),
             }
         });
         spawn_forever(async move {
@@ -121,11 +123,11 @@ impl UiActions {
         self.refresh_history();
     }
 
-    fn load_failed(self, what: &str, error: &ClientError) {
+    fn load_failed(self, what: &str, error: &AppError) {
         self.management().write().notify(
             Tone::Error,
             NoticeScope::Global,
-            format!("{what} could not be loaded: {}", error.summary()),
+            format!("{what} could not be loaded: {}", error.summary.clone()),
         );
     }
 
@@ -203,9 +205,7 @@ impl UiActions {
     /// Removes every kind of application data, then reads everything again.
     pub(crate) fn clear_data(self) {
         let operation = UiOperation::ClearData;
-        let request = whispernow_api::ClearDataRequest {
-            categories: whispernow_api::ClearDataCategory::ALL.to_vec(),
-        };
+        let request = ClearDataCategory::ALL.to_vec();
         self.run(
             operation,
             async move { client::clear_data(&request).await },

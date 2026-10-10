@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
-use whispernow_api::{Settings, VocabularyReplacement};
+use whispernow_domain::{Settings, VocabularyReplacement};
 
 use super::actions::{DisabledReason, use_actions};
 use super::configuration::{SettingsLoading, status_parts, use_settings_blocked};

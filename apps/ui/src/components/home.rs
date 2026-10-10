@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
-use whispernow_api::{MicrophoneTestResponse, RecordingMode, SetupStep, Shortcut};
+use whispernow_domain::ipc::MicrophoneTestResponse;
+use whispernow_domain::{RecordingMode, SetupStep, Shortcut};
 
 use super::actions::{DisabledReason, use_actions};
 use super::labels;
@@ -31,7 +32,7 @@ pub(super) fn HomePage() -> Element {
         .snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.last_transcript.as_ref())
-        .map(|transcript| transcript.final_text.clone())
+        .cloned()
         .filter(|text| !text.trim().is_empty());
     let management = context.management.read();
     let setup_step = management

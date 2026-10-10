@@ -8,6 +8,9 @@ authors.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+test-support = []
+
 [dependencies]
 arboard = { workspace = true }
 bzip2.workspace = true

@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use whispernow_api::{ApiKey, LlmProvider, ProviderEndpoint, ProviderSettings, Settings};
+use whispernow_domain::{ApiKey, LlmProvider, ProviderEndpoint, ProviderSettings, Settings};
 
 use super::NoticeRegion;
 use super::actions::{DisabledReason, UiActions, use_actions};

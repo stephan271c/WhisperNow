@@ -2,8 +2,9 @@
 //! window is and whether it shows.
 
 use std::sync::{Arc, Mutex};
+use whispernow_domain::AppError;
 
-use whispernow_api::{ApiErrorDto, AppStateDto, PhaseDto, RecoveryActionDto};
+use whispernow_domain::ipc::{AppState, ErrorCategory, Phase};
 
 mod tauri_window;
 
@@ -107,17 +108,17 @@ pub(crate) fn overlay_origin(monitor: &MonitorArea, logical_size: (f64, f64)) ->
 
 /// Where a phase is presented, given whether the session can keep a window floating above
 /// others (not native Wayland).
-pub(crate) const fn overlay_presentation(phase: &PhaseDto, can_float: bool) -> OverlayPresentation {
+pub(crate) const fn overlay_presentation(phase: &Phase, can_float: bool) -> OverlayPresentation {
     match (phase, can_float) {
-        (PhaseDto::Idle | PhaseDto::Paused | PhaseDto::Updating, _) => OverlayPresentation::None,
+        (Phase::Idle | Phase::Paused | Phase::Updating, _) => OverlayPresentation::None,
         (_, true) => OverlayPresentation::Window,
-        (PhaseDto::Error { .. }, false) => OverlayPresentation::Notification,
+        (Phase::Error { .. }, false) => OverlayPresentation::Notification,
         (_, false) => OverlayPresentation::None,
     }
 }
 
-fn notification(error: &ApiErrorDto) -> String {
-    if error.recovery == Some(RecoveryActionDto::CopyManually) {
+fn notification(error: &AppError) -> String {
+    if error.category == ErrorCategory::Output {
         NOT_PASTED_NOTIFICATION.to_owned()
     } else {
         error.summary.clone()
@@ -147,7 +148,7 @@ impl RecordingOverlay {
         }
     }
 
-    pub(crate) fn observe(&self, snapshot: &AppStateDto) {
+    pub(crate) fn observe(&self, snapshot: &AppState) {
         let presentation = overlay_presentation(&snapshot.phase, self.can_float);
         let mut presented = self.presented.lock().expect("overlay lock poisoned");
         let show = presentation == OverlayPresentation::Window;
@@ -160,7 +161,7 @@ impl RecordingOverlay {
         let notify = presentation == OverlayPresentation::Notification;
         if notify
             && !presented.notified
-            && let PhaseDto::Error { error } = &snapshot.phase
+            && let Phase::Error { error } = &snapshot.phase
         {
             self.window.notify(notification(error));
         }

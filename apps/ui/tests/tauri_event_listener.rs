@@ -15,7 +15,7 @@ async fn history_changed_event_from_tauri_refreshes_history() {
     wait_for("the history-changed listener", || {
         eval_bool(&format!(
             "window.__whispernowListeners.has({:?})",
-            whispernow_api::HISTORY_CHANGED_EVENT
+            whispernow_domain::ipc::HISTORY_CHANGED_EVENT
         ))
     })
     .await;
@@ -33,7 +33,7 @@ async fn history_changed_event_from_tauri_refreshes_history() {
             return true;
           }}
         }})()"#,
-        whispernow_api::HISTORY_CHANGED_EVENT
+        whispernow_domain::ipc::HISTORY_CHANGED_EVENT
     ));
 
     assert!(!threw, "the Tauri event callback must not panic");

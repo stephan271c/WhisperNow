@@ -1,4 +1,4 @@
-use whispernow_api::MainWindowSectionDto;
+use whispernow_domain::ipc::MainWindowSection;
 
 use crate::notice::NoticeScope;
 
@@ -103,11 +103,13 @@ impl TopLevel {
 
 impl Route {
     #[must_use]
-    pub const fn from_section(section: MainWindowSectionDto) -> Self {
+    pub const fn from_section(section: MainWindowSection) -> Self {
         match section {
-            MainWindowSectionDto::History => Self::History,
-            MainWindowSectionDto::Settings => Self::Settings(SettingsRoute::General),
-            MainWindowSectionDto::AiCleanup => Self::Settings(SettingsRoute::AiCleanup),
+            MainWindowSection::History => Self::History,
+            MainWindowSection::Settings => Self::Settings(SettingsRoute::General),
+            MainWindowSection::Audio => Self::Settings(SettingsRoute::Audio),
+            MainWindowSection::SpeechModels => Self::Settings(SettingsRoute::SpeechModels),
+            MainWindowSection::AiCleanup => Self::Settings(SettingsRoute::AiCleanup),
         }
     }
 
@@ -166,7 +168,7 @@ pub fn nav_keyboard_target(key: &str, current: usize, count: usize) -> Option<us
 
 #[cfg(test)]
 mod tests {
-    use whispernow_api::MainWindowSectionDto;
+    use whispernow_domain::ipc::MainWindowSection;
 
     use super::{Route, SettingsRoute, TopLevel, nav_keyboard_target};
     use crate::NoticeScope;
@@ -190,11 +192,11 @@ mod tests {
     #[test]
     fn overlay_sections_open_their_routes_and_each_page_has_one_title() {
         assert_eq!(
-            Route::from_section(MainWindowSectionDto::History),
+            Route::from_section(MainWindowSection::History),
             Route::History
         );
         assert_eq!(
-            Route::from_section(MainWindowSectionDto::Settings),
+            Route::from_section(MainWindowSection::Settings),
             Route::Settings(SettingsRoute::General)
         );
         assert_eq!(Route::default(), Route::Home);

@@ -7,11 +7,12 @@ mod setup;
 use std::collections::BTreeMap;
 
 use dioxus::core::Task;
-use whispernow_api::{
-    ActiveDownloadDto, AudioDeviceDto, ClearDataResult, DataLocationDto, EventPayload,
-    HistoryCursor, HistoryEntry, HistoryFilter, ListAudioDevicesResponse, MicrophoneTestResponse,
-    ModelDto, PermissionsResponse, Settings, SettingsView, SetupStateView,
+use whispernow_domain::ipc::{
+    ActiveDownload, AudioDevice, ClearDataResult, DataLocation, EventPayload,
+    MicrophoneTestResponse, ModelSummary, PermissionKind, PermissionsResponse, SettingsView,
+    SetupStateView,
 };
+use whispernow_domain::{HistoryCursor, HistoryEntry, HistoryFilter, Settings};
 
 use crate::components::ui::Tone;
 use crate::{Notice, NoticeAction, NoticeScope, UiOperation};
@@ -33,11 +34,11 @@ pub(crate) struct ManagementState {
     /// The controls whose edits the desktop saved last.
     saved_settings: Vec<SettingKey>,
     pub setup: Option<SetupStateView>,
-    pub devices: Vec<AudioDeviceDto>,
+    pub devices: Vec<AudioDevice>,
     pub devices_listed: bool,
-    pub models: Vec<ModelDto>,
+    pub models: Vec<ModelSummary>,
     pub models_loaded: bool,
-    pub downloads: Vec<ActiveDownloadDto>,
+    pub downloads: Vec<ActiveDownload>,
     pub history: Vec<HistoryEntry>,
     pub history_unavailable: Option<String>,
     pub history_next_cursor: Option<HistoryCursor>,
@@ -57,11 +58,11 @@ pub(crate) struct ManagementState {
     /// The latest history copy, which clears its outcome after a moment.
     pub(crate) history_copy: Option<Task>,
     /// The application data a clear would remove, once the user asked to review it.
-    pub data_locations: Option<Vec<DataLocationDto>>,
+    pub data_locations: Option<Vec<DataLocation>>,
     pub clear_result: Option<ClearDataResult>,
     /// Controls whose call is in flight, once per call.
     pub(crate) busy: Vec<UiOperation>,
-    pub(crate) requested_permission: Option<whispernow_api::PermissionKindDto>,
+    pub(crate) requested_permission: Option<PermissionKind>,
     pub notice: Option<Notice>,
     next_notice: u64,
     pub microphone_test: Option<MicrophoneTestResponse>,
@@ -93,12 +94,7 @@ impl ManagementState {
         });
     }
 
-    pub(crate) fn notify_saved(
-        &mut self,
-        scope: NoticeScope,
-        saved: &str,
-        warnings: &[whispernow_api::ApiErrorDto],
-    ) {
+    pub(crate) fn notify_saved(&mut self, scope: NoticeScope, saved: &str, warnings: &[String]) {
         let tone = if warnings.is_empty() {
             Tone::Success
         } else {
@@ -139,8 +135,8 @@ impl ManagementState {
         self.busy.contains(&operation)
     }
 
-    pub fn install_devices(&mut self, devices: ListAudioDevicesResponse) {
-        self.devices = devices.devices;
+    pub fn install_devices(&mut self, devices: Vec<AudioDevice>) {
+        self.devices = devices;
         self.devices_listed = true;
     }
 

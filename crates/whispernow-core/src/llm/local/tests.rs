@@ -230,8 +230,6 @@ fn run(
         &LocalDecodeRequest {
             prompt: &prompt,
             max_tokens,
-            repeat_penalty: 1.05,
-            repeat_last_n: 4_096,
             draft,
         },
         |_| ControlFlow::Continue(()),
@@ -452,8 +450,6 @@ fn breaking_between_passes_stops_the_decode() {
         &LocalDecodeRequest {
             prompt: &prompt,
             max_tokens: 64,
-            repeat_penalty: 1.05,
-            repeat_last_n: 4_096,
             draft: None,
         },
         |reply| {

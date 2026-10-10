@@ -1,10 +1,10 @@
-#[path = "../../crates/whispernow-api/src/command_names.rs"]
+#[path = "../../crates/whispernow-domain/src/ipc/command_names.rs"]
 mod command_names;
 
 use command_names::COMMAND_NAMES;
 
 fn main() {
-    println!("cargo:rerun-if-changed=../../crates/whispernow-api/src/command_names.rs");
+    println!("cargo:rerun-if-changed=../../crates/whispernow-domain/src/ipc/command_names.rs");
     // Exposes the exact list handed to Tauri so the command catalog test can
     // check what the build generated permissions for.
     println!(

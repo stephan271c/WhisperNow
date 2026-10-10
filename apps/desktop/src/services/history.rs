@@ -2,15 +2,13 @@ use std::{
     path::PathBuf,
     sync::{Mutex, MutexGuard},
 };
+use whispernow_domain::AppError;
 
-use whispernow_api::{ApiErrorDto, ErrorCategoryDto};
+use whispernow_domain::ErrorCategory;
 use whispernow_domain::{
-    AppError, EntryId, HistoryEntry, HistoryLimit, HistoryPage, HistoryPageRequest, NewHistoryEntry,
+    EntryId, HistoryEntry, HistoryLimit, HistoryPage, HistoryPageRequest, NewHistoryEntry,
 };
 use whispernow_platform::{AppPaths, SqliteHistoryRepository};
-
-const UNAVAILABLE_CODE: &str = "history_unavailable";
-const UNAVAILABLE_SUMMARY: &str = "Transcription history is unavailable";
 
 struct HistoryState {
     /// `None` after a failed open or a data clear; the next use opens it again.
@@ -43,21 +41,15 @@ impl HistoryStore {
         store
     }
 
-    pub(super) fn take_warning(&self) -> Option<ApiErrorDto> {
-        self.lock()
-            .warning
-            .take()
-            .map(|error| storage_error(&error))
+    pub(super) fn take_warning(&self) -> Option<AppError> {
+        self.lock().warning.take()
     }
 
     /// Removes the entries beyond a new `limit`; returns whether any were removed.
-    pub(super) fn prune(&self, limit: HistoryLimit) -> Result<bool, ApiErrorDto> {
+    pub(super) fn prune(&self, limit: HistoryLimit) -> Result<bool, AppError> {
         let mut state = self.lock();
-        let repository = self.repository(&mut state).map_err(|e| storage_error(&e))?;
-        repository
-            .prune(limit)
-            .map(|removed| removed > 0)
-            .map_err(|error| storage_error(&error))
+        let repository = self.repository(&mut state)?;
+        repository.prune(limit).map(|removed| removed > 0)
     }
 
     /// Saves one dictation, keeping its audio when `keep_audio` or its status ask for it, and
@@ -80,22 +72,20 @@ impl HistoryStore {
         self.repository(&mut state)?.mark_not_delivered(id, error)
     }
 
-    pub(super) fn list(&self, request: &HistoryPageRequest) -> Result<HistoryPage, ApiErrorDto> {
+    pub(super) fn list(&self, request: &HistoryPageRequest) -> Result<HistoryPage, AppError> {
         let mut state = self.lock();
         self.repository(&mut state)
             .and_then(|repository| repository.list(request))
-            .map_err(|error| storage_error(&error))
     }
 
     /// One entry's kept audio as WAV bytes.
-    pub(crate) fn audio(&self, id: EntryId) -> Result<Vec<u8>, ApiErrorDto> {
+    pub(crate) fn audio(&self, id: EntryId) -> Result<Vec<u8>, AppError> {
         let mut state = self.lock();
         self.repository(&mut state)
-            .and_then(|repository| repository.audio(id))
-            .map_err(|error| storage_error(&error))?
+            .and_then(|repository| repository.audio(id))?
             .ok_or_else(|| {
-                ApiErrorDto::new(
-                    ErrorCategoryDto::NotFound,
+                AppError::new(
+                    ErrorCategory::NotFound,
                     "history_audio_not_kept",
                     "The audio for this dictation was not kept",
                 )
@@ -103,28 +93,26 @@ impl HistoryStore {
     }
 
     /// Deletes one entry; returns whether it existed.
-    pub(super) fn delete(&self, id: EntryId) -> Result<bool, ApiErrorDto> {
+    pub(super) fn delete(&self, id: EntryId) -> Result<bool, AppError> {
         let mut state = self.lock();
         self.repository(&mut state)
             .and_then(|repository| repository.delete(id))
-            .map_err(|error| storage_error(&error))
     }
 
     /// Deletes every entry; returns whether anything was removed.
-    pub(super) fn clear(&self) -> Result<bool, ApiErrorDto> {
+    pub(super) fn clear(&self) -> Result<bool, AppError> {
         let mut state = self.lock();
         self.repository(&mut state)
             .and_then(SqliteHistoryRepository::clear)
-            .map_err(|error| storage_error(&error))
     }
 
     /// The folder of kept audio, created when missing so it can be opened before the first
     /// recording is kept.
-    pub(super) fn recordings_dir(&self) -> Result<PathBuf, ApiErrorDto> {
+    pub(super) fn recordings_dir(&self) -> Result<PathBuf, AppError> {
         let directory = self.paths.recordings_dir();
         std::fs::create_dir_all(&directory).map_err(|_| {
-            ApiErrorDto::new(
-                ErrorCategoryDto::General,
+            AppError::new(
+                ErrorCategory::General,
                 "recordings_folder_unavailable",
                 "The recordings folder could not be created",
             )
@@ -144,11 +132,11 @@ impl HistoryStore {
     pub(super) fn with_repository_closed<T>(
         &self,
         operation: impl FnOnce() -> T,
-    ) -> Result<T, ApiErrorDto> {
+    ) -> Result<T, AppError> {
         let mut state = self.lock();
         if let Some(repository) = state.repository.take() {
-            repository.clear().map_err(|error| storage_error(&error))?;
-            repository.close().map_err(|error| storage_error(&error))?;
+            repository.clear()?;
+            repository.close()?;
         }
         state.warning = None;
         Ok(operation())
@@ -159,11 +147,7 @@ impl HistoryStore {
         state: &'a mut HistoryState,
     ) -> Result<&'a SqliteHistoryRepository, AppError> {
         if state.repository.is_none() {
-            let (repository, diagnostic) =
-                SqliteHistoryRepository::open(&self.paths).map_err(|error| {
-                    tracing::warn!(code = error.code, "transcription history did not open");
-                    AppError::redacted(UNAVAILABLE_CODE, UNAVAILABLE_SUMMARY)
-                })?;
+            let (repository, diagnostic) = SqliteHistoryRepository::open(&self.paths)?;
             if let Some(diagnostic) = diagnostic {
                 tracing::warn!(
                     code = diagnostic.code,
@@ -179,15 +163,6 @@ impl HistoryStore {
     fn lock(&self) -> MutexGuard<'_, HistoryState> {
         self.state.lock().expect("history state lock poisoned")
     }
-}
-
-fn storage_error(error: &AppError) -> ApiErrorDto {
-    let category = if error.code == UNAVAILABLE_CODE {
-        ErrorCategoryDto::HistoryUnavailable
-    } else {
-        ErrorCategoryDto::General
-    };
-    ApiErrorDto::new(category, &error.code, &error.summary)
 }
 
 #[cfg(test)]

@@ -27,7 +27,10 @@ fn manual_parakeet_fixture_matches_documented_text() {
     let fixture = root.join("test_wavs/0.wav");
     let wave = sherpa_onnx::Wave::read(fixture.to_str().expect("UTF-8 fixture path"))
         .expect("readable fixture");
-    assert_eq!(wave.sample_rate(), 16_000);
+    assert_eq!(
+        wave.sample_rate(),
+        whispernow_core::audio::TARGET_SAMPLE_RATE.cast_signed()
+    );
 
     let mut engine = SherpaAsrEngine::new();
     engine

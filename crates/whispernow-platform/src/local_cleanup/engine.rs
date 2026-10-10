@@ -3,7 +3,7 @@
 use std::{ops::ControlFlow, path::Path, rc::Rc};
 
 use whispernow_core::llm::{
-    DraftText, LlmDecoding, LlmPrompt,
+    DraftText, LlmPrompt,
     local::{self, DecodeContext, LocalDecodeError, LocalDecodeOutput, LocalDecodeRequest},
 };
 
@@ -57,20 +57,18 @@ impl LocalCleanupEngine {
         self.model.backend()
     }
 
-    /// Decodes the reply to `prompt`: speculatively when `decoding` carries a draft.
+    /// Decodes the reply to `prompt`: speculatively when given a draft.
     /// `between_passes` sees the reply so far and stops the decode by breaking.
     pub(crate) fn decode(
         &mut self,
         prompt: &LlmPrompt,
-        decoding: &LlmDecoding,
+        max_output_tokens: u64,
+        draft: Option<&DraftText>,
         between_passes: impl FnMut(&[u8]) -> ControlFlow<()>,
     ) -> Result<LocalDecodeOutput, EngineError> {
         let rendered = local::render_prompt(&self.model.bos_text(), prompt);
-        // Core always gives this model a budget; without one the context cannot be sized.
-        let max_tokens = decoding
-            .max_output_tokens
-            .and_then(|tokens| usize::try_from(tokens).ok())
-            .unwrap_or(usize::MAX);
+        let max_tokens = usize::try_from(max_output_tokens)
+            .map_err(|_| EngineError::Decode(LocalDecodeError::PromptTooLong))?;
         let prompt_tokens = self
             .model
             .tokenize(rendered.as_bytes(), true)
@@ -84,19 +82,12 @@ impl LocalCleanupEngine {
         let context_size = u32::try_from(context_size)
             .map_err(|_| EngineError::Decode(LocalDecodeError::PromptTooLong))?;
         let context = self.context(context_size)?;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "llama.cpp keeps the penalty as f32"
-        )]
-        let repeat_penalty = local::REPEAT_PENALTY as f32;
         local::decode(
             context,
             &LocalDecodeRequest {
                 prompt: &rendered,
                 max_tokens,
-                repeat_penalty,
-                repeat_last_n: local::REPEAT_LAST_N,
-                draft: decoding.draft.as_ref().map(DraftText::as_str),
+                draft: draft.map(DraftText::as_str),
             },
             between_passes,
         )

@@ -5,9 +5,10 @@ mod permissions;
 mod settings;
 
 use std::sync::{Arc, PoisonError, RwLock, atomic::AtomicBool};
+use whispernow_domain::AppError;
 
-use whispernow_api::{ApiErrorDto, AppStateDto, ErrorCategoryDto, EventPayload};
 use whispernow_core::CancellationToken;
+use whispernow_domain::ipc::{AppState, ErrorCategory, EventPayload, MainWindowSection};
 
 use crate::{
     activation::ActivationGate, autostart::AutostartRegistration, services::NativeServices,
@@ -61,7 +62,7 @@ impl Gateway {
         }
     }
 
-    pub(crate) fn services_state(&self) -> AppStateDto {
+    pub(crate) fn services_state(&self) -> AppState {
         self.services.state.snapshot()
     }
 
@@ -70,7 +71,7 @@ impl Gateway {
         self.services.state.publish();
     }
 
-    pub(crate) fn request_navigation(&self, section: whispernow_api::MainWindowSectionDto) {
+    pub(crate) fn request_navigation(&self, section: MainWindowSection) {
         self.services
             .state
             .events()
@@ -82,10 +83,10 @@ impl Gateway {
         &self,
         operation: &'static str,
         failure: Failure,
-        work: impl FnOnce(Arc<NativeServices>, CancellationToken) -> Result<R, ApiErrorDto>
+        work: impl FnOnce(Arc<NativeServices>, CancellationToken) -> Result<R, AppError>
         + Send
         + 'static,
-    ) -> Result<R, ApiErrorDto> {
+    ) -> Result<R, AppError> {
         let services = Arc::clone(&self.services);
         let commands = Arc::clone(&self.commands);
         let shutdown = self.shutdown.clone();
@@ -93,8 +94,8 @@ impl Gateway {
         let result = run_blocking(move || {
             let _running = commands.read().unwrap_or_else(PoisonError::into_inner);
             if shutdown.is_cancelled() {
-                return Err(ApiErrorDto::new(
-                    ErrorCategoryDto::General,
+                return Err(AppError::new(
+                    ErrorCategory::General,
                     "application_shutting_down",
                     "The application is closing",
                 ));
@@ -115,7 +116,7 @@ impl Gateway {
         result
     }
 
-    pub(crate) fn publish_error(&self, error: &ApiErrorDto) {
+    pub(crate) fn publish_error(&self, error: &AppError) {
         self.services.state.publish_error(error.clone());
     }
 }
@@ -130,14 +131,14 @@ pub(crate) enum Failure {
     Local,
 }
 
-async fn run_blocking<T, F>(work: F) -> Result<T, ApiErrorDto>
+async fn run_blocking<T, F>(work: F) -> Result<T, AppError>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
     tokio::task::spawn_blocking(work).await.map_err(|_| {
-        ApiErrorDto::new(
-            ErrorCategoryDto::General,
+        AppError::new(
+            ErrorCategory::General,
             "worker_stopped",
             "The application could not complete this operation",
         )

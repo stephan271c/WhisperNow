@@ -122,6 +122,12 @@ pub struct ProviderSettings {
     pub saved_models: Vec<String>,
 }
 
+static DEFAULT_PROVIDER_SETTINGS: ProviderSettings = ProviderSettings {
+    model: String::new(),
+    api_base: None,
+    saved_models: Vec::new(),
+};
+
 /// A literal vocabulary replacement, stored as a `[source, replacement]` pair.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(from = "(String, String)", into = "(String, String)")]
@@ -251,11 +257,10 @@ impl Settings {
     }
 
     #[must_use]
-    pub fn provider_settings(&self, provider: LlmProvider) -> ProviderSettings {
+    pub fn provider_settings(&self, provider: LlmProvider) -> &ProviderSettings {
         self.llm_provider_settings
             .get(&provider)
-            .cloned()
-            .unwrap_or_default()
+            .unwrap_or(&DEFAULT_PROVIDER_SETTINGS)
     }
 
     pub fn provider_settings_mut(&mut self, provider: LlmProvider) -> &mut ProviderSettings {

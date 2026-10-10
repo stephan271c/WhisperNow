@@ -1,12 +1,13 @@
-use whispernow_api::{
-    ApiErrorDto, AppStateDto, ErrorCategoryDto, ModelAvailability, PermissionKindDto,
-    PermissionStatusDto, PermissionsResponse, SaveSettingsResponse, SetupCheckpoint,
-    SetupStateView, SetupStep, SetupTestResultDto,
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{
+    AppState, PermissionKind, PermissionStatus, PermissionsResponse, SaveSettingsResponse,
+    SetupStateView, SetupTestResult,
 };
+use whispernow_domain::{ModelAvailability, SetupCheckpoint, SetupStep};
 
 use super::ManagementState;
+use crate::NoticeScope;
 use crate::components::ui::Tone;
-use crate::{NoticeScope, client::ClientError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SetupTest {
@@ -14,7 +15,7 @@ pub enum SetupTest {
     Running {
         active: bool,
     },
-    Finished(SetupTestResultDto),
+    Finished(SetupTestResult),
 }
 
 /// Whether no card can change any more while setup watches: each is granted, unavailable to
@@ -24,9 +25,9 @@ fn permissions_settled(permissions: &PermissionsResponse) -> bool {
         .permissions
         .iter()
         .all(|permission| match permission.status {
-            PermissionStatusDto::Granted | PermissionStatusDto::Unavailable => true,
-            PermissionStatusDto::Denied => !permission.can_request && !permission.can_open_settings,
-            PermissionStatusDto::NotDetermined => false,
+            PermissionStatus::Granted | PermissionStatus::Unavailable => true,
+            PermissionStatus::Denied => !permission.can_request && !permission.can_open_settings,
+            PermissionStatus::NotDetermined => false,
         })
 }
 
@@ -68,8 +69,8 @@ impl ManagementState {
             // The desktop checks the choices when setup finishes.
             SetupStep::Welcome | SetupStep::TryIt => true,
             SetupStep::Permissions => {
-                self.permission_status(PermissionKindDto::Microphone)
-                    == Some(PermissionStatusDto::Granted)
+                self.permission_status(PermissionKind::Microphone)
+                    == Some(PermissionStatus::Granted)
             }
             // The download carries on in the background while setup moves on.
             SetupStep::Model => self.setup_model_ready() || self.setup_model_downloading(),
@@ -151,7 +152,7 @@ impl ManagementState {
     /// What the desktop reports for `kind`; `None` before the cards load or when this platform
     /// does not need it.
     #[must_use]
-    pub fn permission_status(&self, kind: PermissionKindDto) -> Option<PermissionStatusDto> {
+    pub fn permission_status(&self, kind: PermissionKind) -> Option<PermissionStatus> {
         self.permissions
             .as_ref()
             .and_then(|permissions| permissions.get(kind))
@@ -169,14 +170,14 @@ impl ManagementState {
             && self.permission_watch.is_some()
             && self.on_permissions_step();
         let microphone = permissions
-            .get(PermissionKindDto::Microphone)
+            .get(PermissionKind::Microphone)
             .map(|permission| permission.status);
         self.permissions = Some(permissions);
         if !settled {
             return None;
         }
         self.end_permission_watch();
-        (microphone == Some(PermissionStatusDto::Granted))
+        (microphone == Some(PermissionStatus::Granted))
             .then(|| self.setup_move(SetupStep::Model))
             .flatten()
     }
@@ -204,28 +205,19 @@ impl ManagementState {
 
     /// The test could not start, or its stop failed: the failure is its result, unless a
     /// snapshot already reported how the test ended.
-    pub fn fail_setup_test(&mut self, error: &ClientError) {
+    pub fn fail_setup_test(&mut self, error: &AppError) {
         if !self.setup_test_running() {
             return;
         }
-        self.setup_test = Some(SetupTest::Finished(match error {
-            ClientError::Api(error) => SetupTestResultDto::Failed {
-                error: Box::new(error.clone()),
-            },
-            ClientError::Transport => SetupTestResultDto::Failed {
-                error: Box::new(ApiErrorDto::new(
-                    ErrorCategoryDto::General,
-                    "desktop_unreachable",
-                    "The desktop connection failed",
-                )),
-            },
+        self.setup_test = Some(SetupTest::Finished(SetupTestResult::Failed {
+            error: Box::new(error.clone()),
         }));
     }
 
     /// Follows the test dictation through the snapshots: once it has run and the workflow is
     /// idle again, the snapshot's setup-test result is its result, however it was stopped. A
     /// test that ended without one, such as one interrupted by shutdown, reads as cancelled.
-    pub(super) fn observe_setup_test(&mut self, snapshot: &AppStateDto) {
+    pub(super) fn observe_setup_test(&mut self, snapshot: &AppState) {
         let Some(SetupTest::Running { active }) = &mut self.setup_test else {
             return;
         };
@@ -239,7 +231,7 @@ impl ManagementState {
         let outcome = snapshot
             .setup_test
             .clone()
-            .unwrap_or(SetupTestResultDto::Cancelled);
+            .unwrap_or(SetupTestResult::Cancelled);
         self.setup_test = Some(SetupTest::Finished(outcome));
     }
 }
