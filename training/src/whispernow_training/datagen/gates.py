@@ -6,25 +6,25 @@
 3. Code checks run first: every protected token the transcript wrote verbatim (a URL, email, path,
    identifier or number already in digits) is in the reference, and the reference has no em dash
    and no correction cue kept from the transcript. What code cannot settle, a spelled-out
-   number next to a word or a hedge or reason the reference says less often than the transcript, goes
-   to the judge as the item's FLAGS.
+   number next to a word, a hedge or reason the reference says less often than the transcript, or
+   a kept hedge the speaker may have settled, goes to the judge as the item's FLAGS.
 
 A reference that fails is relabelled once, as a new sample of the same teacher request (or, with
 `relabel_note`, with the judge's note added), and checked again; one that fails twice is dropped.
-The label audit (`audit.py`) uses the same check.
 """
 
 from __future__ import annotations
 
-import asyncio
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..model.metrics import EM_DASH, casual_contractions, correction_cues, dropped_kept_words, protected_tokens, spelled_counts
+from ..text_rules import CASE_SENSITIVE, FILLER, POSSIBLE_CORRECTION, protected_tokens
+from ..model.metrics import EM_DASH, HEDGES, casual_contractions, correction_cues, dropped_kept_words, spelled_counts
+from .concurrency import task_group
 from .judge import Verdict, judge_batch, size_batches
-from .llm import LlmClient, Role
+from .llm import LlmClient
 from .paths import PROMPTS
 from .schema import EMPTY
 from .teacher import relabel
@@ -42,22 +42,12 @@ INPUT_CRITERIA = ("input_realistic",)
 JUDGE_MAX_ITEMS = 10
 JUDGE_MAX_CHARS = 14_000
 
-# A token said before one of these, close by, may be the discarded side of a correction or an item
-# the speaker took back, so the reference may lack it; the completeness judge still checks the row.
-_CORRECTION_CUE = re.compile(
-    r"\b(?:no|nope|wait|sorry|actually|i mean|scratch|make (?:it|that)|change|instead|rather|except|"
-    r"go with|switch|never ?mind|forget|skip|drop|remove|cancel|take (?:off|out)|don't need|already have|"
-    r"not|correction|let me|hold on|or|i guess|i meant|whoops|oops|my bad|er|really|say|maybe|probably)\b",
-    re.IGNORECASE,
-)
 _CUE_WINDOW_WORDS = 25
 # "a.m."/"p.m." match the identifier pattern but are written "AM"/"PM" just as well.
 _TIME_OF_DAY = re.compile(r"^[ap]\.m$", re.IGNORECASE)
 _THOUSANDS = re.compile(r"(?<=\d),(?=\d{3}\b)")
 # "23rd", "2am", "28s" and "20%" hold the numbers 23, 2, 28 and 20.
 _NUMBER_SUFFIX = re.compile(r"^(\d+(?:\.\d+)?)(?:st|nd|rd|th|am|pm|s|%)$", re.IGNORECASE)
-# Paths, files, emails, URLs and flags keep their case; a word-like token may be recased ("g2" as "G2").
-_CASE_SENSITIVE = re.compile(r"[/@_\\]|\.[A-Za-z]{2,}|--")
 
 
 def _normalize(text: str) -> str:
@@ -73,7 +63,7 @@ def _present(token: str, reference: str) -> bool:
         return re.search(rf"(?<!\d){re.escape(token)}0*(?!\d)", reference) is not None
     if token in reference:
         return True
-    return not _CASE_SENSITIVE.search(token) and token.casefold() in reference.casefold()
+    return not CASE_SENSITIVE.search(token) and token.casefold() in reference.casefold()
 
 
 def missing_protected(transcript: str, reference: str) -> list[str]:
@@ -92,7 +82,7 @@ def missing_protected(transcript: str, reference: str) -> list[str]:
             index = max(0, sum(start <= match.start() for start in starts) - 1)
             window = " ".join(words[max(0, index - _CUE_WINDOW_WORDS) : index + _CUE_WINDOW_WORDS])
             # A value asked as a question ("15 of them?") is tentative too.
-            if _CORRECTION_CUE.search(window) or "?" in " ".join(words[index : index + 3]):
+            if POSSIBLE_CORRECTION.search(window) or "?" in " ".join(words[index : index + 3]):
                 tentative = True
                 break
         if not tentative:
@@ -105,7 +95,7 @@ def corrected_later(token: str, transcript: str) -> bool:
     ("... actually, forget the cork, go with bamboo") can take back a value said long before."""
     transcript = _normalize(transcript)
     mentions = [m.end() for m in re.finditer(re.escape(token), transcript)]
-    return bool(mentions) and _CORRECTION_CUE.search(transcript, mentions[-1]) is not None
+    return bool(mentions) and POSSIBLE_CORRECTION.search(transcript, mentions[-1]) is not None
 
 
 # A restart right after a value ("55... 58 degrees", "precinct 30— 31") may replace it.
@@ -140,6 +130,51 @@ def why_dropped(token: str, transcript: str) -> str:
     return ""
 
 
+_HEDGE = re.compile(rf"\b(?:{'|'.join(map(re.escape, HEDGES))})\b", re.IGNORECASE)
+# A yes or a decision soon after a hedge may settle it: "maybe some jasmine rice, actually yeah get it".
+_SETTLE = re.compile(
+    r"\b(?:yeah|yes|yep|yup|definitely|for sure|let'?s (?:do|get|go|just)|go with|"
+    r"get (?:it|them|that|those|one|both|two)|make it|we do)\b",
+    re.IGNORECASE,
+)
+_SETTLE_WINDOW_WORDS = 10
+_FUNCTION_WORDS = frozenset(
+    "some that this then with have just also from there they what like it's i'm we're you're about would "
+    "could should them those these their really other thing things okay yeah".split()
+) | frozenset(word for phrase in HEDGES for word in phrase.split())
+
+
+def settled_hedges(transcript: str, reference: str) -> list[str]:
+    """Kept hedges near a decision, quoted with the item they refer to for the judge to settle."""
+    sentences = re.split(r"(?<=[.!?])\s+|\n", reference)
+    matches = list(_HEDGE.finditer(transcript))
+    found = []
+    for index, match in enumerate(matches):
+        if (
+            index + 1 < len(matches)
+            and match.group().casefold() == matches[index + 1].group().casefold()
+            and not re.search(r"\w", transcript[match.end() : matches[index + 1].start()])
+        ):
+            continue
+        following = list(re.finditer(r"\S+", transcript[match.end() :]))[:_SETTLE_WINDOW_WORDS]
+        after = transcript[match.end() : match.end() + following[-1].end()] if following else ""
+        settle = _SETTLE.search(after)
+        if not settle:
+            continue
+        item = after[: settle.start()]
+        start = match.start()
+        hedged = [w for w in re.findall(r"[\w']+", item.casefold()) if len(w) >= 4 and w not in _FUNCTION_WORDS]
+        if not hedged:
+            preceding = list(re.finditer(r"\S+", transcript[:match.start()]))[-_SETTLE_WINDOW_WORDS:]
+            start = preceding[0].start() if preceding else match.start()
+            item = transcript[start : match.start()]
+            hedged = [w for w in re.findall(r"[\w']+", item.casefold()) if len(w) >= 4 and w not in _FUNCTION_WORDS]
+        hedge = re.compile(r"\b" + r"\s+".join(map(re.escape, match.group(0).split())) + r"\b", re.IGNORECASE)
+        if any(hedge.search(s) and any(re.search(rf"\b{re.escape(w)}", s, re.IGNORECASE) for w in hedged) for s in sentences):
+            found.append(transcript[start : match.end() + settle.end()].strip())
+    return found
+
+
 @dataclass(frozen=True)
 class Judge:
     """The judge prompt and criteria a gate uses, and the style each row's transcript is in."""
@@ -151,8 +186,7 @@ class Judge:
     addendum: str = ""
     # Rows per request: 1 gives each long row the judge's full attention.
     max_items: int = JUDGE_MAX_ITEMS
-    # The judge model's reasoning for this judge's checks, and for references the gate has the judge's
-    # model write; None keeps `LLM_JUDGE_REASONING`.
+    # None keeps `LLM_JUDGE_REASONING`.
     reasoning: str | None = None
     # Rows whose transcript is longer than this many words get a request each, the rest share requests.
     solo_over_words: int | None = None
@@ -184,12 +218,9 @@ def code_check(transcript: str, reference: str) -> tuple[list[str], str]:
     return failed, "; ".join(notes)
 
 
-_FILLER_WORD = re.compile(r"um+|uh+m?|erm?|hmm+|mm+|mhm|ah+", re.IGNORECASE)
-
-
 def filler_only(transcript: str) -> bool:
     """Whether a transcript holds no dictated words, only fillers and punctuation, so its edit is EMPTY."""
-    return all(_FILLER_WORD.fullmatch(word) for word in re.findall(r"[\w']+", transcript))
+    return all(FILLER.fullmatch(word) for word in re.findall(r"[\w']+", transcript))
 
 
 def empty_check(transcript: str, reference: str) -> tuple[list[str], str]:
@@ -203,14 +234,15 @@ def empty_check(transcript: str, reference: str) -> tuple[list[str], str]:
 
 def code_flags(transcript: str, reference: str) -> str:
     """What code found and the judge settles: spelled-out numbers next to a word, hedges or reasons
-    the reference says less often than the transcript, and dropped values a correction may have
-    taken back or a larger number may hold."""
+    the reference says less often than the transcript, dropped values a correction may have taken
+    back or a larger number may hold, and kept hedges the speaker may have settled."""
     flags = [f"spelled-out number {phrase!r}" for phrase in spelled_counts(reference)[:5]]
     flags += [f"the transcript says {word!r} more often than the reference" for word in dropped_kept_words(transcript, reference)]
     flags += [
         f"the reference drops {token!r}, {why}"
         for token in missing_protected(transcript, reference)[:5] if (why := why_dropped(token, transcript))
     ]
+    flags += [f"the reference keeps a hedge the speaker may settle: {phrase!r}" for phrase in settled_hedges(transcript, reference)[:3]]
     return "; ".join(flags)
 
 
@@ -234,14 +266,19 @@ async def check_references(
             judged.append((id_, {**style, "transcript": transcript, "reference": reference, **({"flags": flags} if flags else {})}))
     instructions = judge.instructions.read_text(encoding="utf-8") + (f"\n{judge.addendum}\n" if judge.addendum else "")
     judged.sort(key=lambda item: len(item[1]["transcript"]))
-    solo = [item for item in judged if judge.solo_over_words is not None and len(item[1]["transcript"].split()) > judge.solo_over_words]
-    shared = [item for item in judged if item not in solo]
-    batches = size_batches(shared, judge.max_items, JUDGE_MAX_CHARS) + [[item] for item in solo]
-    for batch_verdicts in await asyncio.gather(
-        *(judge_batch(llm, instructions, judge.criteria, batch, judge.reasoning) for batch in batches)
-    ):
-        verdicts.update((verdict.id, verdict) for verdict in batch_verdicts)
+    batches = size_batches(judged, judge.max_items, JUDGE_MAX_CHARS, judge.solo_over_words)
+    async with task_group() as group:
+        tasks = [group.create_task(judge_batch(llm, instructions, judge.criteria, batch, judge.reasoning))
+                 for batch in batches]
+    for task in tasks:
+        verdicts.update((verdict.id, verdict) for verdict in task.result())
     return verdicts
+
+
+def _relabel_note(note: str, earlier: str) -> str:
+    if not earlier:
+        return note
+    return f"{note} Also avoid what an edit before it was rejected for: {earlier}"
 
 
 @dataclass
@@ -262,36 +299,28 @@ async def gate(
     references: dict[str, str] | None = None,
     first_attempt: int = 0,
     judge: Judge = COMPLETENESS_JUDGE,
-    teacher_role: Role = "teacher",
-    relabel_role: Role | None = None,
     teacher_reasoning: str | None = None,
     relabel_note: bool = False,
+    earlier_notes: dict[str, str] | None = None,
 ) -> dict[str, Gated]:
     """Labels (id, transcript) rows with the teacher, checks them, and relabels each failure once.
 
     `references` supplies a first reference per id instead of the teacher's attempt `first_attempt`
-    (the audit passes the existing ones). A relabel is teacher attempt `first_attempt + 1`.
-    `teacher_role="judge"` has the judge's model write the references; `relabel_role="judge"` only
-    the relabel, so a failure gets its second reference from the stronger model, at `judge.reasoning`.
-    `teacher_reasoning` overrides `LLM_REASONING` for the references the teacher role writes.
+    instead of requesting that sample. A relabel is teacher attempt `first_attempt + 1`.
+    `teacher_reasoning` overrides `LLM_REASONING` for the references the teacher writes.
     `relabel_note` adds the first check's note to the relabel request, so the second reference fixes
-    what the first got wrong.
+    what the first got wrong. `earlier_notes` adds a note per id from a check before that, so a fix
+    does not bring back an earlier fault.
     """
-    first_reasoning = judge.reasoning if teacher_role == "judge" else teacher_reasoning
-    relabel_role = relabel_role or teacher_role
-    relabel_reasoning = judge.reasoning if relabel_role == "judge" else teacher_reasoning
     transcripts = dict(rows)
     ids = list(transcripts)
     first = dict(references or {})
     missing = [id_ for id_ in ids if id_ not in first]
-    for id_, output in zip(
-        missing,
-        await asyncio.gather(
-            *(relabel(llm, transcripts[id_], first_attempt, teacher_role, first_reasoning) for id_ in missing)
-        ),
-        strict=True,
-    ):
-        first[id_] = output
+    async with task_group() as group:
+        tasks = [group.create_task(relabel(llm, transcripts[id_], first_attempt, teacher_reasoning))
+                 for id_ in missing]
+    for id_, task in zip(missing, tasks, strict=True):
+        first[id_] = task.result()
     verdicts = await check_references(llm, [(id_, transcripts[id_], first[id_]) for id_ in ids], judge)
     results = {
         id_: Gated(id_, first[id_], True, first_attempt, [], "", [], "") for id_ in ids if verdicts[id_].passed
@@ -301,21 +330,12 @@ async def gate(
         if not verdict.passed and set(verdict.failed) & set(INPUT_CRITERIA):
             results[id_] = Gated(id_, first[id_], False, first_attempt, verdict.failed, verdict.note, verdict.failed, verdict.note)
     retry = [id_ for id_ in ids if id_ not in results]
-    second = dict(
-        zip(
-            retry,
-            await asyncio.gather(
-                *(
-                    relabel(
-                        llm, transcripts[id_], first_attempt + 1, relabel_role, relabel_reasoning,
-                        note=verdicts[id_].note if relabel_note else None,
-                    )
-                    for id_ in retry
-                )
-            ),
-            strict=True,
-        )
-    )
+    async with task_group() as group:
+        tasks = [group.create_task(relabel(
+            llm, transcripts[id_], first_attempt + 1, teacher_reasoning,
+            note=_relabel_note(verdicts[id_].note, (earlier_notes or {}).get(id_, "")) if relabel_note else None,
+        )) for id_ in retry]
+    second = {id_: task.result() for id_, task in zip(retry, tasks, strict=True)}
     rechecked = await check_references(llm, [(id_, transcripts[id_], second[id_]) for id_ in retry], judge)
     for id_ in retry:
         again = rechecked[id_]

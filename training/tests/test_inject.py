@@ -6,6 +6,7 @@ import pytest
 from whispernow_training.datagen import inject, sources
 from whispernow_training.datagen.schema import EMPTY, Example
 from whispernow_training.model.metrics import protected_tokens
+from whispernow_training.text_rules import FILLER
 
 CLEAN = (
     "Hi Sarah, the meeting moved to Thursday at 3 PM in room B2. Can you send the deck to "
@@ -159,19 +160,20 @@ def test_densify_adds_hesitation_to_a_spoken_text_and_keeps_its_words():
 
 
 def test_pause_punctuation_splits_a_sentence_without_touching_words():
-    seen_mid = seen_list = False
+    seen_period = seen_question = False
     for text, _style, _seed, result in _cases("pause"):
-        assert _words(result.text) == _words(text) or result.text.count("?") > text.count("?")
-        seen_mid |= bool(re.search(r"\b[a-z]+[.?] [A-Za-z]", result.text)) and result.text.count(".") > text.count(".")
-        seen_list |= result.text.count("?") > text.count("?")
-    assert seen_mid and seen_list
+        assert _words(result.text) == _words(text)
+        seen_period |= bool(re.search(r"\b[a-z]+\. [A-Za-z]", result.text)) and result.text.count(".") > text.count(".")
+        seen_question |= result.text.count("?") > text.count("?")
+    assert seen_period
+    assert seen_question
 
 
 def test_raw_style_drops_case_and_edge_punctuation_but_not_code():
-    spoken = inject.inject(CLEAN, 1, "raw").text
+    spoken = inject.inject(CLEAN + " There's a cache at ./data:/app/data, and NASA will use it.", 1, "raw").text
     assert "," not in spoken and "?" not in spoken
     assert "sarah" in spoken and "Sarah" not in spoken
-    for token in ("B2", "jane.doe@example.com", "--save-dev", "U.S.", "I'm"):
+    for token in ("B2", "jane.doe@example.com", "--save-dev", "U.S.", "I'm", "there's", "./data:/app/data", "NASA"):
         assert token in spoken
 
 
@@ -183,13 +185,6 @@ def test_levels_and_kinds_are_tagged():
         assert f"noise_level:{result.level}" in result.tags
         assert all(f"noise:{kind}" in result.tags for kind in result.kinds)
     assert set(levels) == set(inject.LEVELS)
-
-
-def test_raw_style_keeps_leading_punctuation_and_lowercases_contractions():
-    assert inject._raw_token("./data:/app/data,") == "./data:/app/data"
-    assert inject._raw_token("There's") == "there's"
-    assert inject._raw_token("I'm") == "I'm"
-    assert inject._raw_token("NASA,") == "NASA"
 
 
 def test_injected_rows_keep_origin_target_group_and_license():
@@ -228,5 +223,5 @@ def test_empty_rows_are_unique_filler_only_inputs():
     assert len({r.input for r in rows}) == 50
     for row in rows:
         assert row.output == EMPTY
-        assert all(word in sources.FILLERS | {"umm", "uhh"} for word in sources.words(row.input))
+        assert all(FILLER.fullmatch(word) for word in sources.words(row.input))
     assert [r.input for r in rows] == [r.input for r in inject.empty_rows(50, seed=9)]

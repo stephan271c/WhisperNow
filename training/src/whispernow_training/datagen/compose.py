@@ -33,9 +33,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from . import gates, generate, paths, rejudge
-from .audit import length_bucket
 from .llm import LlmClient, LlmError
-from .schema import EMPTY, Example, example_id, layout_of, read_examples, read_jsonl
+from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, layout_of, length_bucket, read_examples, read_jsonl
 from .teacher import relabel
 
 CATEGORIES = (
@@ -54,11 +53,6 @@ RECOGNIZER_PERCENT = 70
 # codex slots idle. A cell can overshoot its target by the batches still running when it is reached.
 LANES = {"150-300": 2, "300-600": 6, "600-1000": 12}
 FEEDBACK_NOTES = 8
-# A reference that fails the gates gets a second sample from the teacher at its bucket's reasoning.
-# With glm-5.3 as teacher this was the judge's model (`"judge"`), which got 32 of 40 long references
-# past the strict judge where the teacher at low got 24-25. With gpt-6.1-sol as both, the teacher's
-# setting is the stronger one for every bucket.
-RELABEL_ROLE = "teacher"
 # The teacher's reasoning per length bucket; a bucket not listed keeps `LLM_REASONING` (high). On 40
 # long references, gpt-6.1-sol passed the judge 7 of 14 times over 600 words at xhigh against 3 at
 # high; below 600 words, xhigh was no better and took 2.5 times as long (report, section 5).
@@ -72,12 +66,12 @@ JUDGE_ITEMS = 1
 # per row, so the shorter rows are checked at low.
 JUDGE_REASONING = {"150-300": "low", "300-600": "low"}
 
-_BENCH_NAMES = (
+BENCH_NAMES = (
     "Adaeze Bjorn Camila Dev Esme Felix Gideon Harriet Ivo Jun Kalani Lorenzo Maren Nnamdi Orla Pavel Rhea Soren "
     "Tamsin Ulrich Valentina Wendell Ximena Yusuf Zara Anouk Bashir Cosima Dariusz Eero Freya Gustavo Hamid Iris "
     "Joaquin Kirra Leif Mbali Nikhil Odette Phuong Rafferty Saoirse Teodor Uzma Vesna Wilhelmina Yohannes Zeynep"
 ).split()
-_BENCH_SETTINGS = (
+BENCH_SETTINGS = (
     "a veterinary clinic", "a ferry terminal", "a community theater", "a solar installer", "a food truck",
     "a university admissions office", "a brewery", "a school bus depot", "a museum archive", "a yoga studio",
     "a pharmacy", "an orchard", "a recording studio", "a print shop", "a ski resort", "a daycare",
@@ -95,26 +89,12 @@ class Run:
     base: Path
     names: tuple[str, ...]
     settings: tuple[str, ...]
-    split: str
     shares: dict[str, float]
 
 
-TRAIN = Run("train", paths.DATA / "stage4", paths.PROMPTS / "generate" / "base.md", tuple(generate._NAMES), generate._SETTINGS, "", SHARES)
-BENCH = Run("bench", paths.DATA / "bench" / "long", paths.PROMPTS / "bench" / "base.md", tuple(_BENCH_NAMES), _BENCH_SETTINGS, "", BENCH_SHARES)
+TRAIN = Run("train", paths.DATA / "stage4", paths.PROMPTS / "generate" / "base.md", tuple(generate.NAMES), generate.SETTINGS, SHARES)
+BENCH = Run("bench", paths.DATA / "bench" / "long", paths.PROMPTS / "bench" / "base.md", tuple(BENCH_NAMES), BENCH_SETTINGS, BENCH_SHARES)
 RUNS = {run.name: run for run in (TRAIN, BENCH)}
-
-
-@dataclass
-class BatchRecord:
-    batch: int
-    style: str
-    requested: int
-    returned: int = 0
-    passed: int = 0
-    relabeled: int = 0
-    notes: list[str] | None = None
-    seconds: float = 0.0
-    error: str = ""
 
 
 def stem(category: str, bucket: str) -> str:
@@ -176,11 +156,11 @@ async def run_batch(
     llm: LlmClient, run: Run, category: str, bucket: str, batch: int, count: int, notes: Sequence[str], known: set[str]
 ) -> tuple[BatchRecord, list[Example], list[dict]]:
     style = style_for(run, category, bucket, batch)
-    record = BatchRecord(batch=batch, style=style, requested=count, notes=[])
+    record = BatchRecord(batch=batch, style=style, requested=count)
     started = time.monotonic()
     try:
         reply = await llm.complete(generator_messages(run, category, bucket, style, count, batch, notes), role="generator")
-        items = [item for item in generate._items(reply, count) if item["input"] not in known]
+        items = [item for item in generate.parse_items(reply, count) if item["input"] not in known]
     except (ValueError, KeyError, TypeError) as error:
         record.error = f"unreadable generator reply: {error}"[:300]
         record.seconds = round(time.monotonic() - started, 1)
@@ -220,7 +200,7 @@ async def run_batch(
         )
         results |= await gates.gate(
             llm, [(id_, item["input"]) for id_, item in group], {id_: firsts[id_] for id_, _ in group}, judge=judge,
-            relabel_role=RELABEL_ROLE, teacher_reasoning=TEACHER_REASONING.get(bucket_),
+            teacher_reasoning=TEACHER_REASONING.get(bucket_),
         )
     passed = []
     for id_, item in candidates:
@@ -242,8 +222,7 @@ async def run_batch(
                 *item["tags"], f"style_{style}", "composed", f"length:{length_bucket(words)}",
                 *(["relabeled"] if result.attempt else []),
             ],
-            split=run.split,
-            teacher_model=llm.settings.judge_model if result.attempt and RELABEL_ROLE == "judge" else llm.settings.model,
+            teacher_model=llm.settings.model,
         )
         mismatch = generate.layout_mismatch(item["layout"], example.layout)
         if mismatch:
@@ -260,12 +239,6 @@ async def run_batch(
     ][:FEEDBACK_NOTES]
     record.seconds = round(time.monotonic() - started, 1)
     return record, passed, rejected
-
-
-def _append(path: Path, rows: Sequence[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as sink:
-        sink.writelines(row + "\n" for row in rows)
 
 
 def output_license(example: Example, glm_inputs: set[str]) -> str:
@@ -299,7 +272,7 @@ async def generate_cell(
     bucket: str,
     target: int,
     known: set[str],
-    counts: Counter | None = None,
+    counts: Counter,
     progress: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
 ) -> int:
     """Generates batches for one category and bucket until the bucket holds `target` rows; resumes from its files.
@@ -307,7 +280,6 @@ async def generate_cell(
     A passing transcript that misses the requested bucket but is 150-1,000 words long is filed under
     the bucket its length puts it in, and counts there. `counts` is shared by the cells running at once.
     """
-    counts = counts_by_cell(run) if counts is None else counts
     log_path = _log_file(run, category, bucket)
     log = list(read_jsonl(log_path)) if log_path.exists() else []
     per_request = PER_REQUEST[bucket]
@@ -336,9 +308,9 @@ async def generate_cell(
             for e in passed:
                 actual = file_bucket(len(e.input.split()))
                 counts[(category, actual)] += 1
-                _append(output_file(run, category, actual), [e.to_json()])
-            _append(_rejected_file(run, category, bucket), [json.dumps(row, ensure_ascii=False) for row in rejected])
-            _append(log_path, [json.dumps(asdict(record), ensure_ascii=False)])
+                append_jsonl(output_file(run, category, actual), [e.to_json()])
+            append_jsonl(_rejected_file(run, category, bucket), [json.dumps(row, ensure_ascii=False) for row in rejected])
+            append_jsonl(log_path, [json.dumps(asdict(record), ensure_ascii=False)])
             log.append(asdict(record))
             elsewhere = sum(file_bucket(len(e.input.split())) != bucket for e in passed)
             progress(

@@ -1,8 +1,24 @@
 import json
+from dataclasses import replace
 
 import pytest
 
 from whispernow_training.datagen.llm import LlmSettings
+
+SETTINGS = LlmSettings(
+    backend="openai",
+    model="teacher-model",
+    judge_model="judge-model",
+    concurrency=1,
+    reasoning="low",
+    judge_reasoning="low",
+    opencode_provider="",
+    base_url=None,
+    judge_backend="openai",
+    generator_backend="openai",
+    generator_model="teacher-model",
+    generator_reasoning="low",
+)
 
 
 class FakeLlm:
@@ -18,16 +34,7 @@ class FakeLlm:
         self.attempts = []
         # (role, reasoning override) per request.
         self.reasonings = []
-        self.settings = LlmSettings(
-            backend="openai",
-            model="teacher-model",
-            judge_model="judge-model",
-            concurrency=1,
-            reasoning="low",
-            judge_reasoning="low",
-            opencode_provider="",
-            base_url=None,
-        )
+        self.settings = replace(SETTINGS)
 
     async def complete(self, messages, *, role="teacher", attempt=0, reasoning=None):
         self.calls += 1
@@ -49,9 +56,26 @@ def _relabel_records(tmp_path, monkeypatch):
 
     monkeypatch.setattr(relabel, "DIR", tmp_path / "relabel")
     monkeypatch.setattr(relabel, "INPUTS", tmp_path / "relabel" / "inputs")
-    monkeypatch.setattr(relabel, "PILOT", tmp_path / "relabel" / "pilot")
 
 
 @pytest.fixture
 def fake_llm():
     return FakeLlm
+
+
+@pytest.fixture
+def seed_families():
+    from whispernow_training.datagen.inject import injected_rows
+    from whispernow_training.datagen.schema import Example
+
+    clean = " ".join(["Meet on Wednesday at 4 by the red door. Bring 12 chairs and 3 tables."] * 11)
+    families = []
+    # Hashing these example IDs put each injected derivative opposite its parent.
+    for id_, split in (("parent-13", "train"), ("parent-51", "val")):
+        parent = Example(id=id_, input=clean, output=clean, source="teacher", category="multi_topic", license="x",
+                         split="train")
+        derivative, = injected_rows([parent], count=1, seed=114)
+        assert derivative.id != parent.id and derivative.input != parent.input
+        assert derivative.output == parent.output and derivative.seed_group == parent.seed_group
+        families.append((parent, derivative, split))
+    return families

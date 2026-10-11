@@ -92,10 +92,10 @@ class LlmSettings:
     judge_reasoning: str
     opencode_provider: str
     base_url: str | None
-    judge_backend: Backend | None = None
-    generator_backend: Backend | None = None
-    generator_model: str | None = None
-    generator_reasoning: str | None = None
+    judge_backend: Backend
+    generator_backend: Backend
+    generator_model: str
+    generator_reasoning: str
     # Requests in flight on the codex backend, which allows many more than the others.
     codex_concurrency: int = 16
 
@@ -122,23 +122,35 @@ class LlmSettings:
         )
 
     def target(self, role: Role) -> tuple[Backend, str, str]:
-        """The backend, model and default reasoning a role's requests use."""
-        if role == "judge":
-            return self.judge_backend or self.backend, self.judge_model, self.judge_reasoning
-        if role == "generator":
-            return (
-                self.generator_backend or self.backend,
-                self.generator_model or self.model,
-                self.reasoning if self.generator_reasoning is None else self.generator_reasoning,
-            )
-        return self.backend, self.model, self.reasoning
+        return {
+            "teacher": (self.backend, self.model, self.reasoning),
+            "judge": (self.judge_backend, self.judge_model, self.judge_reasoning),
+            "generator": (self.generator_backend, self.generator_model, self.generator_reasoning),
+        }[role]
+
+    def request(self, role: Role) -> dict:
+        backend, model, reasoning = self.target(role)
+        fields = {"backend": backend, "model": model, "reasoning": reasoning}
+        if backend == "openai":
+            fields["base_url"] = self.base_url or os.environ.get("OPENAI_BASE_URL")
+        elif backend == "opencode":
+            fields["provider"] = self.opencode_provider
+        return fields
 
 
-def cache_key(model: str, reasoning: str, messages: list[Message], attempt: int = 0) -> str:
-    """The request's hash. A nonzero `attempt` names a fresh sample of the same request, such as a relabel."""
-    fields = {"model": model, "reasoning": reasoning, "messages": messages} | ({"attempt": attempt} if attempt else {})
+def request_key(fields: dict) -> str:
     request = json.dumps(fields, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(request.encode()).hexdigest()
+
+
+R112_TARGET = ("codex", "gpt-6.1-sol", "high")
+
+
+def require_r112(settings: LlmSettings, *roles: Role) -> None:
+    wrong = {role: target for role in roles if (target := settings.target(role)) != R112_TARGET}
+    if wrong:
+        found = ", ".join(f"{role}: {'/'.join(target)}" for role, target in wrong.items())
+        raise SystemExit(f"R112 requires {'/'.join(R112_TARGET)}; found {found}")
 
 
 class ResponseCache:
@@ -292,19 +304,16 @@ class _OpencodeServer:
                 self.process.kill()
 
     async def complete(
-        self, client: httpx.AsyncClient, model: str, reasoning: str, messages: list[Message]
+        self, client: httpx.AsyncClient, model: str, reasoning: str, prompt: tuple[str, str]
     ) -> str:
-        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
-        users = [m["content"] for m in messages if m["role"] == "user"]
-        if len(users) != 1 or len(messages) != len(users) + (1 if system else 0):
-            raise ValueError("the opencode backend sends one optional system message and one user message")
+        system, user = prompt
         session = await client.post(f"{self.url}/session", json={"title": "datagen"})
         session.raise_for_status()
         session_id = session.json()["id"]
         body: dict = {
             "agent": self.AGENT,
             "model": {"providerID": self.settings.opencode_provider, "modelID": model},
-            "parts": [{"type": "text", "text": users[0]}],
+            "parts": [{"type": "text", "text": user}],
         }
         if system:
             body["system"] = system
@@ -381,18 +390,15 @@ class _CodexRunner:
             partial.replace(path)
         return path
 
-    async def complete(self, model: str, reasoning: str, messages: list[Message]) -> str:
-        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
-        users = [m["content"] for m in messages if m["role"] == "user"]
-        if len(users) != 1 or len(messages) != len(users) + (1 if system else 0):
-            raise ValueError("the codex backend sends one optional system message and one user message")
+    async def complete(self, model: str, reasoning: str, prompt: tuple[str, str]) -> str:
+        system, user = prompt
         instructions = self._instructions_file(system or "Follow the user's instructions.")
         with tempfile.NamedTemporaryFile(dir=self.work, suffix=".txt", delete=False) as handle:
             reply = Path(handle.name)
         try:
             try:
                 returncode, stderr = await run_process_group(
-                    codex_command(self.codex, model, reasoning, instructions, reply), users[0].encode(), self.work,
+                    codex_command(self.codex, model, reasoning, instructions, reply), user.encode(), self.work,
                     _REQUEST_TIMEOUT_SECONDS,
                 )
             except TimeoutError as error:
@@ -464,25 +470,22 @@ class LlmClient:
 
     async def _connect(self, backend: Backend) -> None:
         async with self._connect_lock:
-            await self._connect_once(backend)
+            if backend == "opencode":
+                if self._opencode is None:
+                    server = _OpencodeServer(self.settings)
+                    await server.start()
+                    self._http = httpx.AsyncClient(timeout=60)
+                    self._opencode = server
+            elif backend == "codex":
+                if self._codex is None:
+                    self._codex = _CodexRunner()
+            elif self._openai is None:
+                from openai import AsyncOpenAI
 
-    async def _connect_once(self, backend: Backend) -> None:
-        if backend == "opencode":
-            if self._opencode is None:
-                server = _OpencodeServer(self.settings)
-                await server.start()
-                self._http = httpx.AsyncClient(timeout=60)
-                self._opencode = server
-        elif backend == "codex":
-            if self._codex is None:
-                self._codex = _CodexRunner()
-        elif self._openai is None:
-            from openai import AsyncOpenAI
-
-            # The key is read by the SDK from LLM_API_KEY and never logged.
-            self._openai = AsyncOpenAI(
-                base_url=self.settings.base_url, api_key=os.environ["LLM_API_KEY"], max_retries=0
-            )
+                # The key is read by the SDK from LLM_API_KEY and never logged.
+                self._openai = AsyncOpenAI(
+                    base_url=self.settings.base_url, api_key=os.environ["LLM_API_KEY"], max_retries=0
+                )
 
     async def __aexit__(self, *_exc: object) -> None:
         if self._http is not None:
@@ -492,7 +495,9 @@ class LlmClient:
         if self._codex is not None:
             self._codex.stop()
 
-    async def _request(self, backend: Backend, model: str, reasoning: str, messages: list[Message]) -> str:
+    async def _request(
+        self, backend: Backend, model: str, reasoning: str, messages: list[Message] | tuple[str, str]
+    ) -> str:
         if backend == "opencode":
             assert self._opencode is not None and self._http is not None
             try:
@@ -535,20 +540,28 @@ class LlmClient:
         `reasoning` overrides the role's reasoning setting for this request.
         """
         backend, model, default = self.settings.target(role)
+        payload: list[Message] | tuple[str, str] = messages
+        if backend in ("opencode", "codex"):
+            system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+            users = [m["content"] for m in messages if m["role"] == "user"]
+            if len(users) != 1 or len(messages) != len(users) + (1 if system else 0):
+                raise ValueError(f"the {backend} backend sends one optional system message and one user message")
+            payload = (system, users[0])
         reasoning = default if reasoning is None else reasoning
-        key = cache_key(model, reasoning, messages, attempt)
+        key = request_key({**self.settings.request(role), "model": model, "reasoning": reasoning, "messages": messages,
+                           **({"attempt": attempt} if attempt else {})})
         hit = self.cache.get(key) if cached else None
         if hit is not None:
             self.cache_hits += 1
             return hit
         async with self._semaphores[backend]:
             await self._connect(backend)
-            attempt = 0
+            failures = 0
             refused = False
             while True:
                 started = time.monotonic()
                 try:
-                    content = await self._request(backend, model, reasoning, messages)
+                    content = await self._request(backend, model, reasoning, payload)
                     break
                 except LlmError as error:
                     if error.limited:
@@ -557,11 +570,11 @@ class LlmClient:
                         self._report_limit(backend, error)
                         await asyncio.sleep(_LIMIT_WAIT_SECONDS * random.uniform(0.75, 1.0))
                         continue
-                    attempt += 1
-                    if not error.retryable or (attempt >= _MAX_ATTEMPTS and not error.throttled):
+                    failures += 1
+                    if not error.retryable or (failures >= _MAX_ATTEMPTS and not error.throttled):
                         raise
-                    self._report_retry(backend, error, attempt)
-                    delay = min(_BACKOFF_CAP_SECONDS, _BACKOFF_BASE_SECONDS * 2 ** min(attempt - 1, 8))
+                    self._report_retry(backend, error, failures)
+                    delay = min(_BACKOFF_CAP_SECONDS, _BACKOFF_BASE_SECONDS * 2 ** min(failures - 1, 8))
                     await asyncio.sleep(delay * random.uniform(0.5, 1.0))
             # Only a request that was refused itself shows the account is back; one sent before the
             # limit can still finish after it.

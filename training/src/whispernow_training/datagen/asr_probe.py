@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import time
 import wave
 from collections import deque
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from . import paths
+from ..text_rules import FILLER, FILLER_FORMS
 from .schema import EMPTY, read_examples
 
 APP_MODELS = Path.home() / ".local/share/WhisperNow/models"
@@ -139,6 +141,45 @@ def segment(samples: np.ndarray, is_speech) -> list[tuple[int, int]]:
     if open_ is not None:
         close(open_)
     return segments
+
+
+def vad_config():
+    import sherpa_onnx as so
+
+    config = so.VadModelConfig()
+    config.silero_vad.model = str(VAD_MODEL)
+    config.silero_vad.threshold = 0.5
+    config.silero_vad.min_silence_duration = 0.1
+    config.silero_vad.min_speech_duration = 0.064
+    config.silero_vad.window_size = FRAME
+    config.silero_vad.max_speech_duration = 30.0
+    config.sample_rate = SAMPLE_RATE
+    config.num_threads = 1
+    return config
+
+
+def segments(samples: np.ndarray) -> list[np.ndarray]:
+    import sherpa_onnx as so
+
+    detector = so.VoiceActivityDetector(vad_config(), buffer_size_in_seconds=30)
+
+    def is_speech(frame: np.ndarray) -> bool:
+        detector.accept_waveform(frame)
+        speech = detector.is_speech_detected()
+        while not detector.empty():  # the app's `clear()`: drop the native segments
+            detector.pop()
+        return speech
+
+    return [samples[start:end] for start, end in segment(samples, is_speech)]
+
+
+def decode_segment(recognizer, samples: np.ndarray) -> tuple[str, float]:
+    stream = recognizer.create_stream()
+    stream.accept_waveform(SAMPLE_RATE, samples)
+    start = time.perf_counter()
+    recognizer.decode_stream(stream)
+    elapsed = time.perf_counter() - start
+    return stream.result.text, elapsed
 
 
 _SENTENCE_ENDINGS = (".", "!", "?", "…")
@@ -282,34 +323,9 @@ class Recognizer:
             )
         else:
             raise ValueError(f"unknown model {model!r}; expected one of {MODELS}")
-        vad_config = so.VadModelConfig()
-        vad_config.silero_vad.model = str(VAD_MODEL)
-        vad_config.silero_vad.threshold = 0.5
-        vad_config.silero_vad.min_silence_duration = 0.1
-        vad_config.silero_vad.min_speech_duration = 0.064
-        vad_config.silero_vad.window_size = FRAME
-        vad_config.silero_vad.max_speech_duration = 30.0
-        vad_config.sample_rate = SAMPLE_RATE
-        vad_config.num_threads = 1
-        self._so = so
-        self._vad_config = vad_config
 
     def transcribe(self, samples: np.ndarray) -> tuple[str, list[str]]:
-        detector = self._so.VoiceActivityDetector(self._vad_config, buffer_size_in_seconds=30)
-
-        def is_speech(frame: np.ndarray) -> bool:
-            detector.accept_waveform(frame)
-            speech = detector.is_speech_detected()
-            while not detector.empty():  # the app's `clear()`: drop the native segments
-                detector.pop()
-            return speech
-
-        texts = []
-        for start, end in segment(samples, is_speech):
-            stream = self.recognizer.create_stream()
-            stream.accept_waveform(SAMPLE_RATE, samples[start:end])
-            self.recognizer.decode_stream(stream)
-            texts.append(stream.result.text)
+        texts = [decode_segment(self.recognizer, part)[0] for part in segments(samples)]
         return join_segment_texts(texts), texts
 
 
@@ -355,40 +371,21 @@ def run(n: int, seed: int, keep_audio: bool = True, shard: int = 0, shards: int 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     done = {json.loads(line)["id"] for path in _out_files() for line in path.open(encoding="utf-8")}
     todo = [e for index, e in enumerate(sample_rows(n, seed)) if index % shards == shard and e.id not in done]
-    speaker, recognizer = Speaker(), Recognizer()
-    written = 0
     out = OUT_DIR / (f"parakeet.{shard}.jsonl" if shards > 1 else "parakeet.jsonl")
-    with out.open("a", encoding="utf-8") as sink:
-        for example in todo:
-            rng = random.Random(f"{seed}-{example.id}")
-            spoken = speaker.speak(example.input, rng)
-            text, segments = recognizer.transcribe(spoken.samples)
-            if keep_audio:
-                _write_wav(AUDIO_DIR / f"{example.id}.wav", spoken.samples)
-            record = {
-                "id": example.id,
-                "source": example.source,
-                "category": example.category,
-                "layout": example.layout,
-                "tags": example.tags,
-                "spoken": example.input,
-                "model": "parakeet",
-                "heard": text,
-                "segments": segments,
-                "chunk_ends": [len(" ".join(spoken.chunks[: i + 1]).split()) for i in range(len(spoken.chunks))],
-                "pauses": spoken.pauses,
-                "voice": spoken.voice,
-                "speed": spoken.speed,
-                "seconds": round(len(spoken.samples) / SAMPLE_RATE, 1),
-            }
-            sink.write(json.dumps(record, ensure_ascii=False) + "\n")
-            sink.flush()
-            written += 1
-            print(f"shard {shard}: {written}/{len(todo)} {example.id} {record['seconds']}s", flush=True)
-    return written
+    extra_fields = {
+        e.id: {"source": e.source, "category": e.category, "layout": e.layout, "tags": e.tags}
+        for e in todo
+    }
+    return probe_texts(
+        [(e.id, e.input) for e in todo], out, seed,
+        extra_fields=extra_fields, keep_audio=keep_audio, progress_prefix=f"shard {shard}: ",
+    )
 
 
-def probe_texts(items: list[tuple[str, str]], out: Path, seed: int) -> int:
+def probe_texts(
+    items: list[tuple[str, str]], out: Path, seed: int, *,
+    extra_fields: dict[str, dict] | None = None, keep_audio: bool = False, progress_prefix: str = "",
+) -> int:
     """Speaks and transcribes (id, text) pairs into `out`, one JSON line each; resumes past ids already there."""
     done = {json.loads(line)["id"] for line in out.open(encoding="utf-8")} if out.exists() else set()
     todo = [(id_, text) for id_, text in items if id_ not in done]
@@ -401,15 +398,20 @@ def probe_texts(items: list[tuple[str, str]], out: Path, seed: int) -> int:
         for id_, text in todo:
             spoken = speaker.speak(text, random.Random(f"{seed}-{id_}"))
             heard, segments = recognizer.transcribe(spoken.samples)
+            if keep_audio:
+                _write_wav(AUDIO_DIR / f"{id_}.wav", spoken.samples)
             record = {
                 "id": id_, "spoken": text, "model": "parakeet", "heard": heard, "segments": segments,
+                "chunk_ends": [len(" ".join(spoken.chunks[: i + 1]).split()) for i in range(len(spoken.chunks))],
                 "pauses": spoken.pauses, "voice": spoken.voice, "speed": spoken.speed,
                 "seconds": round(len(spoken.samples) / SAMPLE_RATE, 1),
             }
+            if extra_fields is not None:
+                record |= extra_fields[id_]
             sink.write(json.dumps(record, ensure_ascii=False) + "\n")
             sink.flush()
             written += 1
-            print(f"{written}/{len(todo)} {id_} {record['seconds']}s", flush=True)
+            print(f"{progress_prefix}{written}/{len(todo)} {id_} {record['seconds']}s", flush=True)
     return written
 
 
@@ -444,7 +446,6 @@ def load(model: str = "parakeet") -> list[dict]:
 
 
 _WORD = re.compile(r"[A-Za-z0-9$%][\w'’.:,/%$-]*")
-_FILLERS = {"um", "uh", "erm", "hmm", "mm", "ah", "er"}
 _COMMANDS = {
     "period": ".",
     "comma": ",",
@@ -530,8 +531,8 @@ def report(records: list[dict]) -> dict:
     fillers = Counter()
     for record in records:
         spoken = [_bare(w) for w in record["spoken"].split()]
-        fillers["spoken"] += sum(w in _FILLERS for w in spoken)
-        for match in re.finditer(r"(^|.)\s*\b(um+|uh+|erm|hmm|mm|ah|er)\b([.,?!]?)", record["heard"], re.IGNORECASE):
+        fillers["spoken"] += sum(FILLER.fullmatch(w) is not None for w in spoken)
+        for match in re.finditer(rf"(^|.)\s*\b({FILLER_FORMS})\b([.,?!]?)", record["heard"], re.IGNORECASE):
             fillers["heard"] += 1
             fillers["comma_before"] += match.group(1) == ","
             fillers["mark_after"] += bool(match.group(3))

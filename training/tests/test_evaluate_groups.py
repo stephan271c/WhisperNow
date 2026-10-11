@@ -19,6 +19,8 @@ def test_scores_group_by_length_pattern_and_test_generation(tmp_path, monkeypatc
     assert scores["pattern"]["restart"]["rows"] == 2
 
 
-def test_benchmarks_load_like_splits():
-    assert set(evaluate.BENCHMARKS) <= set(evaluate.SPLITS)
-    assert all(path.parent.name == "bench" for path in evaluate.BENCHMARKS.values())
+def test_length_ratio_uses_total_output_and_reference_words():
+    rows = [_row("a", 4), _row("b", 2)]
+    outputs = {"a": {"output": "word word", "hit_limit": False},
+               "b": {"output": "word word word word", "hit_limit": False}}
+    assert evaluate.score(rows, outputs)["overall"]["length_ratio"] == 1.0

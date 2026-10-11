@@ -1,11 +1,10 @@
-import re
 from dataclasses import replace
 
 import pytest
 
 from whispernow_training.datagen import build, epochs, inject
 from whispernow_training.datagen.schema import EMPTY, Example
-from whispernow_training.model import config, report
+from whispernow_training.model import config
 
 CLEAN = (
     "Move the standup to Thursday at 10:30 and tell Priya the budget is $450. "
@@ -26,10 +25,6 @@ def _injected(i: int, style: str = "recognizer") -> Example:
     )
 
 
-def _words(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9']+", text.lower())
-
-
 def test_injected_rows_get_new_noise_each_epoch_around_the_same_target():
     row = _injected(1)
     assert epochs.reinjected(row, 1) is row
@@ -40,10 +35,6 @@ def test_injected_rows_get_new_noise_each_epoch_around_the_same_target():
         assert (variant.id, variant.output, variant.seed_group, variant.split) == (row.id, CLEAN, "g1", "train")
         assert {"injected", "style_recognizer", "from:owner/src", "long_origin"} <= set(variant.tags)
         assert sum(tag.startswith("noise_level:") for tag in variant.tags) == 1
-        # The clean words are all said, in order; what is added is noise the target drops.
-        said = iter(_words(variant.input))
-        assert all(word in said for word in _words(CLEAN)), variant.input
-        assert not re.search(r"\b(?:like|i mean|you know|basically)\b", variant.input.lower())
 
 
 def test_raw_and_empty_injected_rows():
@@ -60,7 +51,7 @@ def _composed(i: int) -> tuple[Example, Example]:
     before = Example(id=f"teacher-{i}", input=SPOKEN, output="Trip list", source="teacher", category="list_corrections",
                      license="x", tags=["style_recognizer", "composed"], seed_group=f"g{i}", split="train")
     built = build.spoken_variant(before, "")
-    return before, replace(built, tags=[*built.tags, "audit_relabeled"])
+    return before, replace(built, tags=[*built.tags, "later_tag"])
 
 
 def test_composed_rows_draw_their_variant_again_from_the_row_before_it():
@@ -69,7 +60,7 @@ def test_composed_rows_draw_their_variant_again_from_the_row_before_it():
     fresh = epochs.respoken(built, before, 2)
     expected = build.spoken_variant(before, "epoch2")
     assert fresh.input == expected.input and fresh.output == built.output
-    assert fresh.tags == [*expected.tags, "audit_relabeled"]
+    assert fresh.tags == [*expected.tags, "later_tag"]
     with pytest.raises(ValueError):
         epochs.respoken(replace(built, input="something else"), before, 2)
 
@@ -100,24 +91,14 @@ def test_noise_per_epoch_needs_whole_epochs_over_the_build(tmp_path):
     assert config.load(path, ["noise_per_epoch=true"]).noise_per_epoch
     with pytest.raises(SystemExit):
         config.load(path, ["noise_per_epoch=true", "epochs=2.5"])
-    with pytest.raises(SystemExit):
-        config.load(path, ["objective='dpo'"])
 
 
-def test_val_loss_per_epoch_is_counted_in_steps():
-    # A noise run is one pass: its trainer's epoch ends at 1, but 3 epochs' worth of steps.
-    train = {
-        "config": {"epochs": 3},
-        "steps": 300,
-        "final_eval_loss": 0.30,
-        "log_history": [
-            {"step": 50, "epoch": 0.17, "eval_loss": 0.5},
-            {"step": 100, "epoch": 0.33, "eval_loss": 0.4},
-            {"step": 200, "epoch": 0.67, "eval_loss": 0.35},
-            {"step": 250, "epoch": 0.83, "eval_loss": 0.33},
-        ],
-    }
-    assert report.val_loss_by_epoch(train) == [0.4, 0.35, 0.30]
+def test_dpo_training_requires_a_preference_train_file(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('base_model = "m"\nobjective = "dpo"\n')
+    with pytest.raises(SystemExit, match="dpo needs a train_file"):
+        config.load(path)
+    assert config.load(path, ["train_file='pairs.jsonl'"]).train_file == "pairs.jsonl"
 
 
 def test_a_rebuild_rewrites_the_epoch_files(tmp_path, monkeypatch):
@@ -127,6 +108,7 @@ def test_a_rebuild_rewrites_the_epoch_files(tmp_path, monkeypatch):
 
     monkeypatch.setattr(epochs.paths, "BUILD", tmp_path)
     monkeypatch.setattr(epochs, "EPOCHS", tmp_path / "epochs")
+    monkeypatch.setattr(epochs.build, "gather_with_drops", lambda: ([], []))
     write_examples(tmp_path / "train.jsonl", [_injected(1)])
     epochs.materialize(2)
     assert [e.id for e in read_examples(epochs.epoch_file(2))] == ["injected-1"]

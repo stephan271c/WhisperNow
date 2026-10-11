@@ -29,10 +29,11 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, replace
 
+from ..text_rules import FILLER, FILLER_FORMS
 from . import gates, generate, paths, rejudge, relabel
-from .compose import _BENCH_NAMES, _BENCH_SETTINGS
-from .llm import LlmClient, LlmError, parse_json_reply
-from .schema import EMPTY, Example, example_id, read_examples, read_jsonl, write_examples
+from .compose import BENCH_NAMES, BENCH_SETTINGS
+from .llm import LlmClient, LlmError
+from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, read_examples, read_jsonl, write_examples
 
 PATTERNS = (
     "filler_cluster", "determiner_filler", "repeats", "restart", "short_cue", "redecision", "reasoned",
@@ -52,11 +53,9 @@ PROBED = OUT_DIR / "probed.jsonl"
 PROBE_SEED = 110
 FEEDBACK_NOTES = 8
 
-_F = r"(?:um+|uh+|er|erm|hmm+)"
-_FILLER = re.compile(rf"\b{_F}\b", re.IGNORECASE)
-_CLUSTER = re.compile(rf"\b{_F}\b[,.]? {_F}\b", re.IGNORECASE)
+_CLUSTER = re.compile(rf"\b{FILLER_FORMS}\b[,.]? {FILLER_FORMS}\b", re.IGNORECASE)
 _DETERMINER = re.compile(
-    rf"\b(the|a|an|this|that|these|those|my|our|your|his|her|their|some)\b,? (?:{_F},? )+\1\b", re.IGNORECASE
+    rf"\b(the|a|an|this|that|these|those|my|our|your|his|her|their|some)\b,? (?:{FILLER_FORMS},? )+\1\b", re.IGNORECASE
 )
 _MEANINGFUL_REPEATS = {"that", "had", "very", "really", "so", "bye", "no", "yeah", "okay", "ha", "knock", "is", "far", "long", "more", "over", "again"}
 _REPEAT = re.compile(r"\b([a-z']+(?: [a-z']+){0,2})(?:,? \1\b)+", re.IGNORECASE)
@@ -101,7 +100,7 @@ def detect(text: str) -> list[str]:
     if _DETERMINER.search(text):
         found.append("determiner_filler")
     repeats = [m.group(1).lower() for m in _REPEAT.finditer(text)]
-    if any(" " in word or (word not in _MEANINGFUL_REPEATS and not _FILLER.fullmatch(word)) for word in repeats):
+    if any(" " in word or (word not in _MEANINGFUL_REPEATS and not FILLER.fullmatch(word)) for word in repeats):
         found.append("repeats")
     if _THINKING.search(text):
         found.append("thinking_aloud")
@@ -112,7 +111,7 @@ def detect(text: str) -> list[str]:
 
 def _restarted_word(phrase: str) -> bool:
     """A content word said, abandoned and said again: "Buy, um we need to buy"."""
-    tokens = [t for t in _norm(phrase).split() if not _FILLER.fullmatch(t)]
+    tokens = [t for t in _norm(phrase).split() if not FILLER.fullmatch(t)]
     return any(len(t) > 2 and t in tokens[i + 2 : i + 10] for i, t in enumerate(tokens))
 
 
@@ -122,7 +121,7 @@ def shows(kind: str, text: str, evidence: Sequence[str]) -> bool:
     if kind in ("filler_cluster", "determiner_filler", "repeats", "thinking_aloud", "pause_punct"):
         return kind in detect(text)
     if kind == CONTROL:
-        return not _FILLER.search(text) and bool(evidence) and all(_CONTROL_WORD.search(e) for e in evidence)
+        return not FILLER.search(text) and bool(evidence) and all(_CONTROL_WORD.search(e) for e in evidence)
     if not evidence:
         return False
     if kind == "restart":
@@ -164,8 +163,8 @@ def generator_messages(kind: str, style: str, count: int, batch: int, notes: Seq
     style_text = (paths.PROMPTS / "generate" / f"style_{style}.md").read_text(encoding="utf-8")
     guidance = (paths.PROMPTS / "bench" / "noise" / f"{kind}.md").read_text(encoding="utf-8")
     rng = random.Random(f"noise-bench-{kind}-{batch}")
-    names = ", ".join(rng.sample(_BENCH_NAMES, 8))
-    settings = "; ".join(rng.sample(_BENCH_SETTINGS, 5))
+    names = ", ".join(rng.sample(BENCH_NAMES, 8))
+    settings = "; ".join(rng.sample(BENCH_SETTINGS, 5))
     user = (
         f"{guidance}\n\n{style_text}\n\nBatch {batch}. Write {count} transcripts with this pattern. "
         f"For variety, draw on some of these names ({names}) and settings ({settings}), and invent others."
@@ -178,42 +177,6 @@ def generator_messages(kind: str, style: str, count: int, batch: int, notes: Seq
     return [{"role": "system", "content": base}, {"role": "user", "content": user}]
 
 
-# One malformed item fails the whole reply; this recovers every item object that parses on its own.
-_OBJECT = re.compile(r"\{[^{}]*\}")
-
-
-def _salvage(reply: str) -> list[dict]:
-    items = []
-    for text in _OBJECT.findall(reply):
-        try:
-            items.append(json.loads(text))
-        except ValueError:
-            continue
-    if not items:
-        raise ValueError("no item in the reply parses")
-    return items
-
-
-def _items(reply: str, count: int) -> list[dict]:
-    try:
-        parsed = parse_json_reply(reply)
-        items = parsed["items"] if isinstance(parsed, dict) else parsed
-    except ValueError:
-        items = _salvage(reply)
-    kept, seen = [], set()
-    for item in items:
-        if not isinstance(item, dict) or not isinstance(item.get("input"), str):
-            continue
-        text = " ".join(item["input"].split())
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        evidence = [str(e) for e in item.get("evidence", []) if isinstance(e, str)][:6]
-        tags = [str(tag) for tag in item.get("tags", []) if isinstance(tag, str)][:4]
-        kept.append({"input": text, "evidence": evidence, "layout": str(item.get("layout", "prose")), "tags": tags})
-    return kept[:count]
-
-
 def pattern_tags(kind: str, text: str) -> list[str]:
     """`pattern:<kind>` for the row's own pattern, `also:<pattern>` for others code sees in it."""
     return [f"pattern:{kind}", *(f"also:{p}" for p in detect(text) if p != kind)]
@@ -221,18 +184,18 @@ def pattern_tags(kind: str, text: str) -> list[str]:
 
 async def run_batch(
     llm: LlmClient, kind: str, batch: int, count: int, notes: Sequence[str], known: set[str]
-) -> tuple[dict, list[Example], list[dict]]:
+) -> tuple[BatchRecord, list[Example], list[dict]]:
     style = style_for(kind, batch)
-    record = {"batch": batch, "style": style, "requested": count, "returned": 0, "passed": 0, "notes": [], "seconds": 0.0, "error": ""}
+    record = BatchRecord(batch=batch, style=style, requested=count)
     started = time.monotonic()
     try:
         reply = await llm.complete(generator_messages(kind, style, count, batch, notes), role="generator")
-        items = [item for item in _items(reply, count) if item["input"] not in known]
+        items = [item for item in generate.parse_items(reply, count) if item["input"] not in known]
     except (ValueError, KeyError, TypeError) as error:
-        record["error"] = f"unreadable generator reply: {error}"[:300]
-        record["seconds"] = round(time.monotonic() - started, 1)
+        record.error = f"unreadable generator reply: {error}"[:300]
+        record.seconds = round(time.monotonic() - started, 1)
         return record, [], []
-    record["returned"] = len(items)
+    record.returned = len(items)
     rejected: list[dict] = []
     candidates = []
     for item in items:
@@ -245,7 +208,7 @@ async def run_batch(
         else:
             candidates.append((id_, item))
     judge = gates.Judge(gates.COMPOSE, gates.COMPOSE_CRITERIA, {id_: style for id_, _ in candidates})
-    results = await gates.gate(llm, [(id_, item["input"]) for id_, item in candidates], judge=judge) if candidates else {}
+    results = await gates.gate(llm, [(id_, item["input"]) for id_, item in candidates], judge=judge)
     passed = []
     for id_, item in candidates:
         result = results[id_]
@@ -271,20 +234,15 @@ async def run_batch(
                 teacher_model=llm.settings.model,
             )
         )
-    record["passed"] = len(passed)
-    record["notes"] = [
+        record.relabeled += bool(result.attempt)
+    record.passed = len(passed)
+    record.notes = [
         f"{', '.join(row['failed'])}: {row['note']} (transcript began: {row['input'][:80]!r})"
         for row in rejected
         if set(row["failed"]) & {"length", "pattern", "input_realistic"} and row.get("note")
     ][:FEEDBACK_NOTES]
-    record["seconds"] = round(time.monotonic() - started, 1)
+    record.seconds = round(time.monotonic() - started, 1)
     return record, passed, rejected
-
-
-def _append(path, rows: Sequence[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as sink:
-        sink.writelines(row + "\n" for row in rows)
 
 
 def output_file(kind: str):
@@ -317,13 +275,13 @@ async def generate_kind(
         passed = [e for e in passed if e.input not in known][: target - len(kept)]
         known |= {e.input for e in passed}
         kept += passed
-        _append(out, [e.to_json() for e in passed])
-        _append(OUT_DIR / f"{kind}.rejected.jsonl", [json.dumps(row, ensure_ascii=False) for row in rejected])
-        _append(log_path, [json.dumps(record, ensure_ascii=False)])
-        log.append(record)
+        append_jsonl(out, [e.to_json() for e in passed])
+        append_jsonl(OUT_DIR / f"{kind}.rejected.jsonl", [json.dumps(row, ensure_ascii=False) for row in rejected])
+        append_jsonl(log_path, [json.dumps(asdict(record), ensure_ascii=False)])
+        log.append(asdict(record))
         progress(
-            f"noise {kind}: batch {batch} ({record['style']}) {record['passed']}/{record['returned']} passed"
-            f"{' ' + record['error'] if record['error'] else ''}, {len(kept)}/{target}, {record['seconds']}s"
+            f"noise {kind}: batch {batch} ({record.style}) {record.passed}/{record.returned} passed"
+            f"{' ' + record.error if record.error else ''}, {len(kept)}/{target}, {record.seconds}s"
         )
     return len(kept)
 
@@ -384,7 +342,7 @@ async def gate_probed(llm: LlmClient) -> dict[str, int]:
     counts: Counter = Counter()
     rows = []
     judge = gates.Judge(gates.COMPOSE, gates.COMPOSE_CRITERIA, {e.id: "recognizer" for e in todo})
-    results = await gates.gate(llm, [(e.id, heard[e.id]["heard"]) for e in todo], judge=judge) if todo else {}
+    results = await gates.gate(llm, [(e.id, heard[e.id]["heard"]) for e in todo], judge=judge)
     # The new reference against the original transcript: did the recognizer change a fact?
     same = await gates.check_references(
         llm, [(e.id, e.input, results[e.id].output) for e in todo if results[e.id].passed], PROBED_JUDGE
@@ -406,7 +364,7 @@ async def gate_probed(llm: LlmClient) -> dict[str, int]:
             reason = ""
         counts[reason.split(":")[0] or "kept"] += 1
         rows.append({"id": example.id, "heard": text, "output": result.output, "attempt": result.attempt, "kept": not reason, "reason": reason})
-    _append(out, [json.dumps(row, ensure_ascii=False) for row in rows])
+    append_jsonl(out, [json.dumps(row, ensure_ascii=False) for row in rows])
     return dict(counts)
 
 

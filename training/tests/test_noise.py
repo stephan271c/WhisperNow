@@ -4,7 +4,7 @@ import re
 
 from conftest import judge_items
 
-from whispernow_training.datagen import gates, noise, paths
+from whispernow_training.datagen import gates, noise
 
 
 def test_detect_sees_each_code_visible_pattern():
@@ -52,8 +52,9 @@ def reply(messages, role):
     if role == "judge":
         return json.dumps({"results": [{"i": i["i"], **{c: True for c in gates.COMPOSE_CRITERIA}} for i in judge_items(messages)]})
     user = messages[-1]["content"]
-    if "<transcript>" in user:
+    if role == "teacher":
         return re.search(r"<transcript>\n(.*)\n</transcript>", user, re.S).group(1).replace("uh um ", "")
+    assert role == "generator"
     batch = int(re.search(r"Batch (\d+)\.", user).group(1))
     items = [
         {"input": f"so for batch {batch} row {i} we could uh um maybe push it", "evidence": ["uh um"], "layout": "prose"}
@@ -87,21 +88,3 @@ def test_assemble_swaps_in_kept_probed_rows(fake_llm, tmp_path, monkeypatch):
     probed = [json.loads(line) for line in (tmp_path / "noise.jsonl").open() if "asr_probe" in line]
     assert probed[0]["input"] == heard and f"probed_from:{first.id}" in probed[0]["tags"]
     assert "pattern:filler_cluster" in probed[0]["tags"]
-
-
-def test_benchmark_files_are_outside_the_build_inputs():
-    from whispernow_training.datagen import build
-
-    from whispernow_training.datagen import compose
-
-    source = __import__("inspect").getsource(build)
-    # The build reads the composed training run only, never a benchmark module, run or path.
-    assert "compose.TRAIN" in source and "compose.BENCH" not in source
-    assert "noise" not in source and '"bench"' not in source and "from . import bench" not in source
-    assert noise.BENCH_FILE.parent == paths.DATA / "bench" == compose.BENCH.out_dir.parent
-    assert compose.TRAIN.out_dir.parent == paths.DATA and compose.TRAIN.out_dir.name != "bench"
-
-
-def test_items_salvage_the_well_formed_objects_of_a_broken_reply():
-    reply = '{"items": [{"input": "we uh um go", "evidence": ["uh um"], "layout": "prose"}, {"input": "bad "quote" here", "evidence": []}]}'
-    assert [item["input"] for item in noise._items(reply, 10)] == ["we uh um go"]

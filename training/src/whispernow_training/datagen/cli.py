@@ -8,7 +8,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from . import aawaaz, build, epochs, generate, paths, real, stage1, stage2, teacher
+from . import aawaaz, build, compose, epochs, generate, paths, real, stage1, stage2, teacher
 from .judge import judge_all, pair_item
 from .llm import LlmClient, LlmSettings
 from .schema import read_examples, write_examples
@@ -86,47 +86,18 @@ async def _add(args: argparse.Namespace) -> None:
 
 async def _generate(args: argparse.Namespace) -> None:
     categories = args.category or list(generate.TARGETS)
-    unknown = sorted(set(categories) - set(generate.TARGETS))
-    if unknown:
-        raise SystemExit(f"unknown categories {unknown}; choose from {sorted(generate.TARGETS)}")
     async with LlmClient(LlmSettings.from_env()) as llm:
         counts = await generate.generate(llm, categories, args.scale, args.batch_size, args.test)
     _print_counts("rows per category:", Counter(counts))
 
 
-async def _audit(args: argparse.Namespace) -> None:
-    from . import audit
-
-    if not args.report:
-        async with LlmClient(LlmSettings.from_env()) as llm:
-            if args.fix:
-                await audit.fix(llm)
-            else:
-                await audit.run(llm)
-    report = audit.report()
-    (audit.OUT_DIR / "report.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
-    print(json.dumps(report, indent=1))
-
-
 async def _compose(args: argparse.Namespace) -> None:
-    from . import compose
-
     run = compose.RUNS[args.run_name]
     categories = args.category or list(compose.CATEGORIES)
-    unknown = sorted(set(categories) - set(compose.CATEGORIES))
-    if unknown:
-        raise SystemExit(f"unknown categories {unknown}; choose from {list(compose.CATEGORIES)}")
     async with LlmClient(LlmSettings.from_env()) as llm:
         counts = await compose.generate_all(llm, run, args.total, categories)
     _print_counts(f"{run.name} rows per category and bucket:", Counter(counts))
     print(json.dumps({"rejected": compose.rejections(run)}, indent=1))
-
-
-async def _rejudge(args: argparse.Namespace) -> None:
-    from . import rejudge
-
-    async with LlmClient(LlmSettings.from_env()) as llm:
-        print(json.dumps(await rejudge.run(llm, args.target), indent=1))
 
 
 async def _bench(args: argparse.Namespace) -> None:
@@ -151,20 +122,6 @@ async def _bench(args: argparse.Namespace) -> None:
 async def _relabel(args: argparse.Namespace) -> None:
     from . import relabel
 
-    if args.step in ("pilot", "review"):
-        if args.step == "pilot":
-            settings = LlmSettings.from_env()
-            relabel.check_settings(settings)
-            async with LlmClient(settings) as llm:
-                report = await relabel.pilot(llm)
-        else:
-            report = relabel.pilot_report()
-        page = relabel.review_page(relabel.review_rows(), report)
-        for scope, info in report["scopes"].items():
-            print(relabel.compare_markdown(info["compare"], f"Pilot, {scope}: {info['passed']}/{info['rows']} passed"))
-        print(json.dumps({"estimate": report["estimate"], "cost": report["cost"]}, indent=1))
-        print(f"wrote {relabel.PILOT / 'report.json'} and the review page {page}")
-        return
     scopes = relabel.SCOPES if args.step == "all" else (args.step,)
     if not args.report:
         settings = LlmSettings.from_env()
@@ -172,7 +129,10 @@ async def _relabel(args: argparse.Namespace) -> None:
         async with LlmClient(settings) as llm:
             for scope in scopes:
                 if args.retry:
-                    print(json.dumps(await relabel.retry(llm, scope, relabel.inputs(scope), round_=args.retry), indent=1))
+                    report = await relabel.retry(
+                        llm, scope, relabel.inputs(scope), round_=args.retry, settled_hedges=args.settled_hedges
+                    )
+                    print(json.dumps(report, indent=1))
                 else:
                     print(json.dumps(await relabel.run(llm, scope, relabel.inputs(scope)), indent=1))
     for scope in scopes:
@@ -296,7 +256,7 @@ def main() -> None:
     add.set_defaults(run=lambda args: asyncio.run(_add(args)))
 
     gen = commands.add_parser("generate", help="stage 3: generate gap and hard-case rows; resumes where it stopped")
-    gen.add_argument("--category", action="append", help="only this category (repeatable)")
+    gen.add_argument("--category", action="append", choices=generate.TARGETS, help="only this category (repeatable)")
     gen.add_argument("--scale", type=float, default=1.0, help="multiply every category's target, e.g. 0.05 for a pilot")
     gen.add_argument("--batch-size", type=int, help="transcripts per request (default: 50, 25 for long_ramble)")
     gen.add_argument("--test", action="store_true", help="generate the extra rows pinned to the test split")
@@ -309,19 +269,12 @@ def main() -> None:
     restyle_parser.add_argument("--recheck", action="store_true", help="check the rejected rewrites again; no LLM calls")
     restyle_parser.set_defaults(run=lambda args: asyncio.run(_restyle(args)))
 
-    audit_parser = commands.add_parser(
-        "audit", help="judge every long reference, and 500 short ones, for completeness against its transcript"
-    )
-    audit_parser.add_argument("--fix", action="store_true", help="relabel the failing rows through the gates")
-    audit_parser.add_argument("--report", action="store_true", help="only rewrite data/audit/report.json")
-    audit_parser.set_defaults(run=lambda args: asyncio.run(_audit(args)))
-
     compose_parser = commands.add_parser(
         "compose", help="long composed-task rows (train) or the long benchmark's generated rows (bench); resumes"
     )
     compose_parser.add_argument("--run", dest="run_name", choices=["train", "bench"], default="train")
     compose_parser.add_argument("--total", type=int, required=True, help="rows over all categories, split 40/35/25 by bucket")
-    compose_parser.add_argument("--category", action="append", help="only this category (repeatable)")
+    compose_parser.add_argument("--category", action="append", choices=compose.CATEGORIES, help="only this category (repeatable)")
     compose_parser.set_defaults(run=lambda args: asyncio.run(_compose(args)))
 
     bench_parser = commands.add_parser(
@@ -334,26 +287,22 @@ def main() -> None:
     bench_parser.add_argument("--kind", action="append", help="noise: only this pattern (repeatable)")
     bench_parser.set_defaults(run=lambda args: asyncio.run(_bench(args)))
 
-    rejudge_parser = commands.add_parser(
-        "rejudge",
-        help="gate rows judged before the header rules again (train: data/stage4, bench-long, noise), or check "
-        "every benchmark reference once more, one row per request (bench-long-strict, noise-strict, train-strict for the rows made before the cascade, and train-codex for the rows glm-5.3 labelled); resumes",
-    )
-    rejudge_parser.add_argument("target", choices=["train", "train-strict", "train-codex", "bench-long", "bench-long-strict", "noise", "noise-strict"])
-    rejudge_parser.set_defaults(run=lambda args: asyncio.run(_rejudge(args)))
-
     relabel_parser = commands.add_parser(
         "relabel",
-        help="todo 112: rewrite every reference with gpt-6.1-sol at high reasoning (every role; the command refuses "
-        "any other setting). pilot: about 200 stratified rows and the review page; review: rewrite the pilot report "
-        "and page; build, bench-long, bench-noise or all: the full run, resumable",
+        help="rewrite every reference with gpt-6.1-sol at high reasoning (every role; the command refuses "
+        "any other setting): build, bench-long, bench-noise or all; resumable",
     )
-    relabel_parser.add_argument("step", choices=["pilot", "review", "build", "bench-long", "bench-noise", "all"])
+    relabel_parser.add_argument("step", choices=["build", "bench-long", "bench-noise", "all"])
     relabel_parser.add_argument("--report", action="store_true", help="only report old against new from the records")
     relabel_parser.add_argument(
         "--retry", nargs="?", const=1, type=int, metavar="ROUND",
         help="retry round ROUND (default 1): check the dropped rows again and give each that still fails one "
-        "more rewrite with the judge's note",
+        "more rewrite with the judge's note. ROUND must exceed every earlier round",
+    )
+    relabel_parser.add_argument(
+        "--settled-hedges", action="store_true",
+        help="with --retry: also check the passed rows whose reference keeps a hedge the speaker may have settled "
+        "soon after (\"maybe some jasmine rice, actually yeah get it\"), and rewrite the ones that fail",
     )
     relabel_parser.set_defaults(run=lambda args: asyncio.run(_relabel(args)))
 
@@ -411,4 +360,6 @@ def main() -> None:
     export.set_defaults(run=lambda args: asyncio.run(_export_real(args)))
 
     args = parser.parse_args()
+    if args.command == "relabel" and args.settled_hedges and not args.retry:
+        relabel_parser.error("--settled-hedges requires --retry with a round above every earlier round")
     args.run(args)

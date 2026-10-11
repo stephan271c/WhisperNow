@@ -14,4 +14,3 @@ STAGE3 = DATA / "stage3"
 BUILD = DATA / "build"
 # Personal dictations. Gitignored with the rest of data/, and never published or trained on.
 REAL = DATA / "real"
-REVIEW = DATA / "review"

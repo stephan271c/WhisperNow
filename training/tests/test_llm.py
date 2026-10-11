@@ -1,21 +1,48 @@
 import asyncio
 import os
+import shlex
 import time
+from dataclasses import replace
 
 import pytest
+from conftest import SETTINGS
 
 from whispernow_training.datagen import llm
-from whispernow_training.datagen.llm import LlmSettings, ResponseCache, cache_key, codex_command, parse_json_reply, strip_think
+from whispernow_training.datagen.llm import LlmSettings, ResponseCache, codex_command, parse_json_reply, strip_think
 
 
-def test_cache_key_depends_on_model_reasoning_and_messages():
+def test_response_cache_separates_model_reasoning_messages_and_attempt(monkeypatch, tmp_path):
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    client = llm.LlmClient(SETTINGS)
     messages = [{"role": "user", "content": "hi"}]
-    assert cache_key("m", "low", messages) == cache_key("m", "low", [dict(messages[0])])
-    assert cache_key("m", "low", messages) != cache_key("m", "high", messages)
-    assert cache_key("m", "low", messages) != cache_key("n", "low", messages)
-    # A second attempt is cached apart; the first keeps the key it always had.
-    assert cache_key("m", "low", messages, 0) == cache_key("m", "low", messages)
-    assert cache_key("m", "low", messages, 1) not in (cache_key("m", "low", messages), cache_key("m", "low", messages, 2))
+    requests = 0
+
+    async def connect(backend):
+        pass
+
+    async def request(backend, model, reasoning, sent):
+        nonlocal requests
+        requests += 1
+        return f"reply {requests}"
+
+    monkeypatch.setattr(client, "_connect", connect)
+    monkeypatch.setattr(client, "_request", request)
+
+    async def run():
+        assert await client.complete(messages) == "reply 1"
+        assert await client.complete([dict(messages[0])]) == "reply 1"
+        assert await client.complete(messages, attempt=0) == "reply 1"
+        assert await client.complete(messages, reasoning="high") == "reply 2"
+        client.settings = replace(SETTINGS, model="another-model")
+        assert await client.complete(messages) == "reply 3"
+        assert await client.complete([{"role": "user", "content": "different"}]) == "reply 4"
+        client.settings = SETTINGS
+        assert await client.complete(messages, attempt=1) == "reply 5"
+        assert await client.complete(messages, attempt=1) == "reply 5"
+        assert await client.complete(messages, attempt=2) == "reply 6"
+
+    asyncio.run(run())
+    assert client.calls == requests == 6 and client.cache_hits == 3
 
 
 def test_response_cache_round_trip(tmp_path):
@@ -67,6 +94,7 @@ def test_codex_command_sends_our_instructions_and_ignores_the_users_setup(tmp_pa
 
 
 def test_each_role_can_use_its_own_backend_and_model(monkeypatch):
+    monkeypatch.setattr(llm, "load_dotenv", lambda _: None)
     for name in ("LLM_JUDGE_BACKEND", "LLM_JUDGE_MODEL", "LLM_JUDGE_REASONING", "LLM_GENERATOR_MODEL", "LLM_GENERATOR_REASONING"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LLM_BACKEND", "opencode")
@@ -74,7 +102,7 @@ def test_each_role_can_use_its_own_backend_and_model(monkeypatch):
     monkeypatch.setenv("LLM_REASONING", "low")
     monkeypatch.setenv("LLM_GENERATOR_BACKEND", "codex")
     settings = LlmSettings.from_env()
-    # Unset roles keep the teacher's settings, so their cached requests keep their keys.
+    # Unset roles use the teacher's settings.
     assert settings.target("teacher") == settings.target("judge") == ("opencode", "glm-5.3", "low")
     assert settings.target("generator") == ("codex", "glm-5.3", "low")
     monkeypatch.setenv("LLM_JUDGE_BACKEND", "codex")
@@ -86,19 +114,152 @@ def test_each_role_can_use_its_own_backend_and_model(monkeypatch):
         LlmSettings.from_env()
 
 
-def test_a_usage_limit_waits_without_using_up_retries_and_is_logged(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize("messages", [
+    [],
+    [{"role": "user", "content": "first"}, {"role": "user", "content": "second"}],
+    [{"role": "assistant", "content": "reply"}, {"role": "user", "content": "hi"}],
+    [{"role": "system", "content": "first"}, {"role": "system", "content": "second"}, {"role": "user", "content": "hi"}],
+])
+def test_cli_backend_rejects_unsupported_messages_before_connecting(messages, monkeypatch, tmp_path):
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    client = llm.LlmClient(replace(SETTINGS, backend="codex"))
+
+    async def connect(backend):
+        pytest.fail("unsupported messages reached the backend")
+
+    monkeypatch.setattr(client, "_connect", connect)
+    with pytest.raises(ValueError, match="one optional system message and one user message"):
+        asyncio.run(client.complete(messages))
+
+
+@pytest.mark.parametrize("backend", ["codex", "openai"])
+def test_supported_messages_reach_the_backend(backend, monkeypatch, tmp_path):
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    client = llm.LlmClient(replace(SETTINGS, backend=backend))
+    messages = [{"role": "system", "content": "instructions"}, {"role": "user", "content": "hi"}]
+    if backend == "openai":
+        messages += [{"role": "assistant", "content": "reply"}, {"role": "user", "content": "again"}]
+
+    async def connect(backend):
+        pass
+
+    async def request(backend, model, reasoning, sent):
+        assert sent == (messages if backend == "openai" else ("instructions", "hi"))
+        return "done"
+
+    monkeypatch.setattr(client, "_connect", connect)
+    monkeypatch.setattr(client, "_request", request)
+    assert asyncio.run(client.complete(messages)) == "done"
+
+
+def test_response_cache_separates_backends_and_endpoints(monkeypatch, tmp_path):
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    messages = [{"role": "user", "content": "hi"}]
+
+    async def connect(backend):
+        pass
+
+    async def request(backend, model, reasoning, sent):
+        return f"{backend}:{client.settings.base_url}"
+
+    client = llm.LlmClient(SETTINGS)
+    monkeypatch.setattr(client, "_connect", connect)
+    monkeypatch.setattr(client, "_request", request)
+    assert asyncio.run(client.complete(messages)) == "openai:None"
+    assert asyncio.run(client.complete(messages)) == "openai:None" and client.cache_hits == 1
+    client.settings = replace(SETTINGS, base_url="http://other-provider/v1")
+    assert asyncio.run(client.complete(messages)) == "openai:http://other-provider/v1"
+    client.settings = replace(SETTINGS, backend="codex")
+    assert asyncio.run(client.complete(messages)) == "codex:None" and client.calls == 3
+
+
+@pytest.mark.parametrize("workflow", ["judge", "restyle"])
+@pytest.mark.parametrize("retryable", [False, True])
+def test_terminal_client_retry_budget_is_not_multiplied_by_reply_recovery(workflow, retryable, monkeypatch, tmp_path):
+    from whispernow_training.datagen import judge, restyle
+    from whispernow_training.datagen.schema import Example
+
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    monkeypatch.setattr(llm, "_BACKOFF_BASE_SECONDS", 0.0)
+    monkeypatch.setattr(llm, "_BACKOFF_CAP_SECONDS", 0.0)
+    client = llm.LlmClient(SETTINGS)
+    failure = llm.LlmError("transport failed", retryable=retryable)
+    requests = 0
+
+    async def connect(backend):
+        pass
+
+    async def request(backend, model, reasoning, messages):
+        nonlocal requests
+        requests += 1
+        raise failure
+
+    monkeypatch.setattr(client, "_connect", connect)
+    monkeypatch.setattr(client, "_request", request)
+
+    async def run():
+        async with client:
+            if workflow == "judge":
+                await judge.judge_batch(client, "rules", ("clean",), [
+                    (id_, {"transcript": "bring milk", "reference": "Bring milk."}) for id_ in ("a", "b")
+                ])
+            else:
+                await restyle._restyle_batch(client, [
+                    Example(id=id_, input="bring milk", output="Bring milk.", source="s", category="c", license="MIT")
+                    for id_ in ("a", "b")
+                ])
+
+    with pytest.raises(llm.LlmError) as error:
+        asyncio.run(run())
+    assert error.value is failure and requests == (llm._MAX_ATTEMPTS if retryable else 1)
+    assert not list(tmp_path.rglob("*.json"))
+
+
+@pytest.mark.parametrize("workflow", ["judge", "restyle"])
+def test_missing_api_key_propagates_without_a_reply_or_completion(workflow, monkeypatch, tmp_path):
+    from whispernow_training.datagen import judge, restyle
+    from whispernow_training.datagen.schema import Example, write_examples
+
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    client = llm.LlmClient(SETTINGS)
+    out = tmp_path / "verdicts.jsonl"
+    rules = tmp_path / "rules.md"
+    rules.write_text("rules")
+    monkeypatch.setattr(restyle, "OUT", tmp_path / "restyle.jsonl")
+    monkeypatch.setattr(restyle, "REJECTED", tmp_path / "rejected.jsonl")
+    monkeypatch.setattr(restyle.stage1, "CLEAN", tmp_path / "clean.jsonl")
+    monkeypatch.setattr(restyle, "chosen", lambda example: True)
+    write_examples(restyle.stage1.CLEAN, [
+        Example(id="a", input="bring milk", output="Bring milk.", source="s", category="c", license="MIT")
+    ])
+
+    async def run():
+        async with client:
+            if workflow == "judge":
+                await judge.judge_all(client, [("a", {"transcript": "bring milk", "output": "Bring milk."})], out,
+                                      instructions_file=rules, criteria=("clean",))
+            else:
+                await restyle.restyle_all(client)
+
+    with pytest.raises(KeyError, match="LLM_API_KEY"):
+        asyncio.run(run())
+    assert client.calls == 0 and not out.exists()
+    assert not restyle.OUT.exists() or restyle.OUT.read_text() == ""
+    assert not restyle.REJECTED.exists() or restyle.REJECTED.read_text() == ""
+
+
+def test_a_usage_limit_waits_without_using_up_retries(monkeypatch, tmp_path):
     import asyncio
 
     from whispernow_training.datagen import llm as llm_module
 
     monkeypatch.setattr(llm_module, "CACHE", tmp_path)
     monkeypatch.setattr(llm_module, "_LIMIT_WAIT_SECONDS", 0.0)
-    settings = LlmSettings(
-        backend="codex", model="m", judge_model="m", concurrency=1, reasoning="low", judge_reasoning="low",
-        opencode_provider="", base_url=None,
-    )
+    settings = replace(SETTINGS, backend="codex", model="m", judge_model="m")
     client = llm_module.LlmClient(settings)
     refusals = llm_module._MAX_ATTEMPTS + 2
+    expected_waits = refusals
 
     async def request(backend, model, reasoning, messages):
         nonlocal refusals
@@ -113,10 +274,7 @@ def test_a_usage_limit_waits_without_using_up_retries_and_is_logged(monkeypatch,
     monkeypatch.setattr(client, "_request", request)
     monkeypatch.setattr(client, "_connect", connect)
     assert asyncio.run(client.complete([{"role": "user", "content": "hi"}])) == "done"
-    log = capsys.readouterr().err
-    assert log.count("USAGE LIMIT on codex") == 1 and "ACCOUNT OK again" in log
-    assert llm_module._CODEX_LIMITED.search("Error: You've hit your usage limit. Upgrade to Pro")
-    assert llm_module._CODEX_SIGNED_OUT.search("401 Unauthorized: please run codex login")
+    assert client.limit_waits == expected_waits and client.retries == 0
 
 
 def test_a_request_sent_before_the_limit_does_not_report_the_account_back(monkeypatch, tmp_path, capsys):
@@ -126,14 +284,11 @@ def test_a_request_sent_before_the_limit_does_not_report_the_account_back(monkey
 
     monkeypatch.setattr(llm_module, "CACHE", tmp_path)
     monkeypatch.setattr(llm_module, "_LIMIT_WAIT_SECONDS", 0.05)
-    settings = LlmSettings(
-        backend="codex", model="m", judge_model="m", concurrency=2, reasoning="low", judge_reasoning="low",
-        opencode_provider="", base_url=None,
-    )
+    settings = replace(SETTINGS, backend="codex", model="m", judge_model="m", concurrency=2)
     client = llm_module.LlmClient(settings)
 
     async def request(backend, model, reasoning, messages):
-        if messages[0]["content"] == "early":
+        if messages[1] == "early":
             await asyncio.sleep(0.01)
             return "done"
         raise llm_module.LlmError("You've hit your usage limit.", retryable=True, limited=True)
@@ -152,6 +307,27 @@ def test_a_request_sent_before_the_limit_does_not_report_the_account_back(monkey
     asyncio.run(run())
     log = capsys.readouterr().err
     assert "USAGE LIMIT on codex" in log and "ACCOUNT OK" not in log
+
+
+@pytest.mark.parametrize("exit_code, log, limited", [
+    (0, "ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 403 Forbidden", False),
+    (1, "ERROR: Selected model is at capacity. Please try a different model.", False),
+    (1, "You've hit your usage limit. Try again at 9:00 PM.", True),
+])
+def test_codex_refusals_classify_throttling_and_usage_limits(tmp_path, monkeypatch, exit_code, log, limited):
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    fake = tmp_path / "fake-codex"
+    fake.write_text(f"#!/bin/sh\ncat > /dev/null\necho {shlex.quote(log)} >&2\nexit {exit_code}\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(llm.shutil, "which", lambda _: str(fake))
+    runner = llm._CodexRunner()
+    try:
+        with pytest.raises(llm.LlmError) as caught:
+            asyncio.run(runner.complete("gpt-6.1-sol", "high", ("", "hi")))
+        error = caught.value
+        assert error.retryable and error.limited is limited and error.throttled is not limited
+    finally:
+        runner.stop()
 
 
 def _alive(pid_file) -> bool:

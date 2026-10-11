@@ -2,10 +2,15 @@ import dataclasses
 import asyncio
 import json
 import re
+from collections import Counter
+
+import pytest
 
 from conftest import judge_items
 
 from whispernow_training.datagen import gates
+from whispernow_training.datagen.llm import LlmError
+from whispernow_training.datagen.schema import EMPTY
 
 
 def _transcript(messages):
@@ -53,6 +58,26 @@ def test_a_restarted_or_merged_value_goes_to_the_judge_not_the_code_check():
     assert "said they misspoke" in gates.code_flags(transcript, "I paid her $28 because of the longer walk.")
     # A value followed by an ordinary word still fails in code.
     assert gates.code_check("keep them at 55 degrees", "Keep them cold.")[0] == ["protected_tokens"]
+
+
+@pytest.mark.parametrize("transcript, reference, phrase", [
+    ("uh rice, maybe some jasmine rice, actually yeah get it, we're out", "- Rice, maybe jasmine (we're out)", "maybe some jasmine rice"),
+    ("get the blue one maybe, yeah the blue one", "Get the blue one, maybe.", "the blue one maybe"),
+    ("Maybe, maybe the jasmine rice, yeah", "Maybe jasmine rice.", "maybe the jasmine rice"),
+    ("maybe, I think the jasmine rice, yeah", "Maybe jasmine rice.", "maybe, I think the jasmine rice"),
+    ("probably, maybe the jasmine rice, yeah", "Probably jasmine rice.", "probably, maybe the jasmine rice"),
+])
+def test_a_kept_hedge_the_speaker_settles_soon_after_goes_to_the_judge(transcript, reference, phrase):
+    found = gates.settled_hedges(transcript, reference)
+    assert len(found) == 1 and phrase.casefold() in found[0].casefold()
+    assert phrase.casefold() in gates.code_flags(transcript, reference).casefold()
+
+
+def test_a_hedge_left_open_or_kept_on_another_item_is_not_flagged():
+    assert gates.settled_hedges("maybe a bag of basmati just in case", "- Maybe a bag of basmati (just in case)") == []
+    transcript = "maybe some jasmine rice, actually yeah get it, we're out"
+    assert gates.settled_hedges(transcript, "- Jasmine rice (we're out)") == []
+    assert gates.settled_hedges(transcript + ", maybe pears", "- Jasmine rice\n- Maybe pears") == []
 
 
 def _gate_llm(fake_llm, *, bad_first=(), bad_always=(), unrealistic=()):
@@ -120,14 +145,19 @@ def test_missing_protected_forgives_every_mention_of_a_revised_value():
     assert gates.missing_protected("Bandanas for the kids, 15 of them? There's 14 in the class, get 16", "Bandanas: 16 (14 in the class).") == []
 
 
-def test_gate_can_relabel_a_failure_with_the_judge_model(fake_llm):
-    roles = []
+@pytest.mark.parametrize("reasoning", [None, "low"])
+@pytest.mark.parametrize("teacher_reasoning", [None, "high"])
+def test_gate_keeps_teacher_reasoning_for_both_attempts_and_judge_reasoning_for_checks(
+    fake_llm, reasoning, teacher_reasoning,
+):
+    written = 0
 
     def reply(messages, role):
+        nonlocal written
         if "<transcript>" in messages[-1]["content"]:
-            roles.append(role)
-            # The teacher keeps both sides of the correction; the judge's model gets it right.
-            return "BP 132/78." if role == "judge" else "WRONG: BP 122/78, sorry, 132/78."
+            assert role == "teacher"
+            written += 1
+            return "WRONG" if written == 1 else "BP 132/78."
         results = [
             {"i": item["i"], **{c: "WRONG" not in item["reference"] for c in gates.COMPLETENESS_CRITERIA}, "note": ""}
             for item in judge_items(messages)
@@ -135,25 +165,118 @@ def test_gate_can_relabel_a_failure_with_the_judge_model(fake_llm):
         return json.dumps({"results": results})
 
     llm = fake_llm(reply)
-    results = asyncio.run(gates.gate(llm, [("a", "BP one twenty two over seventy eight sorry one thirty two")], relabel_role="judge"))
+    judge = dataclasses.replace(gates.COMPLETENESS_JUDGE, reasoning=reasoning)
+    results = asyncio.run(gates.gate(
+        llm, [("a", "BP one thirty two over seventy eight")], judge=judge, teacher_reasoning=teacher_reasoning,
+    ))
     assert results["a"].passed and results["a"].attempt == 1 and results["a"].output == "BP 132/78."
-    assert roles == ["teacher", "judge"]
-    # The teacher's first sample and the judge's relabel and checks at the judge's own setting.
-    assert llm.reasonings == [("teacher", None), ("judge", None), ("judge", None), ("judge", None)]
+    assert Counter(llm.reasonings) == Counter({("teacher", teacher_reasoning): 2, ("judge", reasoning): 2})
 
 
-def test_a_judge_reasoning_applies_to_its_checks_and_the_judge_models_relabel(fake_llm):
+def test_code_checks_fail_em_dashes_and_kept_cues_and_flag_counts_and_dropped_hedges():
+    failed, note = gates.code_check("so the 2019, oh wait. the 2020 one", "So the 2020 one — our best.")
+    assert failed == ["em_dash"] and "em dash" in note
+    failed, _ = gates.code_check("call Sam. wait, call Ana", "Call Sam. Wait, call Ana.")
+    assert failed == ["correction_cue"]
+    assert gates.code_check("wait for me at the gate", "Wait for me at the gate.") == ([], "")
+    flags = gates.code_flags("I think two bags of ice", "Two bags of ice.")
+    assert "spelled-out number 'Two bags'" in flags and "'i think'" in flags
+
+
+def test_the_judge_sees_flags_long_rows_go_alone_and_a_relabel_carries_the_judges_note(fake_llm):
+    long_input = " ".join(["we need the boxes"] * 80)
+    requests = []
+
     def reply(messages, role):
-        if "<transcript>" in messages[-1]["content"]:
-            return "BP 132/78." if role == "judge" else "WRONG"
-        results = [
-            {"i": item["i"], **{c: "WRONG" not in item["reference"] for c in gates.COMPLETENESS_CRITERIA}, "note": ""}
-            for item in judge_items(messages)
-        ]
-        return json.dumps({"results": results})
+        if role == "judge":
+            requests.append(judge_items(messages))
+            return json.dumps({"results": [
+                {"i": item["i"], **{c: True for c in gates.COMPLETENESS_CRITERIA},
+                 "clean": item["reference"] != "Two bags.",
+                 "note": "dropped 'maybe'" if item["reference"] == "Two bags." else ""}
+                for item in judge_items(messages)
+            ]})
+        user = messages[-1]["content"]
+        if "boxes" in user:
+            return "We need the boxes."
+        return "Maybe 2 bags." if "dropped 'maybe'" in user else "Two bags."
 
     llm = fake_llm(reply)
-    judge = dataclasses.replace(gates.COMPLETENESS_JUDGE, reasoning="low")
-    results = asyncio.run(gates.gate(llm, [("a", "BP one thirty two over seventy eight")], judge=judge, relabel_role="judge"))
-    assert results["a"].passed and results["a"].attempt == 1
-    assert llm.reasonings == [("teacher", None), ("judge", "low"), ("judge", "low"), ("judge", "low")]
+    judge = gates.Judge(solo_over_words=300)
+    results = asyncio.run(gates.gate(llm, [("short", "maybe two bags"), ("long", long_input)], judge=judge, relabel_note=True))
+    assert results["short"].passed and results["short"].attempt == 1 and results["short"].output == "Maybe 2 bags."
+    assert results["short"].first_note == "dropped 'maybe'"
+    first = next(items for items in requests if any(item["reference"] == "Two bags." for item in items))
+    assert len(first) == 1 and "spelled-out number 'Two bags'" in first[0]["flags"]
+    assert any(len(items) == 1 and items[0]["transcript"] == long_input for items in requests)
+
+
+def test_a_kept_casual_contraction_fails_the_code_check():
+    failed, note = gates.code_check("we wanna go", "We wanna go.")
+    assert failed == ["contraction"] and "'wanna'" in note
+    assert gates.code_check("we wanna go", "We want to go.") == ([], "")
+
+
+def test_code_settles_empty_without_the_judge(fake_llm):
+    llm = fake_llm(lambda messages, role: pytest.fail("the judge saw an EMPTY row"))
+    verdicts = asyncio.run(gates.check_references(llm, [
+        ("a", "um, uh... hmm?", EMPTY), ("b", "Erm. Mm", "Mm."), ("c", "buy milk", EMPTY),
+    ]))
+    assert verdicts["a"].passed and verdicts["a"].judge_model == "code"
+    assert verdicts["b"].failed == ["empty"] and verdicts["c"].failed == ["empty"]
+
+
+@pytest.mark.parametrize("phase", ["teacher", "judge", "relabel"])
+def test_client_failure_joins_sibling_calls_before_the_gate_returns(phase, fake_llm):
+    failure = LlmError("transport retries exhausted", retryable=True)
+
+    async def exercise():
+        held = asyncio.Event()
+        release = asyncio.Event()
+        stopped = asyncio.Event()
+
+        class Failing(fake_llm):
+            async def complete(self, messages, *, role="teacher", **kwargs):
+                if role == ("judge" if phase == "judge" else "teacher"):
+                    transcript = judge_items(messages)[0]["transcript"] if role == "judge" else _transcript(messages)
+                    if "eggs" in transcript:
+                        await held.wait()
+                        raise failure
+                    held.set()
+                    try:
+                        await release.wait()
+                        return "Bring bread."
+                    finally:
+                        await asyncio.sleep(0)
+                        stopped.set()
+                return await super().complete(messages, role=role, **kwargs)
+
+        def reply(messages, role):
+            return json.dumps({"results": [
+                {"i": item["i"], **{criterion: False for criterion in gates.COMPLETENESS_CRITERIA}, "note": "bad"}
+                for item in judge_items(messages)
+            ]})
+
+        llm = Failing(reply)
+        rows = [("a", "bring eggs"), ("b", "bring bread")]
+        references = {"a": "Bring eggs.", "b": "Bring bread."} if phase != "teacher" else None
+        with pytest.raises(LlmError) as error:
+            await gates.gate(llm, rows, references=references, judge=gates.Judge(max_items=1))
+        assert error.value is failure and stopped.is_set()
+        release.set()
+        await asyncio.sleep(0)
+
+    asyncio.run(asyncio.wait_for(exercise(), timeout=2))
+
+
+def test_gate_reports_each_simultaneous_teacher_failure(fake_llm):
+    failures = {text: LlmError(f"failed {text}", retryable=False) for text in ("bring eggs", "bring bread")}
+
+    class Failing(fake_llm):
+        async def complete(self, messages, **kwargs):
+            raise failures[_transcript(messages)]
+
+    llm = Failing(lambda messages, role: pytest.fail("a failed reference reached the judge"))
+    with pytest.raises(ExceptionGroup) as error:
+        asyncio.run(gates.gate(llm, [("a", "bring eggs"), ("b", "bring bread")]))
+    assert error.value.exceptions == tuple(failures.values())

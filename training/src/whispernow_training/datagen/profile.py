@@ -11,8 +11,10 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-_FILLER = re.compile(r"\b(um+|uh+|uhm|erm?|hmm+)\b([,.?!]?)", re.IGNORECASE)
-_REPEAT_AROUND_FILLER = re.compile(r"\b(\w+),? (?:(?:um+|uh+|uhm|erm?|hmm+),? )+\1\b", re.IGNORECASE)
+from ..text_rules import FILLER_FORMS
+
+_FILLER = re.compile(rf"\b({FILLER_FORMS})\b([,.?!]?)", re.IGNORECASE)
+_REPEAT_AROUND_FILLER = re.compile(rf"\b(\w+),? (?:{FILLER_FORMS},? )+\1\b", re.IGNORECASE)
 _STOCK_CUE = re.compile(
     r"\b(?:no wait|wait no|scratch that|i mean|sorry|make that|or rather|correction|no no)\b", re.IGNORECASE
 )

@@ -1,3 +1,6 @@
+import copy
+import math
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -21,22 +24,43 @@ def test_unit_weights_give_the_plain_mean():
 
 
 def test_fact_tokens_weigh_more_and_the_weights_average_one():
-    torch.manual_seed(1)
-    logits = torch.randn(1, 20, 10)
-    labels = torch.randint(0, 10, (1, 20))
-    labels[:, :5] = -100
-    weights = torch.ones(1, 20)
-    weights[0, 10] = 4.0
-    losses = F.cross_entropy(logits[0, :-1], labels[0, 1:], ignore_index=-100, reduction="none")
+    logits = torch.tensor([[[0.0, 0.0], [math.log(3), 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]],
+                          dtype=torch.float32, device="cpu")
+    labels = torch.tensor([[-100, -100, 1, 0, -100]], device="cpu")
+    weights = torch.tensor([[99.0, 99.0, 3.0, 1.0, 99.0]], device="cpu")
     total, count = weighted.weighted_loss(logits, labels, weights)
-    shifted = weights[0, 1:].clone()
-    shifted[labels[0, 1:] == -100] = 0
-    expected = (losses * shifted).sum() * count / shifted.sum()
-    assert torch.allclose(total, expected)
-    # Padding and prompt positions carry no weight, whatever the collator put there.
-    padded = weights.clone()
-    padded[0, :5] = 9.0
-    assert torch.allclose(weighted.weighted_loss(logits, labels, padded)[0], total)
+    # The reply targets have probabilities 1/4 and 1/2; normalized weights are 1.5 and 0.5.
+    assert total.item() == pytest.approx(3.5 * math.log(2))
+    assert count.item() == 2
+
+
+def test_hidden_states_and_output_head_match_dense_loss_and_gradients():
+    hidden = torch.tensor([[
+        [0.2, -0.4, 0.6], [0.1, 0.3, -0.5], [-0.2, 0.4, 0.7],
+        [0.8, -0.6, 0.2], [0.9, 0.1, -0.3],
+    ]], dtype=torch.float32, device="cpu", requires_grad=True)
+    head = torch.nn.Linear(3, 5, bias=False, device="cpu")
+    with torch.no_grad():
+        head.weight.copy_(torch.tensor([
+            [0.2, -0.3, 0.4], [-0.1, 0.5, -0.2], [0.6, 0.1, -0.4],
+            [-0.5, -0.2, 0.3], [0.4, 0.7, -0.1],
+        ], device="cpu"))
+    labels = torch.tensor([[-100, -100, 4, 2, 1]], device="cpu")
+    weights = torch.tensor([[100.0, 100.0, 2.0, 1.0, 3.0]], device="cpu")
+    dense_hidden = hidden.detach().clone().requires_grad_()
+    dense_head = copy.deepcopy(head)
+    losses = F.cross_entropy(
+        dense_head(dense_hidden[0, 1:4]), torch.tensor([4, 2, 1], device="cpu"), reduction="none"
+    )
+    expected = (losses * torch.tensor([2.0, 1.0, 3.0], device="cpu")).sum() / 6.0
+    total, count = weighted.weighted_loss(hidden, labels, weights, head)
+    assert count.item() == 3
+    loss = total / count
+    torch.testing.assert_close(loss, expected)
+    loss.backward()
+    expected.backward()
+    torch.testing.assert_close(hidden.grad, dense_hidden.grad)
+    torch.testing.assert_close(head.weight.grad, dense_head.weight.grad)
 
 
 class _Inner:

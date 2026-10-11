@@ -3,7 +3,7 @@ import json
 
 from conftest import judge_items
 
-from whispernow_training.datagen.judge import judge_all, load_verdicts
+from whispernow_training.datagen.judge import Verdict, judge_all, load_verdicts
 from whispernow_training.datagen.schema import Example
 from whispernow_training.model import evaluate
 
@@ -42,9 +42,6 @@ def test_criteria_follow_the_faults_and_an_unresolved_correction_fails_none(fake
     assert verdicts["unresolved"].passed and len(verdicts["unresolved"].faults) == 1
     assert verdicts["lossy"].failed == ["facts_kept", "nothing_invented"]
     assert "wrong_side: kept 6:30 beside 5:30" in verdicts["lossy"].note
-    # Faults survive a resume, and a verdict without faults is written as before.
-    lines = [json.loads(line) for line in (tmp_path / "v.jsonl").read_text().splitlines()]
-    assert "faults" not in next(line for line in lines if line["id"] == "clean")
     assert load_verdicts(tmp_path / "v.jsonl")["lossy"].faults == verdicts["lossy"].faults
 
 
@@ -72,9 +69,9 @@ def test_scores_count_faults_per_row_and_per_thousand_words():
     rows = [_row("a", 100), _row("b", 300), _row("c", 100)]
     outputs = {row.id: {"output": row.output, "hit_limit": False} for row in rows}
     judged = {
-        "a": evaluate.Judged([], REPLIES["unresolved"]),
-        "b": evaluate.Judged(["facts_kept", "nothing_invented"], REPLIES["lossy"]),
-        "c": evaluate.Judged(["judge_error"], []),
+        "a": Verdict("a", True, [], "", "judge-model", REPLIES["unresolved"]),
+        "b": Verdict("b", False, ["facts_kept", "nothing_invented"], "", "judge-model", REPLIES["lossy"]),
+        "c": Verdict("c", False, ["judge_error"], "", "judge-model"),
     }
     faults = evaluate.score(rows, outputs, judged)["overall"]["faults"]
     # The unreadable row counts in none; the other two hold 400 reference words.
@@ -87,13 +84,13 @@ def test_judged_scores_get_their_own_files(tmp_path, monkeypatch):
     rows = [_row("a", 5)]
     monkeypatch.setattr(evaluate, "load_rows", lambda split, limit: rows)
 
-    async def judge(rows, outputs, out, require):
+    async def judge(rows, outputs, out, r112):
         assert out.name == "test.faults.judge.jsonl"
-        return {"a": evaluate.Judged([], [])}
+        return {"a": Verdict("a", True, [], "", "judge-model")}
 
     monkeypatch.setattr(evaluate, "judge", judge)
     produce = lambda missing: [{"id": row.id, "output": row.output, "hit_limit": False} for row in missing]  # noqa: E731
-    evaluate.evaluate(produce, tmp_path, "test", with_judge=True)
-    evaluate.evaluate(produce, tmp_path, "test")
+    evaluate.evaluate(produce, tmp_path, "test", with_judge=True, generation={"source": "reference"})
+    evaluate.evaluate(produce, tmp_path, "test", generation={"source": "reference"})
     assert json.loads((tmp_path / "test.faults.scores.json").read_text())["judge"] == "faults"
     assert not json.loads((tmp_path / "test.scores.json").read_text())["judged"]

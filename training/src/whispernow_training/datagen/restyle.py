@@ -13,7 +13,6 @@ row `style_recognizer`, `restyled` and `asr_<style>`.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import random
@@ -23,8 +22,9 @@ from typing import NamedTuple
 
 from . import paths, stage1
 from .asr_probe import join_segment_texts
-from .llm import LlmClient, LlmError, parse_json_reply
-from .schema import Example, read_examples
+from .concurrency import task_group
+from .llm import LlmClient, parse_json_reply
+from .schema import Example, read_examples, read_jsonl
 
 OUT = paths.DATA / "restyle/aawaaz.jsonl"
 REJECTED = paths.DATA / "restyle/rejected.jsonl"
@@ -187,16 +187,22 @@ def _check(example: Example, text: str) -> str:
 
 async def _restyle_batch(llm: LlmClient, batch: Sequence[Example]) -> list[tuple[Example, str, str]]:
     """(row, rewrite, why it failed or "")."""
+    reply = await llm.complete(restyle_messages([e.input for e in batch]), role="teacher")
     try:
-        reply = await llm.complete(restyle_messages([e.input for e in batch]), role="teacher")
         parsed = parse_json_reply(reply)
         items = parsed["items"] if isinstance(parsed, dict) else parsed
-        texts = {int(item["n"]): str(item["text"]) for item in items if isinstance(item, dict)}
-    except (LlmError, ValueError, KeyError, TypeError) as error:
+        if not isinstance(items, list):
+            raise ValueError("reply has no items list")
+        texts = {int(item["n"]): item["text"] for item in items}
+        if set(texts) != set(range(len(batch))) or len(texts) != len(items):
+            raise ValueError("reply does not cover every input")
+        if any(not isinstance(text, str) for text in texts.values()):
+            raise ValueError("reply text is not a string")
+    except (ValueError, KeyError, TypeError) as error:
         return [(e, "", f"reply: {error}") for e in batch]
     results = []
     for index, example in enumerate(batch):
-        text = " ".join(texts.get(index, "").split())
+        text = " ".join(texts[index].split())
         results.append((example, text, _check(example, text)))
     return results
 
@@ -211,10 +217,9 @@ def _write(good, bad, example: Example, text: str, why: str) -> None:
 async def restyle_all(llm: LlmClient, limit: int = 0) -> dict:
     """Restyles the chosen aawaaz rows not yet done; resumes from `OUT` and `REJECTED`."""
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    done = set()
-    for path in (OUT, REJECTED):
-        if path.exists():
-            done |= {json.loads(line)["id"] for line in path.open(encoding="utf-8")}
+    done = {row["id"] for row in read_jsonl(OUT)} if OUT.exists() else set()
+    if REJECTED.exists():
+        done |= {row["id"] for row in read_jsonl(REJECTED) if not row["why"].startswith("reply:")}
     rows = [e for e in read_examples(stage1.CLEAN) if chosen(e) and e.id not in done]
     rows.sort(key=lambda e: e.id)
     if limit:
@@ -222,15 +227,20 @@ async def restyle_all(llm: LlmClient, limit: int = 0) -> dict:
     batches = _batches(rows)
     passed = failed = 0
     with OUT.open("a", encoding="utf-8") as good, REJECTED.open("a", encoding="utf-8") as bad:
-        for start in range(0, len(batches), 32):
-            chunk = batches[start : start + 32]
-            for results in await asyncio.gather(*(_restyle_batch(llm, b) for b in chunk)):
-                for example, text, why in results:
-                    _write(good, bad, example, text, why)
-                    passed += not why
-                    failed += bool(why)
+        async def run(batch: Sequence[Example]) -> None:
+            nonlocal passed, failed
+            for example, text, why in await _restyle_batch(llm, batch):
+                _write(good, bad, example, text, why)
+                passed += not why
+                failed += bool(why)
             good.flush()
             bad.flush()
+
+        for start in range(0, len(batches), 32):
+            chunk = batches[start : start + 32]
+            async with task_group() as group:
+                for batch in chunk:
+                    group.create_task(run(batch))
             print(f"batches {min(start + 32, len(batches))}/{len(batches)}: {passed} restyled, {failed} kept as spoken", flush=True)
     return {"restyled": passed, "failed": failed, "remaining_batches": 0}
 

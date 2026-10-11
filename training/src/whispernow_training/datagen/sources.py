@@ -17,6 +17,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable
 
+from ..text_rules import CORRECTION, FILLER
 from .schema import Example, example_id
 
 HANDY = "MagicNoThief/handy-dictation-editing"
@@ -25,10 +26,6 @@ DISFL_QA = "google-research-datasets/disfl_qa"
 LICENSES = {HANDY: "CC-BY-4.0", SOTTO: "MIT", DISFL_QA: "CC-BY-4.0"}
 SWITCHBOARD_DERIVED = ("amaai-lab/DisfluencySpeech", "nyralabs/disfluency_speech_english")
 
-FILLERS = {"um", "uh", "uhm", "er", "ah", "erm", "hmm", "mm"}
-CORRECTION = re.compile(
-    r"\b(no wait|wait no|i mean|actually|scratch that|make that|sorry|or rather|no no|rather|correction|let me rephrase)\b"
-)
 _WORD = re.compile(r"[a-z0-9']+")
 
 
@@ -134,7 +131,7 @@ _NGRAM = 6
 
 
 def ngrams(text: str, n: int = _NGRAM) -> set[str]:
-    tokens = [w for w in words(text) if w not in FILLERS]
+    tokens = [w for w in words(text) if not FILLER.fullmatch(w)]
     return {" ".join(tokens[i : i + n]) for i in range(len(tokens) - n + 1)}
 
 
@@ -162,11 +159,11 @@ class SwitchboardIndex:
         self.lines: set[str] = set()
         for text in texts:
             self.grams |= ngrams(text)
-            self.lines.add(" ".join(w for w in words(text) if w not in FILLERS))
+            self.lines.add(" ".join(w for w in words(text) if not FILLER.fullmatch(w)))
 
     def contains(self, example_input: str, example_output: str) -> bool:
         for text in (example_input, example_output):
-            if " ".join(w for w in words(text) if w not in FILLERS) in self.lines:
+            if " ".join(w for w in words(text) if not FILLER.fullmatch(w)) in self.lines:
                 return True
         row_grams = ngrams(example_input) | ngrams(example_output)
         return bool(row_grams) and len(row_grams & self.grams) >= max(1, len(row_grams) // 4)
@@ -209,7 +206,7 @@ def sotto_category(source_input: str, output: str) -> str | None:
         # A clean input the model must not edit. It is adversarial when it holds a filler look-alike.
         kept = [w for w in _LOOKALIKES if re.search(rf"\b{w}\b", lowered)]
         return "adversarial" if kept else "preserve_wording"
-    if any(w in FILLERS for w in source_words):
+    if any(FILLER.fullmatch(w) for w in source_words):
         return None
     if CORRECTION.search(lowered):
         return "self_correction"

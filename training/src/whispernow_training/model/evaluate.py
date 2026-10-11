@@ -2,25 +2,26 @@
 
 Three sources produce outputs: a trained checkpoint through transformers (`hf`), a GGUF behind
 `llama-server` (`server`), and the hosted teacher with the app's current prompt (`teacher`).
-Each writes `<dir>/<split>.outputs.jsonl`; scoring reads it back, so a finished generation is
-never repeated.
+Each appends completed requests to `<dir>/<split>.outputs.jsonl`; matching requests resume.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import random
 import sys
 import time
 from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
-from ..datagen.audit import length_bucket
+from ..datagen.judge import Verdict
+from ..datagen.llm import R112_TARGET, request_key, require_r112
 from ..datagen.paths import BUILD, DATA, PROMPTS, TRAINING_ROOT
-from ..datagen.schema import Example, read_examples, read_jsonl
+from ..datagen.schema import Example, length_bucket, read_examples, read_jsonl
 from . import draft, prompt
 from .metrics import RowChecks, check, input_style
 
@@ -55,7 +56,6 @@ JUDGE_SOLO_OVER_WORDS = 300
 # References the relabel rewrote are judged and scored apart from the old ones, by the model that wrote
 # them: `<stem>.r112.judge.jsonl` and `<stem>.r112.scores.json`.
 R112 = "r112"
-R112_TARGET = ("codex", "gpt-6.1-sol", "high")
 
 
 def reference_tag(rows: Sequence[Example]) -> str:
@@ -72,8 +72,56 @@ def load_rows(split: str, limit: int | None = None, seed: int = 109) -> list[Exa
     return rows
 
 
+def load_benchmarks() -> list[Example]:
+    return [row for path in BENCHMARKS.values() for row in read_examples(path)]
+
+
 def _progress(line: str) -> None:
     print(line, file=sys.stderr, flush=True)
+
+
+def model_revision(path: Path) -> str:
+    files = sorted(file for file in path.rglob("*") if file.is_file()) if path.is_dir() else [path]
+    digests = {}
+    for file in files:
+        with file.open("rb") as source:
+            name = str(file.relative_to(path)) if path.is_dir() else file.name
+            digests[name] = hashlib.file_digest(source, "sha256").hexdigest()
+    return request_key(digests)
+
+
+def hf_generation(model_dir: Path, repeat_penalty: float = prompt.REPEAT_PENALTY) -> dict:
+    from importlib.metadata import version
+
+    return {"source": "hf", "revision": model_revision(model_dir), "chat_template": prompt.chat_template(),
+            "repeat_penalty": repeat_penalty, "do_sample": False, "dtype": "bfloat16",
+            "end_of_turn": prompt.END_OF_TURN, "transformers": version("transformers"), "torch": version("torch")}
+
+
+def server_generation(
+    url: str, repeat_penalty: float = prompt.REPEAT_PENALTY, repeat_last_n: int = prompt.REPEAT_LAST_N,
+) -> dict:
+    import httpx
+
+    root = url.rstrip("/").removesuffix("/v1")
+    response = httpx.get(f"{root}/props", timeout=30)
+    response.raise_for_status()
+    props = response.json()
+    model = Path(props["model_path"])
+    defaults = props["default_generation_settings"]
+    local = urlparse(url).hostname in ("localhost", "127.0.0.1", "::1")
+    return {"source": "server", "revision": model_revision(model) if local and model.is_absolute() and model.is_file() else None,
+            "model_path": str(model), "chat_template": props["chat_template"], "build": props.get("build_info"),
+            "defaults": defaults["params"], "n_ctx": defaults["n_ctx"], "temperature": prompt.TEMPERATURE,
+            "repeat_penalty": repeat_penalty, "repeat_last_n": repeat_last_n}
+
+
+def teacher_generation() -> dict:
+    from ..datagen.llm import LlmSettings
+    from ..datagen.teacher import teacher_messages
+
+    return {"source": "teacher", "settings": LlmSettings.from_env().request("teacher"),
+            "messages": teacher_messages("")}
 
 
 def generate_hf(
@@ -183,53 +231,41 @@ async def generate_teacher(rows: Sequence[Example]) -> list[dict]:
 
 def write_outputs(path: Path, outputs: Sequence[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in outputs), encoding="utf-8")
+    with path.open("a", encoding="utf-8") as sink:
+        sink.writelines(json.dumps(row, ensure_ascii=False) + "\n" for row in outputs)
 
 
 def read_outputs(path: Path) -> dict[str, dict]:
     return {row["id"]: row for row in read_jsonl(path)}
 
 
-@dataclass(frozen=True)
-class Judged:
-    failed: list[str]
-    faults: list[dict]
+async def judge_outputs(llm, items: Sequence[tuple[str, dict]], out: Path,
+                        progress: Callable[[str], None] | None = None) -> dict[str, Verdict]:
+    from ..datagen.judge import judge_all
+
+    return await judge_all(
+        llm, items, out, instructions_file=JUDGE_INSTRUCTIONS, criteria=JUDGE_CRITERIA,
+        batch_size=JUDGE_BATCH_ROWS, max_chars=JUDGE_MAX_CHARS, solo_over_words=JUDGE_SOLO_OVER_WORDS,
+        fault_kinds=FAULT_KINDS, progress=progress if progress is not None else _progress,
+    )
 
 
 async def judge(
-    rows: Sequence[Example], outputs: dict[str, dict], out: Path, require: tuple[str, str, str] | None = None
-) -> dict[str, Judged]:
-    """Judges every row not yet in `out`; returns each row's verdict by id.
-
-    `require` is the judge's (backend, model, reasoning), checked before any request.
-    """
-    from ..datagen.judge import judge_all
+    rows: Sequence[Example], outputs: dict[str, dict], out: Path, r112: bool = False
+) -> dict[str, Verdict]:
+    """Judges current transcript/reference/output requests; returns each row's verdict by id."""
     from ..datagen.llm import LlmClient, LlmSettings
 
     settings = LlmSettings.from_env()
-    if require and settings.target("judge") != require:
-        raise SystemExit(
-            f"these references are judged by {'/'.join(require)}; set LLM_JUDGE_BACKEND, LLM_JUDGE_MODEL and "
-            f"LLM_JUDGE_REASONING to it (now {'/'.join(settings.target('judge'))})"
-        )
+    if r112:
+        require_r112(settings, "judge")
 
     items = [
         (row.id, {"transcript": row.input, "reference": row.output, "output": outputs[row.id]["output"]})
         for row in rows
     ]
     async with LlmClient(settings) as llm:
-        verdicts = await judge_all(
-            llm,
-            items,
-            out,
-            instructions_file=JUDGE_INSTRUCTIONS,
-            criteria=JUDGE_CRITERIA,
-            batch_size=JUDGE_BATCH_ROWS,
-            max_chars=JUDGE_MAX_CHARS,
-            solo_over_words=JUDGE_SOLO_OVER_WORDS,
-            fault_kinds=FAULT_KINDS,
-        )
-    return {id_: Judged(verdict.failed, verdict.faults) for id_, verdict in verdicts.items()}
+        return await judge_outputs(llm, items, out)
 
 
 # Rate name → (field or judge criterion, whether a True value is the bad outcome).
@@ -258,7 +294,7 @@ RATES: dict[str, tuple[str, bool]] = {
 }
 
 
-def _value(name: str, checks: RowChecks, judged: Judged | None) -> bool | None:
+def _value(name: str, checks: RowChecks, judged: Verdict | None) -> bool | None:
     field, _ = RATES[name]
     if field.startswith("judge:"):
         if judged is None:
@@ -269,7 +305,7 @@ def _value(name: str, checks: RowChecks, judged: Judged | None) -> bool | None:
     return getattr(checks, field)
 
 
-def _fault_counts(entries: Sequence[tuple[RowChecks, Judged | None]]) -> dict | None:
+def _fault_counts(entries: Sequence[tuple[RowChecks, Verdict | None]]) -> dict | None:
     """Faults per judged row and per 1,000 reference words by kind, and the share of rows with one.
     A row the judge could not read counts in none."""
     judged = [(checks, verdict) for checks, verdict in entries if verdict is not None and "judge_error" not in verdict.failed]
@@ -289,7 +325,7 @@ def _fault_counts(entries: Sequence[tuple[RowChecks, Judged | None]]) -> dict | 
     return counts
 
 
-def _summarize(entries: Sequence[tuple[RowChecks, Judged | None]]) -> dict:
+def _summarize(entries: Sequence[tuple[RowChecks, Verdict | None]]) -> dict:
     summary: dict = {"rows": len(entries)}
     if not entries:
         return summary
@@ -322,10 +358,10 @@ def _summarize(entries: Sequence[tuple[RowChecks, Judged | None]]) -> dict:
 
 
 def _test_ids_109() -> set[str]:
-    return set(TEST_IDS_109.read_text(encoding="utf-8").split()) if TEST_IDS_109.exists() else set()
+    return set(TEST_IDS_109.read_text(encoding="utf-8").split())
 
 
-def score(rows: Sequence[Example], outputs: dict[str, dict], judged: dict[str, Judged] | None = None) -> dict:
+def score(rows: Sequence[Example], outputs: dict[str, dict], judged: dict[str, Verdict] | None = None) -> dict:
     """Overall rates, and the same rates per category, tag, input style, source, length bucket and
     noise pattern, and for test rows, the `TEST_IDS_109` rows apart from rows added since."""
     old_test = _test_ids_109()
@@ -353,46 +389,42 @@ def score(rows: Sequence[Example], outputs: dict[str, dict], judged: dict[str, J
     }
 
 
-def worst_rows(
-    rows: Sequence[Example], outputs: dict[str, dict], name: str, limit: int = 20
-) -> list[dict]:
-    """Rows failing one deterministic check, for reading by hand."""
-    field, bad = RATES[name]
-    picked = []
-    for row in rows:
-        value = getattr(check(row, outputs[row.id]["output"], hit_limit=outputs[row.id]["hit_limit"]), field)
-        if value is not None and value == bad:
-            picked.append({"id": row.id, "input": row.input, "reference": row.output, "output": outputs[row.id]["output"]})
-    return picked[:limit]
-
-
 def evaluate(
     produce: Callable[[Sequence[Example]], list[dict]],
     out_dir: Path,
     split: str,
     limit: int | None = None,
     with_judge: bool = False,
+    *,
+    generation: dict,
 ) -> dict:
-    """Generates (or reuses) outputs for a split, scores them, and writes `<split>.scores.json`."""
+    """Scores matching generation requests; unverified server revisions are never reused."""
     rows = load_rows(split, limit)
     stem = split if limit is None else f"{split}{limit}"
     outputs_file = out_dir / f"{stem}.outputs.jsonl"
     outputs = read_outputs(outputs_file) if outputs_file.exists() else {}
-    # Only rows without an output are generated: a benchmark that dropped rows reuses the rest.
-    missing = [row for row in rows if row.id not in outputs]
+    keys = {row.id: request_key({"generation": generation, "transcript": row.input,
+                                "messages": prompt.messages(row.input), "max_tokens": prompt.max_tokens(row.input),
+                                **({"reference": row.output} if generation["source"] == "reference" else {}),
+                                **({"draft_text": draft.preclean(row.input)} if generation["source"] == "server" else {})})
+            for row in rows}
+    reusable = not (generation["source"] == "server" and generation["revision"] is None)
+    missing = [row for row in rows if not reusable or outputs.get(row.id, {}).get("request_key") != keys[row.id]]
     if missing:
         started = time.monotonic()
         generated = produce(missing)
+        for output in generated:
+            output["request_key"] = keys[output["id"]]
         _progress(f"generated {len(generated)} outputs in {time.monotonic() - started:.0f} s")
         outputs |= {row["id"]: row for row in generated}
-        write_outputs(outputs_file, list(outputs.values()))
+        write_outputs(outputs_file, generated)
     outputs = {row.id: outputs[row.id] for row in rows}
     tag = reference_tag(rows)
     scored = f"{stem}.{tag}" if tag else stem
     if with_judge:
         scored = f"{scored}.{JUDGE_VERSION}"
     judged = (
-        asyncio.run(judge(rows, outputs, out_dir / f"{scored}.judge.jsonl", R112_TARGET if tag else None))
+        asyncio.run(judge(rows, outputs, out_dir / f"{scored}.judge.jsonl", bool(tag)))
         if with_judge else None
     )
     scores = score(rows, outputs, judged)
@@ -400,5 +432,6 @@ def evaluate(
     if with_judge:
         scores["judge"] = JUDGE_VERSION
     scores["references"] = tag or "before todo 112"
+    out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{scored}.scores.json").write_text(json.dumps(scores, indent=2) + "\n", encoding="utf-8")
     return scores

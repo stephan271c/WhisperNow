@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .llm import LlmClient, LlmError, parse_json_reply
+from .concurrency import task_group
+from .llm import LlmClient, parse_json_reply, request_key
 from .paths import PROMPTS
 from .schema import Example, read_jsonl
 
@@ -28,12 +28,15 @@ class Verdict:
     judge_model: str
     # Each fault the judge listed, as {"kind", "fact"}, when it judges by fault kinds.
     faults: list[dict] = field(default_factory=list)
+    request_key: str = ""
 
     def record(self) -> dict:
         """The verdict as written to a verdicts file; a judge without fault kinds writes no `faults`."""
         record = asdict(self)
         if not self.faults:
             del record["faults"]
+        if not self.request_key:
+            del record["request_key"]
         return record
 
 
@@ -82,10 +85,9 @@ async def judge_batch(
     """
     derived = set(fault_kinds.values()) - {None} if fault_kinds else set()
     model = llm.settings.judge_model
+    reply = await llm.complete(_messages(instructions, pairs), role="judge", attempt=attempt, reasoning=reasoning)
     try:
-        reply = parse_json_reply(
-            await llm.complete(_messages(instructions, pairs), role="judge", attempt=attempt, reasoning=reasoning)
-        )
+        reply = parse_json_reply(reply)
         results = {int(result["i"]): result for result in reply["results"]}
         if set(results) != set(range(len(pairs))):
             raise ValueError("reply does not cover every pair")
@@ -100,30 +102,33 @@ async def judge_batch(
             note = "; ".join(filter(None, [str(result.get("note", "")), *(f"{f['kind']}: {f['fact']}" for f in faults)]))
             verdicts.append(Verdict(id_, not failed, failed, note, model, faults))
         return verdicts
-    except (ValueError, KeyError, TypeError, LlmError) as error:
-        if isinstance(error, LlmError) and not error.retryable:
-            raise
+    except (ValueError, KeyError, TypeError) as error:
         if len(pairs) == 1:
             if attempt < SINGLE_RETRIES:
                 return await judge_batch(llm, instructions, criteria, pairs, reasoning, fault_kinds, attempt + 1)
             return [Verdict(pairs[0][0], False, ["judge_error"], str(error)[:200], model)]
         middle = len(pairs) // 2
-        first, second = await asyncio.gather(
-            judge_batch(llm, instructions, criteria, pairs[:middle], reasoning, fault_kinds),
-            judge_batch(llm, instructions, criteria, pairs[middle:], reasoning, fault_kinds),
-        )
-        return first + second
+        async with task_group() as group:
+            tasks = [group.create_task(judge_batch(llm, instructions, criteria, half, reasoning, fault_kinds))
+                     for half in (pairs[:middle], pairs[middle:])]
+        return tasks[0].result() + tasks[1].result()
 
 
-def size_batches(items: Sequence[Item], max_items: int, max_chars: int | None = None) -> list[list[Item]]:
+def size_batches(
+    items: Sequence[Item], max_items: int, max_chars: int | None = None, solo_over_words: int | None = None,
+) -> list[list[Item]]:
     """Consecutive batches of at most `max_items` items and, when set, `max_chars` characters of fields.
 
-    A long transcript and its cleanup fill a request on their own, so long rows go in small batches.
+    Transcripts over `solo_over_words`, when set, get a request each.
     """
+    solo: list[Item] = []
     batches: list[list[Item]] = []
     current: list[Item] = []
     size = 0
     for item in items:
+        if solo_over_words is not None and len(str(item[1].get("transcript", "")).split()) > solo_over_words:
+            solo.append(item)
+            continue
         length = sum(len(str(value)) for value in item[1].values())
         if current and (len(current) >= max_items or (max_chars is not None and size + length > max_chars)):
             batches.append(current)
@@ -132,13 +137,24 @@ def size_batches(items: Sequence[Item], max_items: int, max_chars: int | None = 
         size += length
     if current:
         batches.append(current)
-    return batches
+    return batches + [[item] for item in solo]
 
 
 def load_verdicts(path: Path) -> dict[str, Verdict]:
     if not path.exists():
         return {}
     return {row["id"]: Verdict(**row) for row in read_jsonl(path)}
+
+
+def judge_contract(
+    llm: LlmClient, instructions: str, criteria: Sequence[str],
+    fault_kinds: Mapping[str, str | None] | None = None, reasoning: str | None = None,
+) -> dict:
+    settings = llm.settings.request("judge")
+    if reasoning is not None:
+        settings["reasoning"] = reasoning
+    return {"settings": settings, "instructions": instructions, "criteria": list(criteria),
+            "fault_kinds": dict(fault_kinds) if fault_kinds is not None else None}
 
 
 async def judge_all(
@@ -154,26 +170,27 @@ async def judge_all(
     fault_kinds: Mapping[str, str | None] | None = None,
     progress: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
 ) -> dict[str, Verdict]:
-    """Judges every example not yet in `out`, appending verdicts as batches finish so a rerun resumes.
+    """Judges changed or unfinished requests, appending verdicts as batches finish.
 
     Batches hold `batch_size` items, or fewer when `max_chars` caps their length; an item whose
     transcript is over `solo_over_words` words gets a request of its own. `fault_kinds` is as in
     `judge_batch`.
     """
     instructions = instructions_file.read_text(encoding="utf-8")
-    verdicts = load_verdicts(out)
+    contract = judge_contract(llm, instructions, criteria, fault_kinds)
+    keys = {id_: request_key({"contract": contract, "fields": fields}) for id_, fields in items}
+    saved = load_verdicts(out)
+    verdicts = {id_: verdict for id_, verdict in saved.items()
+                if id_ in keys and verdict.request_key == keys[id_] and "judge_error" not in verdict.failed}
     pending = [item for item in items if item[0] not in verdicts]
-    def solo(item: Item) -> bool:
-        return solo_over_words is not None and len(str(item[1].get("transcript", "")).split()) > solo_over_words
-
-    batches = size_batches([item for item in pending if not solo(item)], batch_size, max_chars)
-    batches += [[item] for item in pending if solo(item)]
+    batches = size_batches(pending, batch_size, max_chars, solo_over_words)
     out.parent.mkdir(parents=True, exist_ok=True)
     done = 0
 
     async def run(batch: Sequence[Item]) -> None:
         nonlocal done
         for verdict in await judge_batch(llm, instructions, criteria, batch, fault_kinds=fault_kinds):
+            verdict.request_key = keys[verdict.id]
             verdicts[verdict.id] = verdict
             with out.open("a", encoding="utf-8") as sink:
                 sink.write(json.dumps(verdict.record(), ensure_ascii=False) + "\n")
@@ -181,5 +198,7 @@ async def judge_all(
         if done % 10 == 0 or done == len(batches):
             progress(f"judged {done}/{len(batches)} batches ({llm.calls} calls, {llm.cache_hits} cached)")
 
-    await asyncio.gather(*(run(batch) for batch in batches))
+    async with task_group() as group:
+        for batch in batches:
+            group.create_task(run(batch))
     return verdicts

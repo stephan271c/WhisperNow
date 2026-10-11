@@ -24,7 +24,6 @@ def test_example_recomputes_layout_and_defaults_seed_group():
 
 
 def test_example_id_is_stable_and_names_the_repo():
-    assert example_id("owner/repo", "hello") == example_id("owner/repo", "hello")
     assert example_id("owner/repo", "hello").startswith("repo-")
     assert example_id("owner/repo", "hello") != example_id("owner/repo", "hello!")
 

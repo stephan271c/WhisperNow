@@ -31,7 +31,7 @@ def test_teacher_messages_have_the_app_shape():
     assert user["content"].endswith("return exactly EMPTY.")
 
 
-def test_clean_teacher_output_mirrors_sanitize_output():
+def test_clean_teacher_output_removes_fences_and_outer_quotes():
     assert teacher.clean_teacher_output("```\nHello.\n```") == "Hello."
     assert teacher.clean_teacher_output('"Hello."') == "Hello."
     assert teacher.clean_teacher_output('"A" and "B"') == '"A" and "B"'

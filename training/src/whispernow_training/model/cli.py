@@ -13,7 +13,6 @@ from pathlib import Path
 from ..datagen.paths import TRAINING_ROOT
 
 RUNS = TRAINING_ROOT / "runs"
-CONFIGS = TRAINING_ROOT / "configs"
 SWEEP_VAL_ROWS = 500
 
 
@@ -64,27 +63,33 @@ def cmd_eval(args: argparse.Namespace) -> None:
         # Its outputs are the references, so new references get a directory of their own.
         tag = evaluate.reference_tag(evaluate.load_rows(args.split, args.limit))
         out_dir = RUNS / "reference" / (f"eval-{tag}" if tag else "eval")
+        generation = {"source": "reference"}
 
         def produce(rows):
             return [{"id": row.id, "output": row.output, "hit_limit": False, "tokens": None} for row in rows]
     elif args.teacher:
         # `--label` keeps a new teacher prompt's outputs apart, as in `eval-112`.
         out_dir = RUNS / "teacher" / ("eval" if args.label == "server" else f"eval-{args.label}")
+        generation = evaluate.teacher_generation()
 
         def produce(rows):
             return asyncio.run(evaluate.generate_teacher(rows))
     elif args.server:
         out_dir = RUNS / args.run / f"eval-{args.label}"
+        repeat_last_n = prompt.REPEAT_LAST_N if args.repeat_last_n is None else args.repeat_last_n
+        generation = evaluate.server_generation(args.server, args.repeat_penalty, repeat_last_n)
 
         def produce(rows):
             return asyncio.run(evaluate.generate_server(args.server, rows, args.concurrency, args.repeat_penalty, args.repeat_last_n))
     elif args.checkpoint:
         out_dir = RUNS / args.run / f"eval-{args.checkpoint}"
+        generation = evaluate.hf_generation(RUNS / args.run / args.checkpoint, args.repeat_penalty)
 
         def produce(rows):
             return evaluate.generate_hf(RUNS / args.run / args.checkpoint, rows, repeat_penalty=args.repeat_penalty)
     else:
         out_dir = RUNS / args.run / "eval"
+        generation = evaluate.hf_generation(RUNS / args.run / "model", args.repeat_penalty)
 
         def produce(rows):
             return evaluate.generate_hf(RUNS / args.run / "model", rows, repeat_penalty=args.repeat_penalty)
@@ -95,7 +100,7 @@ def cmd_eval(args: argparse.Namespace) -> None:
         out_dir = out_dir.with_name(f"{out_dir.name}-last{args.repeat_last_n}")
     else:
         args.repeat_last_n = prompt.REPEAT_LAST_N
-    scores = evaluate.evaluate(produce, out_dir, args.split, args.limit, with_judge=args.judge)
+    scores = evaluate.evaluate(produce, out_dir, args.split, args.limit, with_judge=args.judge, generation=generation)
     overall = scores["overall"]
     def rate(value):
         if not isinstance(value, dict):
@@ -182,14 +187,6 @@ def cmd_sweep_table(args: argparse.Namespace) -> None:
 
     _, runs = _sweep_runs(args.sweep)
     print(report.sweep_table([run["name"] for run in runs], f"val{SWEEP_VAL_ROWS}"))
-
-
-def cmd_judge_check(args: argparse.Namespace) -> None:
-    from . import judge_check
-
-    result = judge_check.report() if args.step == "report" else judge_check.run(args.step)
-    print(json.dumps(result, indent=1))
-    print(f"read every disagreement in {judge_check.OUT / 'disagreements.md'}")
 
 
 def cmd_compare(args: argparse.Namespace) -> None:
@@ -294,14 +291,6 @@ def main() -> None:
     pairs_parser.add_argument("--count", type=int, default=8000)
     pairs_parser.add_argument("--long-share", type=float, default=0.7, help="share of pairs from rows of 150+ words")
     pairs_parser.set_defaults(handler=cmd_code_pairs)
-
-    check = commands.add_parser(
-        "judge-check",
-        help="todo 112: the new eval judge on the 33 hand-reviewed rows (reviewed) and on stratified rows the old "
-        "judge scored (sample), against the old references; needs LLM_JUDGE_* on codex/gpt-6.1-sol/high",
-    )
-    check.add_argument("step", choices=["reviewed", "sample", "all", "report"])
-    check.set_defaults(handler=cmd_judge_check)
 
     compare = commands.add_parser("compare", help="print scores of several evaluations side by side")
     compare.add_argument("candidates", nargs="+", metavar="LABEL=RUN/EVAL_DIR")

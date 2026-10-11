@@ -8,7 +8,7 @@ salt `epoch<n>`, from the same code and the same clean text, so the target is un
   with a new seed. `EMPTY` rows stay as built.
 - **Composed rows and the short sources' train rows** (`build.spoken_variant`): the recognizer
   style and the densified share are drawn again from the row's input before the variant step,
-  which `build.gather` rebuilds. The build's own variant of each row is checked to come out of it.
+  which `build.gather_with_drops` rebuilds. The build's own variant of each row is checked to come out of it.
 
 Every other row (aawaaz, the restyled rows, generated rows the teacher labelled) is the same in
 every epoch: its noise came from an LLM, which also wrote the target. Val, test and the
@@ -59,7 +59,6 @@ def respoken(row: Example, before: Example, epoch: int) -> Example:
     if epoch == 1:
         return row
     fresh = build.spoken_variant(before, _salt(epoch))
-    # Tags added after the variant step (e.g. `audit_relabeled`) stay.
     later = [tag for tag in row.tags if tag not in built.tags]
     return replace(row, input=fresh.input, tags=[*fresh.tags, *later])
 
@@ -70,10 +69,10 @@ def _respoken_kind(row: Example) -> bool:
 
 
 def _before_variants(train: Sequence[Example]) -> dict[str, Example]:
-    """The train rows `spoken_variant` applies to, as they were before it: rebuilt with `build.gather`."""
+    """The train rows `spoken_variant` applies to, rebuilt before the variant step."""
     wanted = {row.id for row in train if _respoken_kind(row)}
     gathered: dict[str, Example] = {}
-    for example in build.gather():
+    for example in build.gather_with_drops()[0]:
         if example.id in wanted and example.id not in gathered:
             gathered[example.id] = replace(example, split="train")
     missing = wanted - set(gathered)

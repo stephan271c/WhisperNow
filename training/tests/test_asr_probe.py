@@ -1,8 +1,15 @@
 """The Python port of the app's segmenter and join, checked against the Rust tests' cases."""
 
+import json
+import random
+import wave
+from types import SimpleNamespace
+
 import numpy as np
+import pytest
 
 from whispernow_training.datagen import asr_probe
+from whispernow_training.datagen.schema import Example
 
 SECOND = asr_probe.SAMPLE_RATE
 
@@ -60,3 +67,42 @@ def test_join_lowercases_a_continuing_segment_but_keeps_i_and_acronyms():
         == "and then I left I'm back NASA called a plan"
     )
     assert asr_probe.join_segment_texts(["  one.  ", "", " ", "Two."]) == "one. Two."
+
+
+@pytest.mark.parametrize("keep_audio", [True, False])
+def test_run_preserves_shard_resume_metadata_audio_and_progress(tmp_path, monkeypatch, capsys, keep_audio):
+    out = tmp_path / "probe"
+    out.mkdir()
+    (out / "parakeet.0.jsonl").write_text(json.dumps({"id": "row-1"}) + "\n")
+    audio = tmp_path / "audio"
+    rows = [Example(f"row-{i}", "first two three", "Fixed.", "dataset", "prose", "CC0", ["tag"]) for i in range(4)]
+    monkeypatch.setattr(asr_probe, "OUT_DIR", out)
+    monkeypatch.setattr(asr_probe, "AUDIO_DIR", audio)
+    monkeypatch.setattr(asr_probe, "sample_rows", lambda n, seed: rows)
+    spoken_ids = []
+
+    def speak(text, rng):
+        spoken_ids.append(text)
+        return asr_probe.Spoken(tone(1.0), rng.choice(asr_probe.ENGLISH_VOICES), 1.05, ["first two", "three"], [0.25])
+
+    monkeypatch.setattr(asr_probe, "Speaker", lambda: SimpleNamespace(speak=speak))
+    monkeypatch.setattr(asr_probe, "Recognizer", lambda: SimpleNamespace(transcribe=lambda samples: ("First two three.", ["First two three."])))
+
+    assert asr_probe.run(4, 7, keep_audio=keep_audio, shard=1, shards=2) == 1
+    record = json.loads((out / "parakeet.1.jsonl").read_text())
+    assert record == {
+        "id": "row-3", "spoken": "first two three", "model": "parakeet", "heard": "First two three.",
+        "segments": ["First two three."], "source": "dataset", "category": "prose", "layout": "plain",
+        "tags": ["tag"], "chunk_ends": [2, 3], "pauses": [0.25],
+        "voice": random.Random("7-row-3").choice(asr_probe.ENGLISH_VOICES), "speed": 1.05, "seconds": 1.0,
+    }
+    assert capsys.readouterr().out == "shard 1: 1/1 row-3 1.0s\n"
+    assert (audio / "row-3.wav").exists() == keep_audio
+    if keep_audio:
+        with wave.open(str(audio / "row-3.wav")) as saved:
+            assert saved.getframerate() == SECOND
+            assert saved.getnframes() == SECOND
+
+    assert asr_probe.run(4, 7, keep_audio=keep_audio, shard=1, shards=2) == 0
+    assert spoken_ids == ["first two three"]
+    assert len((out / "parakeet.1.jsonl").read_text().splitlines()) == 1

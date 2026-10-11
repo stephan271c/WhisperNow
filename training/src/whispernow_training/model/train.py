@@ -40,7 +40,7 @@ def load_split(split: str, limit: int | None = None) -> Dataset:
 
 
 def load_pairs(path: Path, split: str) -> Dataset:
-    """Preference pairs (`input`, `chosen`, `rejected`, `split`) in TRL's conversational shape."""
+    """Preference pairs in TRL's conversational shape, dropping metadata such as `seed_group`."""
     rows = load_dataset("json", data_files=str(path), split="train").filter(lambda row: row["split"] == split)
     return rows.map(
         lambda row: {

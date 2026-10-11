@@ -39,6 +39,7 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
+from ..text_rules import FILLER_TOKEN
 from .schema import EMPTY, Example, example_id
 
 SOURCE = "injected"
@@ -440,6 +441,19 @@ def _pause(d: _Draft) -> bool:
     return True
 
 
+def _edit(kind: str, draft: _Draft, clean: str, corrections: list[tuple[str, str, str]]) -> bool:
+    return {
+        "filler": lambda: _filler(draft, cluster=False),
+        "cluster": lambda: _filler(draft, cluster=True),
+        "determiner": lambda: _determiner(draft),
+        "repeat": lambda: _repeat(draft),
+        "restart": lambda: _restart(draft),
+        "fragment": lambda: _fragment(draft),
+        "correction": lambda: _correction(draft, clean, corrections),
+        "pause": lambda: _pause(draft),
+    }[kind]()
+
+
 def inject(
     clean: str, seed: str | int, style: str, *, kinds: Sequence[str] = KINDS, level: str | None = None
 ) -> Injection:
@@ -467,16 +481,7 @@ def inject(
         if not choices:
             break
         kind = rng.choices(choices, [_KIND_WEIGHTS[kind] for kind in choices])[0]
-        applied = {
-            "filler": lambda: _filler(draft, cluster=False),
-            "cluster": lambda: _filler(draft, cluster=True),
-            "determiner": lambda: _determiner(draft),
-            "repeat": lambda: _repeat(draft),
-            "restart": lambda: _restart(draft),
-            "fragment": lambda: _fragment(draft),
-            "correction": lambda: _correction(draft, clean, corrections),
-            "pause": lambda: _pause(draft),
-        }[kind]()
+        applied = _edit(kind, draft, clean, corrections)
         if applied:
             done.append(kind)
     text = draft.render()
@@ -487,11 +492,10 @@ _DENSIFY_KINDS = {"filler": 45, "cluster": 15, "determiner": 15, "repeat": 12, "
 # Fillers per 100 words a densified input is brought up to, drawn per row. Real Parakeet dictation
 # measured 4.5; the generator writes about 0.8.
 DENSIFY_RATE = (3.0, 6.0)
-_FILLER_WORD = re.compile(r"^(?:um+|uh+|uhm|erm?|hmm+)[,.?!]?$", re.IGNORECASE)
 
 
 def filler_count(text: str) -> int:
-    return sum(1 for token in text.split() if _FILLER_WORD.match(token))
+    return sum(1 for token in text.split() if FILLER_TOKEN.match(token))
 
 
 def densify(spoken: str, seed: str | int, style: str, rate: float | None = None, pauses: bool = True) -> Injection:
@@ -514,16 +518,10 @@ def densify(spoken: str, seed: str | int, style: str, rate: float | None = None,
         if added >= needed:
             break
         kind = rng.choices(kinds, [_DENSIFY_KINDS[kind] for kind in kinds])[0]
-        applied = {
-            "filler": lambda: _filler(draft, cluster=False),
-            "cluster": lambda: _filler(draft, cluster=True),
-            "determiner": lambda: _determiner(draft),
-            "repeat": lambda: _repeat(draft),
-            "pause": lambda: _pause(draft),
-        }[kind]()
+        applied = _edit(kind, draft, spoken, [])
         if applied:
             done.append(kind)
-            added = sum(1 for words in draft.before.values() for word in words if _FILLER_WORD.match(word))
+            added = sum(1 for words in draft.before.values() for word in words if FILLER_TOKEN.match(word))
     text = draft.render() if done else spoken
     return Injection(text, "densified", "bare", tuple(done))
 
@@ -579,7 +577,7 @@ def injected_rows(
     return rows
 
 
-_EMPTY_FILLERS = ("um", "uh", "er", "erm", "hmm", "umm", "uhh", "mm")
+_EMPTY_GENERATION_WORDS = ("um", "uh", "er", "erm", "hmm", "umm", "uhh", "mm")
 _EMPTY_JOINS = (" ", ", ", "... ", ". ")
 _EMPTY_ENDS = ("", ".", "...", "?")
 
@@ -592,7 +590,7 @@ def empty_rows(count: int, seed: int) -> list[Example]:
     for _ in range(count * 20):
         if len(rows) == count:
             break
-        fillers = [rng.choice(_EMPTY_FILLERS) for _ in range(rng.randint(1, 4))]
+        fillers = [rng.choice(_EMPTY_GENERATION_WORDS) for _ in range(rng.randint(1, 4))]
         text = rng.choice(_EMPTY_JOINS).join(fillers) + rng.choice(_EMPTY_ENDS)
         if rng.random() < 0.5:
             text = text[0].upper() + text[1:]

@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .metrics import _PROTECTED, _TRAILING_PUNCTUATION
+from ..text_rules import PROTECTED, TRAILING_PUNCTUATION
 
 _WEEKDAYS = r"Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday"
 _MONTHS = r"January|February|March|April|June|July|August|September|October|November|December"
@@ -51,10 +51,6 @@ _SENTENCE = re.compile(r"[^.!?]+(?:[.!?]+[\"')\]]*|$)")
 class Span:
     start: int
     end: int
-    kind: str  # value, name, hedge, negation, reason, unit_start
-
-    def text(self, source: str) -> str:
-        return source[self.start : self.end]
 
 
 @dataclass(frozen=True)
@@ -102,29 +98,29 @@ def _sentence_starts(text: str) -> set[int]:
 def fact_spans(text: str) -> list[Span]:
     """Fact-bearing spans of a reference, sorted and possibly overlapping."""
     spans: list[Span] = []
-    for match in _PROTECTED.finditer(text):
-        end = match.start() + len(match.group(0).rstrip(_TRAILING_PUNCTUATION))
+    for match in PROTECTED.finditer(text):
+        end = match.start() + len(match.group(0).rstrip(TRAILING_PUNCTUATION))
         if end > match.start():
-            spans.append(Span(match.start(), end, "value"))
+            spans.append(Span(match.start(), end))
     for pattern in (_NUMBER, _WORD_VALUE):
-        spans += [Span(m.start(), m.start() + len(m.group(0).rstrip(".,:")), "value") for m in pattern.finditer(text)]
+        spans += [Span(m.start(), m.start() + len(m.group(0).rstrip(".,:"))) for m in pattern.finditer(text)]
     starts = _sentence_starts(text)
     for match in _CAPITALIZED.finditer(text):
         if match.start() not in starts and match.group(0) not in ("I", "I'm", "I'll", "I've", "I'd", "OK"):
-            spans.append(Span(match.start(), match.end(), "name"))
-    spans += [Span(m.start(), m.end(), "hedge") for m in _HEDGE.finditer(text)]
-    spans += [Span(m.start(), m.end(), "negation") for m in _NEGATION.finditer(text)]
-    spans += [Span(m.start(), m.start() + len(m.group(0).rstrip()), "reason") for m in _REASON.finditer(text)]
+            spans.append(Span(match.start(), match.end()))
+    spans += [Span(m.start(), m.end()) for m in _HEDGE.finditer(text)]
+    spans += [Span(m.start(), m.end()) for m in _NEGATION.finditer(text)]
+    spans += [Span(m.start(), m.start() + len(m.group(0).rstrip())) for m in _REASON.finditer(text)]
     for start in starts:
         match = re.compile(r"\S+").match(text, start)
         if match:
-            spans.append(Span(match.start(), match.end(), "unit_start"))
-    return sorted(set(spans), key=lambda s: (s.start, s.end, s.kind))
+            spans.append(Span(match.start(), match.end()))
+    return sorted(set(spans), key=lambda s: (s.start, s.end))
 
 
-def char_mask(text: str, spans: list[Span] | None = None) -> list[bool]:
+def char_mask(text: str) -> list[bool]:
     mask = [False] * len(text)
-    for span in fact_spans(text) if spans is None else spans:
+    for span in fact_spans(text):
         for index in range(span.start, span.end):
             mask[index] = True
     return mask

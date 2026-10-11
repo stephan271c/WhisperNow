@@ -10,36 +10,14 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-from ..datagen.schema import EMPTY, LIST_ITEM, Example, layout_of
-
-# Fillers counted as leftovers when the output has more of them than the reference.
-FILLERS = ("um", "umm", "uh", "uhh", "uhm", "erm", "er", "hmm", "mhm", "you know", "i mean", "basically", "like")
-_FILLER_PATTERNS = {filler: re.compile(rf"\b{re.escape(filler)}\b", re.IGNORECASE) for filler in FILLERS}
-
-# Code, paths, URLs, emails, flags, identifiers and numbers: things that must come through exactly.
-_PROTECTED = re.compile(
-    r"https?://\S+|www\.\S+"
-    r"|[\w.+-]+@[\w-]+\.[\w.-]+"
-    r"|(?<![\w/])(?:~|\.{1,2})?/[\w.\-/~]+"
-    r"|\b[\w.-]+(?:/[\w.-]+)+/?"
-    r"|(?<![\w-])--[a-zA-Z][\w-]*|(?<![\w-])-[a-zA-Z]\b"
-    r"|\b[A-Za-z_]\w*(?:[._:]\w+)+(?:\(\))?"
-    r"|\b[a-z]+[A-Z]\w*\b"
-    r"|\b[A-Za-z]*\d[\w.,:/%$-]*"
+from ..datagen.schema import EMPTY, Example, layout_of
+from ..text_rules import (
+    CORRECTION, DISCOURSE_FILLER_PATTERNS, EVAL_ASSISTANT_OPENING, FILLER, SENTENCE_CORRECTION,
+    has_markdown, malformed_list, protected_tokens,
 )
-_TRAILING_PUNCTUATION = ".,;:!?)]}'\""
-_BAD_LIST_MARKER = re.compile(r"^\s*(?:[*•+·]\s|\d+[)\]]\s|[a-z][.)]\s)")
-_MARKDOWN = re.compile(r"^\s*#{1,6}\s|\*\*|__\w|```|`[^`\n]+`", re.MULTILINE)
-_ASSISTANT_OPENERS = re.compile(
-    r"^(?:sure|certainly|of course|absolutely|here(?:'s| is| are)|i can(?:'t| not|not)|i'm sorry|i am sorry|as an ai)\b",
-    re.IGNORECASE,
-)
+
 _LOOP_NGRAM = 5
 _LOOP_REPEATS = 3
-
-
-def protected_tokens(text: str) -> list[str]:
-    return [match.group(0).rstrip(_TRAILING_PUNCTUATION) for match in _PROTECTED.finditer(text)]
 
 
 # The cleanup contract's style: checked in references by the gates, reported for outputs.
@@ -59,15 +37,11 @@ _NOT_COUNTED = {
 }
 # Idioms whose number stays a word.
 NUMBER_IDIOMS = ("two cents", "two minds", "two birds", "two peas", "two sides", "two feet", "two hands")
-_HEDGES = ("maybe", "probably", "i think", "i guess", "i believe")
+HEDGES = ("maybe", "probably", "i think", "i guess", "i believe")
 _REASONS = ("because",)
 # The hedges and reasons a cleanup keeps, counted against the transcript.
-KEPT_WORDS = (*_HEDGES, *_REASONS)
+KEPT_WORDS = (*HEDGES, *_REASONS)
 _KEPT_PATTERNS = {word: re.compile(rf"\b{word.replace(' ', r'\s+')}\b", re.IGNORECASE) for word in KEPT_WORDS}
-# A correction cue opening a sentence: "Wait," or "Oh wait." but not "Wait for me".
-_CUE = re.compile(
-    r"(?:(?:oh|no),?\s+)?wait(?=\s*(?:[,.!?…—–-]|$))|okay,?\s+so\b|scratch that\b|oh wait\b", re.IGNORECASE
-)
 _SENTENCE_START = re.compile(r"(?:^|(?<=[.!?…:])\s+|\n)(?:\s*(?:- |\d+\. ))?\s*", re.MULTILINE)
 
 
@@ -102,7 +76,7 @@ def correction_cues(text: str, transcript: str) -> list[str]:
     spoken = " ".join(transcript.casefold().replace(",", " ").split())
     cues = []
     for start in _SENTENCE_START.finditer(text):
-        match = _CUE.match(text, start.end())
+        match = SENTENCE_CORRECTION.match(text, start.end())
         if match:
             cue = " ".join(match.group(0).casefold().replace(",", " ").split())
             if cue in spoken:
@@ -111,7 +85,7 @@ def correction_cues(text: str, transcript: str) -> list[str]:
 
 
 _CLAUSE_WORDS = 3
-_SKIPPED = {"um", "umm", "uh", "uhh", "uhm", "er", "erm", "hmm", "like", "you", "know", "i", "mean", "so", "the", "a", "an"}
+_SKIPPED = {"like", "you", "know", "i", "mean", "so", "the", "a", "an"}
 _DIGITS = {word: str(value) for value, word in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
     "seventeen eighteen nineteen twenty".split()
@@ -123,7 +97,7 @@ def _clause_words(text: str) -> list[str]:
     # A stutter ("I don't I don't remember") says a word once.
     kept: list[str] = []
     for word in words:
-        if word not in _SKIPPED and word not in kept[-2:]:
+        if not FILLER.fullmatch(word) and word not in _SKIPPED and word not in kept[-2:]:
             kept.append(word)
     return kept
 
@@ -135,13 +109,12 @@ _REPEAT_WORDS = 8
 _CORRECTION_WORDS = 10
 _CLOSING = re.compile(r"^[\W_]*(?:that'?s|that is)\s+(?:\w+\s+)?(?:it|everything|all)\b", re.IGNORECASE)
 _CLOSED = re.compile(r"\b(?:that'?s|that is)\s+(?:\w+\s+)?(?:it|everything|all)[\W_]*$", re.IGNORECASE)
-_CORRECTION = re.compile(r"\b(?:no|wait|actually|scratch that|i mean|or rather|make (?:it|that))\b", re.IGNORECASE)
 
 
 def _excused(pattern: re.Pattern[str], transcript: str, match: re.Match[str]) -> bool:
     after = transcript[match.end() :]
     following = " ".join(after.split()[:_REPEAT_WORDS])
-    if pattern.search(following) or _CORRECTION.search(" ".join(after.split()[:_CORRECTION_WORDS])):
+    if pattern.search(following) or CORRECTION.search(" ".join(after.split()[:_CORRECTION_WORDS])):
         return True
     return bool(_CLOSING.match(after) or _CLOSED.search(transcript[max(0, match.start() - 40) : match.start()]))
 
@@ -184,27 +157,15 @@ def _words(text: str) -> list[str]:
 
 
 def _filler_counts(text: str) -> Counter:
-    return Counter({filler: len(pattern.findall(text)) for filler, pattern in _FILLER_PATTERNS.items()})
+    counts = Counter(match.group(0).casefold() for match in FILLER.finditer(text))
+    counts.update({phrase: len(pattern.findall(text)) for phrase, pattern in DISCOURSE_FILLER_PATTERNS.items()})
+    return counts
 
 
 def _max_ngram_repeats(text: str, n: int = _LOOP_NGRAM) -> int:
     words = _words(text)
     grams = Counter(tuple(words[index : index + n]) for index in range(len(words) - n + 1))
     return max(grams.values(), default=0)
-
-
-def _numbering_ok(output: str) -> bool:
-    """Each run of numbered items counts 1, 2, 3 without skips."""
-    expected = 1
-    for line in output.split("\n"):
-        match = re.match(r"^\s*(\d+)\. ", line)
-        if match:
-            if int(match.group(1)) != expected:
-                return False
-            expected += 1
-        elif line.strip() and not LIST_ITEM.match(line):
-            expected = 1
-    return True
 
 
 def chrf(hypothesis: str, reference: str, n: int = 6, beta: float = 2.0) -> float:
@@ -279,18 +240,18 @@ def check(example: Example, output: str, *, hit_limit: bool = False) -> RowCheck
         layout_match=got_layout == expected_layout,
         formatting_added=(got_layout != "plain") if expected_layout == "plain" and reference != EMPTY else None,
         formatting_missed=(got_layout == "plain") if expected_layout != "plain" else None,
-        bad_list_marker=any(_BAD_LIST_MARKER.match(line) for line in output.split("\n")) or not _numbering_ok(output),
-        markdown=bool(_MARKDOWN.search(output)),
+        bad_list_marker=malformed_list(output) is not None,
+        markdown=has_markdown(output),
         protected_kept=(len(kept) == len(wanted)) if wanted else None,
         protected_tokens_total=len(wanted),
         protected_tokens_kept=len(kept),
-        leftover_filler=any(output_fillers[f] > reference_fillers[f] for f in FILLERS),
+        leftover_filler=any(count > reference_fillers[filler] for filler, count in output_fillers.items()),
         passthrough_kept=(output == example.input.strip()) if reference == example.input.strip() else None,
         empty_correct=(output == EMPTY) if reference == EMPTY else None,
         false_empty=output == EMPTY and reference != EMPTY,
         loop=hit_limit or _max_ngram_repeats(output) >= max(_LOOP_REPEATS, input_repeats + 1),
         hit_limit=hit_limit,
-        assistant_opener=bool(_ASSISTANT_OPENERS.match(output)) and not _ASSISTANT_OPENERS.match(reference),
+        assistant_opener=bool(EVAL_ASSISTANT_OPENING.match(output)) and not EVAL_ASSISTANT_OPENING.match(reference),
         deleted_over_30pct=(output_words < 0.7 * reference_words) if reference != EMPTY and reference_words >= 10 else None,
         output_words=output_words,
         reference_words=reference_words,

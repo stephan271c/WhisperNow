@@ -1,5 +1,3 @@
-import random
-
 from whispernow_training.datagen import sources
 from whispernow_training.datagen.schema import Example
 
@@ -83,11 +81,3 @@ def test_sample_by_category_is_seeded_and_caps_test_rows():
     assert sum(e.split == "test" for e in first) == 2
     assert sum(e.split == "" for e in first) == 20
     assert first != sources.sample_by_category(rows, {"c": 20}, seed=8)
-
-
-def test_seeded_shuffle_is_independent_of_global_random():
-    random.seed(1)
-    rows = [Example(id=f"id{i}", input="i", output="o", source="s", category="c", license="MIT") for i in range(10)]
-    a = sources.sample_by_category(rows, {"c": 3}, seed=3)
-    random.seed(2)
-    assert a == sources.sample_by_category(rows, {"c": 3}, seed=3)

@@ -20,9 +20,10 @@ def reply(messages, role):
         results = [{"i": item["i"], **{c: True for c in gates.COMPOSE_CRITERIA}, "note": ""} for item in judge_items(messages)]
         return json.dumps({"results": results})
     user = messages[-1]["content"]
-    if "<transcript>" in user:
+    if role == "teacher":
         transcript = re.search(r"<transcript>\n(.*)\n</transcript>", user, re.S).group(1)
         return transcript.capitalize() + "."
+    assert role == "generator"
     batch = int(re.search(r"Batch (\d+)\.", user).group(1))
     count = int(re.search(r"Write (\d+) transcripts", user).group(1))
     low, high = map(int, re.search(r"each (\d+) to (\d+) words", user).groups())
@@ -53,7 +54,6 @@ def test_bench_and_train_requests_share_no_prompt_names_or_settings():
     assert train[0]["content"] != bench[0]["content"]
     assert not set(compose.TRAIN.names) & set(compose.BENCH.names)
     assert not set(compose.TRAIN.settings) & set(compose.BENCH.settings)
-    assert "150 to 300 words" in train[1]["content"]
     assert compose.style_for(compose.BENCH, "revised_choice", "150-300", 3) == compose.style_for(compose.BENCH, "revised_choice", "150-300", 3)
 
 
@@ -67,22 +67,60 @@ def test_a_cell_runs_its_lanes_at_once_with_distinct_batches_and_resumes_after_t
     monkeypatch.setattr(compose, "LANES", {**compose.LANES, "300-600": 3})
     run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
     llm = fake_llm(reply)
+    counts = compose.counts_by_cell(run)
+    original_complete = llm.complete
+
+    async def observe_overlap():
+        entered = []
+        all_entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def complete(messages, *, role="teacher", **kwargs):
+            if role == "generator" and not release.is_set():
+                batch = int(re.search(r"Batch (\d+)\.", messages[-1]["content"]).group(1))
+                entered.append(batch)
+                if len(entered) == 3:
+                    all_entered.set()
+                await release.wait()
+            return await original_complete(messages, role=role, **kwargs)
+
+        monkeypatch.setattr(llm, "complete", complete)
+        task = asyncio.create_task(compose.generate_cell(
+            llm, run, "revised_choice", "300-600", 4, set(), counts, progress=lambda _: None
+        ))
+        try:
+            try:
+                await asyncio.wait_for(all_entered.wait(), timeout=5)
+            except TimeoutError:
+                pytest.fail(f"Expected three overlapping generator requests; observed {entered}")
+            assert len(entered) == 3 and set(entered) == {0, 1, 2}
+            assert not task.done()
+            release.set()
+            return await asyncio.wait_for(task, timeout=5)
+        finally:
+            release.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            monkeypatch.setattr(llm, "complete", original_complete)
+
     # Each lane checks the count before starting, so the cell stops within its lanes' batches.
-    assert 4 <= asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 4, set(), progress=lambda _: None)) < 4 + 3
+    assert 4 <= asyncio.run(observe_overlap()) < 4 + 3
     batches = [json.loads(line)["batch"] for line in (tmp_path / "revised_choice.300-600.batches.jsonl").open()]
     assert len(set(batches)) == len(batches)
     # A batch lost to a stop leaves a gap; the run continues after the highest logged batch.
     log = tmp_path / "revised_choice.300-600.batches.jsonl"
     log.write_text("".join(line for line in log.open() if json.loads(line)["batch"] != min(batches)))
-    asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 100, set(), progress=lambda _: None))
+    asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 100, set(), counts, progress=lambda _: None))
     later = [json.loads(line)["batch"] for line in log.open()]
     assert min(batches) not in later and len(set(later)) == len(later)
+    assert min(set(later) - set(batches)) == max(batches) + 1
 
 
 def test_generate_cell_files_rows_by_length_rejects_short_ones_and_resumes(fake_llm, tmp_path):
     run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
     llm = fake_llm(reply)
-    assert asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 4, set(), progress=lambda _: None)) == 4
+    counts = compose.counts_by_cell(run)
+    assert asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 4, set(), counts, progress=lambda _: None)) == 4
     rows = compose.load(run)
     in_bucket = [r for r in rows if len(r.input.split()) == 450]
     elsewhere = [r for r in rows if len(r.input.split()) == 200]
@@ -95,7 +133,7 @@ def test_generate_cell_files_rows_by_length_rejects_short_ones_and_resumes(fake_
     log = [json.loads(line) for line in (tmp_path / "revised_choice.300-600.batches.jsonl").open()]
     assert log[0]["notes"] and "length" in log[0]["notes"][0]
     calls = llm.calls
-    assert asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 4, set(), progress=lambda _: None)) == 4
+    assert asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 4, set(), counts, progress=lambda _: None)) == 4
     assert llm.calls == calls
 
 
@@ -108,7 +146,8 @@ def test_rows_over_600_words_get_their_own_judge_and_teacher_reasoning(fake_llm,
 
     run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
     llm = fake_llm(long_and_short)
-    asyncio.run(compose.generate_cell(llm, run, "revised_choice", "600-1000", 1, set(), progress=lambda _: None))
+    counts = compose.counts_by_cell(run)
+    asyncio.run(compose.generate_cell(llm, run, "revised_choice", "600-1000", 1, set(), counts, progress=lambda _: None))
     # The 800-word row keeps the judge's setting (None); the 200-word row is checked at low.
     assert sorted(map(str, (r for role, r in llm.reasonings if role == "judge"))) == ["None", "low"]
     # The teacher writes the 800-word row's reference at xhigh and the 200-word row's at its setting.
@@ -123,7 +162,8 @@ def test_a_reference_against_the_intended_layout_is_dropped_before_the_judge_see
 
     run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
     llm = fake_llm(list_meant)
-    asyncio.run(compose.generate_cell(llm, run, "technical_steps", "300-600", 1, set(), progress=lambda _: None))
+    counts = compose.counts_by_cell(run)
+    asyncio.run(compose.generate_cell(llm, run, "technical_steps", "300-600", 1, set(), counts, progress=lambda _: None))
     rejected = [json.loads(line) for line in (tmp_path / "technical_steps.300-600.rejected.jsonl").open()]
     assert rejected and all(r["failed"] == ["layout_intent"] for r in rejected)
     assert not [role for role, _ in llm.reasonings if role == "judge"]

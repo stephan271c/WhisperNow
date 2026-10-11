@@ -9,7 +9,7 @@ No sampling and no judge. Each rejected reply differs from its reference in one 
 - `wrong_side`: a known-answer correction's abandoned value in place of the corrected one, for rows
   whose input has one of the noise injector's corrections (`datagen/inject.py`).
 
-Pairs are written in `cleanup prefer`'s `pairs.jsonl` format, so DPO trains on them unchanged.
+Pairs use `cleanup prefer`'s `pairs.jsonl` format, including `seed_group` and its family split.
 """
 
 from __future__ import annotations
@@ -21,12 +21,12 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from ..datagen.audit import length_bucket
 from ..datagen.inject import _wrong_value
 from ..datagen.paths import BUILD
-from ..datagen.schema import EMPTY, Example, read_examples
+from ..datagen.schema import Example, read_examples
 from . import facts
-from .prefer import split_of
+from .evaluate import load_benchmarks
+from .prefer import preference_pair, training_inputs
 
 SEED = 114
 # Share of pairs per kind, from the fault mix the SFT model makes on bench-long (dropped 3.7,
@@ -214,10 +214,7 @@ def pair(row: Example, kind: str, rng: random.Random) -> dict | None:
     rejected = BREAKERS[kind](row, rng)
     if rejected is None or not one_span(row.output, rejected):
         return None
-    return {
-        "id": row.id, "split": split_of(row.id), "input": row.input, "chosen": row.output, "rejected": rejected,
-        "kind": kind, "chosen_from": "reference", "bucket": length_bucket(len(row.input.split())),
-    }
+    return preference_pair(row, row.output, rejected, kind, "reference")
 
 
 def build(train: Sequence[Example], benchmark: Sequence[Example], count: int, mix: dict[str, float] = MIX,
@@ -227,8 +224,7 @@ def build(train: Sequence[Example], benchmark: Sequence[Example], count: int, mi
     Kinds are drawn by `mix`; a row with no place for the drawn kind tries the others in mix order.
     Correction rows go to `wrong_side` first, as they are the only ones that can make it.
     """
-    held_out = {row.id for row in benchmark} | {row.seed_group for row in benchmark}
-    rows = [r for r in train if r.output != EMPTY and r.id not in held_out and r.seed_group not in held_out]
+    rows = training_inputs(train, benchmark)
     rng = random.Random(seed)
     rng.shuffle(rows)
     long_rows = [r for r in rows if len(r.input.split()) >= 150]
@@ -273,14 +269,11 @@ def stats(pairs: Sequence[dict]) -> dict:
     }
 
 
-def run(out: Path, count: int, long_share: float = 0.7, mix: dict[str, float] = MIX) -> dict:
+def run(out: Path, count: int, long_share: float = 0.7) -> dict:
     """Writes `pairs.jsonl` and `stats.json` under `out`, from the build's train split."""
-    from .evaluate import BENCHMARKS
-
-    benchmark = [row for path in BENCHMARKS.values() for row in read_examples(path)]
-    pairs = build(read_examples(BUILD / "train.jsonl"), benchmark, count, mix, long_share)
+    pairs = build(read_examples(BUILD / "train.jsonl"), load_benchmarks(), count, long_share=long_share)
     out.mkdir(parents=True, exist_ok=True)
     (out / "pairs.jsonl").write_text("".join(json.dumps(p, ensure_ascii=False) + "\n" for p in pairs), encoding="utf-8")
-    summary = {"count": count, "long_share": long_share, "mix": mix, **stats(pairs)}
+    summary = {"count": count, "long_share": long_share, "mix": MIX, **stats(pairs)}
     (out / "stats.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary

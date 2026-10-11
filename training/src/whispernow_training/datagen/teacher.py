@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .llm import LlmClient, Role
+from .llm import LlmClient
 from .paths import PROMPTS, REPO_ROOT
 from .schema import EMPTY
 
@@ -110,15 +110,14 @@ async def relabel(
     llm: LlmClient,
     transcript: str,
     attempt: int = 0,
-    role: Role = "teacher",
     reasoning: str | None = None,
     note: str | None = None,
 ) -> str:
     """The teacher's cleanup of `transcript`; `attempt` N > 0 asks again for a new sample.
 
-    `role="judge"` has the judge's model write it, with the same hosted prompt; `reasoning` overrides
-    the role's reasoning setting. `note` is a reviewer's note on an earlier edit, added to the request.
+    `reasoning` overrides the teacher's reasoning setting. `note` is a reviewer's note on an earlier
+    edit, added to the request.
     """
     return clean_teacher_output(
-        await llm.complete(teacher_messages(transcript, note=note), role=role, attempt=attempt, reasoning=reasoning)
+        await llm.complete(teacher_messages(transcript, note=note), role="teacher", attempt=attempt, reasoning=reasoning)
     )

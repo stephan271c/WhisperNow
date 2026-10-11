@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import json
 import re
-import time
 import wave
 
 import numpy as np
 import sherpa_onnx as so
 
+from ..text_rules import FILLER
 from . import asr_probe as probe
 from . import paths
 
@@ -94,8 +94,7 @@ def normalize(text: str) -> list[str]:
     text = re.sub(r"\d+(?:\.\d+)?", number, text)
     text = re.sub(r"[^a-z0-9' ]+", " ", text)
     words = [w.strip("'") for w in text.split()]
-    fillers = {"uh", "um", "hmm", "mm", "ah", "er"}
-    return [w.replace("okay", "ok") for w in words if w and w not in fillers]
+    return [w.replace("okay", "ok") for w in words if w and not FILLER.fullmatch(w)]
 
 
 def edits(ref: list[str], hyp: list[str]) -> int:
@@ -112,29 +111,10 @@ def clips() -> list[tuple[str, str, list[np.ndarray]]]:
     records = probe.load()
     records = sorted(records, key=lambda r: r["id"])[:: max(1, len(records) // CLIPS)][:CLIPS]
     out = []
-    vad_config = so.VadModelConfig()
-    vad_config.silero_vad.model = str(probe.VAD_MODEL)
-    vad_config.silero_vad.threshold = 0.5
-    vad_config.silero_vad.min_silence_duration = 0.1
-    vad_config.silero_vad.min_speech_duration = 0.064
-    vad_config.silero_vad.window_size = probe.FRAME
-    vad_config.silero_vad.max_speech_duration = 30.0
-    vad_config.sample_rate = 16000
-    vad_config.num_threads = 1
     for r in records:
         with wave.open(str(probe.AUDIO_DIR / f"{r['id']}.wav")) as w:
             samples = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
-        detector = so.VoiceActivityDetector(vad_config, buffer_size_in_seconds=30)
-
-        def is_speech(frame):
-            detector.accept_waveform(frame)
-            speech = detector.is_speech_detected()
-            while not detector.empty():
-                detector.pop()
-            return speech
-
-        segments = [samples[a:b] for a, b in probe.segment(samples, is_speech)]
-        out.append((r["id"], r["spoken"], segments))
+        out.append((r["id"], r["spoken"], probe.segments(samples)))
     return out
 
 
@@ -147,20 +127,15 @@ def run(only: list[str] | None = None) -> dict:
         if (only and name not in only) or name in results:
             continue
         recognizer = make()
-        warm = recognizer.create_stream()
-        warm.accept_waveform(16000, data[0][2][0])
-        recognizer.decode_stream(warm)
+        probe.decode_segment(recognizer, data[0][2][0])
         spent = 0.0
         errors = words = 0
         for _, spoken, segments in data:
             texts = []
             for segment in segments:
-                stream = recognizer.create_stream()
-                stream.accept_waveform(16000, segment)
-                start = time.perf_counter()
-                recognizer.decode_stream(stream)
-                spent += time.perf_counter() - start
-                texts.append(stream.result.text)
+                text, elapsed = probe.decode_segment(recognizer, segment)
+                spent += elapsed
+                texts.append(text)
             ref, hyp = normalize(spoken), normalize(probe.join_segment_texts(texts))
             errors += edits(ref, hyp)
             words += len(ref)

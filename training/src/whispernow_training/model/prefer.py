@@ -1,10 +1,11 @@
 """The preference stage: sample an SFT model, judge its outputs, and pair them.
 
-Every step writes a file under `runs/<run>/prefer/` and is skipped when its file exists, so a
-stopped run resumes:
+Every step writes a file under `runs/<run>/prefer/`. Matching sampling requests and judgments
+resume; derived verdicts and pairs are rebuilt from the current content and contracts:
 
-1. **inputs.jsonl** — train rows only, never a benchmark row: `PER_BUCKET` rows from each long
-   bucket, and `CORRECTIONS` more rows with a reasoned or re-decided correction of any length.
+1. **inputs.jsonl** — the run's selection snapshot, kept across builds: train rows only, never a
+   benchmark row; `PER_BUCKET` rows from each long bucket, and `CORRECTIONS` more rows with a
+   reasoned or re-decided correction of any length.
 2. **samples.jsonl** — per input, the greedy output (`k` 0) and `SAMPLES` samples at `TEMPERATURE`,
    from `llama-server` serving the SFT model with the app's request and penalty.
 3. **verdicts.jsonl** — each distinct output, checked in code (loops, fillers the reference does not
@@ -19,10 +20,11 @@ stopped run resumes:
    `only_fact_edits` otherwise) and the eval judge passes it.
 5. **pairs.jsonl** — up to `PAIRS_PER_INPUT` pairs per input: the minimal pair first, then failing
    outputs against the passing output nearest in length. An input with nothing passing pairs a
-   failure with its gated reference instead. `kind` names the rejected output's fault.
+   failure with its gated reference instead. `kind` names the rejected output's fault;
+   `seed_group` keeps the family identity used for splitting.
    **rft.jsonl** — rejection-sampling SFT, the baseline: one passing output per input.
 
-`split` puts `VAL_SHARE` of the inputs, by id hash, in a val split for DPO's eval loss.
+`split` puts `VAL_SHARE` of the seed groups, by group hash, in a val split for DPO's eval loss.
 """
 
 from __future__ import annotations
@@ -39,20 +41,16 @@ from dataclasses import asdict
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from ..datagen.audit import length_bucket
+from ..datagen.llm import request_key, require_r112
 from ..datagen.paths import BUILD, PROMPTS
-from ..datagen.schema import EMPTY, Example, read_examples, read_jsonl
+from ..datagen.schema import EMPTY, Example, append_jsonl, length_bucket, read_examples, read_jsonl
 from . import prompt
 from .evaluate import (
-    BENCHMARKS,
-    FAULT_KINDS,
-    JUDGE_BATCH_ROWS,
-    JUDGE_CRITERIA,
-    JUDGE_INSTRUCTIONS,
-    JUDGE_MAX_CHARS,
-    JUDGE_SOLO_OVER_WORDS,
     LOST_KINDS,
-    R112_TARGET,
+    judge_outputs,
+    load_benchmarks,
+    model_revision,
+    server_generation,
 )
 from .metrics import check
 
@@ -97,18 +95,36 @@ def _write(path: Path, rows: Sequence[dict]) -> None:
     path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
 
 
-def split_of(id_: str) -> str:
-    fraction = int(hashlib.sha256(f"prefer-{id_}".encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
+def _save_records(path: Path, rows: Sequence[dict]) -> None:
+    saved = {(r["id"], r["k"]): r for r in read_jsonl(path)} if path.exists() else {}
+    append_jsonl(path, (json.dumps(row, ensure_ascii=False) for row in rows
+                        if saved.get((row["id"], row["k"])) != row))
+
+
+def split_of(seed_group: str) -> str:
+    fraction = int(hashlib.sha256(f"prefer-{seed_group}".encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
     return "val" if fraction < VAL_SHARE else "train"
+
+
+def training_inputs(train: Sequence[Example], benchmark: Sequence[Example]) -> list[Example]:
+    held_out = {row.id for row in benchmark} | {row.seed_group for row in benchmark}
+    return [
+        row for row in train
+        if row.output != EMPTY and row.id not in held_out and row.seed_group not in held_out
+    ]
+
+
+def preference_pair(row: Example, chosen: str, rejected: str, kind: str, chosen_from: str) -> dict:
+    return {
+        "id": row.id, "seed_group": row.seed_group, "split": split_of(row.seed_group),
+        "input": row.input, "chosen": chosen, "rejected": rejected,
+        "kind": kind, "chosen_from": chosen_from, "bucket": length_bucket(len(row.input.split())),
+    }
 
 
 def select_inputs(train: Sequence[Example], benchmark: Sequence[Example], seed: int = SEED) -> list[Example]:
     """Long train rows by bucket, then rows with a reasoned or re-decided correction."""
-    held_out = {row.id for row in benchmark} | {row.seed_group for row in benchmark}
-    rows = [
-        row for row in train
-        if row.output != EMPTY and row.id not in held_out and row.seed_group not in held_out
-    ]
+    rows = training_inputs(train, benchmark)
     rng = random.Random(seed)
     picked: list[Example] = []
     for bucket, count in PER_BUCKET.items():
@@ -120,9 +136,18 @@ def select_inputs(train: Sequence[Example], benchmark: Sequence[Example], seed: 
     return picked
 
 
-async def sample(url: str, rows: Sequence[Example], samples: int = SAMPLES, temperature: float = TEMPERATURE,
+def _sample_body(row: Example, k: int, temperature: float) -> dict:
+    return {
+        "messages": prompt.messages(row.input),
+        "max_tokens": prompt.max_tokens(row.input),
+        **prompt.decoding(),
+        **({"temperature": temperature, "seed": k} if k else {}),
+    }
+
+
+async def sample(url: str, requests: Sequence[tuple[Example, int]], temperature: float = TEMPERATURE,
                  concurrency: int = 4) -> list[dict]:
-    """Greedy (`k` 0) and `samples` samples per row, with the served request and penalty."""
+    """Samples each requested (row, k); `k` zero is greedy, others use the configured temperature."""
     import httpx
 
     semaphore = asyncio.Semaphore(concurrency)
@@ -130,19 +155,13 @@ async def sample(url: str, rows: Sequence[Example], samples: int = SAMPLES, temp
 
     async def one(client: httpx.AsyncClient, row: Example, k: int) -> dict:
         nonlocal done
-        body = {
-            "messages": prompt.messages(row.input),
-            "max_tokens": prompt.max_tokens(row.input),
-            **prompt.decoding(),
-            **({"temperature": temperature, "seed": k} if k else {}),
-        }
         async with semaphore:
-            response = await client.post(f"{url.rstrip('/')}/chat/completions", json=body)
+            response = await client.post(f"{url.rstrip('/')}/chat/completions", json=_sample_body(row, k, temperature))
             response.raise_for_status()
         choice = response.json()["choices"][0]
         done += 1
         if done % 500 == 0:
-            _progress(f"sampled {done}/{len(rows) * (samples + 1)}")
+            _progress(f"sampled {done}/{len(requests)}")
         return {
             "id": row.id,
             "k": k,
@@ -151,7 +170,7 @@ async def sample(url: str, rows: Sequence[Example], samples: int = SAMPLES, temp
         }
 
     async with httpx.AsyncClient(timeout=900) as client:
-        return await asyncio.gather(*(one(client, row, k) for row in rows for k in range(samples + 1)))
+        return await asyncio.gather(*(one(client, row, k) for row, k in requests))
 
 
 def code_failures(row: Example, output: str, hit_limit: bool) -> list[str]:
@@ -159,29 +178,11 @@ def code_failures(row: Example, output: str, hit_limit: bool) -> list[str]:
     return [name for name in CODE_CHECKS if getattr(checks, name)]
 
 
-def require_r112(settings, role: str) -> None:
-    """Every judge and restore call is `gpt-6.1-sol` at high reasoning through codex, as the scores are."""
-    if settings.target(role) != R112_TARGET:
-        raise SystemExit(f"the preference stage's {role} must be {'/'.join(R112_TARGET)} "
-                         f"(now {'/'.join(settings.target(role))})")
-
-
-async def judge_outputs(llm, rows: dict[str, Example], items: Sequence[tuple[str, str, str]], out: Path) -> dict:
-    """(key, row id, output) items through the eval judge, against each row's reference; resumes from `out`."""
-    from ..datagen.judge import judge_all
-
-    payload = [(key, {"transcript": rows[id_].input, "reference": rows[id_].output, "output": output})
-               for key, id_, output in items]
-    return await judge_all(llm, payload, out, instructions_file=JUDGE_INSTRUCTIONS, criteria=JUDGE_CRITERIA,
-                           batch_size=JUDGE_BATCH_ROWS, max_chars=JUDGE_MAX_CHARS,
-                           solo_over_words=JUDGE_SOLO_OVER_WORDS, fault_kinds=FAULT_KINDS, progress=_progress)
-
-
 def judge_failures(verdict) -> tuple[list[str], list[dict]]:
     """The fault kinds an output fails on, most serious first, and the faults behind them."""
     if "judge_error" in verdict.failed:
         return ["judge_error"], []
-    faults = [fault for fault in verdict.faults if fault.get("kind") in JUDGE_FAILURES]
+    faults = [fault for fault in verdict.faults if fault["kind"] in JUDGE_FAILURES]
     kinds = {fault["kind"] for fault in faults}
     failed = ["answered"] if "not_answered" in verdict.failed else []
     failed += [kind for kind in ("invented", "wrong_side", "changed", "dropped") if kind in kinds]
@@ -189,7 +190,7 @@ def judge_failures(verdict) -> tuple[list[str], list[dict]]:
 
 
 def fault_note(faults: Sequence[dict]) -> str:
-    return "\n".join(f"- {fault['kind']}: {fault.get('fact', '')}" for fault in faults)
+    return "\n".join(f"- {fault['kind']}: {fault['fact']}" for fault in faults)
 
 
 def distinct_outputs(samples: Sequence[dict]) -> list[dict]:
@@ -217,8 +218,10 @@ async def verdicts_for(rows: dict[str, Example], samples: Sequence[dict], judged
     settings = LlmSettings.from_env()
     require_r112(settings, "judge")
     async with LlmClient(settings) as llm:
-        verdicts = await judge_outputs(llm, rows, [(f"{r['id']}#{r['k']}", r["id"], r["output"]) for r in to_judge],
-                                       judged)
+        items = [(f"{r['id']}#{r['k']}", {"transcript": rows[r["id"]].input,
+                                          "reference": rows[r["id"]].output, "output": r["output"]})
+                 for r in to_judge]
+        verdicts = await judge_outputs(llm, items, judged, progress=_progress)
         _progress(f"judged {len(to_judge)} outputs; llm calls {llm.calls}, cached {llm.cache_hits}")
     for result in to_judge:
         failed, faults = judge_failures(verdicts[f"{result['id']}#{result['k']}"])
@@ -254,7 +257,7 @@ def only_fact_edits(before: str, after: str, faults: Sequence[dict]) -> bool:
     quoted = {
         token.lower()
         for fault in faults
-        for phrase in _QUOTED.findall(fault.get("fact", ""))
+        for phrase in _QUOTED.findall(fault["fact"])
         for token in _TOKEN.findall(phrase)
     }
     a = [token.lower() for token in _TOKEN.findall(before)]
@@ -299,8 +302,7 @@ async def restore(rows: dict[str, Example], verdicts: Sequence[dict], judged: Pa
 
     candidates = restore_candidates(verdicts)
     settings = LlmSettings.from_env()
-    require_r112(settings, "teacher")
-    require_r112(settings, "judge")
+    require_r112(settings, "teacher", "judge")
     async with LlmClient(settings) as llm:
         replies = await asyncio.gather(
             *(llm.complete(restore_messages(rows[c["id"]].input, c["output"], c["note"])) for c in candidates)
@@ -313,8 +315,10 @@ async def restore(rows: dict[str, Example], verdicts: Sequence[dict], judged: Pa
                             "restored": restored, "fixed": candidate["failed"], "edit_ok": ok,
                             "failed": [] if ok else ["edited"]})
         checked = [r for r in results if r["edit_ok"]]
-        verdicts_ = await judge_outputs(llm, rows, [(f"{r['id']}#restored", r["id"], r["restored"]) for r in checked],
-                                        judged)
+        items = [(f"{r['id']}#restored", {"transcript": rows[r["id"]].input,
+                                        "reference": rows[r["id"]].output, "output": r["restored"]})
+                 for r in checked]
+        verdicts_ = await judge_outputs(llm, items, judged, progress=_progress)
         for result in checked:
             failed, faults = judge_failures(verdicts_[f"{result['id']}#restored"])
             result["failed"] = [*failed, *code_failures(rows[result["id"]], result["restored"], False)]
@@ -345,6 +349,7 @@ def build_pairs(rows: dict[str, Example], verdicts: Sequence[dict], restored: Se
     minimal = {r["id"]: r for r in restored if r["passed"]}
     pairs, rft = [], []
     for id_, row in rows.items():
+        split = split_of(row.seed_group)
         outputs = sorted(by_id.get(id_, []), key=lambda v: v["k"])
         passes = [v for v in outputs if v["passed"]]
         fails = [v for v in outputs if not v["passed"] and "judge_error" not in v["failed"]]
@@ -362,11 +367,9 @@ def build_pairs(rows: dict[str, Example], verdicts: Sequence[dict], restored: Se
             elif id_ not in minimal:
                 chosen_rows.append((row.output, fail["output"], kind_of(fail["failed"]), "reference"))
         for chosen, rejected, kind, chosen_from in chosen_rows:
-            pairs.append({"id": id_, "split": split_of(id_), "input": row.input, "chosen": chosen,
-                          "rejected": rejected, "kind": kind, "chosen_from": chosen_from,
-                          "bucket": length_bucket(_words(row.input))})
+            pairs.append(preference_pair(row, chosen, rejected, kind, chosen_from))
         keep = passes[0]["output"] if passes else minimal[id_]["restored"] if id_ in minimal else None
-        if keep is not None and split_of(id_) == "train":
+        if keep is not None and split == "train":
             rft.append(asdict(Example(id=row.id, input=row.input, output=keep, source=row.source, category=row.category,
                                       license=row.license, tags=[*row.tags, "rft"], seed_group=row.seed_group, split="train")))
     return pairs, rft
@@ -407,27 +410,44 @@ def stats(verdicts: Sequence[dict], restored: Sequence[dict], pairs: Sequence[di
 
 
 def run(out: Path, server: str | None, concurrency: int = 4) -> dict:
-    """Runs every step whose file is missing; sampling needs `server`."""
+    """Resumes matching requests; changed sampling requests need `server`."""
     out.mkdir(parents=True, exist_ok=True)
     inputs_file = out / "inputs.jsonl"
     if not inputs_file.exists():
-        benchmark = [row for path in BENCHMARKS.values() for row in read_examples(path)]
-        _write(inputs_file, [asdict(row) for row in select_inputs(read_examples(BUILD / "train.jsonl"), benchmark)])
+        _write(inputs_file, [asdict(row) for row in select_inputs(read_examples(BUILD / "train.jsonl"), load_benchmarks())])
     rows = {row.id: row for row in read_examples(inputs_file)}
     samples_file = out / "samples.jsonl"
-    if not samples_file.exists():
+    generation_file = out / "samples.generation.json"
+    generation = server_generation(server) if server else (
+        json.loads(generation_file.read_text(encoding="utf-8")) if generation_file.exists() else None
+    )
+    if generation and not server:
+        model = Path(generation["model_path"])
+        generation["revision"] = model_revision(model) if model.is_absolute() and model.is_file() else None
+    keys = {(row.id, k): request_key({"generation": generation, "transcript": row.input,
+                                    "request": _sample_body(row, k, TEMPERATURE)})
+            for row in rows.values() for k in range(SAMPLES + 1)}
+    saved = {(r["id"], r["k"]): r for r in read_jsonl(samples_file)} if samples_file.exists() else {}
+    reusable = generation is not None and generation["revision"] is not None
+    samples = {key: item for key, item in saved.items()
+               if reusable and key in keys and item.get("request_key") == keys[key]}
+    pending = [(rows[id_], k) for id_, k in keys if (id_, k) not in samples]
+    if pending:
         if not server:
-            raise SystemExit("sampling needs --server, the SFT model behind llama-server")
-        _write(samples_file, asyncio.run(sample(server, list(rows.values()), concurrency=concurrency)))
-    samples = list(read_jsonl(samples_file))
+            raise SystemExit("changed or unverified sampling requests need --server, the SFT model behind llama-server")
+        generated = asyncio.run(sample(server, pending, concurrency=concurrency))
+        for item in generated:
+            item["request_key"] = keys[item["id"], item["k"]]
+            samples[item["id"], item["k"]] = item
+        _save_records(samples_file, generated)
+        generation_file.write_text(json.dumps(generation, indent=2) + "\n", encoding="utf-8")
+    current_samples = [samples[key] for key in keys]
     verdicts_file = out / "verdicts.jsonl"
-    if not verdicts_file.exists():
-        _write(verdicts_file, asyncio.run(verdicts_for(rows, samples, out / "verdicts.judge.jsonl")))
-    verdicts = list(read_jsonl(verdicts_file))
+    verdicts = asyncio.run(verdicts_for(rows, current_samples, out / "verdicts.judge.jsonl"))
+    _save_records(verdicts_file, verdicts)
     restored_file = out / "restored.jsonl"
-    if not restored_file.exists():
-        _write(restored_file, asyncio.run(restore(rows, verdicts, out / "restored.judge.jsonl")))
-    restored = list(read_jsonl(restored_file))
+    restored = asyncio.run(restore(rows, verdicts, out / "restored.judge.jsonl"))
+    _save_records(restored_file, restored)
     pairs, rft = build_pairs(rows, verdicts, restored)
     _write(out / "pairs.jsonl", pairs)
     _write(out / "rft.jsonl", rft)

@@ -27,20 +27,10 @@ def default_history() -> Path:
 
 
 def read_history(path: Path) -> list[dict]:
-    """Every non-empty raw transcript, newest first, from either history schema."""
+    """Every non-empty raw transcript, newest first, from single-entry history."""
     connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        if "entries" in tables:
-            query = "SELECT raw_text, asr_model_id FROM entries ORDER BY created_at_ms DESC, id DESC"
-        else:
-            # The schema before single-entry history: one row per attempt, several per recording.
-            query = (
-                "SELECT a.raw_text, a.asr_model_id FROM recordings r "
-                "JOIN attempts a ON a.id = COALESCE(r.preferred_attempt_id, "
-                "(SELECT id FROM attempts WHERE recording_id = r.id ORDER BY ordinal DESC LIMIT 1)) "
-                "ORDER BY r.created_at_ms DESC, r.id DESC"
-            )
+        query = "SELECT raw_text, asr_model_id FROM entries ORDER BY created_at_ms DESC, id DESC"
         rows = connection.execute(query).fetchall()
     finally:
         connection.close()

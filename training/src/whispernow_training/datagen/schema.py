@@ -17,6 +17,20 @@ EMPTY = "EMPTY"
 
 LIST_ITEM = re.compile(r"^\s*(?:- |\d+\. )\S")
 _LABEL_MAX_WORDS = 8
+LENGTH_BUCKETS = ((49, "<50"), (150, "50-150"), (300, "150-300"), (600, "300-600"), (1000, "600-1000"))
+
+
+@dataclass
+class BatchRecord:
+    batch: int
+    style: str
+    requested: int
+    returned: int = 0
+    passed: int = 0
+    relabeled: int = 0
+    notes: list[str] = field(default_factory=list)
+    seconds: float = 0.0
+    error: str = ""
 
 
 @dataclass
@@ -42,10 +56,6 @@ class Example:
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
-
-    @classmethod
-    def from_dict(cls, row: dict) -> Example:
-        return cls(**row)
 
 
 def example_id(source: str, text: str) -> str:
@@ -78,7 +88,7 @@ def read_jsonl(path: Path) -> Iterator[dict]:
 
 
 def read_examples(path: Path) -> list[Example]:
-    return [Example.from_dict(row) for row in read_jsonl(path)]
+    return [Example(**row) for row in read_jsonl(path)]
 
 
 def write_examples(path: Path, examples: Iterable[Example]) -> int:
@@ -91,8 +101,18 @@ def write_examples(path: Path, examples: Iterable[Example]) -> int:
     return count
 
 
-def append_examples(path: Path, examples: Iterable[Example]) -> None:
+def append_jsonl(path: Path, rows: Iterable[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as out:
-        for example in examples:
-            out.write(example.to_json() + "\n")
+    with path.open("a", encoding="utf-8") as sink:
+        sink.writelines(row + "\n" for row in rows)
+
+
+def words(text: str) -> int:
+    return len(text.split())
+
+
+def length_bucket(word_count: int) -> str:
+    for limit, name in LENGTH_BUCKETS:
+        if word_count <= limit:
+            return name
+    return "over 1000"

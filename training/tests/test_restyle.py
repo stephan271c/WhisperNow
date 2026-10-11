@@ -1,4 +1,23 @@
+import asyncio
+import json
+
+import pytest
+
 from whispernow_training.datagen import restyle
+from whispernow_training.datagen.llm import LlmError
+from whispernow_training.datagen.schema import Example, read_jsonl, write_examples
+
+
+@pytest.fixture
+def restyle_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(restyle, "OUT", tmp_path / "restyle.jsonl")
+    monkeypatch.setattr(restyle, "REJECTED", tmp_path / "rejected.jsonl")
+    monkeypatch.setattr(restyle.stage1, "CLEAN", tmp_path / "clean.jsonl")
+    monkeypatch.setattr(restyle, "chosen", lambda example: True)
+    rows = [Example(id=id_, input=f"bring {item}", output=f"Bring {item}.", source="s", category="c", license="MIT")
+            for id_, item in (("a", "milk"), ("b", "eggs"), ("c", "bread"))]
+    write_examples(restyle.stage1.CLEAN, rows)
+    return rows
 
 
 def test_punctuation_casing_and_written_numbers_keep_the_same_words():
@@ -34,8 +53,6 @@ def test_a_changed_dropped_or_contracted_word_fails():
 
 
 def test_the_restyled_share_is_fixed_by_id():
-    from whispernow_training.datagen.schema import Example
-
     rows = [Example(id=f"r{i}", input="x", output="x", source="s", category="c", license="MIT") for i in range(2000)]
     share = sum(map(restyle.chosen, rows)) / len(rows)
     assert 0.45 < share < 0.55
@@ -79,3 +96,74 @@ def test_filler_commas_are_mostly_dropped_mid_sentence():
     assert restyle.same_words(text, thinned)
     assert thinned.count(", um") + thinned.count("um,") < 0.3 * text.count(", um,") * 2
     assert "box 7, uh" in text and "Um, so" in restyle.filler_commas("Um, so we go.", "row-4")
+
+
+@pytest.mark.parametrize("failure", [
+    ValueError("invalid client configuration"),
+    LlmError("transport retries exhausted", retryable=True),
+], ids=["configuration", "exhausted-transport"])
+def test_client_failures_preserve_finished_batches_and_resume_the_rest(failure, fake_llm, restyle_rows, monkeypatch):
+    monkeypatch.setattr(restyle, "MAX_BATCH", 1)
+    sent = []
+
+    def reply(messages, role):
+        assert role == "teacher"
+        sent.append(messages[-1]["content"])
+        if "eggs" in messages[-1]["content"]:
+            raise failure
+        return json.dumps({"items": [{"n": 0, "text": "Bring milk."}]})
+
+    llm = fake_llm(reply)
+    with pytest.raises(type(failure)) as error:
+        asyncio.run(restyle.restyle_all(llm, limit=2))
+    assert error.value is failure and llm.calls == 2
+    saved = list(read_jsonl(restyle.OUT))
+    assert saved == [{"id": "a", "input": "Bring milk."}] and not list(read_jsonl(restyle.REJECTED))
+
+    def resumed_reply(messages, role):
+        assert "milk" not in messages[-1]["content"]
+        sent.append(messages[-1]["content"])
+        return json.dumps({"items": [{"n": 0, "text": "Bring eggs." if "eggs" in messages[-1]["content"] else "Bring bread."}]})
+
+    resumed = fake_llm(resumed_reply)
+    assert asyncio.run(restyle.restyle_all(resumed)) == {"restyled": 2, "failed": 0, "remaining_batches": 0}
+    assert resumed.calls == 2 and [row["id"] for row in read_jsonl(restyle.OUT)] == ["a", "b", "c"]
+    assert list(read_jsonl(restyle.OUT))[0] == saved[0] and not list(read_jsonl(restyle.REJECTED))
+
+
+@pytest.mark.parametrize("reply", [
+    "malformed",
+    '{"items": []}',
+    '{"items": [{"n": 0}]}',
+    '{"items": [{"n": 0, "text": 123}]}',
+    '{"items": [{"n": 0, "text": "Bring milk."}, {"n": 0, "text": "Bring milk."}]}',
+])
+def test_malformed_restyle_replies_are_diagnostics_that_remain_pending(reply, fake_llm, restyle_rows):
+    malformed = fake_llm(lambda messages, role: reply)
+    assert asyncio.run(restyle.restyle_all(malformed, limit=1)) == {"restyled": 0, "failed": 1, "remaining_batches": 0}
+    diagnostic, = read_jsonl(restyle.REJECTED)
+    assert diagnostic["id"] == "a" and diagnostic["why"].startswith("reply:")
+    assert malformed.calls == 1 and not list(read_jsonl(restyle.OUT))
+    resumed = fake_llm(lambda messages, role: '{"items": [{"n": 0, "text": "Bring milk."}]}')
+    assert asyncio.run(restyle.restyle_all(resumed, limit=1))["restyled"] == 1
+    assert resumed.calls == 1 and list(read_jsonl(restyle.OUT)) == [{"id": "a", "input": "Bring milk."}]
+    assert list(read_jsonl(restyle.REJECTED)) == [diagnostic]
+
+
+def test_legacy_infrastructure_diagnostics_resume_but_content_rejections_stay_done(fake_llm, restyle_rows):
+    rejected = [
+        {"id": "a", "why": "reply: transport retries exhausted", "text": ""},
+        {"id": "b", "why": "eggs != milk", "text": "Bring milk."},
+    ]
+    restyle.REJECTED.write_text("".join(json.dumps(row) + "\n" for row in rejected))
+
+    def reply(messages, role):
+        user = messages[-1]["content"]
+        assert "eggs" not in user and "milk" in user and "bread" in user
+        return '{"items": [{"n": 0, "text": "Bring milk."}, {"n": 1, "text": "Bring bread."}]}'
+
+    llm = fake_llm(reply)
+    assert asyncio.run(restyle.restyle_all(llm))["restyled"] == 2 and llm.calls == 1
+    assert [row["id"] for row in read_jsonl(restyle.OUT)] == ["a", "c"]
+    assert list(read_jsonl(restyle.REJECTED)) == rejected
+    assert asyncio.run(restyle.restyle_all(llm))["restyled"] == 0 and llm.calls == 1

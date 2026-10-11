@@ -18,8 +18,12 @@ from pathlib import Path
 
 import numpy as np
 
-from . import aawaaz, audit, compose, generate, inject, paths, relabel, restyle, sources, stage1, stage2
-from .schema import EMPTY, LIST_ITEM, Example, read_examples, write_examples
+from ..text_rules import (
+    CASE_SENSITIVE, CODE_TOKEN, CORRECTION, FILLER, FILLER_TOKEN, TRAILING_PUNCTUATION,
+    assistant_opener, has_markdown, malformed_list, protected_tokens,
+)
+from . import aawaaz, compose, generate, inject, paths, relabel, restyle, sources, stage1, stage2
+from .schema import EMPTY, LENGTH_BUCKETS, Example, length_bucket, read_examples, write_examples
 
 SEED = 108
 INJECTED = 2000
@@ -59,10 +63,6 @@ def _source_rank(example: Example) -> tuple[int, int]:
     return (0 if example.split == "test" else 1, rank)
 
 
-def gather(with_sotto: bool = False) -> list[Example]:
-    return gather_with_drops(with_sotto)[0]
-
-
 def gather_with_drops(with_sotto: bool = False) -> tuple[list[Example], list[tuple[Example, str]]]:
     """Every stage's rows, plus the programmatic rows made here from the cleaned aawaaz rows and the
     composed rows. The benchmarks in `data/bench/` are never read.
@@ -72,14 +72,15 @@ def gather_with_drops(with_sotto: bool = False) -> tuple[list[Example], list[tup
     rows are then made from the relabelled parents.
     """
     relabelled = relabel.active("build")
+    records = relabel.load_records("build") if relabelled else {}
     if relabelled:
-        relabel.require_complete("build")
+        relabel.require_complete("build", records)
     dropped: list[tuple[Example, str]] = []
 
     def labelled(examples: list[Example]) -> list[Example]:
         if not relabelled:
             return examples
-        kept, lost = relabel.apply(examples, "build")
+        kept, lost = relabel.apply(examples, records)
         dropped.extend(lost)
         return kept
 
@@ -108,8 +109,8 @@ def gather_with_drops(with_sotto: bool = False) -> tuple[list[Example], list[tup
     return [_empty_sentinel(_bare_fillers(_modal_may(e))) for e in rows], dropped
 
 
-def _share(key: str, percent: int) -> bool:
-    return int(hashlib.sha256(key.encode()).hexdigest(), 16) % 100 < percent
+def _bucket(key: str) -> int:
+    return int(hashlib.sha256(key.encode()).hexdigest(), 16) % 100
 
 
 def spoken_variant(example: Example, salt: str = "") -> Example:
@@ -137,7 +138,7 @@ def spoken_variant(example: Example, salt: str = "") -> Example:
     else:
         style = "recognizer"
         asr = restyle.asr_style(key) if composed else None
-    if _share(f"densify-{key}", DENSIFY_PERCENT["composed" if composed else "short"]):
+    if _bucket(f"densify-{key}") < DENSIFY_PERCENT["composed" if composed else "short"]:
         dense = inject.densify(text, key, style, pauses=asr in (None, "parakeet")).text
         if dense != text:
             text, tags = dense, [*tags, "densified"]
@@ -148,10 +149,6 @@ def spoken_variant(example: Example, salt: str = "") -> Example:
     if text == example.input and tags == example.tags:
         return example
     return replace(example, input=text, tags=tags)
-
-
-def spoken_variants(examples: Iterable[Example], salt: str = "") -> list[Example]:
-    return [spoken_variant(e, salt) for e in examples]
 
 
 def restyled(rows: list[Example]) -> list[Example]:
@@ -184,7 +181,6 @@ def _bare_fillers(example: Example) -> Example:
     return replace(example, input=text, tags=[*example.tags, "asr_parakeet"])
 
 
-_FILLER_TOKEN = re.compile(r"^(um+|uh+|uhm|erm?|hmm+)([,.?!;:]?)$", re.IGNORECASE)
 # A comma before a filler stays after a discourse word, as in Parakeet's "So, um let's".
 _DISCOURSE = {"so", "and", "but", "okay", "ok", "well", "yeah", "oh", "alright", "right", "now", "then", "also"}
 
@@ -193,13 +189,13 @@ def strip_filler_commas(text: str) -> str:
     """`text` with no comma after a filler, and none before one except after a discourse word."""
     tokens = text.split(" ")
     for i, token in enumerate(tokens):
-        match = _FILLER_TOKEN.match(token)
+        match = FILLER_TOKEN.match(token)
         if not match:
             continue
         if match.group(2) == ",":
             tokens[i] = match.group(1)
         previous = tokens[i - 1] if i else ""
-        if previous.endswith(",") and previous[:-1].lower() not in _DISCOURSE and not _FILLER_TOKEN.match(previous):
+        if previous.endswith(",") and previous[:-1].lower() not in _DISCOURSE and not FILLER_TOKEN.match(previous):
             tokens[i - 1] = previous[:-1]
     return " ".join(tokens)
 
@@ -212,7 +208,7 @@ def bare_filler_share(examples: Iterable[Example]) -> list[Example]:
         if (
             e.source == generate.SOURCE and e.split in ("train", "val") and "style_recognizer" in e.tags
             and "composed" not in e.tags
-            and int(hashlib.sha256(f"bare-{e.id}".encode()).hexdigest(), 16) % 100 < BARE_FILLER_PERCENT
+            and _bucket(f"bare-{e.id}") < BARE_FILLER_PERCENT
         ):
             text = strip_filler_commas(e.input)
             if text != e.input:
@@ -233,59 +229,14 @@ def _modal_may(example: Example) -> Example:
 
 def _empty_sentinel(example: Example) -> Example:
     """aawaaz writes an empty output for filler-only input, where the app expects EMPTY."""
-    spoken = [w for w in sources.words(example.input) if w not in sources.FILLERS]
+    spoken = [w for w in sources.words(example.input) if not FILLER.fullmatch(w)]
     if not example.output.strip() and not spoken:
         return replace(example, output=EMPTY)
     return example
 
 
-_MARKDOWN = re.compile(r"(?<![\w*])\*\*(?=\S).+?(?<=\S)\*\*(?![\w*])|`|^\s*#{1,6}\s|\[[^\]]+\]\([^)]+\)|^\s*\|.*\|\s*$", re.MULTILINE)
-_OTHER_BULLET = re.compile(r"^\s*[*•+]\s", re.MULTILINE)
-_NUMBERED = re.compile(r"^\s*(\d+)\.\s")
-_ANSWER_OPENING = re.compile(
-    r"^(sure|certainly|of course|here is|here's|here are|i can|i'd be happy|as an ai|i'm sorry|i cannot|"
-    r"i can't help|great question)\b",
-    re.IGNORECASE,
-)
-# Fillers and openers the cleanup removes before a speaker's own "here's" or "I can".
-_SPOKEN_OPENERS = re.compile(r"^(?:(?:um+|uh+|so|yeah|oh|okay|ok|alright|well|hey|like|and)\b[\s,.]*)+", re.IGNORECASE)
-_PROTECTED = re.compile(r"\S*(?:[/@_\\]|[a-z][A-Z]|[A-Za-z]\d|\d[A-Za-z]|\.[A-Za-z]{2,}|--)\S*")
-_CORRECTION = re.compile(
-    r"\b(?:no wait|wait no|scratch|actually|sorry|i mean|make (?:it|that)|never ?mind|or rather|no no)\b|\bno\b[,.—-]",
-    re.IGNORECASE,
-)
-_CASE_SENSITIVE = re.compile(r"[/@_\\]|\.[A-Za-z]{2,}|--")
-_EDGES = ".,!?;:'\"()[]{}—–"
-
-
-def has_markdown(output: str) -> bool:
-    return bool(_MARKDOWN.search(output))
-
-
-def malformed_list(output: str) -> str | None:
-    """Why a list is malformed: another bullet character, an empty item, or numbering that skips."""
-    if _OTHER_BULLET.search(output):
-        return "bullet other than '- '"
-    expected = None
-    for line in output.split("\n"):
-        if LIST_ITEM.match(line) is None and re.match(r"^\s*(?:-|\d+\.)\s*$", line):
-            return "empty list item"
-        number = _NUMBERED.match(line)
-        if number:
-            value = int(number.group(1))
-            if expected is not None and value != expected and value != 1:
-                return "numbering skips"
-            expected = value + 1
-        elif line.strip() and not LIST_ITEM.match(line):
-            expected = None
-    return None
-
-
 def answered(example: Example) -> bool:
-    """An output that opens like a reply the speaker never said."""
-    opening = _ANSWER_OPENING.match(example.output.strip())
-    spoken = _SPOKEN_OPENERS.sub("", example.input.strip().lstrip(",. ")).lower()
-    return bool(opening) and not re.match(_ANSWER_OPENING, spoken)
+    return assistant_opener(example.output, example.input)
 
 
 def _alnum(token: str) -> str:
@@ -298,16 +249,15 @@ def changed_protected_token(example: Example) -> str | None:
     A token the output drops is not flagged, since a self-correction may remove it;
     one that reappears in another form ("x25" as "X.25") is.
     """
-    output_tokens = {token.strip(_EDGES) for token in example.output.split()}
+    output_tokens = {token.strip(TRAILING_PUNCTUATION) for token in example.output.split()}
     output_forms = {_alnum(token) for token in output_tokens}
     # Recasing a dictated word-like token ("co2" as "CO2", "typeScript" as "TypeScript") is a fix;
     # paths, files, emails, URLs and flags stay case-sensitive.
     output_folded = example.output.casefold()
-    for match in _PROTECTED.finditer(example.input):
-        token = match.group(0).strip(_EDGES)
-        if not token or token in example.output:
+    for token in protected_tokens(example.input):
+        if not CODE_TOKEN.search(token) or token in example.output:
             continue
-        if not _CASE_SENSITIVE.search(token) and token.casefold() in output_folded:
+        if not CASE_SENSITIVE.search(token) and token.casefold() in output_folded:
             continue
         if _alnum(token) and _alnum(token) in output_forms:
             return token
@@ -362,11 +312,11 @@ def invented_signature(example: Example) -> bool:
 def implausible_length(example: Example) -> bool:
     if example.output == EMPTY:
         return len(sources.words(example.input)) > 6
-    source_words = len([w for w in sources.words(example.input) if w not in sources.FILLERS])
+    source_words = len([w for w in sources.words(example.input) if not FILLER.fullmatch(w)])
     output_words = len(sources.words(example.output))
     # A list sheds the talk around its items, and a self-correction sheds the discarded versions,
     # so only prose without corrections must keep 30% of the words.
-    shrinks = example.layout in ("list", "mixed") or _CORRECTION.search(example.input)
+    shrinks = example.layout in ("list", "mixed") or CORRECTION.search(example.input)
     if source_words >= 20 and output_words < 0.3 * source_words and not shrinks:
         return True
     return output_words > 1.3 * source_words + 8
@@ -402,7 +352,7 @@ _BANDS = 16
 
 
 def _shingles(text: str) -> set[str]:
-    tokens = [w for w in sources.words(text) if w not in sources.FILLERS]
+    tokens = [w for w in sources.words(text) if not FILLER.fullmatch(w)]
     if len(tokens) < 3:
         return {" ".join(tokens)}
     return {" ".join(tokens[i : i + 3]) for i in range(len(tokens) - 2)}
@@ -481,10 +431,6 @@ def deduplicate(examples: Iterable[Example]) -> tuple[list[Example], list[tuple[
     return final, dropped
 
 
-def _bucket(seed_group: str) -> int:
-    return int(hashlib.sha256(f"split\0{seed_group}".encode()).hexdigest(), 16) % 100
-
-
 def assign_splits(examples: Iterable[Example]) -> list[Example]:
     """Splits by seed group: a group with a preset test row is test, and others are hashed into val and test."""
     groups: dict[str, list[Example]] = defaultdict(list)
@@ -492,7 +438,7 @@ def assign_splits(examples: Iterable[Example]) -> list[Example]:
         groups[example.seed_group].append(example)
     result = []
     for seed_group, members in groups.items():
-        bucket = _bucket(seed_group)
+        bucket = _bucket(f"split\0{seed_group}")
         if any(e.split == "test" for e in members):
             split = "test"
         elif bucket < VAL_PERCENT:
@@ -549,9 +495,9 @@ def stats(examples: Sequence[Example], dropped: Sequence[tuple[Example, str]]) -
 def length_histogram(examples: Sequence[Example]) -> dict:
     """Rows per input length bucket, and the share over each of `LENGTH_MARKS` words."""
     counts = [len(e.input.split()) for e in examples]
-    buckets = Counter(audit.length_bucket(n) for n in counts)
+    buckets = Counter(length_bucket(n) for n in counts)
     return {
-        "buckets": {name: buckets[name] for _, name in (*audit.BUCKETS, (None, "over 1000")) if buckets[name]},
+        "buckets": {name: buckets[name] for _, name in (*LENGTH_BUCKETS, (None, "over 1000")) if buckets[name]},
         "over": {str(mark): round(sum(n > mark for n in counts) / max(1, len(counts)), 3) for mark in LENGTH_MARKS},
     }
 
@@ -575,7 +521,7 @@ def stats_markdown(report: dict) -> str:
     for key in ("input_words", "output_words"):
         p = report[key]
         lines.append(f"| {key.split('_')[0]} | {p['p5']} | {p['p50']} | {p['p95']} | {p['max']} | {p['mean']} |")
-    names = [name for _, name in (*audit.BUCKETS, (None, "over 1000"))]
+    names = [name for _, name in (*LENGTH_BUCKETS, (None, "over 1000"))]
     marks = [f"> {mark}" for mark in LENGTH_MARKS]
     lines.append("\n## Input length by split\n")
     lines.append("| split | " + " | ".join(names + marks) + " |\n|" + "---|" * (len(names) + len(marks) + 1))
@@ -595,13 +541,9 @@ def build(with_sotto: bool = False, out_dir: Path = paths.BUILD) -> dict:
             dropped.append((example, reason))
         else:
             kept.append(example)
-    if not relabel.active("build"):
-        # The audit's relabels and test corrections predate the relabel, which replaces them all.
-        kept, audited = audit.apply(kept)
-        dropped += audited
     kept, duplicates = deduplicate(kept)
     dropped += duplicates
-    final = spoken_variants(bare_filler_share(assign_splits(restyled(kept))))
+    final = [spoken_variant(e) for e in bare_filler_share(assign_splits(restyled(kept)))]
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for split in ("train", "val", "test"):
@@ -610,14 +552,13 @@ def build(with_sotto: bool = False, out_dir: Path = paths.BUILD) -> dict:
         for example, reason in dropped:
             sink.write(json.dumps({**asdict(example), "dropped": reason}, ensure_ascii=False) + "\n")
     report = stats(final, dropped)
-    (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     markdown = stats_markdown(report)
     if relabel.active("build"):
         # Old against new by source; the old injected rows were copied aside with the relabel's inputs.
         compared = relabel.compare([*relabel.inputs("build"), *relabel.old_injected()], final, relabel.load_records("build"))
         report["relabel"] = compared
-        (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         markdown += "\n" + relabel.compare_markdown(compared)
+    (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     (out_dir / "stats.md").write_text(markdown, encoding="utf-8")
     return report
 

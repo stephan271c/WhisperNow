@@ -1,4 +1,7 @@
 import random
+import re
+
+import pytest
 
 from whispernow_training.datagen.inject import inject
 from whispernow_training.datagen.schema import EMPTY, Example
@@ -20,28 +23,26 @@ def _row(id_: str, output: str = REFERENCE, input_: str = "spoken words", tags: 
                    tags=tags or [], seed_group=f"g-{id_}", split="train")
 
 
-def _spans(text: str, kind: str) -> list[str]:
-    return [span.text(text) for span in facts.fact_spans(text) if span.kind == kind]
+def _spans(text: str) -> list[str]:
+    return [text[span.start:span.end] for span in facts.fact_spans(text)]
 
 
 def test_fact_spans_find_values_names_hedges_reasons_and_unit_starts():
-    assert {"7:30", "$40", "Saturday", "noon", "Two"} <= set(_spans(REFERENCE, "value"))
-    assert "Noah" in _spans(REFERENCE, "name")
-    # A capital that only opens a sentence or item is not a name; its word is weighted as a unit start.
-    assert "Call" not in _spans(REFERENCE, "name") and "The" not in _spans(REFERENCE, "name")
-    assert {"Maybe", "I think"} <= set(_spans(REFERENCE, "hedge"))
-    assert "because the road closes at noon" in _spans(REFERENCE, "reason")
-    assert "in case the gate is locked" in _spans(REFERENCE, "reason")
-    # Each list item and sentence starts with a weighted word, where dropping it is decided.
-    assert {"Two", "The", "Maybe", "I", "Dana", "Call"} <= set(_spans(REFERENCE, "unit_start"))
-    assert "a" not in _spans("It costs $15,000 a month.", "value")
+    assert {"7:30", "$40", "Saturday", "noon", "Two", "Noah", "Maybe", "I think",
+            "because the road closes at noon", "in case the gate is locked", "The", "I", "Dana", "Call"} <= set(_spans(REFERENCE))
+    text = "It costs $15,000 a month."
+    assert "$15,000" in _spans(text)
+    mask = facts.char_mask(text)
+    assert all(mask[text.index("$15,000"):text.index("$15,000") + 7])
+    assert not any(mask[text.index(" a "):text.index(" a ") + 3])
 
 
 def test_fact_spans_find_negations():
     text = "Don't bring the tent. We can\u2019t park there, so no cooler and nothing glass. Not Friday, never mind."
-    assert _spans(text, "negation") == ["Don't", "can\u2019t", "no", "nothing", "Not", "never"]
-    # Words that only contain the letters are not negations.
-    assert _spans("Note the north gate and the nonstop bus.", "negation") == []
+    assert {"Don't", "can\u2019t", "no", "nothing", "Not", "never"} <= set(_spans(text))
+    false_matches = "Note the north gate and the nonstop bus."
+    mask = facts.char_mask(false_matches)
+    assert not any(mask[false_matches.index("north"):])
 
 
 def test_fact_spans_cover_a_corrected_value():
@@ -49,8 +50,7 @@ def test_fact_spans_cover_a_corrected_value():
     spoken = inject(clean, "s", "recognizer", kinds=("correction",))
     assert spoken.corrections
     _, right, _ = spoken.corrections[0]
-    # The value the speaker settled on is weighted wherever it lands in the reference.
-    assert right in {span.text(clean) for span in facts.fact_spans(clean)}
+    assert right in _spans(clean)
 
 
 def test_units_split_lines_into_sentences_and_items():
@@ -60,40 +60,57 @@ def test_units_split_lines_into_sentences_and_items():
     assert ("sentence", "Packing list for Saturday:") in kinds
 
 
-def _removed_added(chosen: str, rejected: str) -> tuple[str, str]:
-    return code_pairs._middles(chosen, rejected)
+@pytest.mark.parametrize(("text", "expected"), [
+    ("Bring enough water for everyone. Fine.", "Fine."),
+    ("Fine. Bring enough water for everyone. Okay.", "Fine. Okay."),
+    ("Fine. Bring enough water for everyone.", "Fine."),
+    (
+        "Trip notes:\nFine. Bring enough water for everyone. Okay.\n\nKeep the blue tent dry.",
+        "Trip notes:\nFine. Okay.\n\nKeep the blue tent dry.",
+    ),
+], ids=("first", "middle", "last", "other-lines"))
+def test_sentence_deletion_removes_the_whole_eligible_sentence(text, expected):
+    assert code_pairs.drop_sentence(text, random.Random(0)) == expected
 
 
-def test_each_breaker_changes_one_span_only():
-    rng = random.Random(0)
-    for _ in range(30):
-        for name, breaker in (("sentence", code_pairs.drop_sentence), ("item", code_pairs.drop_item),
-                              ("reason", code_pairs.drop_reason), ("hedge", code_pairs.drop_hedge),
-                              ("changed", code_pairs.change_value)):
-            rejected = breaker(REFERENCE, rng)
-            assert rejected is not None, name
-            assert code_pairs.one_span(REFERENCE, rejected), (name, rejected)
-            removed, added = _removed_added(REFERENCE, rejected)
-            if name == "changed":
-                assert removed and added and " " not in removed + added
-            else:
-                assert not added or (len(added) == 1 and removed[-1].lower() == added.lower())
+def test_sentence_deletion_requires_an_eligible_unit_on_a_multi_sentence_line():
+    assert code_pairs.drop_sentence("Bring enough water for everyone.", random.Random(0)) is None
+    assert code_pairs.drop_sentence("Ready. Fine.", random.Random(0)) is None
 
 
-def test_drops_remove_whole_units_and_keep_the_text_plain():
+@pytest.mark.parametrize(("text", "expected"), [
+    (
+        "List:\n- Water\n- Bring enough clean towels\n- Tent\n\nKeep the road map.",
+        "List:\n- Water\n- Tent\n\nKeep the road map.",
+    ),
+    (
+        "List:\n- Water\n- Tent\n- Bring enough clean towels",
+        "List:\n- Water\n- Tent",
+    ),
+], ids=("middle", "last-without-newline"))
+def test_item_deletion_removes_the_whole_eligible_line(text, expected):
+    assert code_pairs.drop_item(text, random.Random(0)) == expected
+
+
+def test_item_deletion_keeps_short_lists_and_numbering():
+    assert code_pairs.drop_item("- Bring enough clean towels\n- Pack the blue tent", random.Random(0)) is None
+    numbered = "Steps:\n1. Rinse the lentils\n2. Chop the onions\n3. Simmer for 20 minutes"
+    assert code_pairs.drop_item(numbered, random.Random(0)) == "Steps:\n1. Rinse the lentils\n2. Chop the onions"
+
+
+def test_reasons_and_hedges_remove_the_whole_modifier():
     rng = random.Random(1)
-    sentence = code_pairs.drop_sentence(REFERENCE, rng)
-    assert "  " not in sentence and ". ." not in sentence
-    item = code_pairs.drop_item(REFERENCE, rng)
-    assert item.count("\n- ") == 2 and "\n\n\n" not in item
     reason = code_pairs.drop_reason("We leave at 7:30, because the road closes at noon. Bring water.", rng)
     assert reason == "We leave at 7:30. Bring water."
     hedge = code_pairs.drop_hedge("Maybe bring the stove.", rng)
     assert hedge == "Bring the stove."
     assert code_pairs.drop_hedge("I think that we should go.", rng) is None
-    # A numbered item is dropped only at the end of its list, so the numbers stay in order.
-    numbered = "Steps:\n1. Rinse the lentils\n2. Chop the onions\n3. Simmer for 20 minutes"
-    assert code_pairs.drop_item(numbered, rng) == "Steps:\n1. Rinse the lentils\n2. Chop the onions"
+
+
+def test_changing_an_amount_preserves_everything_around_it():
+    rejected = code_pairs.change_value("Dana pays $40 for the campsite.", random.Random(0))
+    assert rejected is not None
+    assert re.fullmatch(r"Dana pays \$(?!40\b)[1-9]\d* for the campsite\.", rejected)
 
 
 def test_one_span_rejects_two_edits_and_identity():
@@ -131,6 +148,18 @@ def test_build_pairs_in_prefer_format_without_held_out_rows():
     pairs = code_pairs.build(train, [held], count=30, long_share=0.0)
     assert len(pairs) == 30
     assert {p["id"] for p in pairs}.isdisjoint({"bench", "same-group", "empty"})
-    assert set(pairs[0]) == {"id", "split", "input", "chosen", "rejected", "kind", "chosen_from", "bucket"}
+    assert {"split", "input", "chosen", "rejected"} <= set(pairs[0])
     assert all(p["chosen"] == REFERENCE and code_pairs.one_span(p["chosen"], p["rejected"]) for p in pairs)
     assert len({p["kind"] for p in pairs}) >= 4
+
+
+def test_build_keeps_injected_families_together(seed_families):
+    train = [row for parent, derivative, _ in seed_families for row in (parent, derivative)]
+    pairs = code_pairs.build(train, [], count=len(train), long_share=1.0)
+    assert pairs == code_pairs.build(train, [], count=len(train), long_share=1.0)
+    for parent, derivative, split in seed_families:
+        family = [pair for pair in pairs if pair["seed_group"] == parent.seed_group]
+        assert {pair["id"] for pair in family} == {parent.id, derivative.id}
+        assert {pair["split"] for pair in family} == {split}
+    held = [derivative for _, derivative, _ in seed_families]
+    assert code_pairs.build(train, held, count=len(train), long_share=1.0) == []

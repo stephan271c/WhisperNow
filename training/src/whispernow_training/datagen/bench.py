@@ -22,9 +22,8 @@ from collections.abc import Sequence
 from dataclasses import asdict, replace
 
 from . import ami, compose, gates, noise, paths, rejudge, relabel
-from .audit import length_bucket, words
 from .llm import LlmClient
-from .schema import EMPTY, Example, read_examples, read_jsonl, write_examples
+from .schema import EMPTY, Example, length_bucket, read_examples, read_jsonl, words, write_examples
 
 LONG_FILE = paths.DATA / "bench" / "long.jsonl"
 AMI_FILE = paths.DATA / "bench" / "long" / "ami.jsonl"
@@ -60,7 +59,7 @@ async def label_ami(llm: LlmClient) -> dict[str, int]:
     done = {e.id for e in read_examples(AMI_FILE)} if AMI_FILE.exists() else set()
     done |= {row["id"] for row in read_jsonl(AMI_REJECTED)} if AMI_REJECTED.exists() else set()
     todo = [t for t in pick_ami(ami.long_turns()) if t.id not in done]
-    results = await gates.gate(llm, [(t.id, t.input) for t in todo], judge=AMI_JUDGE) if todo else {}
+    results = await gates.gate(llm, [(t.id, t.input) for t in todo], judge=AMI_JUDGE)
     kept, rejected = [], []
     for turn in todo:
         result = results[turn.id]

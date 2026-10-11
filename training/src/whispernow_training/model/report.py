@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 
 from ..datagen.paths import TRAINING_ROOT
@@ -75,12 +74,6 @@ def eval_loss_at(train: dict, epoch: float) -> float | None:
         return None
     nearest = min(losses, key=lambda entry: abs(epochs * entry["step"] / train["steps"] - epoch))
     return nearest["eval_loss"]
-
-
-def val_loss_by_epoch(train: dict) -> list[float | None]:
-    """Val loss at the end of each epoch; the last is the final evaluation."""
-    epochs = math.ceil(train["config"]["epochs"])
-    return [eval_loss_at(train, epoch) for epoch in range(1, epochs)] + [train["final_eval_loss"]]
 
 
 def sweep_table(names: list[str], stem: str) -> str:

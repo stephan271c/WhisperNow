@@ -19,12 +19,12 @@ import re
 import sys
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, replace
 
 from . import paths
 from .judge import judge_batch
 from .llm import LlmClient, LlmError, parse_json_reply
-from .schema import EMPTY, Example, example_id, read_examples, read_jsonl
+from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, read_examples, read_jsonl
 from .teacher import relabel
 
 SOURCE = "teacher"
@@ -65,12 +65,12 @@ TEST_TARGETS = {
 # Categories where the validator, not the generator's guess, decides whether a list fits.
 LAYOUT_OPEN = {"ambiguous_intent"}
 
-_NAMES = (
+NAMES = (
     "Aisha Ben Carlos Dana Elif Farid Grace Hiro Ines Jamal Kofi Lena Mateo Nadia Omar Priya Quinn Rosa Sven Tariq "
     "Uma Vikram Wen Xavier Yara Zoe Mike Sarah Tom Jess Raj Mei Diego Hannah Luca Fatima Noah Chloe Kenji Amara "
     "Dmitri Leah Sam Ravi Olga Emeka Bea Pat Colin Marisol"
 ).split()
-_SETTINGS = (
+SETTINGS = (
     "a small bakery", "a hospital ward", "a college dorm", "a software startup", "a construction site",
     "a family road trip", "a wedding", "a dentist's office", "a high school class", "a law firm",
     "a farm", "a gym", "a book club", "a camping trip", "moving house", "a car repair", "a birthday party",
@@ -79,18 +79,6 @@ _SETTINGS = (
     "a tax return", "an online store", "a hotel front desk", "a flight delay", "a podcast", "a hackathon",
     "a school fundraiser", "a doctor's appointment", "a landlord", "a neighborhood cleanup", "a video game",
 )
-
-
-@dataclass
-class BatchRecord:
-    batch: int
-    style: str
-    requested: int
-    returned: int = 0
-    passed: int = 0
-    notes: list[str] = field(default_factory=list)
-    seconds: float = 0.0
-    error: str = ""
 
 
 def _stem(category: str, held_out: bool) -> str:
@@ -119,8 +107,8 @@ def generator_messages(category: str, style: str, count: int, batch: int, notes:
     style_text = (paths.PROMPTS / "generate" / f"style_{style}.md").read_text(encoding="utf-8")
     guidance = (paths.PROMPTS / "categories" / f"{category}.md").read_text(encoding="utf-8")
     rng = random.Random(f"{category}-{batch}")
-    names = ", ".join(rng.sample(_NAMES, 8))
-    settings = "; ".join(rng.sample(_SETTINGS, 5))
+    names = ", ".join(rng.sample(NAMES, 8))
+    settings = "; ".join(rng.sample(SETTINGS, 5))
     user = (
         f"{guidance}\n\n{style_text}\n\nBatch {batch}. Write {count} transcripts for this category. "
         f"For variety, draw on some of these names ({names}) and settings ({settings}), and invent others."
@@ -136,14 +124,20 @@ def generator_messages(category: str, style: str, count: int, batch: int, notes:
 # One malformed item (the generator once wrote Python, `"a".split() + ["b"]`, as a tag list) fails the
 # whole reply; this recovers each item's transcript and layout from the text instead.
 _ITEM = re.compile(r'"input":\s*("(?:[^"\\]|\\.)*")\s*,\s*"layout":\s*"(\w+)"')
+_OBJECT = re.compile(r'\{(?:[^{}"]|"(?:[^"\\]|\\.)*")*\}')
 
 
-def _items(reply: str, count: int) -> list[dict]:
+def parse_items(reply: str, count: int) -> list[dict]:
     try:
         parsed = parse_json_reply(reply)
         items = parsed["items"] if isinstance(parsed, dict) else parsed
     except ValueError:
-        items = [{"input": json.loads(text), "layout": layout} for text, layout in _ITEM.findall(reply)]
+        items = []
+        for text in _OBJECT.findall(reply):
+            try:
+                items.append(json.loads(text))
+            except ValueError:
+                items.extend({"input": json.loads(value), "layout": layout} for value, layout in _ITEM.findall(text))
         if not items:
             raise
     kept, seen = [], set()
@@ -155,7 +149,8 @@ def _items(reply: str, count: int) -> list[dict]:
             continue
         seen.add(text)
         tags = [str(tag) for tag in item.get("tags", []) if isinstance(tag, str)][:4]
-        kept.append({"input": text, "layout": str(item.get("layout", "prose")), "tags": tags})
+        evidence = [e for e in item.get("evidence", []) if isinstance(e, str)][:6]
+        kept.append({"input": text, "layout": str(item.get("layout", "prose")), "tags": tags, "evidence": evidence})
     return kept[:count]
 
 
@@ -177,7 +172,7 @@ async def run_batch(
     started = time.monotonic()
     try:
         reply = await llm.complete(generator_messages(category, style, count, batch, notes), role="generator")
-        items = [item for item in _items(reply, count) if item["input"] not in known_inputs]
+        items = [item for item in parse_items(reply, count) if item["input"] not in known_inputs]
     except (ValueError, KeyError, TypeError) as error:
         record.error = f"unreadable generator reply: {error}"[:300]
         record.seconds = round(time.monotonic() - started, 1)
@@ -241,12 +236,6 @@ async def run_batch(
     return record, passed, rejected
 
 
-def _append(path, rows: Sequence[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as sink:
-        sink.writelines(row + "\n" for row in rows)
-
-
 async def generate_category(
     llm: LlmClient,
     category: str,
@@ -287,9 +276,9 @@ async def generate_category(
             passed = [replace(e, split="test") for e in passed]
         known |= {e.input for e in passed}
         kept += passed
-        _append(out, [e.to_json() for e in passed])
-        _append(rejected_file(category, held_out), [json.dumps(row, ensure_ascii=False) for row in rejected])
-        _append(batch_log(category, held_out), [json.dumps(asdict(record), ensure_ascii=False)])
+        append_jsonl(out, [e.to_json() for e in passed])
+        append_jsonl(rejected_file(category, held_out), [json.dumps(row, ensure_ascii=False) for row in rejected])
+        append_jsonl(batch_log(category, held_out), [json.dumps(asdict(record), ensure_ascii=False)])
         log.append(asdict(record))
         progress(
             f"{_stem(category, held_out)}: batch {batch} ({record.style}) {record.passed}/{record.returned} passed"

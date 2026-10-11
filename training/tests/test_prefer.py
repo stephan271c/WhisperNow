@@ -1,6 +1,12 @@
-from whispernow_training.datagen.schema import EMPTY, Example
-from whispernow_training.model import bench, evaluate, prefer
-from whispernow_training.model.metrics import check
+import json
+from dataclasses import replace
+
+import httpx
+from conftest import SETTINGS, judge_items
+
+from whispernow_training.datagen import llm
+from whispernow_training.datagen.schema import EMPTY, Example, read_jsonl
+from whispernow_training.model import evaluate, prefer
 
 LONG = " ".join(["we need to finish the report"] * 40)
 
@@ -32,6 +38,30 @@ def test_inputs_are_long_or_corrections_and_never_held_out():
 def _verdict(id_, k, output, failed=(), note="", faults=()):
     return {"id": id_, "k": k, "output": output, "failed": list(failed), "faults": list(faults), "note": note,
             "passed": not failed}
+
+
+def test_pairs_and_rft_keep_injected_families_together(seed_families, tmp_path):
+    train = [row for parent, derivative, _ in seed_families for row in (parent, derivative)]
+    rows = {row.id: row for row in prefer.select_inputs(train, [])}
+    assert set(rows) == {row.id for row in train}
+    verdicts = [verdict for row in rows.values() for verdict in (
+        _verdict(row.id, 0, "Meet on Wednesday.", ["dropped"]),
+        _verdict(row.id, 1, row.output),
+    )]
+    pairs, rft = prefer.build_pairs(rows, verdicts, [])
+    assert (pairs, rft) == prefer.build_pairs(rows, verdicts, [])
+    prefer._write(tmp_path / "pairs.jsonl", pairs)
+    saved = list(read_jsonl(tmp_path / "pairs.jsonl"))
+    for parent, derivative, split in seed_families:
+        family = [pair for pair in saved if pair["seed_group"] == parent.seed_group]
+        assert {pair["id"] for pair in family} == {parent.id, derivative.id}
+        assert {pair["split"] for pair in family} == {split}
+    train_parent, train_derivative, _ = seed_families[0]
+    assert {row["id"] for row in rft} == {train_parent.id, train_derivative.id}
+    assert {row["seed_group"] for row in rft} == {train_parent.seed_group}
+    assert all(row["split"] == "train" for row in rft)
+    held = [derivative for _, derivative, _ in seed_families]
+    assert prefer.select_inputs(train, held) == []
 
 
 def test_pairs_put_the_minimal_pair_first_and_match_lengths():
@@ -66,14 +96,6 @@ def test_code_failures_catch_fillers_and_layout():
     assert prefer.code_failures(row, "Finish the report.", True) == ["loop"]
     assert prefer.kind_of(["leftover_filler", "dropped"]) == "dropped"
     assert prefer.kind_of(["dropped", "wrong_side"]) == "wrong_side"
-
-
-def test_length_ratio_and_latency_cases():
-    row = _row("a", output="one two three four")
-    summary = evaluate._summarize([(check(row, "one two"), None), (check(row, "one two three four five six"), None)])
-    assert summary["length_ratio"] == 1.0
-    names = list(bench.cases())
-    assert names == ["short", "words_100", "words_200", "long", "words_500", "words_1000"]
 
 
 def _judged(failed=(), faults=()):
@@ -112,3 +134,103 @@ def test_restore_candidates_take_lost_facts_and_check_the_edit_by_kind():
     assert not prefer.edit_ok(dropped, "Complete the report.")
     assert prefer.edit_ok(changed, "Pay 40 dollars.")
     assert not prefer.edit_ok(changed, "Send 40 dollars.")
+
+
+def test_run_validates_samples_verdicts_and_restored_judgments(tmp_path, monkeypatch):
+    out = tmp_path / "prefer"
+    out.mkdir()
+    rows = [_row("parent-13", "Bring uh 12 chairs.", output="Bring 12 chairs.")]
+    prefer._write(out / "inputs.jsonl", [row.__dict__ for row in rows])
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture weights")
+    generation = {"source": "server", "revision": evaluate.model_revision(model), "model_path": str(model)}
+    monkeypatch.setattr(prefer, "server_generation", lambda server: generation)
+    rules, restore_rules = tmp_path / "judge.md", tmp_path / "restore.md"
+    rules.write_text("judge-contract")
+    restore_rules.write_text("restore-contract")
+    monkeypatch.setattr(evaluate, "JUDGE_INSTRUCTIONS", rules)
+    monkeypatch.setattr(prefer, "RESTORE", restore_rules)
+    monkeypatch.setattr(llm, "CACHE", tmp_path / "cache")
+    settings = replace(SETTINGS, backend="codex", model="gpt-6.1-sol", reasoning="high",
+                       judge_backend="codex", judge_model="gpt-6.1-sol", judge_reasoning="high")
+    monkeypatch.setattr(llm.LlmSettings, "from_env", lambda: settings)
+    samples, requests = [], []
+
+    async def sample(server, pending, **kwargs):
+        samples.append([(row.input, k) for row, k in pending])
+        return [{"id": row.id, "k": k, "output": "Bring chairs.", "hit_limit": False}
+                for row, k in pending]
+
+    async def connect(self, backend):
+        pass
+
+    async def request(self, backend, model, reasoning, messages):
+        requests.append(messages)
+        system, user = messages
+        if system == "restore-contract":
+            return rows[0].output
+        items = judge_items([{"content": user}])
+        return json.dumps({"results": [
+            {"i": item["i"], "not_answered": True, "faults": [] if item["output"] == item["reference"] else
+             [{"kind": "dropped", "fact": repr(rows[0].output.split()[1])}]} for item in items
+        ]})
+
+    monkeypatch.setattr(prefer, "sample", sample)
+    monkeypatch.setattr(llm.LlmClient, "_connect", connect)
+    monkeypatch.setattr(llm.LlmClient, "_request", request)
+    prefer.run(out, "http://fixture/v1")
+    assert len(requests) == 3
+    prefer.run(out, None)
+    assert len(requests) == 3 and len(samples) == 1
+    rows[0] = replace(rows[0], input="Bring um 14 chairs.", output="Bring 14 chairs.")
+    prefer._write(out / "inputs.jsonl", [row.__dict__ for row in rows])
+    prefer.run(out, "http://fixture/v1")
+    assert len(requests) == 6 and samples[-1] == [("Bring um 14 chairs.", k) for k in range(prefer.SAMPLES + 1)]
+    restored = list(read_jsonl(out / "restored.jsonl"))
+    assert [row["restored"] for row in restored] == ["Bring 12 chairs.", "Bring 14 chairs."]
+    assert len(list(read_jsonl(out / "samples.jsonl"))) == 2 * (prefer.SAMPLES + 1)
+    rules.write_text("changed-judge-contract")
+    prefer.run(out, None)
+    assert len(requests) == 8 and len(samples) == 2
+
+
+def test_run_resumes_partial_samples_without_replacing_completed_outputs(tmp_path, monkeypatch):
+    out = tmp_path / "prefer"
+    out.mkdir()
+    row = _row("a", "Bring uh 12 chairs.", output="Bring 12 chairs.")
+    prefer._write(out / "inputs.jsonl", [row.__dict__])
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"fixture weights")
+    generation = {"source": "server", "revision": evaluate.model_revision(model), "model_path": str(model)}
+    monkeypatch.setattr(prefer, "server_generation", lambda server: generation)
+    requested = []
+
+    def reply(request):
+        requested.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": f"Provider completion {len(requested)}."},
+                                                       "finish_reason": "stop"}]})
+
+    client = httpx.AsyncClient
+    transport = httpx.MockTransport(reply)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: client(transport=transport, **kwargs))
+
+    async def verdicts_for(rows, samples, judged):
+        return [_verdict(item["id"], item["k"], item["output"]) for item in samples]
+
+    async def restore(*args):
+        return []
+
+    monkeypatch.setattr(prefer, "verdicts_for", verdicts_for)
+    monkeypatch.setattr(prefer, "restore", restore)
+    prefer.run(out, "http://fixture/v1")
+    original = list(read_jsonl(out / "samples.jsonl"))
+    completed = [item for item in original if item["k"] != 2]
+    prefer._write(out / "samples.jsonl", completed)
+    requested.clear()
+    prefer.run(out, "http://fixture/v1")
+    saved = list(read_jsonl(out / "samples.jsonl"))
+    assert len(requested) == 1 and requested[0]["seed"] == 2
+    assert saved[:len(completed)] == completed and saved[-1]["k"] == 2
+    assert saved[-1]["output"] != original[2]["output"]
+    prefer.run(out, None)
+    assert len(requested) == 1 and list(read_jsonl(out / "samples.jsonl")) == saved

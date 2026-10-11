@@ -45,17 +45,12 @@ _SPELLED_NUMBER = re.compile(
     r"|\b\d+(\.\d+)?\s+percent\b",
     re.IGNORECASE,
 )
-_MARKDOWN = re.compile(r"\*\*|`|^\s*#{1,6}\s", re.MULTILINE)
 
 
 def conflict(example: Example) -> str | None:
     """Why a row conflicts with the target rules in a way we don't normalize, or None."""
-    if not example.output.strip():
-        return "empty output"
     if _SPELLED_NUMBER.search(example.output):
         return "number written as words"
-    if _MARKDOWN.search(example.output):
-        return "markdown"
     if example.source == sources.HANDY and sources.spliced(example.input):
         return "written text spliced into dictation"
     if example.source == sources.DISFL_QA and sources.reworded(example.input, example.output):

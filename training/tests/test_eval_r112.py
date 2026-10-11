@@ -13,7 +13,7 @@ def _row(id_, teacher_model=None, teacher_reasoning=None):
                    teacher_model=teacher_model, teacher_reasoning=teacher_reasoning)
 
 
-def test_new_references_get_their_own_judge_and_score_files():
+def test_reference_tag_marks_only_uniform_r112_provenance():
     new = [_row("a", "gpt-6.1-sol", "high"), _row("b", "gpt-6.1-sol", "high")]
     assert evaluate.reference_tag(new) == "r112"
     assert evaluate.reference_tag([*new, _row("c", "glm-5.3-flash")]) == ""
