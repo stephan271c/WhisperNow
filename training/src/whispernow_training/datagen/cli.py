@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import aawaaz, build, compose, epochs, generate, paths, real, stage1, stage2, teacher
 from .judge import judge_all, pair_item
-from .llm import LlmClient, LlmSettings
+from .llm import LlmClient, LlmSettings, require_r112
 from .schema import read_examples, write_examples
 
 
@@ -125,7 +125,7 @@ async def _relabel(args: argparse.Namespace) -> None:
     scopes = relabel.SCOPES if args.step == "all" else (args.step,)
     if not args.report:
         settings = LlmSettings.from_env()
-        relabel.check_settings(settings)
+        require_r112(settings, "teacher", "judge", "generator")
         async with LlmClient(settings) as llm:
             for scope in scopes:
                 if args.retry:

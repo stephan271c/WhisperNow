@@ -3,7 +3,7 @@ import re
 from collections import Counter
 from dataclasses import replace
 
-from whispernow_training.datagen import build, gates
+from whispernow_training.datagen import build
 from whispernow_training.datagen.schema import EMPTY, Example, read_examples, write_examples
 
 
@@ -75,12 +75,10 @@ def test_length_ratio():
     assert not build.implausible_length(row("f", listed, "We need:\n- Chips\n- Salsa\n- Soda"))
 
 
-def test_filler_only_rows_use_the_same_detection_as_the_gate():
+def test_filler_only_rows_with_blank_references_use_empty():
     for transcript in ("Um, uhhm erm hmm mhm mmm ahh", "uh uhm ummm"):
         example = row("empty", transcript, "")
-        assert gates.filler_only(transcript)
         assert build._empty_sentinel(example).output == EMPTY
-    assert not gates.filler_only("I like this")
     assert build._empty_sentinel(row("words", "I like this", "")).output == ""
 
 
@@ -202,12 +200,12 @@ def test_gather_applies_relabel_references_and_preserves_dropped_rows_from_every
     write_examples(relabel.INPUTS / "build.jsonl", originals)
     records = [{"id": example.id, "output": example.input.capitalize() + ".", "passed": example != failed,
                 "failed": [] if example != failed else ["facts_complete"], "attempt": int(example == generated),
-                "teacher_model": relabel.MODEL, "teacher_reasoning": relabel.REASONING} for example in originals]
+                "teacher_model": "gpt-6.1-sol", "teacher_reasoning": "high"} for example in originals]
     path = relabel.records_path("build")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(record) + "\n" for record in records))
 
-    kept, dropped = build.gather_with_drops()
+    kept, dropped, _ = build.gather_with_drops()
     assert [example.id for example in kept] == ["clean", "stage2", "generated", "composed"]
     assert [(example.id, reason) for example, reason in dropped] == [
         ("failed", "failed the relabel gate"), ("unseen", "not relabelled"),

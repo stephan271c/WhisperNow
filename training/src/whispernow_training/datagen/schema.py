@@ -63,6 +63,10 @@ def example_id(source: str, text: str) -> str:
     return f"{source.split('/')[-1]}-{digest}"
 
 
+def hash_bucket(key: str) -> int:
+    return int(hashlib.sha256(key.encode()).hexdigest(), 16) % 100
+
+
 def _is_label(line: str) -> bool:
     """A lead-in, section label or title line that sits above list items."""
     stripped = line.strip()

@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..text_rules import CASE_SENSITIVE, FILLER, POSSIBLE_CORRECTION, protected_tokens
+from ..text_rules import CASE_SENSITIVE, POSSIBLE_CORRECTION, filler_only, protected_tokens
 from ..model.metrics import EM_DASH, HEDGES, casual_contractions, correction_cues, dropped_kept_words, spelled_counts
 from .concurrency import task_group
 from .judge import Verdict, judge_batch, size_batches
@@ -216,11 +216,6 @@ def code_check(transcript: str, reference: str) -> tuple[list[str], str]:
         failed.append("contraction")
         notes.append("kept " + ", ".join(repr(word) for word in contractions[:3]) + " instead of writing it out ('want to', 'going to')")
     return failed, "; ".join(notes)
-
-
-def filler_only(transcript: str) -> bool:
-    """Whether a transcript holds no dictated words, only fillers and punctuation, so its edit is EMPTY."""
-    return all(FILLER.fullmatch(word) for word in re.findall(r"[\w']+", transcript))
 
 
 def empty_check(transcript: str, reference: str) -> tuple[list[str], str]:

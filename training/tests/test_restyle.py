@@ -150,9 +150,8 @@ def test_malformed_restyle_replies_are_diagnostics_that_remain_pending(reply, fa
     assert list(read_jsonl(restyle.REJECTED)) == [diagnostic]
 
 
-def test_legacy_infrastructure_diagnostics_resume_but_content_rejections_stay_done(fake_llm, restyle_rows):
+def test_content_rejections_stay_done_when_other_rows_resume(fake_llm, restyle_rows):
     rejected = [
-        {"id": "a", "why": "reply: transport retries exhausted", "text": ""},
         {"id": "b", "why": "eggs != milk", "text": "Bring milk."},
     ]
     restyle.REJECTED.write_text("".join(json.dumps(row) + "\n" for row in rejected))

@@ -35,11 +35,9 @@ from ..model import metrics
 from . import gates, paths
 from .concurrency import task_group
 from .judge import judge_contract
-from .llm import R112_TARGET, LlmClient, LlmSettings, request_key, require_r112
+from .llm import LlmClient, request_key
 from .schema import EMPTY, Example, read_examples, read_jsonl, words, write_examples
 from .teacher import teacher_messages
-
-BACKEND, MODEL, REASONING = R112_TARGET
 
 DIR = paths.DATA / "relabel"
 INPUTS = DIR / "inputs"
@@ -62,10 +60,6 @@ GROUP = 10
 # The injected rows are made from their parents' references, so they are made again, not relabelled.
 INJECTED_CATEGORY = "filler_injection"
 TAG = "relabel112"
-
-
-def check_settings(settings: LlmSettings) -> None:
-    require_r112(settings, "teacher", "judge", "generator")
 
 
 def in_scope(example: Example) -> bool:
@@ -94,19 +88,26 @@ def old_injected() -> list[Example]:
     return read_examples(path) if path.exists() else []
 
 
-def records_path(scope: str, root: Path | None = None) -> Path:
-    """`root` defaults to `DIR`, looked up per call."""
-    return (root or DIR) / f"{scope}.jsonl"
+def records_path(scope: str) -> Path:
+    return DIR / f"{scope}.jsonl"
 
 
-def load_records(scope: str, root: Path | None = None) -> dict[str, dict]:
-    path = records_path(scope, root)
+def load_records(scope: str) -> dict[str, dict]:
+    path = records_path(scope)
     return {row["id"]: row for row in read_jsonl(path)} if path.exists() else {}
 
 
-def active(scope: str, root: Path | None = None) -> bool:
+def active(scope: str) -> bool:
     """Whether the scope has been relabelled, so its rows take their references from the records."""
-    return records_path(scope, root).exists()
+    return records_path(scope).exists()
+
+
+def snapshot(scope: str) -> dict[str, dict] | None:
+    records = load_records(scope)
+    if not records and not active(scope):
+        return None
+    require_complete(scope, records)
+    return records
 
 
 def require_complete(scope: str, records: Mapping[str, dict]) -> None:
@@ -120,7 +121,7 @@ def require_complete(scope: str, records: Mapping[str, dict]) -> None:
 
 
 def relabelled_license(example: Example) -> str:
-    """The row's license with the reference now `MODEL`'s output; the transcript's author stays.
+    """The row's license with the new teacher reference; the transcript's author stays.
 
     A dataset original keeps its license, as rows the teacher relabelled before did. A row of model
     output names each writer: a single author wrote both parts, a pair names the transcript's writer
@@ -231,12 +232,11 @@ async def _gate_groups(
     round_: int | None,
     contract: dict,
     *,
-    root: Path | None = None,
     progress: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
     stall_seconds: float = STALL_SECONDS,
 ) -> Progress:
     _, model, reasoning = llm.settings.target("teacher")
-    path = records_path(scope, root)
+    path = records_path(scope)
     path.parent.mkdir(parents=True, exist_ok=True)
     state = Progress(len(rows), started=time.monotonic(), last=time.monotonic())
     # Enough groups in flight to keep every codex slot busy through the judge step.
@@ -284,7 +284,6 @@ async def retry(
     llm: LlmClient,
     scope: str,
     rows: Sequence[Example],
-    root: Path | None = None,
     round_: int = 1,
     settled_hedges: bool = False,
 ) -> dict:
@@ -293,7 +292,7 @@ async def retry(
     `settled_hedges` also checks passed references whose hedge may have been settled. A record with
     a user `ruling` is never retried. Matching records carrying this round or a later one are skipped.
     """
-    records = load_records(scope, root)
+    records = load_records(scope)
     contract = _contract(llm, scope)
     to_check = []
     for e in rows:
@@ -308,7 +307,7 @@ async def retry(
         to_check.append(e)
     rechecked = sum(records[e.id]["passed"] for e in to_check)
     earlier_notes = {e.id: records[e.id]["first_note"] for e in to_check if not records[e.id]["passed"]}
-    state = await _gate_groups(llm, scope, to_check, records, earlier_notes, round_, contract, root=root)
+    state = await _gate_groups(llm, scope, to_check, records, earlier_notes, round_, contract)
     return {"scope": scope, "round": round_, "retried": len(to_check), "rechecked": rechecked, "passed": state.passed}
 
 
@@ -316,7 +315,6 @@ async def run(
     llm: LlmClient,
     scope: str,
     rows: Sequence[Example],
-    root: Path | None = None,
     progress: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
     stall_seconds: float = STALL_SECONDS,
 ) -> dict:
@@ -324,14 +322,14 @@ async def run(
 
     Raises `Stalled` when no group finishes for `stall_seconds`.
     """
-    records = load_records(scope, root)
+    records = load_records(scope)
     contract = _contract(llm, scope)
     pending = [e for e in rows if e.id not in records or (
         not records[e.id].get("ruling") and not _matches(e, records[e.id], contract)
     )]
     started_tokens, started_seconds, started_calls = llm.tokens, llm.request_seconds, llm.calls
     state = await _gate_groups(
-        llm, scope, pending, {}, {}, None, contract, root=root, progress=progress, stall_seconds=stall_seconds,
+        llm, scope, pending, {}, {}, None, contract, progress=progress, stall_seconds=stall_seconds,
     )
     return {
         "scope": scope,
@@ -459,9 +457,9 @@ def compare_markdown(report: dict, title: str = "References, old against new (to
     return "\n".join(lines) + "\n"
 
 
-def scope_report(scope: str, root: Path | None = None) -> dict:
+def scope_report(scope: str) -> dict:
     old = inputs(scope)
-    records = load_records(scope, root)
+    records = load_records(scope)
     old = [e for e in old if e.id in records]
     new, _ = apply(old, records)
     return compare(old, new, records)
@@ -469,10 +467,9 @@ def scope_report(scope: str, root: Path | None = None) -> dict:
 
 def apply_bench(rows: list[Example], scope: str) -> list[Example]:
     """A benchmark's rows with their new references once the scope is relabelled; failed rows go."""
-    if not active(scope):
+    records = snapshot(scope)
+    if records is None:
         return rows
-    records = load_records(scope)
-    require_complete(scope, records)
     kept, dropped = apply(rows, records)
     missing = [e.id for e, reason in dropped if reason == "not relabelled"]
     if missing:

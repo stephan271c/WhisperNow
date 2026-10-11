@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from collections import Counter
 
-from .schema import Example, example_id
+from .schema import Example, example_id, hash_bucket
 
 REPO = "shantanugoel/aawaaz-transcript-cleanup-dataset"
 LICENSE = "MIT"
@@ -56,7 +55,7 @@ def normalize_output(text: str) -> str | None:
 
 
 def is_test(example_id_: str) -> bool:
-    return int(hashlib.sha256(example_id_.encode()).hexdigest(), 16) % 100 < TEST_PERCENT
+    return hash_bucket(example_id_) < TEST_PERCENT
 
 
 def import_rows(rows_by_category: dict[str, list[dict]]) -> tuple[list[Example], Counter]:

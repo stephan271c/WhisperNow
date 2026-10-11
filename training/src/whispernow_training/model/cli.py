@@ -80,7 +80,7 @@ def cmd_eval(args: argparse.Namespace) -> None:
         generation = evaluate.server_generation(args.server, args.repeat_penalty, repeat_last_n)
 
         def produce(rows):
-            return asyncio.run(evaluate.generate_server(args.server, rows, args.concurrency, args.repeat_penalty, args.repeat_last_n))
+            return asyncio.run(evaluate.generate_server(args.server, rows, args.concurrency, args.repeat_penalty, repeat_last_n))
     elif args.checkpoint:
         out_dir = RUNS / args.run / f"eval-{args.checkpoint}"
         generation = evaluate.hf_generation(RUNS / args.run / args.checkpoint, args.repeat_penalty)
@@ -210,10 +210,12 @@ def main() -> None:
     table.add_argument("sweep", type=Path)
     table.set_defaults(handler=cmd_sweep_table)
 
+    from . import evaluate
+
     eval_parser = commands.add_parser("eval", help="generate, check and (with --judge) judge a split")
     eval_parser.add_argument("run", nargs="?", default="teacher", help="run name under runs/")
     eval_parser.add_argument(
-        "--split", default="test", choices=["train", "val", "test", "bench-long", "bench-noise"],
+        "--split", default="test", choices=evaluate.SPLITS,
         help="a built split, or one of todo 110's benchmarks in data/bench/",
     )
     eval_parser.add_argument("--limit", type=int, help="score a fixed random sample of this many rows")

@@ -19,7 +19,6 @@ The requests use their own prompt (`prompts/bench/noise.md`), their own name and
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import random
 import re
@@ -33,7 +32,7 @@ from ..text_rules import FILLER, FILLER_FORMS
 from . import gates, generate, paths, rejudge, relabel
 from .compose import BENCH_NAMES, BENCH_SETTINGS
 from .llm import LlmClient, LlmError
-from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, read_examples, read_jsonl, write_examples
+from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, hash_bucket, read_examples, read_jsonl, write_examples
 
 PATTERNS = (
     "filler_cluster", "determiner_filler", "repeats", "restart", "short_cue", "redecision", "reasoned",
@@ -213,7 +212,7 @@ async def run_batch(
     for id_, item in candidates:
         result = results[id_]
         if result.passed and result.output.strip() == EMPTY:
-            result = replace(result, passed=False, failed=["empty"], note="the teacher returned EMPTY")
+            result = replace(result, passed=False, failed=["empty"], note="the noise benchmark has no EMPTY rows")
         if result.passed and kind == CONTROL and not keeps_control_words(result.output, item["evidence"]):
             result = replace(result, passed=False, failed=["control_words"], note="the reference dropped a meaningful word")
         if not result.passed:
@@ -312,8 +311,7 @@ PROBED_JUDGE = gates.Judge(
 
 
 def chosen_for_probe(example: Example) -> bool:
-    digest = hashlib.sha256(f"noise-probe-{example.id}".encode()).hexdigest()
-    return int(digest, 16) % 100 < PROBE_PERCENT
+    return hash_bucket(f"noise-probe-{example.id}") < PROBE_PERCENT
 
 
 def probe_audio() -> int:

@@ -34,7 +34,7 @@ from pathlib import Path
 
 from . import gates, generate, paths, rejudge
 from .llm import LlmClient, LlmError
-from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, layout_of, length_bucket, read_examples, read_jsonl
+from .schema import BatchRecord, Example, append_jsonl, example_id, layout_of, length_bucket, read_examples, read_jsonl
 from .teacher import relabel
 
 CATEGORIES = (
@@ -142,8 +142,8 @@ def generator_messages(run: Run, category: str, bucket: str, style: str, count: 
     return [{"role": "system", "content": base}, {"role": "user", "content": user}]
 
 
-def _bucket_of(item: dict) -> str | None:
-    return file_bucket(len(item["input"].split()))
+def _bucket_of(item: dict) -> str:
+    return length_bucket(len(item["input"].split()))
 
 
 def file_bucket(words: int) -> str | None:
@@ -189,7 +189,7 @@ async def run_batch(
         else:
             unjudged.append((id_, item))
     candidates = unjudged
-    groups: dict[str | None, list[tuple[str, dict]]] = {}
+    groups: dict[str, list[tuple[str, dict]]] = {}
     for id_, item in candidates:
         groups.setdefault(_bucket_of(item), []).append((id_, item))
     results: dict[str, gates.Gated] = {}
@@ -205,8 +205,6 @@ async def run_batch(
     passed = []
     for id_, item in candidates:
         result = results[id_]
-        if result.passed and result.output.strip() == EMPTY:
-            result = replace(result, passed=False, failed=["empty"], note="the teacher returned EMPTY")
         if not result.passed:
             rejected.append({"id": id_, "input": item["input"], **asdict(result)})
             continue

@@ -436,13 +436,7 @@ def redecode(model: str, shard: int = 0, shards: int = 1) -> int:
 
 
 def load(model: str = "parakeet") -> list[dict]:
-    """Probe records for `model`; the transcript is `heard` (the first Parakeet rows called it `parakeet`)."""
-    records = [json.loads(line) for path in _out_files(model) for line in path.open(encoding="utf-8")]
-    for record in records:
-        if "parakeet" in record:
-            record["heard"] = record.pop("parakeet")
-            record["model"] = "parakeet"
-    return records
+    return [json.loads(line) for path in _out_files(model) for line in path.open(encoding="utf-8")]
 
 
 _WORD = re.compile(r"[A-Za-z0-9$%][\w'’.:,/%$-]*")

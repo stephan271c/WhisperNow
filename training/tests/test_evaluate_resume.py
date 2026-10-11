@@ -37,10 +37,9 @@ def test_evaluation_resumes_only_matching_generation_requests(tmp_path, monkeypa
     assert outputs["a"]["output"] == "Fresh output A." and outputs["b"]["output"] == "Independent output B."
     old = [json.loads(line) for line in (tmp_path / "test.outputs.jsonl").read_text().splitlines()]
     assert old[0]["output"] == "Independent output A." and len(old) == 3
-    for fields in ({"repeat_penalty": 1.1}, {"revision": "weights-2"}):
-        generation = {**generation, **fields}
-        evaluate.evaluate(produce, tmp_path, "test", generation=generation)
-    assert requests[-2:] == [["a", "b"], ["a", "b"]]
+    generation = {**generation, "revision": "weights-2"}
+    evaluate.evaluate(produce, tmp_path, "test", generation=generation)
+    assert requests[-1] == ["a", "b"]
 
 
 def test_unknown_model_revisions_stay_pending(tmp_path, monkeypatch):

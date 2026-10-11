@@ -33,7 +33,14 @@ def reply(messages, role):
 
 def test_generation_writes_passing_rows_logs_batches_and_resumes(fake_llm, tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "STAGE3", tmp_path)
-    llm = fake_llm(reply)
+    generator_requests = []
+
+    def recorded_reply(messages, role):
+        if role == "generator":
+            generator_requests.append(messages[-1]["content"])
+        return reply(messages, role)
+
+    llm = fake_llm(recorded_reply)
     kept = asyncio.run(generate.generate_category(llm, "mixed_message", 6, batch_size=5, progress=lambda _: None))
     assert kept == 6
     rows = read_examples(tmp_path / "mixed_message.jsonl")
@@ -45,10 +52,8 @@ def test_generation_writes_passing_rows_logs_batches_and_resumes(fake_llm, tmp_p
     assert set(styles) <= set(generate.STYLES)
     rejected = list(read_jsonl(tmp_path / "mixed_message.rejected.jsonl"))
     assert any(r["failed"] == ["layout_intent"] for r in rejected)
-    # The rejection notes reach the next batch's request.
     assert log[0]["notes"]
-    second_request = generate.generator_messages("mixed_message", "raw", 5, 1, log[0]["notes"])
-    assert log[0]["notes"][0] in second_request[1]["content"]
+    assert log[0]["notes"][0] in generator_requests[1]
 
     calls = llm.calls
     assert asyncio.run(generate.generate_category(llm, "mixed_message", 6, batch_size=5, progress=lambda _: None)) == 6

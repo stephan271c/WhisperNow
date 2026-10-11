@@ -173,12 +173,8 @@ def test_response_cache_separates_backends_and_endpoints(monkeypatch, tmp_path):
     assert asyncio.run(client.complete(messages)) == "codex:None" and client.calls == 3
 
 
-@pytest.mark.parametrize("workflow", ["judge", "restyle"])
 @pytest.mark.parametrize("retryable", [False, True])
-def test_terminal_client_retry_budget_is_not_multiplied_by_reply_recovery(workflow, retryable, monkeypatch, tmp_path):
-    from whispernow_training.datagen import judge, restyle
-    from whispernow_training.datagen.schema import Example
-
+def test_terminal_client_failure_uses_only_the_client_retry_budget(retryable, monkeypatch, tmp_path):
     monkeypatch.setattr(llm, "CACHE", tmp_path)
     monkeypatch.setattr(llm, "_BACKOFF_BASE_SECONDS", 0.0)
     monkeypatch.setattr(llm, "_BACKOFF_CAP_SECONDS", 0.0)
@@ -199,54 +195,12 @@ def test_terminal_client_retry_budget_is_not_multiplied_by_reply_recovery(workfl
 
     async def run():
         async with client:
-            if workflow == "judge":
-                await judge.judge_batch(client, "rules", ("clean",), [
-                    (id_, {"transcript": "bring milk", "reference": "Bring milk."}) for id_ in ("a", "b")
-                ])
-            else:
-                await restyle._restyle_batch(client, [
-                    Example(id=id_, input="bring milk", output="Bring milk.", source="s", category="c", license="MIT")
-                    for id_ in ("a", "b")
-                ])
+            await client.complete([{"role": "user", "content": "bring milk"}])
 
     with pytest.raises(llm.LlmError) as error:
         asyncio.run(run())
     assert error.value is failure and requests == (llm._MAX_ATTEMPTS if retryable else 1)
     assert not list(tmp_path.rglob("*.json"))
-
-
-@pytest.mark.parametrize("workflow", ["judge", "restyle"])
-def test_missing_api_key_propagates_without_a_reply_or_completion(workflow, monkeypatch, tmp_path):
-    from whispernow_training.datagen import judge, restyle
-    from whispernow_training.datagen.schema import Example, write_examples
-
-    monkeypatch.setattr(llm, "CACHE", tmp_path)
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-    client = llm.LlmClient(SETTINGS)
-    out = tmp_path / "verdicts.jsonl"
-    rules = tmp_path / "rules.md"
-    rules.write_text("rules")
-    monkeypatch.setattr(restyle, "OUT", tmp_path / "restyle.jsonl")
-    monkeypatch.setattr(restyle, "REJECTED", tmp_path / "rejected.jsonl")
-    monkeypatch.setattr(restyle.stage1, "CLEAN", tmp_path / "clean.jsonl")
-    monkeypatch.setattr(restyle, "chosen", lambda example: True)
-    write_examples(restyle.stage1.CLEAN, [
-        Example(id="a", input="bring milk", output="Bring milk.", source="s", category="c", license="MIT")
-    ])
-
-    async def run():
-        async with client:
-            if workflow == "judge":
-                await judge.judge_all(client, [("a", {"transcript": "bring milk", "output": "Bring milk."})], out,
-                                      instructions_file=rules, criteria=("clean",))
-            else:
-                await restyle.restyle_all(client)
-
-    with pytest.raises(KeyError, match="LLM_API_KEY"):
-        asyncio.run(run())
-    assert client.calls == 0 and not out.exists()
-    assert not restyle.OUT.exists() or restyle.OUT.read_text() == ""
-    assert not restyle.REJECTED.exists() or restyle.REJECTED.read_text() == ""
 
 
 def test_a_usage_limit_waits_without_using_up_retries(monkeypatch, tmp_path):

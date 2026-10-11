@@ -6,7 +6,7 @@ import pytest
 from conftest import SETTINGS, judge_items
 
 from whispernow_training.datagen import gates, inject, relabel
-from whispernow_training.datagen.llm import LlmError
+from whispernow_training.datagen.llm import LlmError, require_r112
 from whispernow_training.datagen.schema import EMPTY, Example, write_examples
 
 SOL = replace(
@@ -31,11 +31,11 @@ def _passing(messages, role, fail=lambda item: ""):
 
 
 def test_the_guard_refuses_any_role_off_gpt_6_1_sol_high(fake_llm):
-    relabel.check_settings(SOL)
+    require_r112(SOL, "teacher", "judge", "generator")
     with pytest.raises(SystemExit, match="judge: codex/gpt-6.1-sol/low"):
-        relabel.check_settings(replace(SOL, judge_reasoning="low"))
+        require_r112(replace(SOL, judge_reasoning="low"), "teacher", "judge", "generator")
     with pytest.raises(SystemExit, match="teacher: opencode/glm-5.3-flash/low"):
-        relabel.check_settings(replace(SOL, backend="opencode", model="glm-5.3-flash", reasoning="low"))
+        require_r112(replace(SOL, backend="opencode", model="glm-5.3-flash", reasoning="low"), "teacher", "judge", "generator")
 
 
 @pytest.fixture

@@ -20,10 +20,10 @@ import numpy as np
 
 from ..text_rules import (
     CASE_SENSITIVE, CODE_TOKEN, CORRECTION, FILLER, FILLER_TOKEN, TRAILING_PUNCTUATION,
-    assistant_opener, has_markdown, malformed_list, protected_tokens,
+    assistant_opener, filler_only, has_markdown, malformed_list, protected_tokens,
 )
 from . import aawaaz, compose, generate, inject, paths, relabel, restyle, sources, stage1, stage2
-from .schema import EMPTY, LENGTH_BUCKETS, Example, length_bucket, read_examples, write_examples
+from .schema import EMPTY, LENGTH_BUCKETS, Example, hash_bucket, length_bucket, read_examples, write_examples
 
 SEED = 108
 INJECTED = 2000
@@ -63,7 +63,7 @@ def _source_rank(example: Example) -> tuple[int, int]:
     return (0 if example.split == "test" else 1, rank)
 
 
-def gather_with_drops(with_sotto: bool = False) -> tuple[list[Example], list[tuple[Example, str]]]:
+def gather_with_drops(with_sotto: bool = False) -> tuple[list[Example], list[tuple[Example, str]], dict[str, dict] | None]:
     """Every stage's rows, plus the programmatic rows made here from the cleaned aawaaz rows and the
     composed rows. The benchmarks in `data/bench/` are never read.
 
@@ -71,14 +71,11 @@ def gather_with_drops(with_sotto: bool = False) -> tuple[list[Example], list[tup
     the relabel (`relabel.apply`), and rows it dropped or never saw are dropped here; the injected
     rows are then made from the relabelled parents.
     """
-    relabelled = relabel.active("build")
-    records = relabel.load_records("build") if relabelled else {}
-    if relabelled:
-        relabel.require_complete("build", records)
+    records = relabel.snapshot("build")
     dropped: list[tuple[Example, str]] = []
 
     def labelled(examples: list[Example]) -> list[Example]:
-        if not relabelled:
+        if records is None:
             return examples
         kept, lost = relabel.apply(examples, records)
         dropped.extend(lost)
@@ -106,11 +103,7 @@ def gather_with_drops(with_sotto: bool = False) -> tuple[list[Example], list[tup
     rows += injected + [replace(e, tags=[*e.tags, "long_origin"]) for e in long_injected]
     rows += labelled(inject.empty_rows(EMPTY_ROWS, SEED))
     rows += labelled([replace(e, split="test") for e in inject.empty_rows(EMPTY_TEST_ROWS, SEED + 1)])
-    return [_empty_sentinel(_bare_fillers(_modal_may(e))) for e in rows], dropped
-
-
-def _bucket(key: str) -> int:
-    return int(hashlib.sha256(key.encode()).hexdigest(), 16) % 100
+    return [_empty_sentinel(_bare_fillers(_modal_may(e))) for e in rows], dropped, records
 
 
 def spoken_variant(example: Example, salt: str = "") -> Example:
@@ -138,7 +131,7 @@ def spoken_variant(example: Example, salt: str = "") -> Example:
     else:
         style = "recognizer"
         asr = restyle.asr_style(key) if composed else None
-    if _bucket(f"densify-{key}") < DENSIFY_PERCENT["composed" if composed else "short"]:
+    if hash_bucket(f"densify-{key}") < DENSIFY_PERCENT["composed" if composed else "short"]:
         dense = inject.densify(text, key, style, pauses=asr in (None, "parakeet")).text
         if dense != text:
             text, tags = dense, [*tags, "densified"]
@@ -208,7 +201,7 @@ def bare_filler_share(examples: Iterable[Example]) -> list[Example]:
         if (
             e.source == generate.SOURCE and e.split in ("train", "val") and "style_recognizer" in e.tags
             and "composed" not in e.tags
-            and _bucket(f"bare-{e.id}") < BARE_FILLER_PERCENT
+            and hash_bucket(f"bare-{e.id}") < BARE_FILLER_PERCENT
         ):
             text = strip_filler_commas(e.input)
             if text != e.input:
@@ -229,8 +222,7 @@ def _modal_may(example: Example) -> Example:
 
 def _empty_sentinel(example: Example) -> Example:
     """aawaaz writes an empty output for filler-only input, where the app expects EMPTY."""
-    spoken = [w for w in sources.words(example.input) if not FILLER.fullmatch(w)]
-    if not example.output.strip() and not spoken:
+    if not example.output.strip() and filler_only(example.input):
         return replace(example, output=EMPTY)
     return example
 
@@ -438,7 +430,7 @@ def assign_splits(examples: Iterable[Example]) -> list[Example]:
         groups[example.seed_group].append(example)
     result = []
     for seed_group, members in groups.items():
-        bucket = _bucket(f"split\0{seed_group}")
+        bucket = hash_bucket(f"split\0{seed_group}")
         if any(e.split == "test" for e in members):
             split = "test"
         elif bucket < VAL_PERCENT:
@@ -533,7 +525,7 @@ def stats_markdown(report: dict) -> str:
 
 
 def build(with_sotto: bool = False, out_dir: Path = paths.BUILD) -> dict:
-    rows, dropped = gather_with_drops(with_sotto)
+    rows, dropped, records = gather_with_drops(with_sotto)
     kept = []
     for example in rows:
         reason = filter_reason(example)
@@ -553,9 +545,9 @@ def build(with_sotto: bool = False, out_dir: Path = paths.BUILD) -> dict:
             sink.write(json.dumps({**asdict(example), "dropped": reason}, ensure_ascii=False) + "\n")
     report = stats(final, dropped)
     markdown = stats_markdown(report)
-    if relabel.active("build"):
+    if records is not None:
         # Old against new by source; the old injected rows were copied aside with the relabel's inputs.
-        compared = relabel.compare([*relabel.inputs("build"), *relabel.old_injected()], final, relabel.load_records("build"))
+        compared = relabel.compare([*relabel.inputs("build"), *relabel.old_injected()], final, records)
         report["relabel"] = compared
         markdown += "\n" + relabel.compare_markdown(compared)
     (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

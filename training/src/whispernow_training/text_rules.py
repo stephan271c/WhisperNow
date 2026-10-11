@@ -78,6 +78,10 @@ PROTECTED = re.compile(
 TRAILING_PUNCTUATION = ".,;:!?)]}'\"—–"
 
 
+def filler_only(transcript: str) -> bool:
+    return all(FILLER.fullmatch(word) for word in re.findall(r"[\w']+", transcript))
+
+
 def protected_tokens(text: str) -> list[str]:
     return [match.group(0).rstrip(TRAILING_PUNCTUATION) for match in PROTECTED.finditer(text)]
 

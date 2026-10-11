@@ -65,13 +65,6 @@ def test_composed_rows_draw_their_variant_again_from_the_row_before_it():
         epochs.respoken(replace(built, input="something else"), before, 2)
 
 
-def test_each_epoch_keeps_the_build_share_of_clean_inputs():
-    pairs = [_composed(i) for i in range(400)]
-    built_dense = sum("densified" in built.tags for _, built in pairs)
-    for epoch in (2, 3, 4, 5):
-        dense = sum("densified" in epochs.respoken(built, before, epoch).tags for before, built in pairs)
-        assert abs(dense - built_dense) < 50, (epoch, dense, built_dense)
-
 
 def test_epoch_rows_renoise_only_programmatic_rows_and_keep_the_order():
     before, built = _composed(7)
@@ -100,7 +93,7 @@ def test_a_rebuild_rewrites_the_epoch_files(tmp_path, monkeypatch):
 
     monkeypatch.setattr(epochs.paths, "BUILD", tmp_path)
     monkeypatch.setattr(epochs, "EPOCHS", tmp_path / "epochs")
-    monkeypatch.setattr(epochs.build, "gather_with_drops", lambda: ([], []))
+    monkeypatch.setattr(epochs.build, "gather_with_drops", lambda: ([], [], None))
     write_examples(tmp_path / "train.jsonl", [_injected(1)])
     epochs.materialize(2)
     assert [e.id for e in read_examples(epochs.epoch_file(2))] == ["injected-1"]

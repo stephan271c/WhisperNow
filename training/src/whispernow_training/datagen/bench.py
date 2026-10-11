@@ -23,7 +23,7 @@ from dataclasses import asdict, replace
 
 from . import ami, compose, gates, noise, paths, rejudge, relabel
 from .llm import LlmClient
-from .schema import EMPTY, Example, length_bucket, read_examples, read_jsonl, words, write_examples
+from .schema import Example, append_jsonl, length_bucket, read_examples, read_jsonl, words, write_examples
 
 LONG_FILE = paths.DATA / "bench" / "long.jsonl"
 AMI_FILE = paths.DATA / "bench" / "long" / "ami.jsonl"
@@ -31,7 +31,6 @@ AMI_REJECTED = paths.DATA / "bench" / "long" / "ami.rejected.jsonl"
 # AMI turns to try per bucket; most real turns are short, so the longest buckets take what there is.
 AMI_PER_BUCKET = {"150-300": 25, "300-600": 20, "600-1000": 15}
 AMI_SEED = 110
-AMI_JUDGE = gates.Judge(gates.COMPLETENESS, gates.COMPLETENESS_CRITERIA)
 SHINGLE = 8
 OVERLAP_LIMIT = 0.3
 
@@ -59,20 +58,17 @@ async def label_ami(llm: LlmClient) -> dict[str, int]:
     done = {e.id for e in read_examples(AMI_FILE)} if AMI_FILE.exists() else set()
     done |= {row["id"] for row in read_jsonl(AMI_REJECTED)} if AMI_REJECTED.exists() else set()
     todo = [t for t in pick_ami(ami.long_turns()) if t.id not in done]
-    results = await gates.gate(llm, [(t.id, t.input) for t in todo], judge=AMI_JUDGE)
+    results = await gates.gate(llm, [(t.id, t.input) for t in todo])
     kept, rejected = [], []
     for turn in todo:
         result = results[turn.id]
-        if result.passed and result.output.strip() != EMPTY:
+        if result.passed:
             tags = [*turn.tags, f"length:{length_bucket(words(turn.input))}", *(["relabeled"] if result.attempt else [])]
             kept.append(replace(turn, output=result.output, tags=tags, teacher_model=llm.settings.model))
         else:
             rejected.append({"id": turn.id, "input": turn.input, **asdict(result)})
-    AMI_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with AMI_FILE.open("a", encoding="utf-8") as sink:
-        sink.writelines(e.to_json() + "\n" for e in kept)
-    with AMI_REJECTED.open("a", encoding="utf-8") as sink:
-        sink.writelines(json.dumps(row, ensure_ascii=False) + "\n" for row in rejected)
+    append_jsonl(AMI_FILE, (e.to_json() for e in kept))
+    append_jsonl(AMI_REJECTED, (json.dumps(row, ensure_ascii=False) for row in rejected))
     return {"kept": len(kept), "rejected": len(rejected)}
 
 
