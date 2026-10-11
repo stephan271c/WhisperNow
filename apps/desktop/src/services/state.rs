@@ -61,7 +61,6 @@ pub(crate) struct State {
     pub(crate) setup_test: Option<SetupTestResult>,
     pub(crate) active_downloads: BTreeMap<ModelId, DownloadTask>,
     pub(crate) download_failures: usize,
-    pub(crate) setup_complete: bool,
     /// Set with `cancellation` when the dictation in flight is asked to end early.
     pub(crate) cancel: Option<CancelReason>,
     /// The dictation in flight's cancellation; the worker replaces it for each recording.
@@ -69,7 +68,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn new(selected_model_id: ModelId, setup_complete: bool) -> Self {
+    pub(crate) fn new(selected_model_id: ModelId) -> Self {
         Self {
             phase: Phase::Idle,
             selected_model_id,
@@ -79,7 +78,6 @@ impl State {
             setup_test: None,
             active_downloads: BTreeMap::new(),
             download_failures: 0,
-            setup_complete,
             cancel: None,
             cancellation: CancellationToken::default(),
         }

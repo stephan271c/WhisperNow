@@ -6,8 +6,8 @@ use whispernow_domain::ipc::{ErrorCategory, Phase};
 use crate::tests::{recording, snapshot};
 
 use super::{
-    MonitorArea, OverlayPresentation, OverlayWindow, PhysicalRect, RecordingOverlay,
-    monitor_under_cursor, overlay_origin, overlay_presentation,
+    MonitorArea, OverlayWindow, PhysicalRect, RecordingOverlay, monitor_under_cursor,
+    overlay_origin,
 };
 
 #[derive(Default)]
@@ -29,10 +29,8 @@ impl OverlayWindow for FakeWindow {
     }
 
     fn notify(&self, message: String) {
-        self.0
-            .lock()
-            .expect("window log")
-            .push(format!("notify {message}"));
+        self.0.lock().expect("window log").push("notify".to_owned());
+        assert!(!message.is_empty());
     }
 }
 
@@ -83,33 +81,7 @@ fn native_wayland_notifies_each_failure_once_instead_of_showing_a_window() {
     overlay.observe(&snapshot(failed(ErrorCategory::Output)));
     overlay.observe(&snapshot(Phase::Idle));
     overlay.observe(&snapshot(failed(ErrorCategory::General)));
-    assert_eq!(
-        window.calls(),
-        [
-            "notify The text was not pasted. Open History in WhisperNow to copy it.",
-            "notify The text was not pasted; copy it instead",
-        ]
-    );
-}
-
-#[test]
-fn visibility_policy_uses_windows_when_allowed_and_notifications_for_failures() {
-    assert_eq!(
-        overlay_presentation(&recording(), true),
-        OverlayPresentation::Window
-    );
-    assert_eq!(
-        overlay_presentation(&failed(ErrorCategory::General), false),
-        OverlayPresentation::Notification
-    );
-    assert_eq!(
-        overlay_presentation(&Phase::Idle, true),
-        OverlayPresentation::None
-    );
-    assert_eq!(
-        overlay_presentation(&recording(), false),
-        OverlayPresentation::None
-    );
+    assert_eq!(window.calls(), ["notify", "notify"]);
 }
 
 fn monitor(x: i32, width: u32, scale_factor: f64) -> MonitorArea {

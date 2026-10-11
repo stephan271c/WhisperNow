@@ -20,6 +20,7 @@ from unittest.mock import patch
 import yaml
 
 SCRIPTS = Path(__file__).parents[1]
+sys.path.insert(0, str(SCRIPTS))
 SIGNING_SECRETS = {
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
@@ -110,29 +111,22 @@ class NativeStagingTests(unittest.TestCase):
         path.write_text(json.dumps(document), encoding="utf-8")
         return path
 
+    def run_stage(self, *arguments: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "stage_native_dependencies.py"), "--platform", "linux-x86_64", *arguments],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
     def test_static_archive_is_verified_extracted_and_licenses_zipped(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             archive = self.fixture_archive(root, "linux-x86_64")
             allowlist = self.fixture_allowlist(root, archive, "linux-x86_64")
             output = root / "output"
-            process = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPTS / "stage_native_dependencies.py"),
-                    "--platform",
-                    "linux-x86_64",
-                    "--archive",
-                    str(archive),
-                    "--output",
-                    str(output),
-                    "--allowlist",
-                    str(allowlist),
-                ],
-                text=True,
-                capture_output=True,
-                check=True,
-            )
+            process = self.run_stage("--archive", str(archive), "--output", str(output), "--allowlist", str(allowlist))
+            self.assertEqual(process.returncode, 0, process.stderr)
             lib_dir = Path(process.stdout.strip())
             self.assertEqual(
                 {path.name for path in lib_dir.iterdir()},
@@ -151,21 +145,7 @@ class NativeStagingTests(unittest.TestCase):
             root = Path(directory)
             archive = self.fixture_archive(root, "linux-x86_64")
             output = root / "output"
-            process = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPTS / "stage_native_dependencies.py"),
-                    "--platform",
-                    "linux-x86_64",
-                    "--archive",
-                    str(archive),
-                    "--output",
-                    str(output),
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            process = self.run_stage("--archive", str(archive), "--output", str(output))
             self.assertNotEqual(process.returncode, 0)
             self.assertIn("does not match the allowlist", process.stderr)
 
@@ -179,23 +159,7 @@ class NativeStagingTests(unittest.TestCase):
                 bundle.add(escaped, arcname="../escaped")
             allowlist = self.fixture_allowlist(root, archive, "linux-x86_64")
             output = root / "output"
-            process = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPTS / "stage_native_dependencies.py"),
-                    "--platform",
-                    "linux-x86_64",
-                    "--archive",
-                    str(archive),
-                    "--output",
-                    str(output),
-                    "--allowlist",
-                    str(allowlist),
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            process = self.run_stage("--archive", str(archive), "--output", str(output), "--allowlist", str(allowlist))
             self.assertNotEqual(process.returncode, 0)
             self.assertIn("unsafe entry", process.stderr)
 

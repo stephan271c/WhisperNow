@@ -51,7 +51,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn summary_is_constant_memory_and_resettable() {
+    fn summary_reports_peak_rms_and_sample_count_then_resets() {
         let mut levels = AudioLevelAccumulator::default();
         levels.observe(&[0.0, 1.0, -1.0, 0.0]);
         let summary = levels.take_summary();

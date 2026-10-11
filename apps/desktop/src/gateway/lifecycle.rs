@@ -1,5 +1,4 @@
 use std::sync::{Arc, atomic::Ordering};
-use whispernow_domain::AppError;
 
 use super::{Failure, Gateway, settings::shortcut_error};
 use crate::{
@@ -94,13 +93,8 @@ impl Gateway {
     }
 
     /// Stops shortcuts, waits for the running commands, and releases services.
-    /// Runs once, and only after [`Self::begin_shutdown`].
+    /// The caller must have received `true` from [`Self::begin_shutdown`].
     pub(crate) fn finish_shutdown(&self) {
-        if !self.shutdown_begun.load(Ordering::Acquire)
-            || self.shutdown_claimed.swap(true, Ordering::AcqRel)
-        {
-            return;
-        }
         self.shortcuts.shutdown();
         self.services.request_shutdown();
         drop(
@@ -119,9 +113,5 @@ impl Gateway {
     pub(crate) fn shortcuts_enabled(&self) -> bool {
         !self.shutdown_begun.load(Ordering::Acquire)
             && self.services.state.lock().phase.shortcuts_enabled()
-    }
-
-    pub(crate) fn refuse_during_maintenance(&self) -> Result<(), AppError> {
-        self.services.state.refuse_during_maintenance()
     }
 }

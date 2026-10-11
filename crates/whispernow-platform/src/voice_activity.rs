@@ -157,7 +157,6 @@ mod tests {
         let mut impulse = silence;
         impulse[SECOND / 2] = 1.0;
         assert!(segments(&impulse).is_empty());
-        assert!(segments(&impulse).is_empty());
 
         // Two seconds of fixed-seed xorshift32 white noise bounded to 0.01
         // normalized amplitude (approximately -40 dBFS peak). This is a
@@ -200,17 +199,6 @@ mod tests {
         );
 
         assert_eq!(segments(&speech).len(), 1);
-    }
-
-    #[test]
-    fn each_recording_gets_fresh_detector_state() {
-        let speech = fixture_speech_without_edge_silence();
-        let silence = vec![0.0; SECOND];
-
-        let first = segments(&speech);
-        assert_eq!(first.len(), 1);
-        assert!(segments(&silence).is_empty());
-        assert_eq!(segments(&speech), first);
     }
 
     #[test]

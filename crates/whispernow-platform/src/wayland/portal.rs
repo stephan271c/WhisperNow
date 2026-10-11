@@ -23,7 +23,10 @@ use tokio::{
     sync::mpsc,
     task::JoinHandle,
 };
-use whispernow_core::{CancellationToken, text_output::PASTE_RESTORE_DELAY};
+use whispernow_core::{
+    CancellationToken,
+    text_output::{PASTE_RESTORE_DELAY, PasteOutcome},
+};
 
 use crate::PasteKeys;
 
@@ -40,14 +43,6 @@ const XK_CONTROL_L: i32 = 0xffe3;
 const XK_SHIFT_L: i32 = 0xffe1;
 const XK_V_LOWER: i32 = 0x0076;
 const BEFORE_PASTE_DELAY: Duration = Duration::from_millis(20);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WaylandPasteOutcome {
-    PastedAndRestored,
-    /// The previous clipboard could not be read or put back.
-    PastedWithoutRestore,
-    RestoreSkippedClipboardChanged,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WaylandPortalError {
@@ -283,43 +278,51 @@ impl WaylandOutput {
         &mut self,
         transcript: &str,
         cancellation: &CancellationToken,
-    ) -> Result<WaylandPasteOutcome, WaylandPortalError> {
-        // Until the transcript is offered, cancellation abandons the work.
-        let output = tokio::select! {
-            output = self.ensure_output() => output?,
-            () = cancellation.cancelled() => return Err(WaylandPortalError::Cancelled),
-        };
-        // A snapshot failure is never fatal: paste anyway and leave the
-        // transcript on the clipboard.
-        let snapshot = tokio::select! {
-            snapshot = snapshot_clipboard(output) => snapshot
-                .inspect_err(|error| tracing::warn!(%error, "clipboard snapshot failed"))
-                .ok(),
-            () = cancellation.cancelled() => return Err(WaylandPortalError::Cancelled),
-        };
-        let transcript_offer = TRANSCRIPT_MIME_TYPES
-            .iter()
-            .map(|mime| (*mime, transcript.as_bytes()))
-            .collect();
-        set_offer(output, transcript_offer).await?;
-        let delivered = async {
-            // Cancellation may shorten only the wait before the keystroke.
-            let keys = tokio::select! {
-                keys = async {
-                    serve_for(output, BEFORE_PASTE_DELAY).await?;
-                    Ok(active_paste_keys().await)
-                } => keys?,
+    ) -> PasteOutcome<WaylandPortalError> {
+        let result = async {
+            // Until the transcript is offered, cancellation abandons the work.
+            let output = tokio::select! {
+                output = self.ensure_output() => output?,
                 () = cancellation.cancelled() => return Err(WaylandPortalError::Cancelled),
             };
-            inject_balanced_paste(output, keys).await?;
-            // Once the keystroke is sent, the target always gets the whole
-            // restore delay; restoring earlier can make it paste the old value.
-            serve_for(output, PASTE_RESTORE_DELAY).await
+            // A snapshot failure is never fatal: paste anyway and leave the
+            // transcript on the clipboard.
+            let snapshot = tokio::select! {
+                snapshot = snapshot_clipboard(output) => snapshot
+                    .inspect_err(|error| tracing::warn!(%error, "clipboard snapshot failed"))
+                    .ok(),
+                () = cancellation.cancelled() => return Err(WaylandPortalError::Cancelled),
+            };
+            let transcript_offer = TRANSCRIPT_MIME_TYPES
+                .iter()
+                .map(|mime| (*mime, transcript.as_bytes()))
+                .collect();
+            set_offer(output, transcript_offer).await?;
+            let delivered = async {
+                // Cancellation may shorten only the wait before the keystroke.
+                let keys = tokio::select! {
+                    keys = async {
+                        serve_for(output, BEFORE_PASTE_DELAY).await?;
+                        Ok(active_paste_keys().await)
+                    } => keys?,
+                    () = cancellation.cancelled() => return Err(WaylandPortalError::Cancelled),
+                };
+                inject_balanced_paste(output, keys).await?;
+                // Once the keystroke is sent, the target always gets the whole
+                // restore delay; restoring earlier can make it paste the old value.
+                serve_for(output, PASTE_RESTORE_DELAY).await
+            }
+            .await;
+            // A failed delivery still puts the previous clipboard back.
+            let restored = restore_if_current(output, snapshot).await;
+            delivered.map(|()| restored)
         }
         .await;
-        // A failed delivery still puts the previous clipboard back.
-        let restored = restore_if_current(output, snapshot).await;
-        delivered.map(|()| restored)
+        match result {
+            Ok(outcome) => outcome,
+            Err(WaylandPortalError::Cancelled) => PasteOutcome::Cancelled,
+            Err(error) => PasteOutcome::Failed(error),
+        }
     }
 
     /// Opens the `RemoteDesktop` output session the paste keystroke uses, asking
@@ -337,9 +340,9 @@ impl WaylandOutput {
 async fn restore_if_current(
     output: &mut OutputSession,
     snapshot: Option<PortalClipboardSnapshot>,
-) -> WaylandPasteOutcome {
+) -> PasteOutcome<WaylandPortalError> {
     let Some(snapshot) = snapshot else {
-        return WaylandPasteOutcome::PastedWithoutRestore;
+        return PasteOutcome::PastedWithoutRestore;
     };
     // While the session still owns the selection it holds the transcript; the
     // portal refuses to read a session's own selection back.
@@ -348,13 +351,13 @@ async fn restore_if_current(
         .lock()
         .is_ok_and(|state| state.can_restore())
     {
-        return WaylandPasteOutcome::RestoreSkippedClipboardChanged;
+        return PasteOutcome::RestoreSkippedClipboardChanged;
     }
     match set_offer(output, snapshot.as_offer()).await {
-        Ok(()) => WaylandPasteOutcome::PastedAndRestored,
+        Ok(()) => PasteOutcome::PastedAndRestored,
         Err(error) => {
             tracing::warn!(%error, "clipboard restore failed");
-            WaylandPasteOutcome::PastedWithoutRestore
+            PasteOutcome::PastedWithoutRestore
         }
     }
 }

@@ -520,7 +520,6 @@ small {
   font-size: var(--font-size-xs);
 }
 
-.checkbox-row,
 .choice-row {
   display: flex;
   align-items: center;
@@ -693,11 +692,11 @@ small {
 }
 
 /* Content between settings rows keeps the card's inner spacing. */
-.section-card > :first-child:not(.setting-row, .prompt-item, .model-list) {
+.section-card > :first-child:not(.setting-row, .model-list) {
   margin-top: var(--space-4);
 }
 
-.section-card > :last-child:not(.setting-row, .prompt-new, .model-list) {
+.section-card > :last-child:not(.setting-row, .model-list) {
   margin-bottom: var(--space-4);
 }
 
@@ -864,35 +863,6 @@ small {
 .saved-model-name {
   flex: 1;
   font-size: var(--font-size-sm);
-  overflow-wrap: anywhere;
-}
-
-.prompt-item,
-.prompt-new {
-  display: grid;
-  gap: var(--space-3);
-  padding-block: var(--space-4);
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.prompt-new {
-  border-bottom: 0;
-}
-
-.prompt-heading {
-  font-size: var(--font-size-sm);
-}
-
-.prompt-test-result {
-  display: grid;
-  gap: var(--space-1);
-  padding: var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-raised);
-}
-
-.prompt-test-text {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

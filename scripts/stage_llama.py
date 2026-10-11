@@ -24,7 +24,7 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from stage_native_dependencies import DEFAULT_ALLOWLIST, PLATFORMS, fetch, sha256
+from stage_native_dependencies import DEFAULT_ALLOWLIST, PLATFORMS, fetch, matches_pin
 
 
 def load_pins(path: Path, platform: str) -> tuple[dict, list[dict], list[str]]:
@@ -82,10 +82,7 @@ def stage(
     for library in libraries:
         destination = output / library["name"]
         destination.write_bytes(contents[library["member"]])
-        if (
-            destination.stat().st_size != library["bytes"]
-            or sha256(destination) != library["sha256"]
-        ):
+        if not matches_pin(destination, library):
             raise ValueError(
                 f"llama.cpp library does not match the allowlist: {library['member']}"
             )
@@ -101,7 +98,7 @@ def verify(directory: Path, libraries: list[dict], runtime: list[str]) -> None:
         raise ValueError(f"packaged llama.cpp libraries are not the exact pinned set: {present}")
     for library in libraries:
         path = directory / library["name"]
-        if path.stat().st_size != library["bytes"] or sha256(path) != library["sha256"]:
+        if not matches_pin(path, library):
             raise ValueError(f"packaged llama.cpp library does not match the allowlist: {path.name}")
 
 
@@ -134,10 +131,7 @@ def main() -> int:
                 fetch(archive["source"], downloaded)
             else:
                 shutil.copyfile(args.archive, downloaded)
-            if (
-                downloaded.stat().st_size != archive["bytes"]
-                or sha256(downloaded) != archive["sha256"]
-            ):
+            if not matches_pin(downloaded, archive):
                 raise ValueError(
                     f"llama.cpp archive size or SHA-256 does not match the allowlist: {archive['name']}"
                 )

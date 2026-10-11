@@ -16,7 +16,6 @@ use whispernow_platform::{
 use super::{
     Dictation, lock,
     settings::SettingsCoordinator,
-    shutting_down,
     state::{DownloadTask, StateCell},
 };
 
@@ -101,14 +100,7 @@ impl ModelCoordinator {
         })
     }
 
-    pub(crate) fn download(
-        &self,
-        model_id: &ModelId,
-        cancellation: &CancellationToken,
-    ) -> Result<(), AppError> {
-        if cancellation.is_cancelled() {
-            return Err(shutting_down());
-        }
+    pub(crate) fn download(&self, model_id: &ModelId) -> Result<(), AppError> {
         self.state.refuse_during_maintenance()?;
         let _transition = self.transition();
         if self.state.lock().active_downloads.contains_key(model_id) {

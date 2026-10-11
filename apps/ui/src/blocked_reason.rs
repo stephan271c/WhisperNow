@@ -1,26 +1,64 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use dioxus::prelude::*;
+
+use crate::{UiContext, UiOperation};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BlockedReason {
-    /// No state snapshot has arrived from the desktop yet.
     Connecting,
-    /// A dictation is recording or being processed.
-    Dictating,
-    Paused,
-    UpdateInstalling,
-    ClearingData,
-    /// A change this window sent is still in flight.
+    Phase(String),
     CommandPending,
 }
 
 impl BlockedReason {
     #[must_use]
-    pub const fn message(self) -> &'static str {
+    pub fn message(&self) -> &str {
         match self {
             Self::Connecting => "WhisperNow is still connecting",
-            Self::Dictating => "Wait for the current dictation to finish",
-            Self::Paused => "Resume WhisperNow first",
-            Self::UpdateInstalling => "Wait for the current update to finish installing",
-            Self::ClearingData => "Wait for application data to finish clearing",
+            Self::Phase(summary) => summary,
             Self::CommandPending => "Wait for the current change to finish",
         }
     }
+}
+
+impl UiContext {
+    pub(crate) fn blocked(self, operation: UiOperation) -> Option<BlockedReason> {
+        if self.state.read().snapshot.is_none() {
+            Some(BlockedReason::Connecting)
+        } else {
+            self.management
+                .read()
+                .is_busy(operation)
+                .then_some(BlockedReason::CommandPending)
+        }
+    }
+
+    pub(crate) fn phase_blocked(self) -> Option<BlockedReason> {
+        match self.state.read().snapshot.as_ref() {
+            None => Some(BlockedReason::Connecting),
+            Some(snapshot) => snapshot
+                .phase
+                .require_idle()
+                .err()
+                .map(|error| BlockedReason::Phase(error.summary)),
+        }
+    }
+
+    pub(crate) fn settings_pending(self) -> Option<BlockedReason> {
+        self.management
+            .read()
+            .settings_pending()
+            .then_some(BlockedReason::CommandPending)
+    }
+
+    pub(crate) fn settings_blocked(self) -> Option<BlockedReason> {
+        self.phase_blocked().or(self.settings_pending())
+    }
+}
+
+#[component]
+pub(crate) fn DisabledReason(id: String, reason: Option<BlockedReason>) -> Element {
+    let Some(reason) = reason else {
+        return rsx! {};
+    };
+    rsx! { p { id, class: "disabled-reason", "{reason.message()}" } }
 }

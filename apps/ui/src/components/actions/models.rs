@@ -20,7 +20,7 @@ impl UiContext {
                     NoticeScope::Models,
                     format!("Downloading {name}"),
                 ),
-                Err(error) => actions.report(operation, &error),
+                Err(error) => actions.report(NoticeScope::Models, &error),
             },
         );
     }
@@ -32,7 +32,7 @@ impl UiContext {
             async move { client::invoke::<_, ()>("cancel_download", Some(&model_id)).await },
             move |actions, answer| {
                 if let Err(error) = answer {
-                    actions.report(operation, &error);
+                    actions.report(NoticeScope::Models, &error);
                 }
             },
         );
@@ -46,7 +46,7 @@ impl UiContext {
             async move { client::invoke::<_, ()>("select_model", Some(&model_id)).await },
             move |actions, answer| {
                 if let Err(error) = answer {
-                    actions.report(operation, &error);
+                    actions.report(NoticeScope::Models, &error);
                 }
             },
         );
@@ -59,7 +59,7 @@ impl UiContext {
             async move { client::invoke("delete_model", Some(&model_id)).await },
             move |actions, answer| match answer {
                 Ok(()) => actions.reload_models(),
-                Err(error) => actions.report(operation, &error),
+                Err(error) => actions.report(NoticeScope::Models, &error),
             },
         );
     }

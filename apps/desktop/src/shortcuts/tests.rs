@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use whispernow_domain::{ShortcutKey};
+use whispernow_domain::ShortcutKey;
 
 use super::*;
 
@@ -196,7 +196,7 @@ fn a_refused_cancel_shortcut_is_reported_quietly_and_recording_shortcuts_keep_wo
         Some(ShortcutRegistrationError::ConflictOrUnsupported)
     );
     assert!(coordinator.registration_active());
-    assert_eq!(coordinator.registration_diagnostic(), None);
+    assert_eq!(coordinator.failure(), None);
     assert_eq!(
         coordinator.input(binding_id("F1"), KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
@@ -275,7 +275,10 @@ fn a_changed_mode_keeps_the_shortcut_registered_and_a_changed_key_replaces_it() 
         .apply_update(Ok(recording("F3", RecordingMode::Toggle)))
         .expect("replace the key");
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F3").0]));
-    assert_eq!(coordinator.input(binding_id("F1"), KeyTransition::Pressed), None);
+    assert_eq!(
+        coordinator.input(binding_id("F1"), KeyTransition::Pressed),
+        None
+    );
 }
 
 #[test]
@@ -288,12 +291,15 @@ fn a_refused_shortcut_change_registers_the_previous_shortcut_again() {
     );
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F1").0]));
     assert!(coordinator.registration_active());
-    assert_eq!(coordinator.registration_diagnostic(), None);
+    assert_eq!(coordinator.failure(), None);
     assert_eq!(
         coordinator.input(binding_id("F1"), KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
     );
-    assert_eq!(coordinator.input(binding_id("F3"), KeyTransition::Pressed), None);
+    assert_eq!(
+        coordinator.input(binding_id("F3"), KeyTransition::Pressed),
+        None
+    );
 }
 
 #[test]
@@ -304,15 +310,18 @@ fn unavailable_shortcuts_are_reported_and_retried_without_restarting() {
         ShortcutCoordinator::new(registrar.clone(), Ok(hold("F1")), always_running(), None);
     assert!(!coordinator.registration_active());
     assert_eq!(
-        coordinator.registration_diagnostic(),
+        coordinator.failure(),
         Some(ShortcutRegistrationError::ConflictOrUnsupported)
     );
-    assert_eq!(coordinator.input(binding_id("F1"), KeyTransition::Pressed), None);
+    assert_eq!(
+        coordinator.input(binding_id("F1"), KeyTransition::Pressed),
+        None
+    );
 
     *registrar.fail_register.lock().expect("fail register") = None;
     coordinator.sync_lifecycle().expect("retry");
     assert!(coordinator.registration_active());
-    assert_eq!(coordinator.registration_diagnostic(), None);
+    assert_eq!(coordinator.failure(), None);
 
     let invalid = ShortcutCoordinator::new(
         registrar,
@@ -321,7 +330,7 @@ fn unavailable_shortcuts_are_reported_and_retried_without_restarting() {
         None,
     );
     assert_eq!(
-        invalid.registration_diagnostic(),
+        invalid.failure(),
         Some(ShortcutRegistrationError::ConflictOrUnsupported)
     );
 }
@@ -336,7 +345,7 @@ fn registration_after_a_backend_startup_timeout_reports_its_actual_result() {
         Some(ShortcutRegistrationError::PortalUnavailable),
     );
     assert!(coordinator.registration_active());
-    assert_eq!(coordinator.registration_diagnostic(), None);
+    assert_eq!(coordinator.failure(), None);
     assert!(registrar.holds(&binding(&control("F1"))));
 
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F2").0);
@@ -348,7 +357,7 @@ fn registration_after_a_backend_startup_timeout_reports_its_actual_result() {
     );
     assert!(!conflict.registration_active());
     assert_eq!(
-        conflict.registration_diagnostic(),
+        conflict.failure(),
         Some(ShortcutRegistrationError::ConflictOrUnsupported)
     );
 }
@@ -363,8 +372,14 @@ fn paused_dictation_releases_the_shortcuts_and_resuming_restores_them() {
     coordinator
         .apply_update(Ok(hold("F2")))
         .expect("a change while paused");
-    assert!(registrar.registered().is_empty(), "nothing registers while paused");
-    assert_eq!(coordinator.input(binding_id("F2"), KeyTransition::Pressed), None);
+    assert!(
+        registrar.registered().is_empty(),
+        "nothing registers while paused"
+    );
+    assert_eq!(
+        coordinator.input(binding_id("F2"), KeyTransition::Pressed),
+        None
+    );
 
     running.store(true, Ordering::SeqCst);
     coordinator.sync_lifecycle().expect("resume");
@@ -408,45 +423,42 @@ fn capture_suspension_ignores_presses_and_forgets_held_keys() {
 }
 
 #[test]
-fn a_hold_press_and_release_each_reach_the_worker_once() {
-    let (_registrar, coordinator) = memory_coordinator("F1");
-    let hold = binding_id("F1");
-    assert_eq!(
-        coordinator.input(hold, KeyTransition::Pressed),
-        Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
-    );
-    assert_eq!(
-        coordinator.input(hold, KeyTransition::Pressed),
-        None,
-        "a key repeat is not a new press"
-    );
-    assert_eq!(
-        coordinator.input(hold, KeyTransition::Released),
-        Some(ShortcutAction::HoldReleased)
-    );
-}
-
-#[test]
-fn a_toggle_press_reaches_the_worker_once_and_its_release_asks_for_nothing() {
-    let (_registrar, coordinator) = memory_coordinator("F1");
-    coordinator
-        .apply_update(Ok(recording("F2", RecordingMode::Toggle)))
-        .expect("toggle shortcut");
-    let toggle = binding_id("F2");
-    assert_eq!(
-        coordinator.input(toggle, KeyTransition::Pressed),
-        Some(ShortcutAction::Pressed(RecordingTrigger::Toggle))
-    );
-    assert_eq!(coordinator.input(toggle, KeyTransition::Pressed), None);
-    assert_eq!(
-        coordinator.input(toggle, KeyTransition::Released),
-        None,
-        "a toggle release asks for nothing"
-    );
-    assert_eq!(
-        coordinator.input(toggle, KeyTransition::Pressed),
-        Some(ShortcutAction::Pressed(RecordingTrigger::Toggle))
-    );
+fn presses_ignore_repeats_and_only_hold_releases_reach_the_worker() {
+    for (mode, trigger, release) in [
+        (
+            RecordingMode::Hold,
+            RecordingTrigger::Hold,
+            Some(ShortcutAction::HoldReleased),
+        ),
+        (RecordingMode::Toggle, RecordingTrigger::Toggle, None),
+    ] {
+        let (_registrar, coordinator) = memory_coordinator("F1");
+        coordinator
+            .apply_update(Ok(recording("F2", mode)))
+            .expect("recording shortcut");
+        let binding = binding_id("F2");
+        let press = Some(ShortcutAction::Pressed(trigger));
+        assert_eq!(
+            coordinator.input(binding, KeyTransition::Pressed),
+            press,
+            "{mode:?}"
+        );
+        assert_eq!(
+            coordinator.input(binding, KeyTransition::Pressed),
+            None,
+            "{mode:?} repeat"
+        );
+        assert_eq!(
+            coordinator.input(binding, KeyTransition::Released),
+            release,
+            "{mode:?}"
+        );
+        assert_eq!(
+            coordinator.input(binding, KeyTransition::Pressed),
+            press,
+            "{mode:?} next press"
+        );
+    }
 }
 
 #[test]
@@ -491,10 +503,13 @@ fn a_lost_shortcut_backend_unregisters_everything_and_forgets_held_keys() {
     coordinator.capability_lost(ShortcutRegistrationError::SessionClosed);
     assert!(!coordinator.registration_active());
     assert_eq!(
-        coordinator.registration_diagnostic(),
+        coordinator.failure(),
         Some(ShortcutRegistrationError::SessionClosed)
     );
-    assert_eq!(coordinator.input(binding_id("F1"), KeyTransition::Pressed), None);
+    assert_eq!(
+        coordinator.input(binding_id("F1"), KeyTransition::Pressed),
+        None
+    );
 }
 
 /// Records every native call and whether `pressed` or `published` was held when it ran.
@@ -577,9 +592,13 @@ fn native_registration_never_runs_under_the_input_locks() {
     running.store(true, Ordering::SeqCst);
     coordinator.sync_lifecycle().expect("resume");
     native_step("resume");
-    coordinator.suspend_for_capture().expect("suspend for capture");
+    coordinator
+        .suspend_for_capture()
+        .expect("suspend for capture");
     native_step("capture suspension");
-    coordinator.resume_after_capture().expect("resume after capture");
+    coordinator
+        .resume_after_capture()
+        .expect("resume after capture");
     native_step("capture resumption");
     coordinator.shutdown();
     native_step("shutdown");

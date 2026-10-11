@@ -68,6 +68,74 @@ pub(crate) async fn write_clipboard(text: &str) -> Answer<()> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum WindowAction {
+    Minimize,
+    ToggleMaximize,
+    Close,
+}
+
+pub(crate) fn run_window_action(action: WindowAction) {
+    #[cfg(target_arch = "wasm32")]
+    dioxus::prelude::spawn(async move {
+        // A refused window action leaves the window as it was, which the user can see.
+        let _ = match action {
+            WindowAction::Minimize => minimize_window().await,
+            WindowAction::ToggleMaximize => toggle_maximize_window().await,
+            WindowAction::Close => close_window().await,
+        };
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = action;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct ListenerOwner;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn listen_all(
+    _event_names: &[&str],
+    _callback: impl FnMut(whispernow_domain::ipc::EventPayload) + 'static,
+) -> std::future::Ready<Answer<ListenerOwner>> {
+    std::future::ready(Ok(ListenerOwner))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn current_window_label() -> String {
+    "settings".to_owned()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn apply_theme(_theme: Option<String>) {}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const fn reset_settings_scroll() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn has_custom_titlebar() -> std::future::Ready<bool> {
+    std::future::ready(false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn listen_maximized(
+    _callback: impl FnMut(bool) + 'static,
+) -> std::future::Ready<Answer<ListenerOwner>> {
+    std::future::ready(Ok(ListenerOwner))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const fn request_shortcut_capture(_capturing: bool) {}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn history_audio_url(
+    _id: whispernow_domain::EntryId,
+) -> std::future::Ready<Result<String, String>> {
+    std::future::ready(Err("Audio plays in the desktop app".to_owned()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const fn revoke_object_url(_url: &str) {}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use std::cell::RefCell;
@@ -160,26 +228,13 @@ mod wasm {
         write_clipboard_text_js(text).await.map_err(from_js)
     }
 
-    /// A recording's retained audio held in this window. Dropping it only leaves bytes for the
-    /// garbage collector; an object URL exists once [`Self::object_url`] makes one.
-    #[derive(Debug)]
-    pub struct RecordingAudio(JsValue);
-
-    impl RecordingAudio {
-        /// An object URL an `<audio>` element can play; revoke it with [`revoke_object_url`]
-        /// once the player is gone.
-        #[must_use]
-        pub fn object_url(&self) -> String {
-            object_url(&self.0)
-        }
-    }
-
-    pub async fn history_audio(request: &EntryId) -> Answer<RecordingAudio> {
-        let request = serde_wasm_bindgen::to_value(request).map_err(|_| connection_error())?;
-        audio_blob("get_history_audio", request)
+    // Make the URL after the last await, in the same step that hands it to the player.
+    pub(crate) async fn history_audio_url(id: EntryId) -> Result<String, String> {
+        let request = serde_wasm_bindgen::to_value(&id).map_err(|_| connection_error().summary)?;
+        let audio = audio_blob("get_history_audio", request)
             .await
-            .map(RecordingAudio)
-            .map_err(from_js)
+            .map_err(|error| from_js(error).summary)?;
+        Ok(object_url(&audio))
     }
 
     pub async fn listen_all(

@@ -10,5 +10,5 @@ mod portal;
 mod token;
 
 pub use accessibility::active_paste_keys;
-pub use portal::{WaylandOutput, WaylandPasteOutcome, WaylandPortalError};
+pub use portal::{WaylandOutput, WaylandPortalError};
 pub use token::RemoteDesktopRestoreTokenStore;

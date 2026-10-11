@@ -4,7 +4,7 @@ use whispernow_domain::{ApiKey, LlmProvider, Settings};
 use crate::UiContext;
 use crate::client;
 
-use crate::{SettingKey, UiOperation};
+use crate::{NoticeScope, SettingKey, UiOperation};
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 
@@ -27,8 +27,8 @@ impl UiContext {
             UiOperation::CredentialMutation,
             async move { client::invoke("set_api_key", Some(&request)).await },
             |mut actions, answer| match answer {
-                Ok(settings) => actions.management.write().settings = Some(settings),
-                Err(error) => actions.report(UiOperation::CredentialMutation, &error),
+                Ok(settings) => actions.management.write().install_settings(settings),
+                Err(error) => actions.report(NoticeScope::Settings, &error),
             },
         );
     }
@@ -38,8 +38,8 @@ impl UiContext {
             UiOperation::CredentialMutation,
             async move { client::invoke("clear_api_key", Some(&provider)).await },
             |mut actions, answer| match answer {
-                Ok(settings) => actions.management.write().settings = Some(settings),
-                Err(error) => actions.report(UiOperation::CredentialMutation, &error),
+                Ok(settings) => actions.management.write().install_settings(settings),
+                Err(error) => actions.report(NoticeScope::Settings, &error),
             },
         );
     }

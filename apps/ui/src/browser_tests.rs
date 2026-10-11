@@ -105,7 +105,7 @@ fn adapter_count(command: &str) -> u32 {
 }
 
 #[wasm_bindgen_test(async)]
-async fn real_history_clicks_reach_tauri_and_clipboard_adapters() {
+async fn a_history_copy_reaches_the_tauri_clipboard_adapter() {
     install_tauri_probe();
     install_mount_point();
     dioxus::launch(BrowserSettingsSurface);
@@ -123,17 +123,6 @@ async fn real_history_clicks_reach_tauri_and_clipboard_adapters() {
         calls.contains("cleaned 7"),
         "the pasted text is copied: {calls}"
     );
-
-    click("history-delete-7");
-    wait_for("the delete to ask for confirmation", || {
-        rendered("history-delete-7-confirm")
-    })
-    .await;
-    click("history-delete-7-confirm");
-    wait_for("the delete to reach invoke", || {
-        adapter_calls().contains("delete_history_entry")
-    })
-    .await;
 }
 
 fn adapter_calls() -> String {
@@ -151,12 +140,6 @@ fn install_tauri_probe() {
           core: {
             invoke: async (command, payload) => {
               window.__whispernowAdapterCalls.push({ command, payload });
-              if (command === "delete_history_entry") {
-                return null;
-              }
-              if (command === "get_history") {
-                return { entries: [], has_more: false };
-              }
               if (command === "update_settings") {
                 return { settings: { settings: payload.request, warnings: [] }, warnings: [] };
               }

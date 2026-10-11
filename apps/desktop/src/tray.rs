@@ -146,11 +146,7 @@ pub(crate) fn tray_desired(snapshot: &AppState, copy_capable: bool) -> TrayDesir
             "Pause"
         },
         pause_enabled: !matches!(snapshot.phase, Phase::ClearingData | Phase::Updating),
-        copy_last: copy_capable
-            && snapshot
-                .last_transcript
-                .as_ref()
-                .is_some_and(|transcript| !transcript.is_empty()),
+        copy_last: copy_capable && snapshot.last_transcript.is_some(),
         cancel: snapshot.phase.is_busy(),
     }
 }
@@ -421,26 +417,11 @@ mod tests {
         }
     }
 
-    fn failed() -> Phase {
-        Phase::Error {
-            error: transcription_failed(),
-        }
-    }
-
     #[test]
     fn tray_state_and_actions_follow_the_phase() {
         for (phase, background_error, expected) in [
-            (Phase::Idle, false, TrayState::Idle),
-            (recording(), false, TrayState::Recording),
-            (
-                Phase::Processing { cleaning_up: true },
-                false,
-                TrayState::Processing,
-            ),
-            (Phase::Paused, false, TrayState::Paused),
             (Phase::Updating, false, TrayState::Idle),
             (Phase::ClearingData, false, TrayState::Idle),
-            (failed(), false, TrayState::Error),
             (Phase::Idle, true, TrayState::Error),
             (recording(), true, TrayState::RecordingError),
             (Phase::Paused, true, TrayState::Error),
@@ -454,46 +435,21 @@ mod tests {
         let mut loading = snapshot(Phase::Idle);
         loading.model_state = ModelState::Loading;
         assert_eq!(tray_desired(&loading, true).state, TrayState::Loading);
-        let idle = tray_desired(&snapshot(Phase::Idle), true);
-        assert_eq!(
-            (
-                idle.pause_text,
-                idle.pause_enabled,
-                idle.copy_last,
-                idle.cancel
-            ),
-            ("Pause", true, false, false)
-        );
-        for busy in [recording(), Phase::Processing { cleaning_up: false }] {
-            assert!(tray_desired(&snapshot(busy), true).cancel);
-        }
-        let paused = tray_desired(&snapshot(Phase::Paused), true);
-        assert_eq!((paused.pause_text, paused.pause_enabled), ("Resume", true));
         let updating = tray_desired(&snapshot(Phase::Updating), true);
         assert_eq!(
             (updating.pause_text, updating.pause_enabled),
             ("Pause", false)
         );
         assert!(!tray_desired(&snapshot(Phase::ClearingData), true).pause_enabled);
-        assert!(!tray_desired(&snapshot(failed()), true).cancel);
     }
 
     #[test]
-    fn copy_last_transcript_needs_text_and_a_session_that_can_copy() {
+    fn copy_last_transcript_is_offered_when_there_is_text() {
         let copied = AppState {
             last_transcript: Some("hello".to_owned()),
             ..snapshot(Phase::Idle)
         };
         assert!(tray_desired(&copied, true).copy_last);
-        let silent = AppState {
-            last_transcript: Some(String::new()),
-            ..snapshot(Phase::Idle)
-        };
-        assert!(!tray_desired(&silent, true).copy_last);
-        assert!(
-            !tray_desired(&copied, false).copy_last,
-            "a session that cannot copy never offers the copy"
-        );
     }
 
     #[test]

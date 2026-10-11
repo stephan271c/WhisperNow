@@ -18,54 +18,15 @@ use whispernow_domain::AppError;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use whispernow_domain::ClearDataCategory;
-use whispernow_domain::ipc::{EventPayload, Phase};
+use whispernow_domain::ipc::EventPayload;
 
 use super::ui::Tone;
 use crate::client;
 
-use crate::{BlockedReason, NoticeScope, Route, UiContext, UiOperation};
+use crate::{NoticeScope, Route, UiContext, UiOperation};
 
 impl UiContext {
-    pub(crate) fn blocked(self, operation: UiOperation) -> Option<BlockedReason> {
-        if self.state.read().snapshot.is_none() {
-            Some(BlockedReason::Connecting)
-        } else {
-            self.management
-                .read()
-                .is_busy(operation)
-                .then_some(BlockedReason::CommandPending)
-        }
-    }
-
-    pub(crate) fn phase_blocked(self) -> Option<BlockedReason> {
-        match self
-            .state
-            .read()
-            .snapshot
-            .as_ref()
-            .map(|snapshot| &snapshot.phase)
-        {
-            None => Some(BlockedReason::Connecting),
-            Some(phase) if phase.is_busy() => Some(BlockedReason::Dictating),
-            Some(Phase::Paused) => Some(BlockedReason::Paused),
-            Some(Phase::Updating) => Some(BlockedReason::UpdateInstalling),
-            Some(Phase::ClearingData) => Some(BlockedReason::ClearingData),
-            Some(_) => None,
-        }
-    }
-
-    pub(crate) fn settings_pending(self) -> Option<BlockedReason> {
-        self.management
-            .read()
-            .settings_pending()
-            .then_some(BlockedReason::CommandPending)
-    }
-
-    pub(crate) fn settings_blocked(self) -> Option<BlockedReason> {
-        self.phase_blocked().or(self.settings_pending())
-    }
-
-    pub(crate) fn download(
+    pub(crate) fn active_download(
         self,
         model_id: &whispernow_domain::ModelId,
     ) -> Option<whispernow_domain::ipc::ActiveDownload> {
@@ -88,24 +49,21 @@ impl UiContext {
         operation: UiOperation,
         call: impl Future<Output = Result<R, AppError>> + 'static,
         finish: impl FnOnce(Self, Result<R, AppError>) + 'static,
-    ) -> bool {
+    ) {
         if !self.management.write().begin_busy(operation) {
-            return false;
+            return;
         }
         spawn_forever(async move {
             let answer = call.await;
             self.management.write().end_busy(operation);
             finish(self, answer);
         });
-        true
     }
 
-    fn report(mut self, operation: UiOperation, error: &AppError) {
-        self.management.write().notify(
-            Tone::Error,
-            operation.notice_scope(),
-            error.summary.clone(),
-        );
+    fn report(mut self, scope: NoticeScope, error: &AppError) {
+        self.management
+            .write()
+            .notify(Tone::Error, scope, error.summary.clone());
     }
 
     /// Reads everything this window shows: the state snapshot, settings, setup, models and
@@ -145,10 +103,6 @@ impl UiContext {
         );
     }
 
-    #[cfg_attr(
-        not(any(test, target_arch = "wasm32")),
-        expect(dead_code, reason = "called by the browser's listener and by tests")
-    )]
     pub(crate) fn apply_event(mut self, event: EventPayload) {
         match &event {
             EventPayload::StateChanged { state } => {
@@ -199,7 +153,7 @@ impl UiContext {
             client::call("test_microphone"),
             move |mut actions, answer| match answer {
                 Ok(result) => actions.management.write().finish_microphone_test(result),
-                Err(error) => actions.report(operation, &error),
+                Err(error) => actions.report(NoticeScope::Home, &error),
             },
         );
     }
@@ -212,7 +166,7 @@ impl UiContext {
             client::call("data_locations"),
             move |mut actions, answer| match answer {
                 Ok(locations) => actions.management.write().data_locations = Some(locations),
-                Err(error) => actions.report(operation, &error),
+                Err(error) => actions.report(NoticeScope::Data, &error),
             },
         );
     }
@@ -227,18 +181,10 @@ impl UiContext {
             move |mut actions, answer| {
                 match answer {
                     Ok(result) => actions.management.write().apply_clear_result(result),
-                    Err(error) => actions.report(operation, &error),
+                    Err(error) => actions.report(NoticeScope::Data, &error),
                 }
                 actions.refresh_all();
             },
         );
     }
-}
-
-#[component]
-pub(crate) fn DisabledReason(id: String, reason: Option<BlockedReason>) -> Element {
-    let Some(reason) = reason else {
-        return rsx! {};
-    };
-    rsx! { p { id, class: "disabled-reason", "{reason.message()}" } }
 }

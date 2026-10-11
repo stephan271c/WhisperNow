@@ -7,7 +7,7 @@ use whispernow_domain::{SetupCheckpoint, SetupStep};
 use crate::UiContext;
 use crate::client;
 
-use crate::{SetupTest, UiOperation};
+use crate::{NoticeScope, SetupTest, UiOperation};
 
 const PERMISSION_POLL_MS: u32 = 1_000;
 
@@ -16,13 +16,9 @@ pub(crate) const PERMISSION_POLLS: u32 = 120;
 impl UiContext {
     pub(crate) fn move_setup(mut self, step: SetupStep) {
         let request = self.management.write().setup_move(step);
-        self.save_setup_checkpoint(request);
-    }
-
-    fn save_setup_checkpoint(self, request: SetupCheckpoint) -> bool {
         self.save_checkpoint(request, |mut actions, setup| {
             actions.management.write().setup = Some(setup);
-        })
+        });
     }
 
     pub(crate) fn finish_setup_later(self) {
@@ -41,7 +37,7 @@ impl UiContext {
         self,
         request: SetupCheckpoint,
         finish: impl FnOnce(Self, SetupStateView) + 'static,
-    ) -> bool {
+    ) {
         let operation = UiOperation::SaveSetup;
         self.run(
             operation,
@@ -51,9 +47,9 @@ impl UiContext {
                     finish(actions, setup);
                     actions.list_devices_once_allowed();
                 }
-                Err(error) => actions.report(operation, &error),
+                Err(error) => actions.report(NoticeScope::Setup, &error),
             },
-        )
+        );
     }
 
     pub(crate) fn save_setup_edit(mut self, edit: impl FnOnce(&mut SetupCheckpoint)) {
@@ -64,11 +60,12 @@ impl UiContext {
             .expect("setup is loaded")
             .clone();
         edit(&mut request);
-        if self.save_setup_checkpoint(request.clone()) {
-            self.management
-                .write()
-                .edit_setup(|checkpoint| *checkpoint = request);
-        }
+        self.management
+            .write()
+            .edit_setup(|checkpoint| *checkpoint = request.clone());
+        self.save_checkpoint(request, |mut actions, setup| {
+            actions.management.write().setup = Some(setup);
+        });
     }
 
     pub(crate) fn complete_setup(self) {
@@ -84,7 +81,7 @@ impl UiContext {
             async move { client::invoke("complete_setup", Some(&request)).await },
             move |mut actions, answer| match answer {
                 Ok(saved) => actions.management.write().finish_setup(saved),
-                Err(error) => actions.report(operation, &error),
+                Err(error) => actions.report(NoticeScope::Setup, &error),
             },
         );
     }
@@ -96,7 +93,7 @@ impl UiContext {
             client::call("restart_setup"),
             move |mut actions, answer| match answer {
                 Ok(setup) => actions.management.write().restart_setup(setup),
-                Err(error) => actions.report(operation, &error),
+                Err(error) => actions.report(NoticeScope::Setup, &error),
             },
         );
     }
@@ -127,7 +124,7 @@ impl UiContext {
                     management.devices = devices;
                     management.devices_listed = true;
                 }
-                Err(error) => actions.report(operation, &error),
+                Err(error) => actions.report(NoticeScope::Global, &error),
             },
         );
     }
@@ -154,7 +151,9 @@ impl UiContext {
     pub(crate) fn install_permissions(mut self, permissions: PermissionsResponse) {
         let request = self.management.write().install_permissions(permissions);
         if let Some(request) = request {
-            self.save_setup_checkpoint(request);
+            self.save_checkpoint(request, |mut actions, setup| {
+                actions.management.write().setup = Some(setup);
+            });
         }
     }
 
@@ -184,7 +183,7 @@ impl UiContext {
             async move { client::invoke::<_, ()>("open_permission_settings", Some(&kind)).await },
             move |actions, answer| {
                 if let Err(error) = answer {
-                    actions.report(operation, &error);
+                    actions.report(NoticeScope::Setup, &error);
                 }
             },
         );

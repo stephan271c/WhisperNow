@@ -110,51 +110,6 @@ pub(super) fn native_services_before_preload(
 }
 
 #[test]
-fn a_failed_tray_pause_does_not_leave_a_settings_warning() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime");
-    let (services, _root) = native_services(Fixture::new());
-    let shortcuts = Arc::new(ShortcutCoordinator::new(
-        Arc::new(Registrar::default()),
-        recording_binding(&Settings::default()),
-        Arc::new(|| true),
-        None,
-    ));
-    let gateway = Gateway::new(
-        Arc::new(services),
-        shortcuts,
-        Arc::new(Autostart::default()),
-        Arc::new(ActivationGate::default()),
-        Arc::new(TrayController::default()),
-    );
-    gateway
-        .services
-        .state
-        .apply(|state| state.phase = Phase::Updating);
-
-    crate::toggle_pause(&gateway);
-
-    let error = gateway
-        .services_state()
-        .error
-        .expect("published pause failure");
-    assert_eq!(error.code, "update_installing");
-    for _ in 0..2 {
-        let settings = runtime
-            .block_on(gateway.settings_view())
-            .expect("read settings");
-        assert!(
-            settings
-                .warnings
-                .iter()
-                .all(|warning| warning != &error.summary)
-        );
-    }
-}
-
-#[test]
 #[expect(
     clippy::too_many_lines,
     reason = "Keeping the two native barriers and geometry save together exposes their ordering"
@@ -222,6 +177,8 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         height: 600,
     };
     gateway
+        .services
+        .settings
         .save_window_geometry(geometry)
         .expect("independent geometry save");
     let saving = Arc::clone(&gateway);
@@ -291,7 +248,6 @@ fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
 
     for expected in ["model_transition_busy", "model_not_speech"] {
         let (services, _root) = native_services(Fixture::new());
-        services.state.lock().setup_complete = false;
         let mut checkpoint = SetupCheckpoint {
             step: SetupStep::TryIt,
             ..SetupCheckpoint::default()
@@ -342,7 +298,13 @@ fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
         let state = services.state.snapshot();
         assert_eq!(services.state.lock().model.clone(), loaded);
         assert_eq!(state.selected_model_id, selected);
-        assert!(!services.state.lock().setup_complete);
+        assert!(
+            !services
+                .settings
+                .load()
+                .expect("saved setup state")
+                .first_run_complete
+        );
         assert_eq!(
             services
                 .settings
@@ -359,7 +321,6 @@ fn setup_loads_and_selects_the_model_then_saves_its_choices() {
     use whispernow_domain::{SetupCheckpoint, SetupStep};
 
     let (services, _root) = native_services(Fixture::new());
-    services.state.lock().setup_complete = false;
     let checkpoint = SetupCheckpoint {
         step: SetupStep::TryIt,
         ..SetupCheckpoint::default()
@@ -380,9 +341,24 @@ fn setup_loads_and_selects_the_model_then_saves_its_choices() {
         checkpoint.recording_shortcut
     );
     let state = services.state.lock();
-    assert!(state.setup_complete);
     assert_eq!(state.selected_model_id, checkpoint.model_id);
-    assert_eq!(state.model, LoadedModel::Ready(checkpoint.model_id));
+    assert_eq!(state.model, LoadedModel::Ready(checkpoint.model_id.clone()));
+    drop(state);
+    assert_eq!(
+        services
+            .settings
+            .save_setup_checkpoint(checkpoint.clone(), services.models.model_store())
+            .expect_err("completed setup cannot save a checkpoint")
+            .code,
+        "setup_already_complete"
+    );
+    let restarted = services.settings.restart_setup().expect("restart setup");
+    assert!(!restarted.first_run_complete);
+    assert_eq!(restarted.checkpoint.step, SetupStep::Welcome);
+    services
+        .settings
+        .save_setup_checkpoint(checkpoint, services.models.model_store())
+        .expect("restarted setup accepts checkpoints");
 }
 
 #[test]
@@ -390,7 +366,7 @@ fn audio_device_listing_reports_the_system_failure() {
     struct UnavailableDevices;
 
     impl AudioInput for UnavailableDevices {
-        fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError> {
+        fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
             Err(AudioInputError::Backend {
                 operation: "list devices",
             })
@@ -419,7 +395,6 @@ fn invalid_setup_choices_leave_the_saved_and_selected_model_unchanged() {
     use whispernow_domain::{SetupCheckpoint, SetupStep, Shortcut};
 
     let (services, _root) = native_services(Fixture::new());
-    services.state.lock().setup_complete = false;
     let before = services.settings.get().expect("saved settings").settings;
     let registry = ModelRegistry::builtin();
     let model = registry
@@ -459,5 +434,11 @@ fn invalid_setup_choices_leave_the_saved_and_selected_model_unchanged() {
         before
     );
     assert_eq!(services.state.snapshot().selected_model_id, before.model_id);
-    assert!(!services.state.lock().setup_complete);
+    assert!(
+        !services
+            .settings
+            .load()
+            .expect("saved setup state")
+            .first_run_complete
+    );
 }

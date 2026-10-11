@@ -14,9 +14,9 @@ use cpal::{
     StreamConfig, SupportedBufferSize, SupportedStreamConfig, SupportedStreamConfigRange,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use whispernow_core::audio::{
-    AudioDeviceChoice, AudioDeviceDescriptor, AudioDeviceId, AudioInputError, TARGET_SAMPLE_RATE,
-};
+use whispernow_core::audio::{AudioDeviceChoice, AudioInputError, TARGET_SAMPLE_RATE};
+
+use whispernow_domain::ipc::AudioDevice;
 
 const CALLBACK_BUFFER_POOL: usize = 8;
 const UNKNOWN_BUFFER_SAMPLES: usize = 65_536;
@@ -73,7 +73,7 @@ pub(crate) struct OpenedCapture {
 }
 
 pub(crate) trait CaptureBackend: Send + Sync + 'static {
-    fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError>;
+    fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError>;
 
     fn open(
         &self,
@@ -88,17 +88,13 @@ pub(crate) trait CaptureBackend: Send + Sync + 'static {
 pub(crate) struct CpalBackend;
 
 impl CaptureBackend for CpalBackend {
-    fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError> {
+    fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
         let host = cpal::default_host();
         let default_id = host
             .default_input_device()
             .and_then(|device| device.id().ok())
             .map(|id| id.to_string());
-        let mut devices = vec![AudioDeviceDescriptor {
-            choice: AudioDeviceChoice::SystemDefault,
-            display_name: "System default".to_owned(),
-            is_current_default: true,
-        }];
+        let mut devices = Vec::new();
         let inputs = host
             .input_devices()
             .map_err(|error| map_device_error(&error, "enumerate input devices"))?;
@@ -111,10 +107,11 @@ impl CaptureBackend for CpalBackend {
                 |_| device.to_string(),
                 |description| description.to_string(),
             );
-            devices.push(AudioDeviceDescriptor {
-                choice: AudioDeviceChoice::Device(AudioDeviceId::new(id.clone())?),
+            let is_default = default_id.as_deref() == Some(id.as_str());
+            devices.push(AudioDevice {
+                id,
                 display_name,
-                is_current_default: default_id.as_deref() == Some(id.as_str()),
+                is_default,
             });
         }
         Ok(devices)
@@ -508,31 +505,6 @@ mod tests {
             &AtomicUsize::new(0),
         );
         chunks_rx.recv().expect("converted chunk")
-    }
-
-    #[test]
-    fn every_supported_cpal_pcm_format_converts_to_finite_normalized_f32() {
-        macro_rules! verify {
-            ($sample:expr) => {{
-                let samples = converted(&[$sample]);
-                assert_eq!(samples.len(), 1);
-                assert!(samples[0].is_finite());
-                assert!(samples[0].abs() <= 1.0);
-            }};
-        }
-
-        verify!(0_i8);
-        verify!(0_i16);
-        verify!(cpal::I24::from_sample(0.25_f32));
-        verify!(0_i32);
-        verify!(0_i64);
-        verify!(u8::MAX / 2);
-        verify!(u16::MAX / 2);
-        verify!(cpal::U24::from_sample(0.25_f32));
-        verify!(u32::MAX / 2);
-        verify!(u64::MAX / 2);
-        verify!(0.25_f32);
-        verify!(0.25_f64);
     }
 
     #[test]

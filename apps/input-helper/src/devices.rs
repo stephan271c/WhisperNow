@@ -135,13 +135,12 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
             }
             Message::InputClosed => return ExitCode::SUCCESS,
         };
-        for id in released {
-            if writeln!(stdout, "{id:x} {millis}")
+        if released
+            && writeln!(stdout, "{millis}")
                 .and_then(|()| stdout.flush())
                 .is_err()
-            {
-                return ExitCode::SUCCESS;
-            }
+        {
+            return ExitCode::SUCCESS;
         }
     }
 }

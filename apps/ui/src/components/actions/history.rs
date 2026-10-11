@@ -6,8 +6,8 @@ use dioxus::prelude::*;
 use whispernow_domain::ipc::ErrorCategory;
 use whispernow_domain::{EntryId, HistoryPageRequest};
 
-use crate::UiContext;
 use crate::client;
+use crate::{NoticeScope, UiContext};
 
 use crate::{HistoryCopied, UiOperation};
 
@@ -98,7 +98,7 @@ impl UiContext {
             if let Err(error) = answer
                 && error.category != ErrorCategory::NotFound
             {
-                actions.report(operation, &error);
+                actions.report(NoticeScope::History, &error);
             }
         });
     }
@@ -110,7 +110,7 @@ impl UiContext {
             client::call::<()>("open_recordings_folder"),
             move |actions, answer| {
                 if let Err(error) = answer {
-                    actions.report(operation, &error);
+                    actions.report(NoticeScope::History, &error);
                 }
             },
         );

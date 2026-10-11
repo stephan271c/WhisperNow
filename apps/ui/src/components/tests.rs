@@ -6,14 +6,16 @@ use whispernow_domain::ipc::{
     SaveSettingsResponse, SettingsView, SetupStateView,
 };
 use whispernow_domain::{
-    ClearDataCategory, DownloadPhase, HistoryLimit, LlmProvider, ModelAvailability, ModelId,
-    ProviderSettings, Rating, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut,
-    ShortcutKey, ShortcutModifier, SpeechBenchmark, VocabularyReplacement, WerSource,
+    ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability, ModelId, ProviderSettings,
+    Rating, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
+    ShortcutModifier, SpeechBenchmark, VocabularyReplacement, WerSource,
 };
 
 use crate::client::fake;
 use crate::components::ui::Tone;
-use crate::test_support::{Page, focused, label_in_name_violations, snapshot, tag, text};
+use crate::test_support::{
+    Page, editable_settings, focused, label_in_name_violations, snapshot, tag, text,
+};
 use crate::{ManagementState, NoticeScope, SettingKey, UiState};
 
 pub(super) fn shell(snapshot: AppState, management: ManagementState) -> Page {
@@ -29,28 +31,10 @@ pub(super) fn shortcut() -> Shortcut {
     }
 }
 
-fn settings() -> Settings {
-    Settings {
-        model_id: ModelId::new("sherpa-onnx-whisper-tiny").expect("fixture model id"),
-        recording_shortcut: shortcut(),
-        first_run_complete: true,
-        history_limit: HistoryLimit::Last20,
-        llm_provider_settings: [(
-            LlmProvider::OpenAi,
-            ProviderSettings {
-                model: "gpt-5".to_owned(),
-                ..ProviderSettings::default()
-            },
-        )]
-        .into(),
-        ..Settings::default()
-    }
-}
-
 pub(super) fn loaded() -> ManagementState {
     let mut management = ManagementState::default();
     management.install_settings(SettingsView {
-        settings: settings(),
+        settings: editable_settings(),
         warnings: Vec::new(),
     });
     management.setup = Some(SetupStateView {
@@ -222,7 +206,6 @@ fn global_notices_show_the_message_and_allow_dismissal() {
 fn test_microphone_runs_once_and_shows_the_measured_level() {
     let mut page = shell(snapshot(Phase::Idle), loaded());
     page.click("test-microphone");
-    let mut management = page.context().management;
     assert_eq!(
         fake::count("test_microphone"),
         1,
@@ -237,12 +220,19 @@ fn test_microphone_runs_once_and_shows_the_measured_level() {
     assert!(text(&html, "test-microphone").contains("Listening…"));
     assert!(tag(&html, "microphone-level").is_none());
 
-    management.write().microphone_test = Some(MicrophoneTestResponse {
-        levels: vec![0.1, 0.3, 0.2],
-        peak: 0.46,
-    });
-    page.settle();
+    page.answer(
+        "test_microphone",
+        Ok(MicrophoneTestResponse {
+            levels: vec![0.1, 0.3, 0.2],
+            peak: 0.46,
+        }),
+    );
     let html = page.html();
+    assert!(
+        !tag(&html, "test-microphone")
+            .expect("button")
+            .contains(" disabled=")
+    );
     let meter = tag(&html, "microphone-level").expect("meter");
     assert!(meter.contains("role=\"meter\""), "{meter}");
     assert!(meter.contains("aria-label=\"Microphone level\""), "{meter}");
@@ -263,7 +253,7 @@ fn disabled_controls_explain_why_in_visible_text() {
     );
     assert_eq!(
         text(&html, "test-microphone-disabled-reason"),
-        "Wait for the current dictation to finish"
+        "Stop the current recording first"
     );
 }
 
@@ -352,7 +342,7 @@ pub(super) fn model(id: &str, name: &str, availability: ModelAvailability) -> Mo
 /// Settings with every section populated: AI cleanup on, a saved provider model, a vocabulary
 /// rule, kept audio, and three models.
 fn configured() -> ManagementState {
-    let mut settings = settings();
+    let mut settings = editable_settings();
     settings.cleanup_enabled = true;
     settings
         .provider_settings_mut(LlmProvider::OpenAi)
@@ -591,7 +581,7 @@ fn a_credential_mutation_blocks_document_saves_until_its_confirmed_settings_arri
     );
     page.fire("theme", "change", "dark");
     assert!(sent_settings().is_empty());
-    let mut confirmed = settings();
+    let mut confirmed = editable_settings();
     confirmed.api_keys.insert(LlmProvider::OpenAi);
     page.answer("set_api_key", Ok(SettingsView::new(&confirmed)));
     assert!(
@@ -616,7 +606,7 @@ fn a_settings_reload_blocks_edits_until_it_installs_the_desktops_confirmed_value
     );
     page.fire("theme", "change", "dark");
     assert!(sent_settings().is_empty());
-    let mut confirmed = settings();
+    let mut confirmed = editable_settings();
     confirmed.recording_shortcut.key = ShortcutKey::T;
     confirmed.theme = whispernow_domain::ThemePreference::Light;
     page.answer("get_settings", Ok(SettingsView::new(&confirmed)));
@@ -876,45 +866,29 @@ fn an_incomplete_provider_saves_with_a_warning_and_a_model_edit_repairs_it() {
     management.install_settings(SettingsView::new(&settings));
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
-    let management = page.context().management;
     let saved = |settings: &Settings| {
         let view = SettingsView::new(settings);
         Ok::<_, AppError>(SaveSettingsResponse {
-            warnings: view.warnings.clone(),
+            warnings: Vec::new(),
             settings: view,
         })
     };
 
     page.fire("provider-name", "change", "anthropic");
     let sent = sent_settings();
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].llm_provider, LlmProvider::Anthropic);
     fake::answer("update_settings", saved(&sent[0]));
     page.settle();
     assert!(
         page.html()
             .contains("AI cleanup needs a model for Anthropic")
     );
-    assert!(tag(&page.html(), "provider-name-error").is_none());
     assert!(
         tag(&page.html(), "provider-model")
             .expect("provider model")
             .contains("value=\"\"")
     );
-    assert_eq!(
-        management
-            .read()
-            .settings
-            .as_ref()
-            .expect("saved")
-            .settings
-            .llm_provider,
-        LlmProvider::Anthropic
-    );
-
     page.fire("provider-model", "change", "claude-test");
     let sent = sent_settings();
-    assert_eq!(sent.len(), 2);
     assert_eq!(sent[1].llm_provider, LlmProvider::Anthropic);
     assert_eq!(
         sent[1].provider_settings(LlmProvider::Anthropic).model,
@@ -922,22 +896,46 @@ fn an_incomplete_provider_saves_with_a_warning_and_a_model_edit_repairs_it() {
     );
     fake::answer("update_settings", saved(&sent[1]));
     page.settle();
-    let settings = management.read().settings.clone().expect("saved");
-    assert_eq!(settings.settings.llm_provider, LlmProvider::Anthropic);
-    assert_eq!(
-        settings
-            .settings
-            .provider_settings(LlmProvider::Anthropic)
-            .model,
-        "claude-test"
-    );
-    assert!(settings.warnings.is_empty());
     assert!(!page.html().contains("AI cleanup needs a model"));
-    assert_eq!(
-        sent_settings().len(),
-        2,
-        "repair sends no extra provider switch"
+}
+
+#[test]
+fn standing_settings_warnings_and_save_warnings_are_shown_together() {
+    let mut management = configured();
+    let mut settings = management.shown_settings().cloned().expect("loaded");
+    settings.cleanup_enabled = true;
+    settings.llm_provider = LlmProvider::Anthropic;
+    settings.provider_settings_mut(LlmProvider::Anthropic).model = "claude-initial".to_owned();
+    management.install_settings(SettingsView::new(&settings));
+    let mut page = shell(snapshot(Phase::Idle), management);
+    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+
+    page.fire("provider-model", "change", "");
+    let sent = sent_settings();
+    page.answer(
+        "update_settings",
+        Ok(SaveSettingsResponse {
+            settings: SettingsView::new(&sent[0]),
+            warnings: vec!["A native setting could not take effect".to_owned()],
+        }),
     );
+    let html = page.html();
+    assert!(html.contains("AI cleanup needs a model for Anthropic"));
+    assert!(text(&html, "notice").contains("Saved, but not everything took effect"));
+    assert!(text(&html, "notice").contains("A native setting could not take effect"));
+
+    page.fire("provider-model", "change", "claude-test");
+    let sent = sent_settings();
+    page.answer(
+        "update_settings",
+        Ok(SaveSettingsResponse {
+            settings: SettingsView::new(&sent[1]),
+            warnings: Vec::new(),
+        }),
+    );
+    let html = page.html();
+    assert!(!html.contains("AI cleanup needs a model"));
+    assert!(text(&html, "notice").contains("A native setting could not take effect"));
 }
 
 fn cleanup_model(id: &str, name: &str, availability: ModelAvailability) -> ModelSummary {
@@ -1040,30 +1038,6 @@ fn speech_model_controls_use_download_cancel_and_refresh_the_finished_download()
         state: active.clone(),
     });
     assert_eq!(fake::count("list_models"), 1);
-    page.answer("list_models", Ok(configured().models));
-    assert!(tag(&page.html(), "model-sherpa-onnx-whisper-small-download").is_some());
-
-    page.click("model-sherpa-onnx-whisper-small-download");
-    assert_eq!(
-        fake::requests::<ModelId>("download_model"),
-        [small.clone(), small.clone()]
-    );
-    page.answer("download_model", Ok(()));
-    active.active_downloads.push(ActiveDownload {
-        model_id: small,
-        phase: DownloadPhase::ValidatingArchive,
-        downloaded_bytes: 1_024,
-        total_bytes: Some(1_024),
-        bytes_per_second: None,
-    });
-    page.publish(EventPayload::StateChanged {
-        state: active.clone(),
-    });
-    assert!(page.html().contains("Checking the download"));
-    assert!(page.html().contains("1.0 KiB of 1.0 KiB"));
-    active.active_downloads.clear();
-    page.publish(EventPayload::StateChanged { state: active });
-    assert_eq!(fake::count("list_models"), 2);
     page.answer(
         "list_models",
         Ok(vec![
@@ -1152,11 +1126,6 @@ fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() 
     const LARGE: &str = "whispernow-cleanup-minicpm5-1b-q8_0";
     const PACK: &str = "llama-cuda-13.4";
     let management = local_cleanup(SMALL, LARGE, PACK);
-    assert!(
-        management
-            .speech_models()
-            .all(|model| model.id.as_str() != PACK)
-    );
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();

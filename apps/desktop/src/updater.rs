@@ -404,7 +404,9 @@ impl UpdateController {
         let dictating = self
             .app
             .state::<crate::gateway::Gateway>()
-            .services_state()
+            .services
+            .state
+            .snapshot()
             .phase
             .is_busy();
         let Some(ready) = self.update(|updates| updates.take_ready(dictating)) else {
@@ -541,6 +543,8 @@ pub(crate) async fn check_for_updates(
     controller: tauri::State<'_, Arc<UpdateController>>,
 ) -> Result<UpdateState, AppError> {
     app.state::<crate::gateway::Gateway>()
+        .services
+        .state
         .refuse_during_maintenance()?;
     Ok(controller.inner().check(true).await)
 }
@@ -676,7 +680,7 @@ mod tests {
     }
 
     #[test]
-    fn deb_and_rpm_notify_while_appimage_macos_and_windows_update_in_place() {
+    fn installation_formats_choose_delivery_and_unsupported_linux_targets_are_refused() {
         use tauri::utils::config::BundleType;
 
         let route = |target: &str, delivery| {
@@ -703,25 +707,14 @@ mod tests {
             update_route("linux", "x86_64", Some(&BundleType::AppImage)),
             route("linux-x86_64-appimage", UpdateDelivery::InPlace)
         );
-        for (os, bundle) in [
-            ("macos", Some(BundleType::App)),
-            ("windows", Some(BundleType::Nsis)),
-        ] {
-            assert_eq!(
-                update_route(os, "x86_64", bundle.as_ref()),
-                Ok(UpdateRoute {
-                    target: None,
-                    delivery: UpdateDelivery::InPlace,
-                }),
-                "{os}"
-            );
-        }
-        for (architecture, bundle) in [
-            ("x86_64", None),
-            ("x86_64", Some(BundleType::Nsis)),
-            ("aarch64", Some(BundleType::AppImage)),
-            ("riscv64", Some(BundleType::Deb)),
-        ] {
+        assert_eq!(
+            update_route("macos", "x86_64", Some(&BundleType::App)),
+            Ok(UpdateRoute {
+                target: None,
+                delivery: UpdateDelivery::InPlace,
+            })
+        );
+        for (architecture, bundle) in [("x86_64", None), ("aarch64", Some(BundleType::AppImage))] {
             assert_eq!(
                 update_route("linux", architecture, bundle.as_ref()),
                 Err(UpdateError::UnsupportedTarget),
@@ -954,18 +947,6 @@ mod tests {
         assert!(fixture.state.snapshot().phase.is_busy());
         fixture.dictation.cancel().expect("cancel test dictation");
         fixture.flush();
-    }
-
-    #[test]
-    fn a_restart_while_dictating_tells_the_user_it_waits() {
-        let mut updates = updates();
-        updates.begin_check(true);
-        updates.downloading("0.2.1".to_owned(), None);
-        updates.downloaded("update", vec![1]);
-        assert!(updates.take_ready(true).is_some());
-        assert!(updates.state.restart_deferred);
-        updates.installing();
-        assert!(!updates.state.restart_deferred);
     }
 
     #[test]

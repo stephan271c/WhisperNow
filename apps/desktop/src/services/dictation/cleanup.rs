@@ -10,7 +10,7 @@ use whispernow_platform::SettingsStore;
 
 #[derive(Clone)]
 pub(crate) struct CleanupPlan {
-    pub(crate) config: CleanupTarget,
+    pub(crate) target: CleanupTarget,
     /// Whether the credential store holds the provider's API key, so it is asked only then.
     pub(crate) key_saved: bool,
 }
@@ -25,10 +25,9 @@ impl AiCleanup {
     pub(super) fn apply(
         &self,
         prepared: &mut PreparedTranscription,
-        plan: Option<&CleanupPlan>,
+        plan: &CleanupPlan,
         cancellation: &CancellationToken,
     ) -> Option<String> {
-        let plan = plan?;
         let started = Instant::now();
         let result = self.run(plan, &prepared.deterministic_text, cancellation);
         tracing::info!(
@@ -41,7 +40,7 @@ impl AiCleanup {
             },
             "batch pipeline stage completed"
         );
-        let llm_model = result.is_ok().then(|| match &plan.config {
+        let llm_model = result.is_ok().then(|| match &plan.target {
             CleanupTarget::Local { model } => model.as_str().to_owned(),
             CleanupTarget::Remote(target) => target.model.clone(),
         });
@@ -55,7 +54,7 @@ impl AiCleanup {
         deterministic_text: &str,
         cancellation: &CancellationToken,
     ) -> Result<String, CleanupFallback> {
-        let api_key = if let CleanupTarget::Remote(target) = &plan.config
+        let api_key = if let CleanupTarget::Remote(target) = &plan.target
             && plan.key_saved
         {
             // An unreadable key leaves the call without one; the provider then rejects it
@@ -76,7 +75,7 @@ impl AiCleanup {
         self.runtime.block_on(clean_up(
             self.service.as_ref(),
             deterministic_text,
-            &plan.config,
+            &plan.target,
             api_key,
             cancellation,
         ))

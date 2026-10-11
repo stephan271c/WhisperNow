@@ -6,14 +6,14 @@
 //! `input` so that only it, not `WhisperNow` or anything else the user runs, can
 //! read keyboards, and it reports only what a recording shortcut needs:
 //!
-//! - It watches only the chords given as arguments, and each must hold Ctrl,
+//! - It watches only the chord given as an argument, which must hold Ctrl,
 //!   Alt or Super, so typed text is never observable through it.
-//! - It writes one line, `<chord id hex> <CLOCK_MONOTONIC milliseconds>`,
+//! - It writes one line, `<CLOCK_MONOTONIC milliseconds>`,
 //!   when a fully held chord stops being held, and nothing else.
 //! - It exits when standard input closes, so it never outlives `WhisperNow`.
 //!
-//! Usage: `whispernow-input-helper <id>=<code>[,<code>]+<code>...`, where codes
-//! are Linux input key codes, for example `8003e=29,97+57` for Ctrl+Space.
+//! Usage: `whispernow-input-helper <code>[,<code>]+<code>...`, where codes
+//! are Linux input key codes, for example `29,97+57` for Ctrl+Space.
 //!
 //! With `--paste` it instead creates a virtual keyboard that can press only
 //! Ctrl+V and Ctrl+Shift+V, so `WhisperNow` can paste on Wayland without a
@@ -35,25 +35,29 @@ fn main() -> ExitCode {
     if specs == ["--paste"] {
         return paste();
     }
-    let chords = match chord::parse_chords(&specs) {
-        Ok(chords) => chords,
+    let [spec] = specs.as_slice() else {
+        eprintln!("expected one recording shortcut chord");
+        return ExitCode::from(64);
+    };
+    let chord = match chord::Chord::parse(spec) {
+        Ok(chord) => chord,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::from(64);
         }
     };
-    run(chords)
+    run(chord)
 }
 
 #[cfg(target_os = "linux")]
-fn run(chords: Vec<chord::Chord>) -> ExitCode {
-    devices::run(chord::ChordTracker::new(chords), None)
+fn run(chord: chord::Chord) -> ExitCode {
+    devices::run(chord::ChordTracker::new(Some(chord)), None)
 }
 
 #[cfg(target_os = "linux")]
 fn paste() -> ExitCode {
     match virtual_keyboard::VirtualKeyboard::create() {
-        Ok(keyboard) => devices::run(chord::ChordTracker::new(Vec::new()), Some(keyboard)),
+        Ok(keyboard) => devices::run(chord::ChordTracker::new(None), Some(keyboard)),
         Err(error) => {
             eprintln!("the paste keyboard could not be created: {error}");
             ExitCode::from(3)
@@ -62,12 +66,13 @@ fn paste() -> ExitCode {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn run(_chords: Vec<chord::Chord>) -> ExitCode {
+fn run(_chord: chord::Chord) -> ExitCode {
     eprintln!("only Linux keyboards are supported");
     ExitCode::FAILURE
 }
 
 #[cfg(not(target_os = "linux"))]
 fn paste() -> ExitCode {
-    run(Vec::new())
+    eprintln!("only Linux keyboards are supported");
+    ExitCode::FAILURE
 }

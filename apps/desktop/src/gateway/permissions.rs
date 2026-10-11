@@ -48,7 +48,7 @@ impl Gateway {
     fn global_shortcuts_consent(&self) -> PermissionStatus {
         shortcut_portal_consent(
             self.shortcuts.registration_active(),
-            self.shortcuts.registration_diagnostic(),
+            self.shortcuts.failure(),
         )
     }
 }

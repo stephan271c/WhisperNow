@@ -1,6 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use thiserror::Error;
+use whispernow_domain::ipc::AudioDevice;
 
 use super::{AudioBlock, AudioLevelSummary};
 
@@ -31,20 +32,6 @@ pub enum AudioDeviceChoice {
     Device(AudioDeviceId),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AudioDeviceDescriptor {
-    pub choice: AudioDeviceChoice,
-    pub display_name: String,
-    pub is_current_default: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum AudioObservation {
-    StreamReady { request_to_stream_ready: Duration },
-    FirstSamples { request_to_first_sample: Duration },
-    Level { summary: AudioLevelSummary },
-}
-
 /// No event contains captured audio.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AudioEvent {
@@ -57,17 +44,11 @@ pub enum AudioEvent {
 /// sink may block briefly.
 pub trait AudioSink: Send + Sync {
     /// Delivers normalized mono 16 kHz audio.
-    fn samples(&self, block: AudioBlock) -> Result<(), AudioSinkError>;
+    fn samples(&self, block: AudioBlock);
 
-    fn observe(&self, observation: AudioObservation);
+    fn observe(&self, summary: AudioLevelSummary);
 
     fn event(&self, event: AudioEvent);
-}
-
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum AudioSinkError {
-    #[error("audio consumer is closed")]
-    Closed,
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -90,8 +71,8 @@ pub enum AudioInputError {
 
 /// Native callbacks only enqueue bounded raw data; conversion and sink calls happen on a worker.
 pub trait AudioInput: Send + Sync {
-    /// Lists an explicit `SystemDefault` entry plus stable physical choices.
-    fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError>;
+    /// Lists connected input devices, marking the current system default.
+    fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError>;
 
     /// Starts one recording. Dropping the returned capture stops it.
     fn start(

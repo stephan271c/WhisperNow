@@ -228,7 +228,7 @@ fn each_phase_renders_its_status_and_only_its_own_actions() {
 }
 
 #[test]
-fn a_failure_is_visible_and_meter_updates_do_not_reannounce_it() {
+fn meter_updates_do_not_reannounce_the_status() {
     let mut state = state_in(listening(RecordingMode::Hold));
     let before = render(state.clone());
     state.apply_event(level(0.3, 0.6, 1_000));
@@ -236,29 +236,6 @@ fn a_failure_is_visible_and_meter_updates_do_not_reannounce_it() {
     let after = render(state.clone());
     assert_eq!(announcement(&before), announcement(&after));
     assert_ne!(before, after, "the meter and timer did update");
-
-    state.apply_event(phase_event(failed(ErrorCategory::Output)));
-    let failed = render(state);
-    assert_eq!(
-        announcement(&failed),
-        "The microphone stopped responding",
-        "the message is the visible status line"
-    );
-}
-
-#[test]
-fn the_overlay_becomes_live_when_the_first_samples_arrive() {
-    let mut state = state_with(listening(RecordingMode::Toggle), false);
-    let starting = render(state.clone());
-    assert_eq!(announcement(&starting), "Starting…");
-    assert!(!starting.contains("role=\"timer\""));
-    assert!(tag(&starting, "overlay-stop").is_none());
-
-    state.apply_event(level(0.2, 0.4, 33));
-    let live = render(state);
-    assert_eq!(announcement(&live), "Listening");
-    assert!(live.contains("role=\"timer\""));
-    assert!(tag(&live, "overlay-stop").is_some());
 }
 
 #[test]

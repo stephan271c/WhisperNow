@@ -9,8 +9,7 @@ use std::{
 use whispernow_domain::AppError;
 
 use whispernow_core::audio::{
-    AudioBlock, AudioDeviceChoice, AudioEvent, AudioInput, AudioObservation, AudioSink,
-    AudioSinkError,
+    AudioBlock, AudioDeviceChoice, AudioEvent, AudioInput, AudioLevelSummary, AudioSink,
 };
 use whispernow_domain::ipc::{ErrorCategory, MicrophoneTestResponse};
 
@@ -40,19 +39,15 @@ impl LevelProbe {
 }
 
 impl AudioSink for LevelProbe {
-    fn samples(&self, _block: AudioBlock) -> Result<(), AudioSinkError> {
-        Ok(())
-    }
+    fn samples(&self, _block: AudioBlock) {}
 
-    fn observe(&self, observation: AudioObservation) {
-        if let AudioObservation::Level { summary } = observation {
-            self.with(|state| {
-                if state.levels.len() < MAX_LEVELS {
-                    state.levels.push(unit(summary.rms));
-                }
-                state.peak = state.peak.max(unit(summary.peak));
-            });
-        }
+    fn observe(&self, summary: AudioLevelSummary) {
+        self.with(|state| {
+            if state.levels.len() < MAX_LEVELS {
+                state.levels.push(unit(summary.rms));
+            }
+            state.peak = state.peak.max(unit(summary.peak));
+        });
     }
 
     fn event(&self, event: AudioEvent) {
@@ -109,9 +104,10 @@ mod tests {
     };
 
     use whispernow_core::audio::{
-        AudioCapture, AudioDeviceChoice, AudioDeviceDescriptor, AudioInput, AudioInputError,
-        AudioLevelSummary, AudioObservation, AudioSink,
+        AudioCapture, AudioDeviceChoice, AudioInput, AudioInputError, AudioLevelSummary, AudioSink,
     };
+
+    use whispernow_domain::ipc::AudioDevice;
 
     use super::run;
 
@@ -131,7 +127,7 @@ mod tests {
     }
 
     impl AudioInput for FakeInput {
-        fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError> {
+        fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
             Ok(Vec::new())
         }
 
@@ -145,12 +141,10 @@ mod tests {
                 return Err(AudioInputError::PermissionDenied);
             }
             for rms in (0_u8..100).map(|step| f32::from(step) / 50.0) {
-                sink.observe(AudioObservation::Level {
-                    summary: AudioLevelSummary {
-                        peak: rms,
-                        rms,
-                        sample_count: 800,
-                    },
+                sink.observe(AudioLevelSummary {
+                    peak: rms,
+                    rms,
+                    sample_count: 800,
                 });
             }
             Ok(Box::new(FakeCapture(Arc::clone(&self.calls))))

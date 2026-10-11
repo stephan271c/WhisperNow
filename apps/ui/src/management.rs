@@ -56,7 +56,6 @@ pub(crate) struct ManagementState {
     pub(crate) busy: Vec<UiOperation>,
     pub(crate) requested_permission: Option<PermissionKind>,
     pub notice: Option<Notice>,
-    cleanup_warning_notice: Option<u64>,
     next_notice: u64,
     pub microphone_test: Option<MicrophoneTestResponse>,
     pub permissions: Option<PermissionsResponse>,
@@ -76,12 +75,7 @@ impl ManagementState {
         });
     }
 
-    pub(crate) fn notify_saved(
-        &mut self,
-        scope: NoticeScope,
-        saved: &str,
-        warnings: &[String],
-    ) -> u64 {
+    pub(crate) fn notify_saved(&mut self, scope: NoticeScope, saved: &str, warnings: &[String]) {
         self.notify(
             Tone::Warning,
             scope,
@@ -90,7 +84,6 @@ impl ManagementState {
                 warnings.join(" ")
             ),
         );
-        self.next_notice
     }
 
     /// Dismisses the notice with `id`; a newer notice stays.
@@ -111,7 +104,7 @@ impl ManagementState {
     }
 
     pub(crate) fn begin_busy(&mut self, operation: UiOperation) -> bool {
-        if operation.changes_settings() && !self.begin_settings_change() {
+        if operation.changes_settings() && self.settings_pending() {
             return false;
         }
         self.busy.push(operation);

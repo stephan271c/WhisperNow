@@ -90,10 +90,6 @@ impl UiState {
         self.update_command_error = Some(summary);
     }
 
-    #[cfg_attr(
-        not(any(test, target_arch = "wasm32")),
-        expect(dead_code, reason = "called by the browser's window root and by tests")
-    )]
     pub fn report_event_stream_failure(&mut self, error: AppError) {
         self.event_stream_failed = true;
         self.error = Some(error);

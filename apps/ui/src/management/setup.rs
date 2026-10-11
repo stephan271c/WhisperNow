@@ -123,7 +123,7 @@ impl ManagementState {
             self.notify_saved(NoticeScope::Setup, "Setup finished", &warnings);
         }
         let first_run_complete = response.settings.first_run_complete;
-        self.settings = Some(response);
+        self.install_settings(response);
         if let Some(setup) = &mut self.setup {
             setup.first_run_complete = first_run_complete;
         }

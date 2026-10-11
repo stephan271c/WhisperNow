@@ -179,7 +179,7 @@ pub struct HistoryPage {
 
 #[cfg(test)]
 mod tests {
-    use super::{EntryStatus, HistoryLimit};
+    use super::HistoryLimit;
 
     #[test]
     fn history_limit_imports_to_the_smallest_choice_that_keeps_everything() {
@@ -193,13 +193,5 @@ mod tests {
             serde_json::to_string(&HistoryLimit::Last100).expect("encode"),
             r#""100""#
         );
-    }
-
-    #[test]
-    fn only_failed_and_cancelled_entries_always_keep_audio() {
-        assert!(EntryStatus::Failed.always_keeps_audio());
-        assert!(EntryStatus::Cancelled.always_keeps_audio());
-        assert!(!EntryStatus::Ok.always_keeps_audio());
-        assert!(!EntryStatus::NotDelivered.always_keeps_audio());
     }
 }

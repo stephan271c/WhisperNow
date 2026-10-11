@@ -10,6 +10,7 @@ from pathlib import Path
 
 def load_module():
     path = Path(__file__).parents[1] / "smoke_dev_frontend.py"
+    sys.path.insert(0, str(path.parent))
     spec = importlib.util.spec_from_file_location("smoke_dev_frontend", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

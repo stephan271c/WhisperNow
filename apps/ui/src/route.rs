@@ -146,7 +146,6 @@ impl Route {
                 Self::Settings(SettingsRoute::SpeechModels | SettingsRoute::AiCleanup)
             ),
             NoticeScope::Data => matches!(self, Self::Settings(SettingsRoute::PrivacyData)),
-            NoticeScope::Updates => matches!(self, Self::Settings(SettingsRoute::AboutUpdates)),
         }
     }
 }

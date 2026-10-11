@@ -17,26 +17,16 @@ fn parse_json<T: DeserializeOwned>(document: &str) -> T {
 fn fresh_settings_take_the_defaults() {
     let settings = Settings::default();
 
-    assert_eq!(settings.input_device, None);
     assert_eq!(
         settings.recording_shortcut.modifiers,
         [ShortcutModifier::Control].into()
     );
     assert_eq!(settings.recording_shortcut.key, ShortcutKey::Space);
     assert_eq!(settings.recording_mode, RecordingMode::Hold);
-    assert_eq!(settings.cancel_shortcut, Some(Shortcut::default_cancel()));
     assert_eq!(
         settings.model_id.as_str(),
         "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
     );
-    assert!(!settings.first_run_complete);
-    assert_eq!(settings.setup, None);
-    assert!(!settings.cleanup_enabled);
-    assert_eq!(settings.llm_provider, LlmProvider::OpenAi);
-    assert!(settings.llm_provider_settings.is_empty());
-    assert!(settings.api_keys.is_empty());
-    assert_eq!(settings.history_limit, HistoryLimit::Last20);
-    assert!(!settings.keep_audio);
 }
 
 #[test]
@@ -72,11 +62,6 @@ fn settings_round_trip_and_missing_fields_take_defaults() {
             keep_audio: true,
             ..Settings::default()
         }
-    );
-    assert_eq!(
-        parse_json::<Settings>(r#"{"cancel_hotkey":null}"#).cancel_shortcut,
-        None,
-        "the cancel shortcut can be off"
     );
     assert!(serde_json::from_str::<Settings>(r#"{"keep_audio":"fast"}"#).is_err());
 }

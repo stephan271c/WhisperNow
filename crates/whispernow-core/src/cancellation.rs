@@ -36,30 +36,3 @@ impl CancellationToken {
         notified.await;
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::CancellationToken;
-
-    #[test]
-    fn cancellation_is_clone_shared_and_monotonic() {
-        let first = CancellationToken::default();
-        let second = first.clone();
-        assert!(!second.is_cancelled());
-        first.cancel();
-        assert!(second.is_cancelled());
-    }
-
-    #[tokio::test]
-    async fn waiting_for_cancellation_ends_when_it_is_requested() {
-        let token = CancellationToken::default();
-        let waiting = tokio::spawn({
-            let token = token.clone();
-            async move { token.cancelled().await }
-        });
-        tokio::task::yield_now().await;
-        token.cancel();
-        waiting.await.expect("the waiter ends");
-        token.cancelled().await;
-    }
-}

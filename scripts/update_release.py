@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
-import hashlib
 import json
 import re
 import shutil
@@ -23,27 +22,48 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import quote
 
+from stage_native_dependencies import sha256
+
 STABLE_TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
-# Updater target (the `latest.json` platform key) -> Tauri bundle type.
-REQUIRED_TARGETS = {
-    "windows-x86_64": "nsis",
-    "linux-x86_64-deb": "deb",
-    "linux-x86_64-rpm": "rpm",
-    "linux-x86_64-appimage": "appimage",
-    "darwin-aarch64": "app",
-    "darwin-x86_64": "app",
-}
-PLATFORM_TARGETS = {
-    "windows-x86_64": ("windows-x86_64",),
-    "linux-x86_64": (
-        "linux-x86_64-deb",
-        "linux-x86_64-rpm",
-        "linux-x86_64-appimage",
+@dataclass(frozen=True)
+class Target:
+    platform: str
+    bundle_type: str
+    glob: str
+    suffix: str
+    label: str
+    installer_glob: str | None = None
+    installer_suffix: str | None = None
+
+
+TARGETS = {
+    "windows-x86_64": Target(
+        "windows-x86_64", "nsis", "*.exe", "windows_x86_64_nsis.exe", "Windows NSIS installer"
     ),
-    "macos-aarch64": ("darwin-aarch64",),
-    "macos-x86_64": ("darwin-x86_64",),
+    "linux-x86_64-deb": Target(
+        "linux-x86_64", "deb", "*.deb", "linux_x86_64.deb", "Linux deb package"
+    ),
+    "linux-x86_64-rpm": Target(
+        "linux-x86_64", "rpm", "*.rpm", "linux_x86_64.rpm", "Linux rpm package"
+    ),
+    "linux-x86_64-appimage": Target(
+        "linux-x86_64", "appimage", "*.AppImage", "linux_x86_64.AppImage", "Linux AppImage"
+    ),
+    "darwin-aarch64": Target(
+        "macos-aarch64", "app", "*.app.tar.gz", "darwin_aarch64.app.tar.gz",
+        "macOS updater archive", "*.dmg", "darwin_aarch64.dmg"
+    ),
+    "darwin-x86_64": Target(
+        "macos-x86_64", "app", "*.app.tar.gz", "darwin_x86_64.app.tar.gz",
+        "macOS updater archive", "*.dmg", "darwin_x86_64.dmg"
+    ),
+}
+REQUIRED_TARGETS = {name: target.bundle_type for name, target in TARGETS.items()}
+PLATFORM_TARGETS = {
+    platform: tuple(name for name, target in TARGETS.items() if target.platform == platform)
+    for platform in sorted({target.platform for target in TARGETS.values()})
 }
 
 SignatureVerifier = Callable[[Path, Path], bool]
@@ -64,27 +84,11 @@ def validate_identity(repository: str, tag: str, version: str) -> None:
 
 
 def canonical_package_name(version: str, target: str, *, installer: bool) -> str:
-    if target == "windows-x86_64":
-        return f"WhisperNow_{version}_windows_x86_64_nsis.exe"
-    if target == "linux-x86_64-deb":
-        return f"WhisperNow_{version}_linux_x86_64.deb"
-    if target == "linux-x86_64-rpm":
-        return f"WhisperNow_{version}_linux_x86_64.rpm"
-    if target == "linux-x86_64-appimage":
-        return f"WhisperNow_{version}_linux_x86_64.AppImage"
-    if target not in {"darwin-aarch64", "darwin-x86_64"}:
+    if target not in TARGETS:
         raise ValueError(f"unsupported release target: {target}")
-    architecture = target.removeprefix("darwin-")
-    suffix = ".dmg" if installer else ".app.tar.gz"
-    return f"WhisperNow_{version}_darwin_{architecture}{suffix}"
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    entry = TARGETS[target]
+    suffix = entry.installer_suffix if installer and entry.installer_suffix else entry.suffix
+    return f"WhisperNow_{version}_{suffix}"
 
 
 def signature_text(path: Path) -> str:
@@ -138,28 +142,19 @@ def one(root: Path, pattern: str, label: str) -> Path:
 
 
 def select_platform(root: Path, platform: str) -> list[Selection]:
-    if platform == "windows-x86_64":
-        nsis = one(root, "*.exe", "Windows NSIS installer")
-        return [Selection("windows-x86_64", nsis, nsis)]
-    if platform == "linux-x86_64":
-        deb = one(root, "*.deb", "Linux deb package")
-        rpm = one(root, "*.rpm", "Linux rpm package")
-        appimage = one(root, "*.AppImage", "Linux AppImage")
-        return [
-            Selection("linux-x86_64-deb", deb, deb),
-            Selection("linux-x86_64-rpm", rpm, rpm),
-            Selection("linux-x86_64-appimage", appimage, appimage),
-        ]
-    if platform in {"macos-aarch64", "macos-x86_64"}:
-        (target,) = PLATFORM_TARGETS[platform]
-        return [
-            Selection(
-                target,
-                one(root, "*.app.tar.gz", "macOS updater archive"),
-                one(root, "*.dmg", "macOS DMG"),
-            )
-        ]
-    raise ValueError(f"unsupported release platform: {platform}")
+    if platform not in PLATFORM_TARGETS:
+        raise ValueError(f"unsupported release platform: {platform}")
+    selections = []
+    for target in PLATFORM_TARGETS[platform]:
+        entry = TARGETS[target]
+        updater = one(root, entry.glob, entry.label)
+        installer = (
+            one(root, entry.installer_glob, f"{platform} installer")
+            if entry.installer_glob
+            else updater
+        )
+        selections.append(Selection(target, updater, installer))
+    return selections
 
 
 def asset_record(path: Path) -> dict:

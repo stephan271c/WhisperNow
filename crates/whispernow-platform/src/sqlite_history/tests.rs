@@ -347,7 +347,7 @@ fn a_failed_open_reports_history_unavailable() {
         panic!("the database cannot be opened")
     };
     assert_eq!(error.category, ErrorCategory::HistoryUnavailable);
-    assert_eq!(error.summary, "Transcription history is unavailable");
+    assert_eq!(error.code, "history_unavailable");
 }
 
 #[test]

@@ -250,8 +250,6 @@ impl ModelLayout {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelSource {
     pub url: String,
-    /// Container/compression format expected independently of the URL suffix.
-    pub archive_format: ArchiveFormat,
     /// Exact expected compressed response size.
     pub archive_size_bytes: u64,
     /// Lowercase SHA-256 digest of the compressed archive.
@@ -263,16 +261,13 @@ impl ModelSource {
     /// the extension. It can differ from the model id in case.
     #[must_use]
     pub fn archive_root(&self) -> &str {
-        let name = self.url.rsplit('/').next().unwrap_or_default();
+        let name = self
+            .url
+            .rsplit('/')
+            .next()
+            .expect("rsplit always yields an item");
         name.strip_suffix(".tar.bz2").unwrap_or(name)
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ArchiveFormat {
-    TarBz2,
-    /// The model's one required artifact itself, stored under the archive root.
-    SingleFile,
 }
 
 /// A score from one to [`Rating::MAX`]; more is better.
@@ -539,7 +534,6 @@ impl ModelRegistry {
 fn source(archive: &str, archive_size_bytes: u64, sha256: &str) -> ModelSource {
     ModelSource {
         url: format!("{RELEASE_BASE}/{archive}.tar.bz2"),
-        archive_format: ArchiveFormat::TarBz2,
         archive_size_bytes,
         sha256: sha256.to_owned(),
     }
@@ -675,7 +669,6 @@ fn local_cleanup(model: &CleanupModel) -> ModelDefinition {
         display_name: model.display_name.to_owned(),
         source: ModelSource {
             url: format!("{CLEANUP_MODEL_RELEASE}/{id}.gguf"),
-            archive_format: ArchiveFormat::SingleFile,
             archive_size_bytes: model.size_bytes,
             sha256: model.sha256.to_owned(),
         },

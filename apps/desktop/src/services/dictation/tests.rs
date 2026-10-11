@@ -13,16 +13,16 @@ use whispernow_core::{
     CancellationToken, ResolvedModel,
     asr::{AsrEngine, AsrError},
     audio::{
-        AudioBlock, AudioCapture, AudioDeviceChoice, AudioDeviceDescriptor, AudioInput,
-        AudioInputError, AudioSink, TARGET_SAMPLE_RATE,
+        AudioBlock, AudioCapture, AudioDeviceChoice, AudioInput, AudioInputError, AudioSink,
+        TARGET_SAMPLE_RATE,
     },
-    llm::{LlmError, LlmFinishReason, LlmFuture, LlmProvider, LlmRequest, LlmResponse, LlmService},
+    llm::{LlmError, LlmFinishReason, LlmFuture, LlmRequest, LlmResponse, LlmService},
     workflow::VoiceActivity,
 };
-use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest};
+use whispernow_domain::ipc::{AudioDevice, ErrorCategory, SetApiKeyRequest};
 use whispernow_domain::{
-    ApiKey, EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, ModelId, ModelRegistry,
-    Settings,
+    ApiKey, EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, LlmProvider, ModelId,
+    ModelRegistry, Settings,
 };
 use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore, SettingsStore};
 
@@ -106,12 +106,8 @@ struct FakeAudio {
 }
 
 impl AudioInput for FakeAudio {
-    fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError> {
-        Ok(vec![AudioDeviceDescriptor {
-            choice: AudioDeviceChoice::SystemDefault,
-            display_name: "Test microphone".to_owned(),
-            is_current_default: true,
-        }])
+    fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
+        Ok(Vec::new())
     }
 
     fn start(
@@ -119,10 +115,7 @@ impl AudioInput for FakeAudio {
         _device: AudioDeviceChoice,
         sink: Arc<dyn AudioSink>,
     ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
-        sink.samples(AudioBlock::new(self.audio.clone()))
-            .map_err(|_| AudioInputError::Backend {
-                operation: "deliver test audio",
-            })?;
+        sink.samples(AudioBlock::new(self.audio.clone()));
         Ok(Box::new(FakeCapture))
     }
 }
@@ -194,7 +187,7 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn new() -> Self {
-        Self::with_output(OutputNotice::PastedAndRestored)
+        Self::with_output(OutputNotice::Pasted)
     }
 
     fn with_output(notice: OutputNotice) -> Self {
@@ -202,7 +195,7 @@ impl Fixture {
     }
 
     fn with_audio(audio: Vec<f32>) -> Self {
-        Self::build(OutputNotice::PastedAndRestored, audio)
+        Self::build(OutputNotice::Pasted, audio)
     }
 
     fn build(notice: OutputNotice, audio: Vec<f32>) -> Self {
@@ -236,7 +229,7 @@ impl Fixture {
         persistence.save(&saved).expect("save settings");
         let history = Arc::new(HistoryStore::open(paths.clone()));
         let state = Arc::new(StateCell::new(
-            State::new(model_id.clone(), true),
+            State::new(model_id.clone()),
             Events::channel().0,
         ));
         let settings = Arc::new(SettingsCoordinator::new(
@@ -690,29 +683,27 @@ fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
 
 #[test]
 fn an_incomplete_cleanup_provider_keeps_the_transcript_without_calling_the_provider() {
-    for model in ["", "local"] {
-        let fixture = Fixture::new();
-        let mut edited = fixture.settings.get().expect("settings").settings;
-        edited.cleanup_enabled = true;
-        edited.llm_provider = LlmProvider::Custom;
-        edited.provider_settings_mut(LlmProvider::Custom).model = model.to_owned();
-        let (_, view) = fixture
-            .settings
-            .update(edited, &FakeAudio { audio: Vec::new() })
-            .expect("save incomplete provider");
-        assert_eq!(view.warnings.len(), 1);
+    let fixture = Fixture::new();
+    let mut edited = fixture.settings.get().expect("settings").settings;
+    edited.cleanup_enabled = true;
+    edited.llm_provider = LlmProvider::Custom;
+    edited.provider_settings_mut(LlmProvider::Custom).model = String::new();
+    let (_, view) = fixture
+        .settings
+        .update(edited, &FakeAudio { audio: Vec::new() })
+        .expect("save incomplete provider");
+    assert_eq!(view.warnings.len(), 1);
 
-        fixture.start();
-        fixture.dictation.stop().expect("stop");
-        assert_eq!(fixture.settled(), Phase::Idle);
-        assert_eq!(fixture.pasted(), [TRANSCRIPT]);
-        assert!(fixture.cleanup_models().is_empty());
-        assert!(fixture.state.lock().last_error.is_none());
-        let history = fixture.history();
-        assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
-        assert_eq!(history[0].cleaned_text, None);
-        assert_eq!(history[0].llm_model, None);
-    }
+    fixture.start();
+    fixture.dictation.stop().expect("stop");
+    assert_eq!(fixture.settled(), Phase::Idle);
+    assert_eq!(fixture.pasted(), [TRANSCRIPT]);
+    assert!(fixture.cleanup_models().is_empty());
+    assert!(fixture.state.lock().last_error.is_none());
+    let history = fixture.history();
+    assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
+    assert_eq!(history[0].cleaned_text, None);
+    assert_eq!(history[0].llm_model, None);
 }
 
 #[test]

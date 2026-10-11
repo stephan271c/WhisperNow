@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 use super::ui::{Icon, IconName};
+use crate::client::{WindowAction, run_window_action};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct WindowChrome {
@@ -13,52 +14,26 @@ pub(super) struct WindowChrome {
 /// Natively there is no window, so the shell keeps the native-frame layout.
 pub(super) fn use_window_chrome() -> Signal<WindowChrome> {
     let chrome = use_signal(WindowChrome::default);
-    #[cfg(target_arch = "wasm32")]
-    {
-        let mut listener = use_signal(|| None::<crate::client::ListenerOwner>);
-        use_future(move || async move {
-            let mut chrome = chrome;
-            if !crate::client::has_custom_titlebar().await {
-                return;
-            }
-            chrome.write().custom = true;
-            // Tauri calls back from JavaScript with no Dioxus scope on the stack.
-            let runtime = dioxus::core::Runtime::current();
-            let scope = dioxus::core::current_scope_id();
-            // Without the listener the maximize button keeps its label; it still toggles.
-            if let Ok(owner) = crate::client::listen_maximized(move |maximized| {
-                runtime.in_scope(scope, || chrome.write().maximized = maximized);
-            })
-            .await
-            {
-                listener.set(Some(owner));
-            }
-        });
-    }
-    chrome
-}
-
-#[derive(Clone, Copy)]
-enum WindowAction {
-    Minimize,
-    ToggleMaximize,
-    Close,
-}
-
-#[cfg_attr(
-    not(target_arch = "wasm32"),
-    expect(unused_variables, reason = "natively there is no window to act on")
-)]
-fn run(action: WindowAction) {
-    // A refused window operation leaves the window as it was, which the user can see.
-    #[cfg(target_arch = "wasm32")]
-    spawn(async move {
-        let _ = match action {
-            WindowAction::Minimize => crate::client::minimize_window().await,
-            WindowAction::ToggleMaximize => crate::client::toggle_maximize_window().await,
-            WindowAction::Close => crate::client::close_window().await,
-        };
+    let mut listener = use_signal(|| None::<crate::client::ListenerOwner>);
+    use_future(move || async move {
+        let mut chrome = chrome;
+        if !crate::client::has_custom_titlebar().await {
+            return;
+        }
+        chrome.write().custom = true;
+        // Tauri calls back from JavaScript with no Dioxus scope on the stack.
+        let runtime = dioxus::core::Runtime::current();
+        let scope = dioxus::core::current_scope_id();
+        // Without the listener the maximize button keeps its label; it still toggles.
+        if let Ok(owner) = crate::client::listen_maximized(move |maximized| {
+            runtime.in_scope(scope, || chrome.write().maximized = maximized);
+        })
+        .await
+        {
+            listener.set(Some(owner));
+        }
     });
+    chrome
 }
 
 /// The strip above the page: a window drag region holding the window controls. Its buttons
@@ -79,7 +54,7 @@ pub(super) fn TitleBar(maximized: bool) -> Element {
                     r#type: "button",
                     aria_label: "Minimize",
                     title: "Minimize",
-                    onclick: move |_| run(WindowAction::Minimize),
+                    onclick: move |_| run_window_action(WindowAction::Minimize),
                     Icon { name: IconName::Minimize }
                 }
                 button {
@@ -88,7 +63,7 @@ pub(super) fn TitleBar(maximized: bool) -> Element {
                     r#type: "button",
                     aria_label: maximize_label,
                     title: maximize_label,
-                    onclick: move |_| run(WindowAction::ToggleMaximize),
+                    onclick: move |_| run_window_action(WindowAction::ToggleMaximize),
                     Icon { name: maximize_icon }
                 }
                 button {
@@ -97,7 +72,7 @@ pub(super) fn TitleBar(maximized: bool) -> Element {
                     r#type: "button",
                     aria_label: "Close",
                     title: "Close",
-                    onclick: move |_| run(WindowAction::Close),
+                    onclick: move |_| run_window_action(WindowAction::Close),
                     Icon { name: IconName::Close }
                 }
             }

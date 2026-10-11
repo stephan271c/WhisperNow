@@ -8,7 +8,7 @@ use std::sync::{Arc, RwLock, atomic::AtomicBool};
 use whispernow_domain::AppError;
 
 use whispernow_core::CancellationToken;
-use whispernow_domain::ipc::{AppState, ErrorCategory, EventPayload, MainWindowSection};
+use whispernow_domain::ipc::ErrorCategory;
 
 use crate::{
     activation::ActivationGate, autostart::AutostartRegistration, services::NativeServices,
@@ -35,7 +35,6 @@ pub(crate) struct Gateway {
     activation: Arc<ActivationGate>,
     tray: Arc<TrayController>,
     shutdown_begun: AtomicBool,
-    shutdown_claimed: AtomicBool,
     shutdown_complete: AtomicBool,
 }
 
@@ -57,25 +56,8 @@ impl Gateway {
             activation,
             tray,
             shutdown_begun: AtomicBool::new(false),
-            shutdown_claimed: AtomicBool::new(false),
             shutdown_complete: AtomicBool::new(false),
         }
-    }
-
-    pub(crate) fn services_state(&self) -> AppState {
-        self.services.state.snapshot()
-    }
-
-    /// Publishes the current snapshot so late subscribers such as the tray converge.
-    pub(crate) fn publish_state(&self) {
-        self.services.state.publish();
-    }
-
-    pub(crate) fn request_navigation(&self, section: MainWindowSection) {
-        self.services
-            .state
-            .events()
-            .publish(EventPayload::NavigationRequested { section });
     }
 
     /// Runs a command's work on a blocking worker, away from the async runtime.

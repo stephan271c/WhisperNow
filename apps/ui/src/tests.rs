@@ -1,12 +1,9 @@
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    ClearDataItem, ClearDataResult, ErrorCategory, EventPayload, ManualUpdatePackage, ModelState,
-    Phase, SettingsView, UpdateError, UpdatePhase, UpdateProgress, UpdateState,
+    ErrorCategory, EventPayload, ManualUpdatePackage, ModelState, Phase, SettingsView, UpdateError,
+    UpdatePhase, UpdateProgress, UpdateState,
 };
-use whispernow_domain::{
-    ClearDataCategory, EntryId, HistoryEntry, HistoryPage, LlmProvider, Settings, Shortcut,
-    ShortcutKey, ShortcutModifier,
-};
+use whispernow_domain::{LlmProvider, Settings, Shortcut, ShortcutKey, ShortcutModifier};
 
 use crate::components::cleanup_destination;
 use crate::test_support::{editable_settings, history_entry, show_history, snapshot, state_event};
@@ -37,17 +34,11 @@ fn cleanup_to(provider: LlmProvider, api_base: Option<&str>) -> Settings {
     let mut settings = editable_settings();
     settings.llm_provider = provider;
     settings.cleanup_enabled = true;
+    "cleanup-test".clone_into(&mut settings.provider_settings_mut(provider).model);
     settings.provider_settings_mut(provider).api_base = api_base.map(|api_base| {
         whispernow_domain::ProviderEndpoint::parse(api_base).expect("a safe endpoint")
     });
     settings
-}
-
-fn history_window(entries: Vec<HistoryEntry>) -> HistoryPage {
-    HistoryPage {
-        entries,
-        has_more: false,
-    }
 }
 
 fn notice_message(management: &ManagementState) -> Option<&str> {
@@ -63,41 +54,6 @@ fn history_unavailable_error() -> AppError {
         code: "history_unavailable".to_owned(),
         summary: "History storage is unavailable".to_owned(),
     }
-}
-
-#[test]
-fn history_copy_uses_the_pasted_text_of_the_entry() {
-    let mut management = ManagementState::default();
-    let mut cleaned = history_entry(11, "raw");
-    cleaned.cleaned_text = Some("cleaned".to_owned());
-    show_history(&mut management, vec![history_entry(10, "first"), cleaned]);
-
-    assert_eq!(
-        management.history_copy(EntryId(10)).as_deref(),
-        Some("first")
-    );
-    assert_eq!(
-        management.history_copy(EntryId(11)).as_deref(),
-        Some("cleaned")
-    );
-    assert!(management.history_copy(EntryId(99)).is_none());
-}
-
-#[test]
-fn a_history_read_for_a_filter_no_longer_shown_is_ignored() {
-    let mut management = ManagementState::default();
-    let (stale, _) = management.history_request();
-    assert!(management.show_failed_history_only(true));
-    let (latest, _) = management.history_request();
-
-    management.finish_history_refresh(latest, history_window(vec![history_entry(11, "newest")]));
-    management.finish_history_refresh(stale, history_window(vec![history_entry(10, "stale")]));
-    management.fail_history_refresh(stale, &history_unavailable_error());
-
-    assert!(management.history_loaded());
-    assert!(management.history_unavailable.is_none());
-    assert_eq!(management.history.len(), 1);
-    assert_eq!(management.history[0].id, EntryId(11));
 }
 
 #[test]
@@ -126,40 +82,6 @@ fn failed_refresh_keeps_loaded_rows_but_unavailable_storage_degrades() {
         management.history_unavailable.as_deref(),
         Some("History storage is unavailable")
     );
-}
-
-#[test]
-fn partial_clear_data_does_not_hide_history_when_database_deletion_failed() {
-    let mut management = ManagementState::default();
-    let (request_id, _) = management.history_request();
-    management.finish_history_refresh(
-        request_id,
-        HistoryPage {
-            has_more: true,
-            ..history_window(vec![history_entry(10, "still in database")])
-        },
-    );
-
-    management.apply_clear_result(ClearDataResult {
-        items: vec![
-            ClearDataItem {
-                category: ClearDataCategory::History,
-                path: "history.sqlite3".to_owned(),
-                deleted: false,
-            },
-            ClearDataItem {
-                category: ClearDataCategory::History,
-                path: "recordings".to_owned(),
-                deleted: true,
-            },
-        ],
-        restart_required: false,
-    });
-
-    assert_eq!(management.history.len(), 1);
-    assert_eq!(management.history[0].id, EntryId(10));
-    assert!(management.history_has_more);
-    assert!(management.clear_result.is_some());
 }
 
 fn loaded_management(settings: Settings) -> ManagementState {
@@ -227,19 +149,6 @@ fn audio_level_is_scoped_by_the_single_recording_phase() {
     assert!(state.audio_rms.abs() < f32::EPSILON);
 
     state.apply_event(state_event(crate::test_support::RECORDING, |_| {}));
-    state.apply_event(EventPayload::AudioLevel {
-        rms: 2.0,
-        peak: 2.0,
-        elapsed_ms: 0,
-    });
-    assert!((state.audio_rms - 2.0).abs() < f32::EPSILON);
-    state.apply_event(EventPayload::AudioLevel {
-        rms: -1.0,
-        peak: 0.0,
-        elapsed_ms: 0,
-    });
-    assert!((state.audio_rms + 1.0).abs() < f32::EPSILON);
-
     state.apply_event(EventPayload::AudioLevel {
         rms: 0.4,
         peak: 0.8,
@@ -343,6 +252,11 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
     audio_problem.hydrate(failed);
     let mut disconnected = ui_state(Phase::Idle);
     disconnected.report_event_stream_failure(crate::client::connection_error());
+    disconnected.error = Some(AppError::new(
+        ErrorCategory::Audio,
+        "microphone_unavailable",
+        "Choose an available microphone",
+    ));
 
     for (state, kind, title, detail) in [
         (

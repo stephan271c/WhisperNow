@@ -326,7 +326,7 @@ fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
         .expect("clear other model data");
     assert_eq!(cleared.len(), 1);
     assert_eq!(cleared[0].path, models);
-    assert!(cleared[0].outcome.is_ok());
+    assert!(cleared[0].deleted);
     assert!(directory.exists(), "loaded files survive data clearing");
     assert!(
         manager.cuda_pack_dir().is_none(),

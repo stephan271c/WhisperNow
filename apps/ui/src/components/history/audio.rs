@@ -50,35 +50,15 @@ enum AudioSource {
 /// drops this task before the audio has a URL, so no URL outlives the player unrevoked.
 fn load_audio(id: EntryId, mut source: Signal<AudioSource>) {
     spawn(async move {
-        source.set(match audio_url(id).await {
+        source.set(match crate::client::history_audio_url(id).await {
             Ok(url) => AudioSource::Ready(url),
             Err(summary) => AudioSource::Failed(summary),
         });
     });
 }
 
-/// An object URL for the entry's audio, or why it could not be loaded. The URL is made
-/// after the last await, in the same step that hands it to the player.
-#[cfg(target_arch = "wasm32")]
-async fn audio_url(id: EntryId) -> Result<String, String> {
-    let audio = crate::client::history_audio(&id)
-        .await
-        .map_err(|error| error.summary)?;
-    Ok(audio.object_url())
-}
-
-/// Only the desktop app holds the audio.
-#[cfg(not(target_arch = "wasm32"))]
-fn audio_url(_id: EntryId) -> std::future::Ready<Result<String, String>> {
-    std::future::ready(Err("Audio plays in the desktop app".to_owned()))
-}
-
-#[cfg(target_arch = "wasm32")]
 fn release(source: &AudioSource) {
     if let AudioSource::Ready(url) = source {
         crate::client::revoke_object_url(url);
     }
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-const fn release(_source: &AudioSource) {}

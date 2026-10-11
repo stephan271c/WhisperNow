@@ -16,10 +16,10 @@ pub(crate) fn forward_events(
     std::thread::Builder::new()
         .name("whispernow-events".to_owned())
         .spawn(move || {
-            let mut followed = Followed::default();
+            let mut shortcuts_enabled = true;
             for event in receiver {
                 if let EventPayload::StateChanged { state } = &event {
-                    followed.observe(&app, &mut overlay, state);
+                    observe(&app, &mut overlay, state, &mut shortcuts_enabled);
                 }
                 emit(&app, event);
             }
@@ -27,46 +27,31 @@ pub(crate) fn forward_events(
         .map(drop)
 }
 
-/// What the forwarder remembers from the previous snapshot.
-struct Followed {
-    shortcuts_enabled: bool,
-}
-
-impl Default for Followed {
-    fn default() -> Self {
-        Self {
-            shortcuts_enabled: true,
-        }
+fn observe(
+    app: &tauri::AppHandle,
+    overlay: &mut RecordingOverlay,
+    state: &AppState,
+    shortcuts_enabled: &mut bool,
+) {
+    overlay.observe(state);
+    let Some(app_state) = app.try_state::<Gateway>() else {
+        return;
+    };
+    app_state.tray.apply_snapshot(state);
+    app_state.observe_dictation(state.phase.is_busy());
+    let enabled = state.phase.shortcuts_enabled();
+    if enabled != *shortcuts_enabled {
+        *shortcuts_enabled = enabled;
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            app.state::<Gateway>().sync_shortcuts();
+        });
     }
-}
-
-impl Followed {
-    fn observe(
-        &mut self,
-        app: &tauri::AppHandle,
-        overlay: &mut RecordingOverlay,
-        state: &AppState,
-    ) {
-        overlay.observe(state);
-        let Some(app_state) = app.try_state::<Gateway>() else {
-            return;
-        };
-        app_state.tray.apply_snapshot(state);
-        app_state.observe_dictation(state.phase.is_busy());
-        let shortcuts_enabled = state.phase.shortcuts_enabled();
-        if shortcuts_enabled != self.shortcuts_enabled {
-            self.shortcuts_enabled = shortcuts_enabled;
-            let app = app.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                app.state::<Gateway>().sync_shortcuts();
-            });
-        }
-        if app_state
-            .activation
-            .release_deferred_activation(&state.phase)
-        {
-            crate::show_settings_window(app);
-        }
+    if app_state
+        .activation
+        .release_deferred_activation(&state.phase)
+    {
+        crate::show_settings_window(app);
     }
 }
 

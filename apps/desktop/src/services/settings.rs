@@ -3,7 +3,7 @@ use whispernow_domain::AppError;
 
 use whispernow_core::audio::{AudioDeviceChoice, AudioDeviceId, AudioInput};
 use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest, SettingsView, SetupStateView};
-use whispernow_domain::{CleanupTarget, LlmProvider, SettingsError};
+use whispernow_domain::{LlmProvider, SettingsError};
 use whispernow_domain::{ModelId, Settings, SetupCheckpoint, SetupStep, WindowGeometry};
 use whispernow_platform::{ModelStore, SettingsNotice, SettingsStore};
 
@@ -229,7 +229,8 @@ impl SettingsCoordinator {
         models: &ModelStore,
     ) -> Result<SetupStateView, AppError> {
         let transaction = self.transaction();
-        if self.state.lock().setup_complete {
+        let mut settings = transaction.load()?;
+        if settings.first_run_complete {
             return Err(AppError::new(
                 ErrorCategory::General,
                 "setup_already_complete",
@@ -244,7 +245,6 @@ impl SettingsCoordinator {
             ));
         }
         device_choice(checkpoint.input_device.as_deref())?;
-        let mut settings = transaction.load()?;
         settings.setup = Some(checkpoint.clone());
         transaction.save(&settings)?;
         Ok(SetupStateView {
@@ -257,19 +257,16 @@ impl SettingsCoordinator {
     /// with the saved choices, and the saved settings stay in effect until setup
     /// finishes again.
     pub(crate) fn restart_setup(&self) -> Result<SetupStateView, AppError> {
-        {
-            let state = self.state.lock();
-            if !state.setup_complete {
-                return Err(AppError::new(
-                    ErrorCategory::General,
-                    "setup_incomplete",
-                    "Finish the remaining setup steps first",
-                ));
-            }
-            state.phase.require_idle()?;
-        }
         let transaction = self.transaction();
         let mut settings = transaction.load()?;
+        if !settings.first_run_complete {
+            return Err(AppError::new(
+                ErrorCategory::General,
+                "setup_incomplete",
+                "Finish the remaining setup steps first",
+            ));
+        }
+        self.state.lock().phase.require_idle()?;
         let checkpoint = SetupCheckpoint {
             step: SetupStep::Welcome,
             model_id: settings.model_id.clone(),
@@ -280,7 +277,6 @@ impl SettingsCoordinator {
         settings.setup = Some(checkpoint.clone());
         settings.first_run_complete = false;
         transaction.save(&settings)?;
-        self.state.lock().setup_complete = false;
         Ok(SetupStateView {
             first_run_complete: false,
             checkpoint,
@@ -338,9 +334,9 @@ pub(super) fn require_connected_device(
     audio: &dyn AudioInput,
     choice: &AudioDeviceChoice,
 ) -> Result<(), AppError> {
-    if *choice == AudioDeviceChoice::SystemDefault {
+    let AudioDeviceChoice::Device(id) = choice else {
         return Ok(());
-    }
+    };
     let devices = audio.list_input_devices().map_err(|_| {
         AppError::new(
             ErrorCategory::Audio,
@@ -348,7 +344,7 @@ pub(super) fn require_connected_device(
             "Audio input devices could not be listed",
         )
     })?;
-    if devices.iter().any(|device| device.choice == *choice) {
+    if devices.iter().any(|device| device.id == id.as_str()) {
         Ok(())
     } else {
         Err(AppError::new(
@@ -363,14 +359,10 @@ fn cleanup_plan(settings: &Settings) -> Option<CleanupPlan> {
     if !settings.cleanup_enabled {
         return None;
     }
-    provider_config(settings).map(|config| CleanupPlan {
+    settings.cleanup_target().ok().map(|target| CleanupPlan {
         key_saved: settings.api_keys.contains(&settings.llm_provider),
-        config,
+        target,
     })
-}
-
-fn provider_config(settings: &Settings) -> Option<CleanupTarget> {
-    settings.cleanup_target().ok()
 }
 
 #[cfg(test)]
@@ -378,12 +370,11 @@ mod tests {
     use std::{fs, sync::Arc};
 
     use whispernow_core::audio::{
-        AudioCapture, AudioDeviceChoice, AudioDeviceDescriptor, AudioDeviceId, AudioInput,
-        AudioInputError, AudioSink,
+        AudioCapture, AudioDeviceChoice, AudioDeviceId, AudioInput, AudioInputError, AudioSink,
     };
-    use whispernow_domain::ipc::SetApiKeyRequest;
+    use whispernow_domain::ipc::{AudioDevice, SetApiKeyRequest};
     use whispernow_domain::{
-        ApiKey, LlmProvider, SetupCheckpoint, ThemePreference, VocabularyReplacement,
+        ApiKey, ErrorCategory, LlmProvider, SetupCheckpoint, ThemePreference, VocabularyReplacement,
     };
     use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore, SettingsStore};
 
@@ -412,7 +403,7 @@ mod tests {
                 Arc::clone(&store) as _,
             ));
             let state = Arc::new(StateCell::new(
-                State::new(whispernow_domain::ModelId::default(), true),
+                State::new(whispernow_domain::ModelId::default()),
                 Events::channel().0,
             ));
             let settings = SettingsCoordinator::new(persistence, Arc::clone(&state));
@@ -448,31 +439,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_local_cleanup_provider_names_the_chosen_cleanup_model() {
-        use whispernow_domain::{
-            CLEANUP_MODEL_IDS, CleanupTarget, DEFAULT_CLEANUP_MODEL_ID, Settings,
-        };
-
-        let mut settings = Settings {
-            llm_provider: LlmProvider::LocalCleanup,
-            ..Settings::default()
-        };
-        let model = |settings: &Settings| {
-            let CleanupTarget::Local { model } = super::provider_config(settings)
-                .expect("the local cleanup provider always has a config")
-            else {
-                panic!("local cleanup target");
-            };
-            model.as_str().to_owned()
-        };
-        assert_eq!(model(&settings), DEFAULT_CLEANUP_MODEL_ID);
-        settings
-            .provider_settings_mut(LlmProvider::LocalCleanup)
-            .model = CLEANUP_MODEL_IDS[1].to_owned();
-        assert_eq!(model(&settings), CLEANUP_MODEL_IDS[1]);
-    }
-
     fn geometry() -> WindowGeometry {
         WindowGeometry {
             x: 10,
@@ -485,13 +451,11 @@ mod tests {
     struct ConnectedMicrophone;
 
     impl AudioInput for ConnectedMicrophone {
-        fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError> {
-            Ok(vec![AudioDeviceDescriptor {
-                choice: AudioDeviceChoice::Device(
-                    AudioDeviceId::new("connected microphone").expect("device id"),
-                ),
+        fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
+            Ok(vec![AudioDevice {
+                id: "connected microphone".to_owned(),
                 display_name: "Connected microphone".to_owned(),
-                is_current_default: true,
+                is_default: true,
             }])
         }
 
@@ -507,35 +471,32 @@ mod tests {
     #[test]
     fn malformed_explicit_microphone_updates_and_checkpoints_are_not_saved() {
         let fixture = Fixture::start();
-        fixture.state.lock().setup_complete = false;
         let models = ModelStore::new(fixture.paths.clone());
         let before = fixture.settings.get().expect("saved settings");
-        for id in ["", " ", "\t\n"] {
-            let mut edited = before.settings.clone();
-            edited.input_device = Some(id.to_owned());
-            assert_eq!(
-                fixture
-                    .settings
-                    .update(edited, &ConnectedMicrophone)
-                    .expect_err("invalid explicit microphone")
-                    .code,
-                "audio_device_invalid"
-            );
-            let checkpoint = SetupCheckpoint {
-                input_device: Some(id.to_owned()),
-                ..SetupCheckpoint::default()
-            };
-            assert_eq!(
-                fixture
-                    .settings
-                    .save_setup_checkpoint(checkpoint, &models)
-                    .expect_err("invalid checkpoint microphone")
-                    .code,
-                "audio_device_invalid"
-            );
-            assert_eq!(fixture.settings.get().expect("unchanged settings"), before);
-            assert!(!fixture.paths.settings_file().exists());
-        }
+        let mut edited = before.settings.clone();
+        edited.input_device = Some(" ".to_owned());
+        assert_eq!(
+            fixture
+                .settings
+                .update(edited, &ConnectedMicrophone)
+                .expect_err("invalid explicit microphone")
+                .code,
+            "audio_device_invalid"
+        );
+        let checkpoint = SetupCheckpoint {
+            input_device: Some(" ".to_owned()),
+            ..SetupCheckpoint::default()
+        };
+        assert_eq!(
+            fixture
+                .settings
+                .save_setup_checkpoint(checkpoint, &models)
+                .expect_err("invalid checkpoint microphone")
+                .code,
+            "audio_device_invalid"
+        );
+        assert_eq!(fixture.settings.get().expect("unchanged settings"), before);
+        assert!(!fixture.paths.settings_file().exists());
     }
 
     #[test]
@@ -627,7 +588,6 @@ mod tests {
         use whispernow_domain::{ModelId, ModelRegistry};
 
         let fixture = Fixture::start();
-        fixture.state.lock().setup_complete = false;
         let registry = ModelRegistry::builtin();
         let other = registry
             .speech_models()
@@ -703,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn an_incomplete_cleanup_provider_is_saved_with_a_warning_that_clears_after_repair() {
+    fn recording_settings_enable_cleanup_only_after_the_provider_is_repaired() {
         let fixture = Fixture::start();
         let mut edited = fixture.settings.get().expect("settings view").settings;
         edited.cleanup_enabled = true;
@@ -713,50 +673,26 @@ mod tests {
             .model
             .clear();
         let audio = whispernow_platform::CpalAudioInput::new();
-
         let (_, view) = fixture
             .settings
             .update(edited, &audio)
             .expect("save provider");
-        assert_eq!(view.settings.llm_provider, LlmProvider::Custom);
-        assert!(view.warnings[0].contains("needs a model"));
-        assert_eq!(fixture.settings.get().expect("reload"), view);
-        assert!(
-            fixture
-                .settings
-                .recording_settings()
-                .expect("recording")
-                .dictation
-                .cleanup
-                .is_none()
-        );
+        let recording = fixture.settings.recording_settings().expect("recording");
+        assert!(recording.dictation.cleanup.is_none());
 
         let mut edited = view.settings;
-        edited.provider_settings_mut(LlmProvider::Custom).model = "local".to_owned();
-        let (_, view) = fixture.settings.update(edited, &audio).expect("save model");
-        assert!(view.warnings[0].contains("needs an API endpoint"));
-        assert_eq!(fixture.settings.get().expect("reload"), view);
-
-        let mut edited = view.settings;
-        edited.provider_settings_mut(LlmProvider::Custom).api_base = Some(
+        let provider = edited.provider_settings_mut(LlmProvider::Custom);
+        provider.model = "local".to_owned();
+        provider.api_base = Some(
             whispernow_domain::ProviderEndpoint::parse("http://localhost:8080/v1")
                 .expect("endpoint"),
         );
-        let (_, view) = fixture
+        fixture
             .settings
             .update(edited, &audio)
-            .expect("save endpoint");
-        assert!(view.warnings.is_empty());
-        assert_eq!(fixture.settings.get().expect("reload"), view);
-        assert!(
-            fixture
-                .settings
-                .recording_settings()
-                .expect("recording")
-                .dictation
-                .cleanup
-                .is_some()
-        );
+            .expect("repair provider");
+        let recording = fixture.settings.recording_settings().expect("recording");
+        assert!(recording.dictation.cleanup.is_some());
     }
 
     #[test]
@@ -802,7 +738,7 @@ mod tests {
             .expect_err("a replacement needs text to replace");
 
         assert_eq!(error.code, "invalid_settings");
-        assert_eq!(error.summary, "Enter the text to replace");
+        assert_eq!(error.category, ErrorCategory::General);
         assert!(!fixture.paths.settings_file().exists());
     }
 

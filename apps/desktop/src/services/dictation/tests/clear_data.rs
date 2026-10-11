@@ -372,7 +372,7 @@ fn a_pause_during_failed_capture_start_remains_paused() {
     }
 
     impl AudioInput for FailingCaptureStart {
-        fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError> {
+        fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
             Ok(Vec::new())
         }
 
@@ -396,7 +396,7 @@ fn a_pause_during_failed_capture_start_remains_paused() {
     let (entered, starting) = mpsc::channel();
     let (release, released) = mpsc::channel();
     let fixture = Fixture::with_script(
-        OutputNotice::PastedAndRestored,
+        OutputNotice::Pasted,
         Arc::new(FailingCaptureStart {
             entered,
             released: Mutex::new(released),
@@ -497,7 +497,7 @@ fn run_startup_overlap() {
     let (release, released) = mpsc::channel();
     *script.hold_load.lock().expect("load hold") = Some((entered, released));
     let fixture = Fixture::with_script(
-        OutputNotice::PastedAndRestored,
+        OutputNotice::Pasted,
         Arc::new(FakeAudio { audio: Vec::new() }),
         script,
     );

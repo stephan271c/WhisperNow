@@ -4,12 +4,12 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 use whispernow_domain::{Settings, VocabularyReplacement};
 
-use super::actions::DisabledReason;
 use super::configuration::{SettingsLoading, status_parts};
 use super::ui::focus::{neighbour, take_focus};
 use super::ui::{
     Button, ButtonVariant, DraftText, Field, IconButton, IconName, Section, TextInput,
 };
+use crate::blocked_reason::DisabledReason;
 use crate::{NoticeScope, SettingKey, UiContext};
 
 /// The add form's id; tests submit it as Enter does.

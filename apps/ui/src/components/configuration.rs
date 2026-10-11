@@ -1,13 +1,13 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{PermissionKind, PermissionStatus};
 use whispernow_domain::{
-    HistoryLimit, LlmProvider, RecordingMode, Settings, Shortcut, ThemePreference,
+    CleanupTarget, HistoryLimit, RecordingMode, RemoteProvider, Settings, Shortcut, ThemePreference,
 };
 
-use super::actions::DisabledReason;
-use super::home::LevelMeter;
+use super::microphone_test::MicrophoneTest;
 use super::ui::{Button, Section, Segmented, Select, SettingRow, Toggle};
 use super::{PasteHelperNotice, ShortcutCapture};
+use crate::blocked_reason::DisabledReason;
 use crate::{NoticeScope, Route, SaveStatus, SettingKey, UiContext, UiOperation};
 
 /// Theme choices as (setting, select value, label).
@@ -200,7 +200,7 @@ pub(super) fn GeneralPage() -> Element {
                     Button {
                         id: "run-setup-again",
                         disabled: restart_blocked.is_some(),
-                        aria_describedby: restart_blocked.map(|_| "run-setup-again-disabled-reason"),
+                        aria_describedby: restart_blocked.as_ref().map(|_| "run-setup-again-disabled-reason"),
                         onclick: move |_| {
                             context.restart_setup();
                             navigator.go(Route::Setup);
@@ -227,11 +227,6 @@ pub(super) fn AudioPage() -> Element {
     let permission = management
         .read()
         .permission_status(PermissionKind::Microphone);
-    let test = management.read().microphone_test.clone();
-    let test_blocked = context
-        .blocked(UiOperation::TestMicrophone)
-        .or(context.phase_blocked());
-    let testing = management.read().is_busy(UiOperation::TestMicrophone);
     rsx! { div { class: "settings-stack",
         DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
         Section { id: "microphone", title: "Microphone",
@@ -253,20 +248,7 @@ pub(super) fn AudioPage() -> Element {
             }
             SettingRow { id: "audio-test-microphone", title: "Test microphone",
                 description: "Listens for three seconds. Nothing is kept.",
-                Button {
-                    disabled: test_blocked.is_some(),
-                    aria_describedby: (test_blocked.is_some() && !testing).then_some("audio-test-disabled-reason"),
-                    onclick: move |_| context.test_microphone(),
-                    if testing { "Listening…" } else { "Test microphone" }
-                }
-            }
-            if testing {
-                p { class: "section-note status-detail", role: "status", "Say a few words." }
-            } else {
-                DisabledReason { id: "audio-test-disabled-reason", reason: test_blocked }
-            }
-            if let Some(test) = test {
-                div { class: "section-note", LevelMeter { test } }
+                MicrophoneTest { id_prefix: "audio-test" }
             }
         }
     } }
@@ -323,14 +305,22 @@ pub(crate) fn cleanup_destination(settings: &Settings) -> Option<String> {
     if !settings.cleanup_enabled {
         return None;
     }
-    let provider = settings.llm_provider;
-    match settings.provider_settings(provider).api_base.as_ref() {
+    let CleanupTarget::Remote(target) = settings.cleanup_target().ok()? else {
+        return None;
+    };
+    let provider = target.provider.provider();
+    let endpoint = match &target.provider {
+        RemoteProvider::Ollama(None) => return None,
+        RemoteProvider::OpenAi(endpoint)
+        | RemoteProvider::Anthropic(endpoint)
+        | RemoteProvider::OpenRouter(endpoint)
+        | RemoteProvider::Gemini(endpoint)
+        | RemoteProvider::Ollama(endpoint) => endpoint.as_ref(),
+        RemoteProvider::Custom(endpoint) => Some(endpoint),
+    };
+    match endpoint {
         Some(endpoint) if endpoint.is_on_this_computer() => None,
         Some(endpoint) => Some(endpoint.origin()),
-        None => match provider {
-            LlmProvider::LocalCleanup | LlmProvider::Ollama => None,
-            LlmProvider::Custom => Some("a custom server".to_owned()),
-            _ => Some(provider.label().to_owned()),
-        },
+        None => Some(provider.label().to_owned()),
     }
 }

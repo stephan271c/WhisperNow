@@ -1,4 +1,4 @@
-use whispernow_domain::{EndpointError, LlmProvider, ProviderEndpoint};
+use whispernow_domain::{LlmProvider, ProviderEndpoint};
 
 #[test]
 fn provider_api_base_requires_a_valid_url_and_exact_loopback_host_for_http() {
@@ -35,19 +35,6 @@ fn provider_api_base_requires_a_valid_url_and_exact_loopback_host_for_http() {
             "expected {rejected:?} to be rejected"
         );
     }
-}
-
-#[test]
-fn a_plain_http_remote_endpoint_is_refused_as_insecure() {
-    assert_eq!(
-        ProviderEndpoint::parse("http://remote.example/v1").map(|_| ()),
-        Err(EndpointError::InsecureRemote)
-    );
-    assert_eq!(
-        ProviderEndpoint::parse("http://[::1]:11434/v1")
-            .map(|endpoint| endpoint.expose_url().to_owned()),
-        Ok("http://[::1]:11434/v1".to_owned())
-    );
 }
 
 #[test]

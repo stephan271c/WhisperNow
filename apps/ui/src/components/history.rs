@@ -77,7 +77,7 @@ pub(super) fn HistoryScreen() -> Element {
                 }
             }
         }
-        if let Some(reason) = change_blocked.filter(|_| !entries.is_empty()) {
+        if let Some(reason) = change_blocked.as_ref().filter(|_| !entries.is_empty()) {
             p { class: "disabled-reason", id: "history-change-reason", "{reason.message()}" }
         }
         if let Some(summary) = &unavailable {

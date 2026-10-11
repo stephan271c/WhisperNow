@@ -2,13 +2,13 @@ use dioxus::prelude::*;
 use whispernow_domain::{ApiKey, LlmProvider, ModelFamily, ProviderEndpoint, Settings};
 
 use super::NoticeRegion;
-use super::actions::DisabledReason;
 use super::configuration::{AutosaveRow, SettingsLoading, choice_value, chosen};
 use super::models::{ModelRow, ModelRowKind};
 use super::ui::{
     Button, ButtonSize, ButtonVariant, ConfirmButton, DraftText, Section, Segmented, Select,
     SettingRow, TextInput, Toggle,
 };
+use crate::blocked_reason::DisabledReason;
 use crate::{NoticeScope, SettingKey, UiContext, UiOperation};
 
 /// Where cleanup runs: one of the app's own cleanup models, an LLM server on this computer,
@@ -225,7 +225,7 @@ fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> El
                         Button {
                             id: "save-credential",
                             disabled: ApiKey::new(credential()).is_err() || credential_blocked.is_some(),
-                            aria_describedby: credential_blocked.map(|_| "credential-disabled-reason"),
+                            aria_describedby: credential_blocked.as_ref().map(|_| "credential-disabled-reason"),
                             onclick: move |_| if let Ok(key) = ApiKey::new(credential()) {
                                 context.set_credential(provider, key);
                                 credential.set(String::new());
@@ -270,7 +270,7 @@ fn CleanupModels(chosen_model: String, disabled: bool) -> Element {
     let delete_blocked = context
         .blocked(UiOperation::ModelDelete)
         .or(context.phase_blocked());
-    let reason = download_blocked.or(delete_blocked);
+    let reason = download_blocked.clone().or(delete_blocked.clone());
     rsx! {
         Section { id: "cleanup-models", title: "WhisperNow models",
             div { class: "section-note",
@@ -285,8 +285,8 @@ fn CleanupModels(chosen_model: String, disabled: bool) -> Element {
                         key: "{model.id.as_str()}",
                         kind: ModelRowKind::Cleanup { chosen: model.id.as_str() == chosen_model },
                         settings_disabled: disabled,
-                        download_blocked,
-                        delete_blocked,
+                        download_blocked: download_blocked.clone(),
+                        delete_blocked: delete_blocked.clone(),
                         model,
                     }
                 }
@@ -298,7 +298,7 @@ fn CleanupModels(chosen_model: String, disabled: bool) -> Element {
                 ul { class: "model-list",
                     ModelRow {
                         key: "{pack.id.as_str()}", kind: ModelRowKind::Runtime, model: pack,
-                        download_blocked, delete_blocked,
+                        download_blocked: download_blocked.clone(), delete_blocked: delete_blocked.clone(),
                     }
                 }
             }

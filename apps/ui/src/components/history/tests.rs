@@ -252,7 +252,6 @@ fn a_read_overlapping_deletion_cannot_restore_the_row_or_report_an_obsolete_fail
             "history_unavailable",
             "History storage is unavailable",
         )),
-        Err(crate::client::connection_error()),
     ] {
         let mut page = history_page(one_entry());
         page.publish(EventPayload::HistoryChanged)
@@ -360,31 +359,24 @@ fn the_header_summarizes_retention_and_links_to_privacy() {
 fn deleting_an_entry_or_the_history_requires_confirmation() {
     let mut page = history_page(one_entry());
     page.click("history-delete-7");
+    assert_eq!(fake::count("delete_history_entry"), 0);
     page.click("history-delete-7-confirm");
     assert_eq!(fake::count("delete_history_entry"), 1);
     assert_eq!(
         fake::requests::<EntryId>("delete_history_entry"),
         [EntryId(7)]
     );
-    fake::answer("delete_history_entry", Ok(()));
-    page.settle();
-
-    page.click("history-clear");
-    page.click("history-clear-confirm");
-    assert_eq!(fake::count("clear_history"), 1);
-}
-
-#[test]
-fn history_changes_wait_for_the_change_in_flight() {
-    let mut page = history_page(one_entry());
-    page.click("history-delete-7")
-        .click("history-delete-7-confirm");
-    page.settle();
     let html = page.html();
     assert!(tag(&html, "history-delete-7").is_some_and(|tag| tag.contains("disabled")));
     assert!(tag(&html, "history-clear").is_some_and(|tag| tag.contains("disabled")));
     assert!(text(&html, "history-change-reason").contains("Wait for the current change"));
-    assert_eq!(fake::count("delete_history_entry"), 1);
+    fake::answer("delete_history_entry", Ok(()));
+    page.settle();
+
+    page.click("history-clear");
+    assert_eq!(fake::count("clear_history"), 0);
+    page.click("history-clear-confirm");
+    assert_eq!(fake::count("clear_history"), 1);
 }
 
 #[test]

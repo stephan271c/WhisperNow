@@ -198,44 +198,37 @@ pub(super) fn capture_duration_millis(samples: &[f32]) -> u64 {
         / u64::from(TARGET_SAMPLE_RATE)
 }
 
-pub(super) const fn delivery_failure(notice: OutputNotice) -> Option<&'static str> {
-    match notice {
-        OutputNotice::PermissionDenied => {
-            Some("The text was not pasted because WhisperNow lacks permission to type")
-        }
-        OutputNotice::CapabilityUnavailable => {
-            Some("The text was not pasted because automatic typing is unavailable")
-        }
-        OutputNotice::PasteFailed => Some("The text could not be pasted"),
-        OutputNotice::Cancelled => Some("Pasting was cancelled"),
-        OutputNotice::PastedAndRestored
-        | OutputNotice::PastedClipboardNotRestored
-        | OutputNotice::RestoreSkippedClipboardChanged => None,
-    }
-}
-
-/// Why the transcript was not pasted, when it was not and the user did not cancel it.
-pub(super) fn delivery_error(notice: OutputNotice) -> Option<AppError> {
-    match notice {
-        OutputNotice::PermissionDenied => Some(AppError::new(
-            ErrorCategory::Settings,
-            "text_output_permission_denied",
-            "Automatic text output needs desktop accessibility or portal permission. Enable it in system settings, then retry.",
-        )),
-        OutputNotice::CapabilityUnavailable => Some(AppError::new(
-            ErrorCategory::Output,
-            "wayland_portal_unavailable",
-            "Automatic text output is unavailable because the required desktop portal capability could not be started.",
-        )),
-        OutputNotice::PasteFailed => Some(AppError::new(
-            ErrorCategory::Output,
-            "paste_failed",
-            "The text was not pasted; copy it instead",
-        )),
-        OutputNotice::PastedAndRestored
-        | OutputNotice::PastedClipboardNotRestored
-        | OutputNotice::RestoreSkippedClipboardChanged
-        | OutputNotice::Cancelled => None,
+impl OutputNotice {
+    pub(super) fn failure(self) -> (Option<&'static str>, Option<AppError>) {
+        let (reason, error) = match self {
+            Self::PermissionDenied => (
+                "The text was not pasted because WhisperNow lacks permission to type",
+                Some(AppError::new(
+                    ErrorCategory::Settings,
+                    "text_output_permission_denied",
+                    "Automatic text output needs desktop accessibility or portal permission. Enable it in system settings, then retry.",
+                )),
+            ),
+            Self::CapabilityUnavailable => (
+                "The text was not pasted because automatic typing is unavailable",
+                Some(AppError::new(
+                    ErrorCategory::Output,
+                    "wayland_portal_unavailable",
+                    "Automatic text output is unavailable because the required desktop portal capability could not be started.",
+                )),
+            ),
+            Self::PasteFailed => (
+                "The text could not be pasted",
+                Some(AppError::new(
+                    ErrorCategory::Output,
+                    "paste_failed",
+                    "The text was not pasted; copy it instead",
+                )),
+            ),
+            Self::Cancelled => ("Pasting was cancelled", None),
+            Self::Pasted => return (None, None),
+        };
+        (Some(reason), error)
     }
 }
 

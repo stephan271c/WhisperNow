@@ -4,7 +4,6 @@ use std::{
 };
 
 use directories::BaseDirs;
-use thiserror::Error;
 
 const APP_DIRECTORY: &str = "WhisperNow";
 const SETTINGS_FILE: &str = "settings.json";
@@ -19,8 +18,13 @@ pub struct AppPaths {
 impl AppPaths {
     /// Resolves the same config/data roots used by the Python `platformdirs`
     /// release and retains its capitalized application directory.
-    pub fn discover() -> Result<Self, AppPathError> {
-        let base = BaseDirs::new().ok_or(AppPathError::Unavailable)?;
+    pub fn discover() -> io::Result<Self> {
+        let base = BaseDirs::new().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "the operating system did not provide user config/data directories",
+            )
+        })?;
         #[cfg(target_os = "windows")]
         {
             // platformdirs uses non-roaming LocalAppData for both calls when
@@ -170,12 +174,6 @@ impl AppPaths {
     pub fn paste_helper_setup_dir(&self) -> PathBuf {
         self.data_dir.join("helper-setup")
     }
-}
-
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum AppPathError {
-    #[error("the operating system did not provide user config/data directories")]
-    Unavailable,
 }
 
 #[cfg(test)]

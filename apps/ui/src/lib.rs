@@ -21,7 +21,6 @@ use overlay::OverlayView;
 use route::{Route, SettingsRoute, TopLevel, nav_keyboard_target};
 use state::UiState;
 
-#[cfg(target_arch = "wasm32")]
 use client::{ListenerOwner, current_window_label};
 
 use dioxus::prelude::*;
@@ -42,7 +41,6 @@ impl UiContext {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 pub fn app() -> Element {
     let window_label = use_signal(current_window_label);
     let mut state = use_signal(move || UiState {

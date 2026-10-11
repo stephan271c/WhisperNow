@@ -1,25 +1,17 @@
-use std::{
-    sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
-    time::{Duration, Instant},
+use std::sync::{
+    Mutex,
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
 };
 
 use whispernow_core::{
-    audio::{
-        AudioBlock, AudioEvent, AudioObservation, AudioSink, AudioSinkError, TARGET_SAMPLE_RATE,
-    },
+    audio::{AudioBlock, AudioEvent, AudioLevelSummary, AudioSink, TARGET_SAMPLE_RATE},
     workflow::{AudioSegment, SpeechSegmenter},
 };
 use whispernow_domain::ipc::EventPayload;
 
 use super::Message;
 use crate::services::Events;
-
-/// Level events drive the overlay's bars at roughly 30 frames per second.
-const LEVEL_EVENT_INTERVAL: Duration = Duration::from_millis(33);
 
 /// Why capture ended before the user stopped the recording. The samples
 /// captured up to that point are kept and transcribed.
@@ -54,7 +46,6 @@ pub(super) struct RecordingSink {
     interruption: Mutex<Option<CaptureInterruption>>,
     worker: mpsc::Sender<Message>,
     events: Events,
-    last_level_event: Mutex<Option<Instant>>,
 }
 
 impl RecordingSink {
@@ -78,7 +69,6 @@ impl RecordingSink {
             interruption: Mutex::new(None),
             worker,
             events,
-            last_level_event: Mutex::new(None),
         }
     }
 
@@ -139,7 +129,7 @@ impl RecordingSink {
 }
 
 impl AudioSink for RecordingSink {
-    fn samples(&self, block: AudioBlock) -> Result<(), AudioSinkError> {
+    fn samples(&self, block: AudioBlock) {
         let mut audio = self.audio.lock().expect("recording audio lock poisoned");
         let remaining = self.max_samples.saturating_sub(audio.samples.len());
         let accepted = &block.samples()[..block.samples().len().min(remaining)];
@@ -163,43 +153,9 @@ impl AudioSink for RecordingSink {
         if accepted < block.samples().len() {
             self.interrupt(CaptureInterruption::MaximumDuration);
         }
-        Ok(())
     }
 
-    fn observe(&self, observation: AudioObservation) {
-        let summary = match observation {
-            AudioObservation::StreamReady {
-                request_to_stream_ready,
-            } => {
-                tracing::info!(
-                    stage = "capture_stream_ready",
-                    duration_ms = request_to_stream_ready.as_secs_f64() * 1_000.0,
-                    "workflow stage completed"
-                );
-                return;
-            }
-            AudioObservation::FirstSamples {
-                request_to_first_sample,
-            } => {
-                tracing::info!(
-                    stage = "shortcut_to_first_sample",
-                    duration_ms = request_to_first_sample.as_secs_f64() * 1_000.0,
-                    "workflow stage completed"
-                );
-                return;
-            }
-            AudioObservation::Level { summary } => summary,
-        };
-        let now = Instant::now();
-        let mut last = self
-            .last_level_event
-            .lock()
-            .expect("audio level lock poisoned");
-        if last.is_some_and(|previous| now.duration_since(previous) < LEVEL_EVENT_INTERVAL) {
-            return;
-        }
-        *last = Some(now);
-        drop(last);
+    fn observe(&self, summary: AudioLevelSummary) {
         let samples = self.captured_samples.load(Ordering::Relaxed) as u64;
         self.events.publish(EventPayload::AudioLevel {
             rms: summary.rms,
@@ -222,7 +178,7 @@ impl AudioSink for RecordingSink {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, thread};
+    use std::{sync::Arc, thread, time::Duration};
 
     use whispernow_core::workflow::VoiceActivity;
 
@@ -253,7 +209,41 @@ mod tests {
         };
         thread::sleep(Duration::from_millis(50));
         drop(busy);
-        assert_eq!(delivery.join().expect("delivery thread"), Ok(()));
+        delivery.join().expect("delivery thread");
         assert_eq!(sink.take().samples.len(), 320);
+    }
+
+    #[test]
+    fn a_final_level_summary_is_published_after_the_previous_level() {
+        let (worker, _messages) = mpsc::channel();
+        let (events, levels) = Events::channel();
+        let sink = RecordingSink::new(
+            1,
+            worker,
+            events,
+            TARGET_SAMPLE_RATE as usize,
+            SpeechSegmenter::new(Box::new(Silence)),
+        );
+        sink.samples(AudioBlock::new(vec![0.5; 320]));
+        sink.observe(AudioLevelSummary {
+            rms: 0.5,
+            peak: 0.5,
+            sample_count: 320,
+        });
+        sink.samples(AudioBlock::new(vec![0.25; 80]));
+        sink.observe(AudioLevelSummary {
+            rms: 0.25,
+            peak: 0.25,
+            sample_count: 80,
+        });
+
+        let levels: Vec<_> = levels
+            .try_iter()
+            .map(|event| match event {
+                EventPayload::AudioLevel { elapsed_ms, .. } => elapsed_ms,
+                _ => panic!("an audio level event"),
+            })
+            .collect();
+        assert_eq!(levels, [20, 25]);
     }
 }

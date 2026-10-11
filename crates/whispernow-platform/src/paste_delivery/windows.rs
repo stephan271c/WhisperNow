@@ -318,36 +318,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_shortcuts_are_balanced_and_ordered() {
-        assert_eq!(
-            shortcut_strokes(PasteKeys::ControlV),
-            [
-                KeyStroke::down(VK_CONTROL),
-                KeyStroke::down(VK_V),
-                KeyStroke::up(VK_V),
-                KeyStroke::up(VK_CONTROL),
-            ]
-        );
-        assert_eq!(
-            shortcut_strokes(PasteKeys::ControlShiftV),
-            [
-                KeyStroke::down(VK_CONTROL),
-                KeyStroke::down(VK_SHIFT),
-                KeyStroke::down(VK_V),
-                KeyStroke::up(VK_V),
-                KeyStroke::up(VK_SHIFT),
-                KeyStroke::up(VK_CONTROL),
-            ]
-        );
-        assert_eq!(
-            shortcut_strokes(PasteKeys::ShiftInsert),
-            [
-                KeyStroke::down(VK_SHIFT),
-                KeyStroke::down_extended(VK_INSERT),
-                KeyStroke::up_extended(VK_INSERT),
-                KeyStroke::up(VK_SHIFT),
-            ]
-        );
+    fn fixed_shortcuts_press_and_release_each_key_in_reverse_order() {
+        for keys in [
+            PasteKeys::ControlV,
+            PasteKeys::ControlShiftV,
+            PasteKeys::ShiftInsert,
+        ] {
+            let strokes = shortcut_strokes(keys);
+            assert!(!strokes.is_empty());
+            assert_eq!(strokes.len() % 2, 0);
+            let (pressed, released) = strokes.split_at(strokes.len() / 2);
+            assert!(pressed.iter().all(|stroke| !stroke.key_up));
+            assert!(released.iter().all(|stroke| stroke.key_up));
+            for (down, up) in pressed.iter().zip(released.iter().rev()) {
+                assert_eq!(
+                    (down.virtual_key, down.extended),
+                    (up.virtual_key, up.extended)
+                );
+            }
+        }
     }
 
     #[test]

@@ -30,6 +30,10 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def matches_pin(path: Path, pin: dict) -> bool:
+    return path.stat().st_size == pin["bytes"] and sha256(path) == pin["sha256"]
+
+
 def load_allowlist(path: Path, platform: str) -> tuple[dict, dict, dict, list[dict]]:
     """Return the components, archive, license files, and libraries pinned for a platform."""
     document = json.loads(path.read_text(encoding="utf-8"))
@@ -46,7 +50,7 @@ def load_allowlist(path: Path, platform: str) -> tuple[dict, dict, dict, list[di
 
 
 def validate_archive(path: Path, archive: dict) -> None:
-    if path.stat().st_size != archive["bytes"] or sha256(path) != archive["sha256"]:
+    if not matches_pin(path, archive):
         raise ValueError(
             f"native archive size or SHA-256 does not match the allowlist: {path.name}"
         )
@@ -114,7 +118,7 @@ def stage_compliance(
 def check_pinned(path: Path, pin: dict) -> None:
     if not path.is_file():
         raise ValueError(f"pinned native license file is missing: {path.name}")
-    if path.stat().st_size != pin["bytes"] or sha256(path) != pin["sha256"]:
+    if not matches_pin(path, pin):
         raise ValueError(f"native license file does not match the allowlist: {path.name}")
 
 

@@ -257,7 +257,7 @@ impl ShortcutCoordinator {
         published.active && published.failure.is_none()
     }
 
-    pub(crate) fn registration_diagnostic(&self) -> Option<ShortcutRegistrationError> {
+    pub(crate) fn failure(&self) -> Option<ShortcutRegistrationError> {
         self.published().failure
     }
 

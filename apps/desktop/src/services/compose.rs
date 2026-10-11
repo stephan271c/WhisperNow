@@ -6,9 +6,8 @@ use whispernow_domain::AppError;
 
 use whispernow_core::{
     audio::AudioInput,
-    llm::{LlmFuture, LlmProvider, LlmRequest, LlmService},
+    llm::{LlmFuture, LlmRequest, LlmService},
 };
-use whispernow_domain::ModelLayout;
 use whispernow_domain::ipc::ErrorCategory;
 use whispernow_platform::{
     AppPaths, CleanupModelLocator, CpalAudioInput, CudaPackLocator, LocalCleanupService,
@@ -61,7 +60,7 @@ impl NativeServices {
             })?;
         let llama_dir = llama_dir(&resource_dir);
         let vad_model = silero_vad_model_path(resource_dir);
-        let initial = State::new(persisted.model_id.clone(), persisted.first_run_complete);
+        let initial = State::new(persisted.model_id.clone());
         let state = Arc::new(StateCell::new(initial, events));
         if let Some(warning) = startup_history_warning {
             state.publish_error(warning);
@@ -78,7 +77,7 @@ impl NativeServices {
             installed_cleanup_model(Arc::clone(&store)),
             installed_cuda_pack(Arc::clone(&store)),
         ));
-        if persisted.llm_provider == LlmProvider::LocalCleanup && persisted.cleanup_enabled {
+        if persisted.uses_local_cleanup() {
             local_cleanup.preload(persisted.cleanup_model_id());
         }
         let models = Arc::new(ModelCoordinator::new(
@@ -140,10 +139,11 @@ fn llama_dir(resource_dir: &Path) -> PathBuf {
 fn installed_cleanup_model(store: Arc<ModelStore>) -> CleanupModelLocator {
     Arc::new(move |model_id| {
         let model = store.resolve(model_id).ok().flatten()?;
-        match &model.definition.layout {
-            ModelLayout::Gguf { model: artifact } => Some(model.root.join(artifact)),
-            _ => None,
-        }
+        Some(
+            model
+                .root
+                .join(model.definition.layout.required_artifacts()[0]),
+        )
     })
 }
 

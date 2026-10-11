@@ -71,8 +71,8 @@ installers, updater metadata, runtime logs, and stable `vMAJOR.MINOR.PATCH` tags
 the contract without modifying the worktree:
 
 ```bash
-python3 scripts/release_version.py --check
-python3 scripts/release_version.py --check --release-tag v0.2.0
+python3 scripts/release_version.py
+python3 scripts/release_version.py --release-tag v0.2.0
 ```
 
 Stable clients never receive drafts or prereleases, and downgrades are rejected. The release

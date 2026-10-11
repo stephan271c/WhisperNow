@@ -1,6 +1,6 @@
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    AppState, AudioDevice, ClearDataResult, DataLocation, MainWindowSection,
+    AppState, AudioDevice, ClearDataResult, DataLocation, EventPayload, MainWindowSection,
     MicrophoneTestResponse, ModelSummary, PermissionKind, PermissionsResponse,
     SaveSettingsResponse, SetApiKeyRequest, SettingsView, SetupStateView,
 };
@@ -146,7 +146,11 @@ pub(crate) async fn open_main_window(
     app: tauri::AppHandle,
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
-    state.request_navigation(request);
+    state
+        .services
+        .state
+        .events()
+        .publish(EventPayload::NavigationRequested { section: request });
     crate::show_settings_window(&app);
     state.services.state.dismiss_error();
     Ok(())
@@ -234,10 +238,9 @@ pub(crate) async fn download_model(
     request: ModelId,
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
-    let shutdown = state.shutdown.clone();
     state
         .run_command("download_model", Failure::Published, move |services| {
-            services.models.download(&request, &shutdown)
+            services.models.download(&request)
         })
         .await
 }

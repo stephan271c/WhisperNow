@@ -46,7 +46,7 @@ impl NativeServices {
             matches!(
                 entry.category,
                 ClearDataCategory::Settings | ClearDataCategory::Models
-            ) && entry.outcome.is_ok()
+            ) && entry.deleted
         });
         let cuda_item = if clears_models {
             let removal = self
@@ -84,11 +84,6 @@ impl NativeServices {
             });
         let result_items = entries
             .into_iter()
-            .map(|entry| ClearDataItem {
-                category: entry.category,
-                path: entry.path.to_string_lossy().into_owned(),
-                deleted: entry.outcome.is_ok(),
-            })
             .chain(cuda_item)
             .chain(credential_item)
             .collect();

@@ -49,8 +49,7 @@ mod outcome;
 use capture::{CapturedSpeech, RecordingSink};
 pub(crate) use cleanup::{AiCleanup, CleanupPlan};
 use outcome::{
-    DecodeFailure, Outcome, capture_duration_millis, cleanup_fallback_warning, delivery_error,
-    delivery_failure, interruption_warning,
+    DecodeFailure, Outcome, capture_duration_millis, cleanup_fallback_warning, interruption_warning,
 };
 
 const MAX_RECORDING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 60 * 30;
@@ -418,14 +417,15 @@ impl Worker {
         self.preload_model();
         for message in receiver {
             match message {
-                Message::Start { trigger, reply } => {
-                    let started = self.start(trigger);
-                    let admitted = started.is_ok();
-                    let _caller_left = reply.send(started);
-                    if admitted {
-                        self.prepare_model();
+                Message::Start { trigger, reply } => match self.start(trigger) {
+                    Ok(recording) => {
+                        let _caller_left = reply.send(Ok(recording.session));
+                        self.prepare_model(recording);
                     }
-                }
+                    Err(error) => {
+                        let _caller_left = reply.send(Err(error));
+                    }
+                },
                 Message::Stop { session } => self.stop(session),
                 Message::ShortcutPressed { trigger } => self.shortcut_pressed(trigger),
                 Message::HoldReleased => {
@@ -459,7 +459,7 @@ impl Worker {
         self.unload();
     }
 
-    fn start(&mut self, trigger: RecordingTrigger) -> Result<u64, AppError> {
+    fn start(&mut self, trigger: RecordingTrigger) -> Result<Recording, AppError> {
         self.parts.state.lock().phase.require_idle()?;
         let RecordingSettings {
             input_device: device,
@@ -516,7 +516,7 @@ impl Worker {
                 state.last_transcript = None;
             }
         });
-        self.recording = Some(Recording {
+        let recording = Recording {
             session,
             trigger,
             capture: Some(capture),
@@ -527,9 +527,9 @@ impl Worker {
             model,
             decoded: Vec::new(),
             live_failed: false,
-        });
+        };
         tracing::info!(?trigger, "recording started");
-        Ok(session)
+        Ok(recording)
     }
 
     fn shortcut_pressed(&mut self, trigger: RecordingTrigger) {
@@ -543,7 +543,7 @@ impl Worker {
             return;
         }
         match self.start(trigger) {
-            Ok(_) => self.prepare_model(),
+            Ok(recording) => self.prepare_model(recording),
             Err(error) => self.parts.state.publish_error(error),
         }
     }
@@ -561,31 +561,20 @@ impl Worker {
     }
 
     /// Loads the recording's model while capture runs; a model that cannot load ends it.
-    fn prepare_model(&mut self) {
-        let Some(model) = self
-            .recording
-            .as_ref()
-            .map(|recording| recording.model.clone())
-        else {
-            return;
-        };
-        if let Err(error) = self.ensure_loaded(&model)
-            && let Some(recording) = self.recording.take()
-        {
+    fn prepare_model(&mut self, recording: Recording) {
+        if let Err(error) = self.ensure_loaded(&recording.model) {
             recording.cancellation.cancel();
             self.finish(recording.trigger, Outcome::Failed(error));
+        } else {
+            self.recording = Some(recording);
         }
     }
 
     fn stop(&mut self, session: u64) {
-        if self
+        let Some(mut recording) = self
             .recording
-            .as_ref()
-            .is_none_or(|recording| recording.session != session)
-        {
-            return;
-        }
-        let Some(mut recording) = self.recording.take() else {
+            .take_if(|recording| recording.session == session)
+        else {
             return;
         };
         let trigger = recording.trigger;
@@ -667,16 +656,16 @@ impl Worker {
             Ok(prepared) => prepared,
             Err(kind) => return self.pipeline_failure(recording, &samples, has_audio, kind),
         };
-        if settings.cleanup.is_some() {
+        let llm_model = if let Some(plan) = &settings.cleanup {
             self.parts.state.apply(|state| {
                 state.phase = Phase::Processing { cleaning_up: true };
             });
-        }
-        let llm_model = self.parts.llm.apply(
-            &mut prepared,
-            settings.cleanup.as_ref(),
-            &recording.cancellation,
-        );
+            self.parts
+                .llm
+                .apply(&mut prepared, plan, &recording.cancellation)
+        } else {
+            None
+        };
         if recording.cancellation.is_cancelled() {
             return self.cancelled(recording, &samples, has_audio);
         }
@@ -715,8 +704,9 @@ impl Worker {
             .parts
             .output
             .output(&prepared.final_text, &recording.cancellation);
+        let (delivery_failure, delivery_error) = notice.failure();
         let history_warning = self.parts.history.take_warning();
-        if let (Some(reason), Ok(entry)) = (delivery_failure(notice), &history) {
+        if let (Some(reason), Ok(entry)) = (delivery_failure, &history) {
             match self.parts.history.mark_not_delivered(*entry, reason) {
                 Ok(()) => self.history_changed(),
                 Err(error) => {
@@ -734,7 +724,7 @@ impl Worker {
             .or(history_warning);
         Outcome::Delivered {
             transcript: prepared.final_text,
-            failure: delivery_error(notice),
+            failure: delivery_error,
             warning,
         }
     }

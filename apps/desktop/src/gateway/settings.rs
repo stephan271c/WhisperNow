@@ -4,8 +4,6 @@ use whispernow_domain::AppError;
 use whispernow_domain::ipc::{ClearDataResult, ErrorCategory, SaveSettingsResponse, SettingsView};
 use whispernow_domain::{ClearDataCategory, Settings, SetupCheckpoint};
 
-use whispernow_domain::WindowGeometry;
-
 use super::{Failure, Gateway, run_blocking};
 use crate::{
     autostart::{self, AutostartError},
@@ -26,7 +24,7 @@ impl Gateway {
             })
             .await?;
         if self.shortcuts_enabled() && !self.shortcuts.registration_active() {
-            let summary = match self.shortcuts.registration_diagnostic() {
+            let summary = match self.shortcuts.failure() {
                 Some(ShortcutRegistrationError::PermissionDenied) => {
                     "The compositor did not grant one of the configured recording shortcuts"
                 }
@@ -130,8 +128,7 @@ impl Gateway {
                 return Err(error);
             }
         };
-        let mut warnings = settings.warnings.clone();
-        warnings.extend(refused.map(|warning| warning.summary));
+        let mut warnings: Vec<_> = refused.map(|warning| warning.summary).into_iter().collect();
         warnings.extend(
             self.apply_native_settings(&settings.settings, None)
                 .await
@@ -285,10 +282,6 @@ impl Gateway {
             self.publish_error(&warning);
         }
         Ok(result)
-    }
-
-    pub(crate) fn save_window_geometry(&self, geometry: WindowGeometry) -> Result<(), AppError> {
-        self.services.settings.save_window_geometry(geometry)
     }
 }
 

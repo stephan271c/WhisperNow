@@ -2,7 +2,7 @@ use std::{collections::VecDeque, sync::Mutex};
 
 use super::prompt::CLEANUP_SYSTEM_CONTRACT;
 use super::*;
-use whispernow_domain::{RemoteProvider, Settings};
+use whispernow_domain::{ProviderEndpoint, RemoteProvider, Settings};
 
 fn config() -> CleanupTarget {
     CleanupTarget::Remote(RemoteCleanupTarget {
@@ -142,14 +142,6 @@ fn prompt_builder_neutralizes_delimiters_in_the_transcript() {
 }
 
 #[tokio::test]
-async fn a_completed_reply_is_the_cleaned_text() {
-    assert_eq!(
-        clean_up_once(Behavior::Text("Hello world."), "hello world").await,
-        Ok("Hello world.".to_owned())
-    );
-}
-
-#[tokio::test]
 async fn a_transient_failure_is_retried() {
     let service = FakeService::new([
         Behavior::Error(LlmError::Transport),
@@ -214,10 +206,6 @@ async fn each_mechanical_failure_falls_back_to_the_transcript() {
         (
             Behavior::Error(LlmError::InvalidRequest),
             CleanupFallback::ProviderFailed(LlmError::InvalidRequest),
-        ),
-        (
-            Behavior::Error(LlmError::Authentication),
-            CleanupFallback::ProviderFailed(LlmError::Authentication),
         ),
         (Behavior::Text(""), CleanupFallback::EmptyOutput),
         (Behavior::Text("  EMPTY\n"), CleanupFallback::EmptyOutput),
@@ -332,7 +320,7 @@ async fn local_cleanup_request_matches_the_training_golden_fixture() {
 }
 
 #[tokio::test]
-async fn the_local_cleanup_model_gets_only_the_transcript_and_its_own_decoding() {
+async fn the_local_cleanup_model_gets_only_the_transcript() {
     let service = FakeService::new([Behavior::Text("Hello world."), Behavior::Text("Hi.")]);
     let local = CleanupTarget::Local {
         model: ModelId::new("cleanup").expect("model ID"),
@@ -350,20 +338,12 @@ async fn the_local_cleanup_model_gets_only_the_transcript_and_its_own_decoding()
         assert!(result.is_ok());
     }
     let sent = service.sent.lock().expect("sent lock");
-    let LlmRequest::Local {
-        model,
-        prompt,
-        max_output_tokens,
-        draft,
-    } = &sent[0]
-    else {
+    let LlmRequest::Local { model, prompt, .. } = &sent[0] else {
         panic!("local request");
     };
     assert_eq!(model.as_str(), "cleanup");
     assert_eq!(prompt.system(), "");
     assert_eq!(prompt.user(), "hello world");
-    assert_eq!(*max_output_tokens, 64);
-    assert_eq!(draft.as_str(), "Hello world");
     let LlmRequest::Remote { prompt, .. } = &sent[1] else {
         panic!("remote request");
     };

@@ -35,10 +35,10 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
-          python3 scripts/release_version.py --check --release-tag "$RELEASE_TAG"
+          python3 scripts/release_version.py --release-tag "$RELEASE_TAG"
       - name: Prove the dry-run source version is internally consistent
         if: github.event_name == 'workflow_dispatch'
-        run: python3 scripts/release_version.py --check
+        run: python3 scripts/release_version.py
       - name: Reject a published or conflicting existing release
         if: github.event_name == 'push'
         env:
@@ -610,7 +610,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
-          python3 scripts/release_version.py --check --release-tag "$RELEASE_TAG"
+          python3 scripts/release_version.py --release-tag "$RELEASE_TAG"
           version="${RELEASE_TAG#v}"
           gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
             -f tag_name="$RELEASE_TAG" --jq .body > release/release-notes.md
@@ -646,7 +646,7 @@ jobs:
           arguments=()
           while IFS= read -r name; do arguments+=(--artifact "$name"); done \
             < <(awk '{print $2}' release/publish/SHA256SUMS)
-          python3 scripts/release_version.py --check --release-tag "$RELEASE_TAG" \
+          python3 scripts/release_version.py --release-tag "$RELEASE_TAG" \
             --updater-metadata release/publish/latest.json "${arguments[@]}"
       - name: Upload packages and signatures, then latest.json last
         env:

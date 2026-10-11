@@ -14,7 +14,6 @@ import ipaddress
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import tempfile
@@ -26,6 +25,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
+from bounded_process import terminate_tree
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "apps" / "desktop" / "tauri.conf.json"
 MAX_HTML_BYTES = 4 * 1024 * 1024
@@ -34,7 +35,7 @@ WASM_MAGIC = b"\x00asm"
 
 
 class SmokeError(RuntimeError):
-    """A safe, content-free smoke-test failure."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -233,23 +234,6 @@ def inspect_served_frontend(frontend: DevFrontend) -> dict[str, str]:
     return {"module_url": module_url, "wasm_url": wasm_url}
 
 
-def _terminate(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "posix":
-        os.killpg(process.pid, signal.SIGTERM)
-    else:
-        process.terminate()
-    try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        if os.name == "posix":
-            os.killpg(process.pid, signal.SIGKILL)
-        else:
-            process.kill()
-        process.wait(timeout=10)
-
-
 def run_smoke(frontend: DevFrontend, timeout_seconds: float) -> dict[str, str]:
     environment = os.environ.copy()
     environment.setdefault("CI", "true")
@@ -287,7 +271,7 @@ def run_smoke(frontend: DevFrontend, timeout_seconds: float) -> dict[str, str]:
                 ) from error
             raise
         finally:
-            _terminate(process)
+            terminate_tree(process, grace_seconds=10)
 
 
 def main() -> int:

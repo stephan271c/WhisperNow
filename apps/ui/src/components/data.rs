@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 
-use super::actions::DisabledReason;
 use super::ui::{Banner, Button, ConfirmButton, Section, Tone};
 use super::{NoticeRegion, labels};
+use crate::blocked_reason::DisabledReason;
 use crate::{NoticeScope, UiContext, UiOperation};
 
 #[component]
@@ -21,7 +21,7 @@ pub(super) fn ClearDataCard() -> Element {
                 Button {
                     id: "preview-clear-data",
                     disabled: review_blocked.is_some(),
-                    aria_describedby: review_blocked.map(|_| "preview-disabled-reason"),
+                    aria_describedby: review_blocked.as_ref().map(|_| "preview-disabled-reason"),
                     onclick: move |_| context.review_data(),
                     "Review data to remove"
                 }

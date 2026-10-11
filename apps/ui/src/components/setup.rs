@@ -10,14 +10,14 @@ use whispernow_domain::{
     ModelAvailability, ModelId, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
 };
 
-use super::actions::DisabledReason;
 use super::configuration::{RECORDING_MODES, choice_value, chosen};
-use super::home::percent;
 use super::labels::{self, format_bytes};
+use super::microphone_test::percent;
 use super::models::{DownloadProgress, ModelLanguages};
 use super::ui::focus::take_focus;
 use super::ui::{Banner, Button, ButtonVariant, Icon, IconName, Segmented, ShortcutLabel, Tone};
 use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture};
+use crate::blocked_reason::DisabledReason;
 use crate::{BlockedReason, NoticeScope, Route, SettingsRoute, SetupTest, UiContext, UiOperation};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -135,7 +135,7 @@ fn SetupFooter(step: SetupStep) -> Element {
     let model_downloading = management
         .read()
         .setup_checkpoint()
-        .is_some_and(|checkpoint| context.download(&checkpoint.model_id).is_some());
+        .is_some_and(|checkpoint| context.active_download(&checkpoint.model_id).is_some());
     let ready = management.read().setup_step_ready(model_downloading);
     let save_blocked = context
         .blocked(UiOperation::SaveSetup)
@@ -147,7 +147,7 @@ fn SetupFooter(step: SetupStep) -> Element {
     let primary_blocked = if finishing {
         complete_blocked
     } else {
-        save_blocked
+        save_blocked.clone()
     };
     let hint = (!ready).then(|| step_hint(step)).flatten();
     let describedby = match (primary_blocked.is_some(), hint.is_some()) {
@@ -402,12 +402,12 @@ fn ModelStep(selected: ModelId) -> Element {
         fieldset { class: "setup-models",
             legend { "Speech model" }
             for model in featured {
-                ModelChoice { key: "{model.id.as_str()}", checked: model.id == selected, model, download_blocked }
+                ModelChoice { key: "{model.id.as_str()}", checked: model.id == selected, model, download_blocked: download_blocked.clone() }
             }
             if show_all() {
                 div { id: "setup-more-models",
                     for model in others {
-                        ModelChoice { key: "{model.id.as_str()}", checked: model.id == selected, model, download_blocked }
+                        ModelChoice { key: "{model.id.as_str()}", checked: model.id == selected, model, download_blocked: download_blocked.clone() }
                     }
                 }
             }
@@ -437,7 +437,7 @@ fn ModelChoice(
     let id = model.id.clone();
     let slug = id.as_str().replace('.', "-");
     let name = model.display_name.clone();
-    let download = context.download(&id);
+    let download = context.active_download(&id);
     rsx! { div { class: "choice-row setup-model",
         label { class: "setup-model-choice",
             input { r#type: "radio", name: "setup-model", value: model.id.as_str(), checked,
@@ -461,7 +461,7 @@ fn ModelChoice(
                     id: "setup-model-{slug}-download",
                     aria_label: "Download {name}",
                     disabled: download_blocked.is_some(),
-                    aria_describedby: download_blocked.map(|_| "setup-models-disabled-reason"),
+                    aria_describedby: download_blocked.as_ref().map(|_| "setup-models-disabled-reason"),
                     onclick: move |_| {
                         management.write().edit_setup(|setup| setup.model_id = id.clone());
                         context.download_model(id.clone());
@@ -535,7 +535,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
         .read()
         .model_display_name(checkpoint.model_id.as_str());
     let model_ready = management.read().setup_model_ready();
-    let download = context.download(&checkpoint.model_id);
+    let download = context.active_download(&checkpoint.model_id);
     let devices = management.read().devices.clone();
     let test = management.read().setup_test.clone();
     let running = matches!(test, Some(SetupTest::Running { .. }));
@@ -586,7 +586,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
                 } else {
                     Button { id: "setup-test-start", variant: ButtonVariant::Primary,
                         disabled: start_blocked.is_some(),
-                        aria_describedby: start_blocked.map(|_| "setup-test-disabled-reason"),
+                        aria_describedby: start_blocked.as_ref().map(|_| "setup-test-disabled-reason"),
                         onclick: move |_| context.start_setup_test(),
                         Icon { name: IconName::Mic }
                         if test.is_some() { "Test again" } else { "Start test" }

@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
-from urllib.parse import urlparse
+
+from stage_native_dependencies import matches_pin
 
 MODEL_FILENAME = "silero_vad.onnx"
 LICENSE_FILENAME = "LICENSE-MIT"
@@ -29,14 +29,6 @@ EXPECTED_MODEL = {
 }
 
 
-def digest(path: Path) -> str:
-    value = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            value.update(block)
-    return value.hexdigest()
-
-
 def load_and_validate(resource_dir: Path) -> dict:
     if not resource_dir.is_dir():
         raise ValueError(f"model resource directory does not exist: {resource_dir}")
@@ -54,27 +46,21 @@ def load_and_validate(resource_dir: Path) -> dict:
         )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"model resource manifest is invalid: {error}") from error
-    if not isinstance(manifest, dict) or set(manifest) != {"schema_version", "model"}:
-        raise ValueError("model resource manifest must contain the exact field set")
-    if manifest.get("schema_version") != 1 or manifest.get("model") != EXPECTED_MODEL:
+    if manifest != {"schema_version": 1, "model": EXPECTED_MODEL}:
         raise ValueError(
             "model resource manifest does not match the pinned Silero VAD identity"
         )
-    for field in ("source", "upstream_project", "upstream_license_snapshot"):
-        parsed = urlparse(EXPECTED_MODEL[field])
-        if parsed.scheme != "https" or not parsed.netloc:
-            raise ValueError(f"model resource {field} must be an HTTPS URL")
     model_path = resource_dir / MODEL_FILENAME
     license_path = resource_dir / LICENSE_FILENAME
-    if model_path.stat().st_size != EXPECTED_MODEL["bytes"]:
-        raise ValueError("Silero VAD model size does not match the pinned manifest")
-    if digest(model_path) != EXPECTED_MODEL["sha256"]:
-        raise ValueError("Silero VAD model SHA-256 does not match the pinned manifest")
-    if license_path.stat().st_size != EXPECTED_MODEL["license_bytes"]:
-        raise ValueError("Silero VAD license size does not match the pinned manifest")
-    if digest(license_path) != EXPECTED_MODEL["license_sha256"]:
+    if not matches_pin(model_path, EXPECTED_MODEL):
+        raise ValueError("Silero VAD model size or SHA-256 does not match the pinned manifest")
+    license_pin = {
+        "bytes": EXPECTED_MODEL["license_bytes"],
+        "sha256": EXPECTED_MODEL["license_sha256"],
+    }
+    if not matches_pin(license_path, license_pin):
         raise ValueError(
-            "Silero VAD license SHA-256 does not match the pinned manifest"
+            "Silero VAD license size or SHA-256 does not match the pinned manifest"
         )
     return manifest
 

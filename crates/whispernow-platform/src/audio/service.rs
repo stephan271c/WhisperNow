@@ -9,9 +9,11 @@ use std::{
 };
 
 use whispernow_core::audio::{
-    AudioBlock, AudioCapture, AudioDeviceChoice, AudioDeviceDescriptor, AudioEvent, AudioInput,
-    AudioInputError, AudioObservation, AudioProcessor, AudioSink, AudioSinkError,
+    AudioBlock, AudioCapture, AudioDeviceChoice, AudioEvent, AudioInput, AudioInputError,
+    AudioProcessor, AudioSink,
 };
+
+use whispernow_domain::ipc::AudioDevice;
 
 use super::{CaptureBackend, CaptureStream, CpalBackend, OpenedCapture, StreamFault};
 
@@ -46,7 +48,7 @@ impl Default for CpalAudioInput {
 }
 
 impl AudioInput for CpalAudioInput {
-    fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError> {
+    fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
         self.backend.list_input_devices()
     }
 
@@ -69,9 +71,11 @@ impl AudioInput for CpalAudioInput {
         let processor = AudioProcessor::new(sample_rate_hz, channels)
             .map_err(|_| AudioInputError::UnsupportedConfiguration)?;
         stream.start()?;
-        sink.observe(AudioObservation::StreamReady {
-            request_to_stream_ready: request_started.elapsed(),
-        });
+        tracing::info!(
+            stage = "capture_stream_ready",
+            duration_ms = request_started.elapsed().as_secs_f64() * 1_000.0,
+            "workflow stage completed"
+        );
         let stop_requested = Arc::new(AtomicBool::new(false));
         let worker = Worker {
             backend: Arc::clone(&self.backend),
@@ -79,7 +83,7 @@ impl AudioInput for CpalAudioInput {
             choice: device,
             resolved_device_id,
             sink,
-            request_started,
+            request_started: Some(request_started),
             fault,
             dropped_frames,
             recycle,
@@ -129,7 +133,7 @@ struct Worker {
     choice: AudioDeviceChoice,
     resolved_device_id: String,
     sink: Arc<dyn AudioSink>,
-    request_started: Instant,
+    request_started: Option<Instant>,
     fault: Arc<AtomicU8>,
     dropped_frames: Arc<AtomicUsize>,
     recycle: SyncSender<Vec<f32>>,
@@ -139,18 +143,16 @@ struct Worker {
 
 impl Worker {
     fn run(
-        self,
+        mut self,
         chunks: &Receiver<Vec<f32>>,
         mut processor: AudioProcessor,
     ) -> Result<(), AudioInputError> {
-        let mut first_samples = false;
         let mut last_default_check = Instant::now();
         let mut last_level = Instant::now();
         loop {
             if self.stop_requested.load(Ordering::Acquire) {
                 let stream_result = self.stream.stop();
-                let processing_result =
-                    self.drain_queued_chunks(&mut processor, chunks, &mut first_samples);
+                let processing_result = self.drain_queued_chunks(&mut processor, chunks);
                 let finish_result = self.finish_processor(processor);
                 if finish_result.is_err() {
                     self.sink.event(AudioEvent::StreamError);
@@ -162,7 +164,7 @@ impl Worker {
             if fault != StreamFault::None {
                 let _stream_was_stopped = self.stream.stop().is_ok();
                 // Audio the device delivered before the fault is still the user's speech.
-                let drained = self.drain_queued_chunks(&mut processor, chunks, &mut first_samples);
+                let drained = self.drain_queued_chunks(&mut processor, chunks);
                 let finished = self.finish_processor(processor);
                 let event =
                     if fault == StreamFault::DeviceLost && drained.is_ok() && finished.is_ok() {
@@ -176,17 +178,12 @@ impl Worker {
             self.emit_callback_backpressure();
             match chunks.recv_timeout(WORKER_POLL_INTERVAL) {
                 Ok(chunk) => {
-                    if self
-                        .process_native_chunk(&mut processor, chunk, &mut first_samples)
-                        .is_err()
-                    {
+                    if self.process_native_chunk(&mut processor, chunk).is_err() {
                         StreamFault::StreamError.store(&self.fault);
                         continue;
                     }
                     if last_level.elapsed() >= LEVEL_OBSERVATION_INTERVAL {
-                        self.sink.observe(AudioObservation::Level {
-                            summary: processor.take_level_summary(),
-                        });
+                        self.sink.observe(processor.take_level_summary());
                         last_level = Instant::now();
                     }
                 }
@@ -199,36 +196,36 @@ impl Worker {
     }
 
     fn drain_queued_chunks(
-        &self,
+        &mut self,
         processor: &mut AudioProcessor,
         chunks: &Receiver<Vec<f32>>,
-        first_samples: &mut bool,
     ) -> Result<(), AudioInputError> {
         for _ in 0..RAW_QUEUE_CAPACITY {
             let Ok(chunk) = chunks.try_recv() else {
                 break;
             };
-            self.process_native_chunk(processor, chunk, first_samples)?;
+            self.process_native_chunk(processor, chunk)?;
         }
         Ok(())
     }
 
     fn process_native_chunk(
-        &self,
+        &mut self,
         processor: &mut AudioProcessor,
         chunk: Vec<f32>,
-        first_samples: &mut bool,
     ) -> Result<(), AudioInputError> {
-        if !*first_samples {
-            *first_samples = true;
-            self.sink.observe(AudioObservation::FirstSamples {
-                request_to_first_sample: self.request_started.elapsed(),
-            });
+        if let Some(started) = self.request_started.take() {
+            tracing::info!(
+                stage = "shortcut_to_first_sample",
+                duration_ms = started.elapsed().as_secs_f64() * 1_000.0,
+                "workflow stage completed"
+            );
         }
         let processed = processor.push_interleaved(&chunk);
         let _recycled = self.recycle.try_send(chunk).is_ok();
         let output = processed.map_err(|_| backend("process native audio chunk"))?;
-        self.emit_processor_output(output)
+        self.emit_processor_output(output);
+        Ok(())
     }
 
     fn poll_default_device(&self, last_check: &mut Instant) {
@@ -255,22 +252,19 @@ impl Worker {
         }
     }
 
-    fn emit_processor_output(&self, blocks: Vec<AudioBlock>) -> Result<(), AudioInputError> {
+    fn emit_processor_output(&self, blocks: Vec<AudioBlock>) {
         for block in blocks {
-            if self.sink.samples(block) == Err(AudioSinkError::Closed) {
-                return Err(backend("deliver audio to closed sink"));
-            }
+            self.sink.samples(block);
         }
-        Ok(())
     }
 
     fn finish_processor(&self, processor: AudioProcessor) -> Result<(), AudioInputError> {
         let (output, summary) = processor
             .finish()
             .map_err(|_| backend("flush audio processor"))?;
-        self.emit_processor_output(output)?;
+        self.emit_processor_output(output);
         if summary.sample_count > 0 {
-            self.sink.observe(AudioObservation::Level { summary });
+            self.sink.observe(summary);
         }
         Ok(())
     }
@@ -284,16 +278,23 @@ fn backend(operation: &'static str) -> AudioInputError {
 mod tests {
     use std::{collections::VecDeque, sync::Mutex};
 
+    use whispernow_core::audio::AudioLevelSummary;
+
     use super::*;
 
     struct FakeStream {
         _chunks: SyncSender<Vec<f32>>,
         _recycle: Receiver<Vec<f32>>,
         stops: Arc<AtomicUsize>,
+        delivery_order: Arc<Mutex<Vec<&'static str>>>,
     }
 
     impl CaptureStream for FakeStream {
         fn start(&self) -> Result<(), AudioInputError> {
+            self.delivery_order
+                .lock()
+                .expect("delivery order")
+                .push("ready");
             Ok(())
         }
 
@@ -308,6 +309,7 @@ mod tests {
         chunks: Mutex<VecDeque<Vec<f32>>>,
         stops: Arc<AtomicUsize>,
         fault_on_open: Mutex<Option<StreamFault>>,
+        delivery_order: Arc<Mutex<Vec<&'static str>>>,
     }
 
     impl FakeBackend {
@@ -317,17 +319,14 @@ mod tests {
                 chunks: Mutex::new(chunks.into_iter().collect()),
                 stops: Arc::new(AtomicUsize::new(0)),
                 fault_on_open: Mutex::new(None),
+                delivery_order: Arc::default(),
             }
         }
     }
 
     impl CaptureBackend for FakeBackend {
-        fn list_input_devices(&self) -> Result<Vec<AudioDeviceDescriptor>, AudioInputError> {
-            Ok(vec![AudioDeviceDescriptor {
-                choice: AudioDeviceChoice::SystemDefault,
-                display_name: "System default".to_owned(),
-                is_current_default: true,
-            }])
+        fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
+            Ok(Vec::new())
         }
 
         fn open(
@@ -351,6 +350,7 @@ mod tests {
                     _chunks: chunks,
                     _recycle: recycle_rx,
                     stops: Arc::clone(&self.stops),
+                    delivery_order: Arc::clone(&self.delivery_order),
                 }),
                 resolved_device_id: self
                     .default_id
@@ -374,10 +374,10 @@ mod tests {
     #[derive(Default)]
     struct RecordingSink {
         blocks: Mutex<Vec<AudioBlock>>,
-        observations: Mutex<Vec<AudioObservation>>,
+        observations: Mutex<Vec<AudioLevelSummary>>,
         events: Mutex<Vec<AudioEvent>>,
-        delivery_order: Mutex<Vec<&'static str>>,
         faulted: Mutex<Option<SyncSender<AudioEvent>>>,
+        delivery_order: Arc<Mutex<Vec<&'static str>>>,
     }
 
     impl RecordingSink {
@@ -401,29 +401,19 @@ mod tests {
     }
 
     impl AudioSink for RecordingSink {
-        fn samples(&self, block: AudioBlock) -> Result<(), AudioSinkError> {
+        fn samples(&self, block: AudioBlock) {
             self.delivery_order
                 .lock()
-                .expect("delivery order lock")
+                .expect("delivery order")
                 .push("samples");
             self.blocks.lock().expect("blocks lock").push(block);
-            Ok(())
         }
 
-        fn observe(&self, observation: AudioObservation) {
-            let label = match observation {
-                AudioObservation::StreamReady { .. } => "ready",
-                AudioObservation::FirstSamples { .. } => "first-samples",
-                AudioObservation::Level { .. } => "level",
-            };
-            self.delivery_order
-                .lock()
-                .expect("delivery order lock")
-                .push(label);
+        fn observe(&self, summary: AudioLevelSummary) {
             self.observations
                 .lock()
                 .expect("observations lock")
-                .push(observation);
+                .push(summary);
         }
 
         fn event(&self, event: AudioEvent) {
@@ -432,23 +422,6 @@ mod tests {
             {
                 faulted.send(event.clone()).expect("report capture fault");
             }
-            self.events.lock().expect("events lock").push(event);
-        }
-    }
-
-    #[derive(Default)]
-    struct ClosedSink {
-        events: Mutex<Vec<AudioEvent>>,
-    }
-
-    impl AudioSink for ClosedSink {
-        fn samples(&self, _block: AudioBlock) -> Result<(), AudioSinkError> {
-            Err(AudioSinkError::Closed)
-        }
-
-        fn observe(&self, _observation: AudioObservation) {}
-
-        fn event(&self, event: AudioEvent) {
             self.events.lock().expect("events lock").push(event);
         }
     }
@@ -481,17 +454,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stopped_capture_can_be_followed_by_another() {
-        let backend = Arc::new(FakeBackend::new([]));
-        let service = service(Arc::clone(&backend));
-        let first = start(&service, Arc::new(RecordingSink::default())).expect("start");
-        first.stop().expect("stop");
-        let second = start(&service, Arc::new(RecordingSink::default())).expect("restart");
-        second.stop().expect("second stop");
-        assert_eq!(backend.stops.load(Ordering::Relaxed), 2);
-    }
-
-    #[test]
     fn dropping_a_capture_stops_the_native_stream() {
         let backend = Arc::new(FakeBackend::new([]));
         let service = service(Arc::clone(&backend));
@@ -503,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_emits_normalized_audio_levels_and_monotonic_timings() {
+    fn worker_emits_normalized_audio_and_levels() {
         let backend = Arc::new(FakeBackend::new([vec![0.5; 96_000]]));
         let service = service(backend);
         let sink = Arc::new(RecordingSink::default());
@@ -520,36 +482,23 @@ mod tests {
                 .all(|sample| sample.is_finite() && sample.abs() <= 1.0)
         }));
         let observations = sink.observations.lock().expect("observations lock");
-        assert!(
-            observations
-                .iter()
-                .any(|observation| matches!(observation, AudioObservation::StreamReady { .. }))
-        );
-        assert!(
-            observations
-                .iter()
-                .any(|observation| matches!(observation, AudioObservation::FirstSamples { .. }))
-        );
-        assert!(
-            observations
-                .iter()
-                .any(|observation| matches!(observation, AudioObservation::Level { .. }))
-        );
-        let delivery_order = sink.delivery_order.lock().expect("delivery order lock");
-        let ready = delivery_order
-            .iter()
-            .position(|item| *item == "ready")
-            .expect("stream-ready delivery");
-        let first_samples = delivery_order
-            .iter()
-            .position(|item| *item == "first-samples")
-            .expect("first-samples delivery");
-        let samples = delivery_order
-            .iter()
-            .position(|item| *item == "samples")
-            .expect("audio delivery");
-        assert!(ready < first_samples);
-        assert!(ready < samples);
+        assert!(!observations.is_empty());
+        assert!(observations.iter().all(|summary| summary.peak <= 1.0));
+    }
+
+    #[test]
+    fn the_native_stream_is_ready_before_first_sample_delivery() {
+        let backend = Arc::new(FakeBackend::new([vec![0.5; 96_000]]));
+        let sink = Arc::new(RecordingSink {
+            delivery_order: Arc::clone(&backend.delivery_order),
+            ..RecordingSink::default()
+        });
+        let service = service(backend);
+        let capture = start(&service, Arc::clone(&sink) as Arc<dyn AudioSink>).expect("start");
+        capture.stop().expect("stop");
+        let order = sink.delivery_order.lock().expect("delivery order");
+        assert_eq!(order.first(), Some(&"ready"));
+        assert_eq!(order.get(1), Some(&"samples"));
     }
 
     #[test]
@@ -601,7 +550,7 @@ mod tests {
     #[test]
     fn invalid_device_does_not_strand_the_service() {
         let backend = Arc::new(FakeBackend::new([]));
-        let service = service(backend);
+        let service = service(Arc::clone(&backend));
         let missing = whispernow_core::audio::AudioDeviceId::new("missing").expect("ID");
         assert_eq!(
             service
@@ -616,22 +565,10 @@ mod tests {
             .expect("restart after invalid device")
             .stop()
             .expect("stop");
-    }
-
-    #[test]
-    fn closed_sink_stops_native_capture_instead_of_reporting_backpressure() {
-        let backend = Arc::new(FakeBackend::new([vec![0.5; 96_000]]));
-        let service = service(Arc::clone(&backend));
-        let sink = Arc::new(ClosedSink::default());
-        let capture = start(&service, Arc::clone(&sink) as Arc<dyn AudioSink>).expect("start");
-        assert!(wait_until(|| backend.stops.load(Ordering::Relaxed) > 0));
-        capture.stop().expect("release faulted capture");
-        let events = sink.events.lock().expect("events lock");
-        assert!(events.contains(&AudioEvent::StreamError));
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, AudioEvent::Backpressure { .. }))
-        );
+        start(&service, Arc::new(RecordingSink::default()))
+            .expect("restart after stopped capture")
+            .stop()
+            .expect("stop restarted capture");
+        assert_eq!(backend.stops.load(Ordering::Relaxed), 2);
     }
 }

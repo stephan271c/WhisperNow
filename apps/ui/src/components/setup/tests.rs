@@ -2,7 +2,8 @@ use dioxus::prelude::*;
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
     ErrorCategory, PasteHelperSetup, Permission, PermissionKind, PermissionStatus,
-    PermissionsResponse, Phase, SetupStateView, SetupTestResult,
+    PermissionsResponse, Phase, SaveSettingsResponse, SettingsView, SetupStateView,
+    SetupTestResult,
 };
 use whispernow_domain::{
     ModelAvailability, RecordingMode, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
@@ -390,14 +391,78 @@ fn try_it_reports_a_failed_start() {
 }
 
 #[test]
-fn try_it_waits_for_the_model_download() {
-    let html = opened(setup_at(SetupStep::TryIt, ModelAvailability::NotInstalled)).html();
-    assert!(tag(&html, "setup-test-start").is_none());
-    assert!(
-        !tag(&html, "setup-continue")
-            .expect("finish")
-            .contains(" disabled="),
-        "the desktop says why setup cannot finish yet"
+fn finishing_setup_shows_a_refusal_then_saves_the_checkpoint_and_stops_permission_watch() {
+    let mut management = setup_at(SetupStep::TryIt, ModelAvailability::NotInstalled);
+    let checkpoint = management.setup.as_ref().expect("setup").checkpoint.clone();
+    let mut settings = crate::test_support::editable_settings();
+    settings.first_run_complete = false;
+    settings.setup = Some(checkpoint.clone());
+    management.install_settings(SettingsView::new(&settings));
+    let mut setup = opened(management);
+    assert!(tag(&setup.html(), "setup-test-start").is_none());
+
+    setup.act(|actions| actions.open_permission_settings(PermissionKind::Microphone));
+    setup.answer("open_permission_settings", Ok(()));
+    setup.wait();
+    assert_eq!(fake::count("get_permissions"), 1);
+    setup.answer(
+        "get_permissions",
+        Ok(cards(
+            PermissionStatus::Granted,
+            PermissionStatus::NotDetermined,
+        )),
+    );
+
+    setup.click("setup-continue");
+    assert_eq!(
+        fake::requests::<SetupCheckpoint>("complete_setup").as_slice(),
+        std::slice::from_ref(&checkpoint)
+    );
+    let refusal = "Download the selected speech model first";
+    setup.answer(
+        "complete_setup",
+        Err::<SaveSettingsResponse, _>(error("model_not_installed", refusal, ErrorCategory::Model)),
+    );
+    assert_eq!(text(&setup.html(), "page-heading"), "Set up WhisperNow");
+    assert!(text(&setup.html(), "setup-wizard").contains(refusal));
+    setup.wait();
+    assert_eq!(fake::count("get_permissions"), 2);
+    setup.answer(
+        "get_permissions",
+        Ok(cards(
+            PermissionStatus::Granted,
+            PermissionStatus::NotDetermined,
+        )),
+    );
+
+    setup.click("setup-continue");
+    assert_eq!(
+        fake::requests::<SetupCheckpoint>("complete_setup"),
+        [checkpoint.clone(), checkpoint.clone()]
+    );
+    settings.first_run_complete = true;
+    settings.setup = None;
+    settings.model_id = checkpoint.model_id;
+    settings.input_device = checkpoint.input_device;
+    settings.recording_shortcut = checkpoint.recording_shortcut;
+    settings.recording_mode = checkpoint.recording_mode;
+    setup.answer(
+        "complete_setup",
+        Ok(SaveSettingsResponse {
+            settings: SettingsView::new(&settings),
+            warnings: Vec::new(),
+        }),
+    );
+    assert!(tag(&setup.html(), "setup-continue").is_none());
+    setup.click("setup-done-home");
+    assert_eq!(text(&setup.html(), "page-heading"), "Home");
+    assert!(tag(&setup.html(), "setup-wizard").is_none());
+    assert!(tag(&setup.html(), "setup-checklist").is_none());
+    setup.wait().wait();
+    assert_eq!(
+        fake::count("get_permissions"),
+        2,
+        "finishing cancels the permission watch"
     );
 }
 

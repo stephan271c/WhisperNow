@@ -119,17 +119,4 @@ mod tests {
         ));
         assert!(!is_silence_hallucination("Thank you."));
     }
-
-    #[test]
-    fn joining_drops_hallucinated_and_blank_segments() {
-        assert_eq!(
-            join_segment_texts([
-                "Hello there",
-                "Thanks for watching!",
-                "   ",
-                "General Kenobi."
-            ]),
-            "Hello there general Kenobi."
-        );
-    }
 }

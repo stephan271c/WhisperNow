@@ -71,8 +71,8 @@ pub(super) fn ShortcutCapture(
     let mut status = use_signal(|| CaptureStatus::Idle);
     // While listening, the desktop's global shortcuts are suspended so pressing
     // the current shortcut is captured instead of starting a recording.
-    use_effect(move || sync_shortcut_capture(status().is_capturing()));
-    use_drop(|| sync_shortcut_capture(false));
+    use_effect(move || crate::client::request_shortcut_capture(status().is_capturing()));
+    use_drop(|| crate::client::request_shortcut_capture(false));
     let parts = shortcut.as_ref().map_or_else(Vec::new, shortcut_parts);
     let help_id = format!("{id}-help");
     let keys_id = format!("{id}-keys");
@@ -162,13 +162,6 @@ pub(super) fn ShortcutCapture(
             "{guidance}"
         }
     }
-}
-
-fn sync_shortcut_capture(capturing: bool) {
-    #[cfg(target_arch = "wasm32")]
-    crate::client::request_shortcut_capture(capturing);
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = capturing;
 }
 
 fn captured_shortcut(

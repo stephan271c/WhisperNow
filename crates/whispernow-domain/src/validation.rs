@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{LlmProvider, Settings, SetupCheckpoint, Shortcut};
+use crate::{LlmProvider, Settings, SetupCheckpoint};
 
 /// Its message is shown beside the control that broke it.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -66,7 +66,18 @@ impl Settings {
     /// they break one.
     #[must_use]
     pub fn shortcut_problems(&self) -> Vec<SettingsError> {
-        shortcut_problems(&self.recording_shortcut, self.cancel_shortcut.as_ref())
+        let mut problems = Vec::new();
+        if !self.recording_shortcut.is_recording_shortcut() {
+            problems.push(SettingsError::RecordingShortcut);
+        }
+        if let Some(cancel) = &self.cancel_shortcut {
+            if !cancel.is_cancel_shortcut() {
+                problems.push(SettingsError::CancelShortcut);
+            } else if cancel == &self.recording_shortcut {
+                problems.push(SettingsError::CancelIsRecordingShortcut);
+            }
+        }
+        problems
     }
 }
 
@@ -75,19 +86,4 @@ impl SetupCheckpoint {
     pub fn shortcuts_ready(&self) -> bool {
         self.recording_shortcut.is_recording_shortcut()
     }
-}
-
-fn shortcut_problems(recording: &Shortcut, cancel: Option<&Shortcut>) -> Vec<SettingsError> {
-    let mut problems = Vec::new();
-    if !recording.is_recording_shortcut() {
-        problems.push(SettingsError::RecordingShortcut);
-    }
-    if let Some(cancel) = cancel {
-        if !cancel.is_cancel_shortcut() {
-            problems.push(SettingsError::CancelShortcut);
-        } else if cancel == recording {
-            problems.push(SettingsError::CancelIsRecordingShortcut);
-        }
-    }
-    problems
 }

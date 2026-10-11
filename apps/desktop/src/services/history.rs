@@ -188,25 +188,20 @@ mod tests {
     }
 
     #[test]
-    fn a_smaller_limit_prunes_and_kept_audio_plays_back() {
+    fn pruning_reports_removals_and_missing_audio_reports_not_kept() {
         let (_dir, store) = store();
-        for index in 0..25 {
+        let first = store
+            .insert(entry("first"), &[], false, HistoryLimit::Unlimited)
+            .expect("insert");
+        assert!(!store.prune(HistoryLimit::Last20).expect("nothing to prune"));
+        for _ in 0..20 {
             store
-                .insert(
-                    entry(&format!("entry {index}")),
-                    &[0.0; 160],
-                    true,
-                    HistoryLimit::Unlimited,
-                )
+                .insert(entry("later"), &[], false, HistoryLimit::Unlimited)
                 .expect("insert");
         }
         assert!(store.prune(HistoryLimit::Last20).expect("prune"));
-        let page = store
-            .list(&HistoryPageRequest::first_page(HistoryFilter::default()))
-            .expect("list");
-        assert_eq!(page.entries.len(), 20);
-        let wav = store.audio(page.entries[0].id).expect("kept audio");
-        assert!(wav.starts_with(b"RIFF"));
+        let error = store.audio(first).expect_err("missing audio");
+        assert_eq!(error.code, "history_audio_not_kept");
     }
 
     #[test]

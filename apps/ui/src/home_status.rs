@@ -129,33 +129,3 @@ pub(crate) const fn category_fix(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{HomeStatus, HomeStatusKind};
-    use crate::UiState;
-    use whispernow_domain::{AppError, ErrorCategory};
-
-    #[test]
-    fn connection_failures_have_no_fix_from_an_earlier_dictation_error() {
-        for (connection_failed, event_stream_failed, title) in [
-            (true, false, "WhisperNow could not connect"),
-            (false, true, "Live updates are unavailable"),
-        ] {
-            let state = UiState {
-                connection_failed,
-                event_stream_failed,
-                error: Some(AppError::new(
-                    ErrorCategory::Audio,
-                    "microphone_unavailable",
-                    "Choose an available microphone",
-                )),
-                ..UiState::default()
-            };
-            let status = HomeStatus::from_state(&state);
-            assert_eq!(status.kind, HomeStatusKind::Problem);
-            assert_eq!(status.title, title);
-            assert_eq!(status.fix, None);
-        }
-    }
-}

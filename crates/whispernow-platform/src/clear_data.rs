@@ -6,17 +6,10 @@ use std::{
 };
 
 use thiserror::Error;
-pub use whispernow_domain::ClearDataCategory;
-use whispernow_domain::ipc::DataLocation;
+use whispernow_domain::ClearDataCategory;
+use whispernow_domain::ipc::{ClearDataItem, DataLocation};
 
 use crate::AppPaths;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClearDataResultEntry {
-    pub category: ClearDataCategory,
-    pub path: PathBuf,
-    pub outcome: Result<(), io::ErrorKind>,
-}
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 #[error("could not inspect {category:?} data: {kind}")]
@@ -49,7 +42,7 @@ impl AppPaths {
     pub fn clear_data(
         &self,
         categories: &[ClearDataCategory],
-    ) -> Result<Vec<ClearDataResultEntry>, ClearDataError> {
+    ) -> Result<Vec<ClearDataItem>, ClearDataError> {
         let cuda_pack = self.cuda_pack_dir();
         let targets = self.data_locations()?.into_iter().filter(|location| {
             categories.contains(&location.category) && location.path != cuda_pack
@@ -57,26 +50,16 @@ impl AppPaths {
         let mut retained_audio_removed = true;
         let mut entries = Vec::new();
         for DataLocation { category, path } in targets {
-            let outcome = if !retained_audio_removed && self.is_lifecycle_database(&path) {
-                Err(io::ErrorKind::Other)
-            } else {
-                remove_path(&path)
-                    .or_else(|error| {
-                        if error.kind() == io::ErrorKind::NotFound {
-                            Ok(())
-                        } else {
-                            Err(error)
-                        }
-                    })
-                    .map_err(|error| error.kind())
-            };
-            if path == self.recordings_dir() && outcome.is_err() {
+            let deleted = (retained_audio_removed || !self.is_lifecycle_database(&path))
+                && remove_path(&path)
+                    .map_or_else(|error| error.kind() == io::ErrorKind::NotFound, |()| true);
+            if path == self.recordings_dir() && !deleted {
                 retained_audio_removed = false;
             }
-            entries.push(ClearDataResultEntry {
+            entries.push(ClearDataItem {
                 category,
-                path,
-                outcome,
+                path: path.to_string_lossy().into_owned(),
+                deleted,
             });
         }
         Ok(entries)
@@ -231,7 +214,7 @@ mod tests {
 
         let report = paths.clear_data(&EVERYTHING).expect("clear");
         assert_eq!(report.len(), 10);
-        assert!(report.iter().all(|entry| entry.outcome.is_ok()));
+        assert!(report.iter().all(|entry| entry.deleted));
         let remaining = paths.data_locations().expect("remaining targets");
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].path, paths.cuda_pack_dir());
@@ -358,7 +341,7 @@ mod tests {
 
         let history_failures = report
             .iter()
-            .filter(|entry| entry.category == ClearDataCategory::History && entry.outcome.is_err())
+            .filter(|entry| entry.category == ClearDataCategory::History && !entry.deleted)
             .count();
         assert_eq!(
             history_failures, 4,
@@ -380,7 +363,7 @@ mod tests {
 
         let report = paths.clear_data(&EVERYTHING).expect("clear");
 
-        assert!(report.iter().all(|entry| entry.outcome.is_ok()));
+        assert!(report.iter().all(|entry| entry.deleted));
         assert_eq!(fixture.paths.config_dir(), fixture.paths.data_dir());
         assert!(fixture.paths.config_dir().is_dir());
         assert!(sentinel.exists());
@@ -403,7 +386,7 @@ mod tests {
 
         let report = paths.clear_data(&EVERYTHING).expect("clear");
 
-        assert!(report.iter().all(|entry| entry.outcome.is_ok()));
+        assert!(report.iter().all(|entry| entry.deleted));
         assert!(outside.join("content").exists());
         assert!(!fixture.paths.models_dir().exists());
         assert!(fixture.paths.cuda_pack_dir().exists());

@@ -16,6 +16,7 @@ mod data;
 mod history;
 mod home;
 mod labels;
+mod microphone_test;
 mod models;
 mod overlay;
 mod setup;
@@ -25,7 +26,7 @@ pub(crate) mod ui;
 mod updates;
 mod vocabulary;
 
-use actions::DisabledReason;
+use crate::blocked_reason::DisabledReason;
 use ai_cleanup::AiCleanupPage;
 use configuration::{AudioPage, GeneralPage, PrivacyPage};
 use data::ClearDataCard;
@@ -37,7 +38,7 @@ use setup::SetupScreen;
 use shared::{PasteHelperNotice, ShortcutCapture};
 use titlebar::{TitleBar, use_window_chrome};
 use ui::focus::{focus, take_focus};
-use ui::{BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
+use ui::{Banner, BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName, Tone};
 use updates::AboutPage;
 use vocabulary::VocabularyPage;
 
@@ -57,10 +58,6 @@ pub(crate) struct Navigator {
 }
 
 impl Navigator {
-    #[cfg_attr(
-        not(any(test, target_arch = "wasm32")),
-        expect(dead_code, reason = "called by the browser's window root and by tests")
-    )]
     pub(crate) const fn new(route: Signal<Route>, focus_requests: Signal<u64>) -> Self {
         Self {
             route,
@@ -157,7 +154,6 @@ pub fn AppShell() -> Element {
         if (navigator.focus_requests)() == 0 {
             return;
         }
-        #[cfg(target_arch = "wasm32")]
         crate::client::reset_settings_scroll();
         take_focus(heading);
     });
@@ -311,21 +307,21 @@ fn SidebarFooter() -> Element {
                     class: "select footer-model",
                     value: "{selected_id}",
                     disabled: switch_blocked.is_some(),
-                    aria_describedby: switch_blocked.map(|_| "footer-model-disabled-reason"),
-                    onchange: move |event| {
-                        let value = event.value();
-                        let id = context.management.read().speech_models()
-                            .find(|model| model.id.as_str() == value && model.availability != ModelAvailability::NotInstalled)
-                            .map(|model| model.id.clone());
-                        if let Some(id) = id {
-                            context.switch_model(id);
+                    aria_describedby: switch_blocked.as_ref().map(|_| "footer-model-disabled-reason"),
+                    onchange: {
+                        let installed = installed.clone();
+                        move |event: FormEvent| {
+                            let value = event.value();
+                            if let Some((id, _)) = installed.iter().find(|(id, _)| id.as_str() == value) {
+                                context.switch_model(id.clone());
+                            }
                         }
                     },
-                    for (id, name) in installed {
+                    for (id, name) in installed.clone() {
                         option { value: id.as_str(), selected: id.as_str() == selected_id, "{name}" }
                     }
                 }
-                DisabledReason { id: "footer-model-disabled-reason", reason: switch_blocked }
+                DisabledReason { id: "footer-model-disabled-reason", reason: switch_blocked.clone() }
             }
             if let Some(update) = update {
                 Button {
@@ -354,6 +350,13 @@ const fn update_summary(phase: Option<&UpdatePhase>) -> Option<&'static str> {
 
 #[component]
 fn Page(route: Route) -> Element {
+    let settings_warnings = use_context::<UiContext>()
+        .management
+        .read()
+        .settings
+        .as_ref()
+        .map(|view| view.warnings.clone())
+        .unwrap_or_default();
     match route {
         Route::Home => rsx! { HomePage {} },
         Route::Setup => rsx! { SetupScreen {} },
@@ -362,25 +365,22 @@ fn Page(route: Route) -> Element {
             HistoryScreen {}
         },
         Route::Settings(page) => rsx! {
+            for warning in settings_warnings {
+                Banner { tone: Tone::Warning, p { "{warning}" } }
+            }
             NoticeRegion { scope: NoticeScope::Settings }
-            SettingsPage { page }
+            match page {
+                SettingsRoute::General => rsx! { GeneralPage {} },
+                SettingsRoute::Audio => rsx! { AudioPage {} },
+                SettingsRoute::SpeechModels => rsx! { ModelsPage {} },
+                SettingsRoute::AiCleanup => rsx! { AiCleanupPage {} },
+                SettingsRoute::Vocabulary => rsx! { VocabularyPage {} },
+                SettingsRoute::PrivacyData => rsx! {
+                    div { class: "settings-stack", PrivacyPage {} ClearDataCard {} }
+                },
+                SettingsRoute::AboutUpdates => rsx! { AboutPage {} },
+            }
         },
-    }
-}
-
-/// One Settings section. Each control saves itself, so there is no page-wide Save.
-#[component]
-fn SettingsPage(page: SettingsRoute) -> Element {
-    match page {
-        SettingsRoute::General => rsx! { GeneralPage {} },
-        SettingsRoute::Audio => rsx! { AudioPage {} },
-        SettingsRoute::SpeechModels => rsx! { ModelsPage {} },
-        SettingsRoute::AiCleanup => rsx! { AiCleanupPage {} },
-        SettingsRoute::Vocabulary => rsx! { VocabularyPage {} },
-        SettingsRoute::PrivacyData => rsx! {
-            div { class: "settings-stack", PrivacyPage {} ClearDataCard {} }
-        },
-        SettingsRoute::AboutUpdates => rsx! { AboutPage {} },
     }
 }
 

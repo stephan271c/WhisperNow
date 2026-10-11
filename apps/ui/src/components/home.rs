@@ -1,17 +1,14 @@
 use dioxus::prelude::*;
-use whispernow_domain::ipc::MicrophoneTestResponse;
 use whispernow_domain::{RecordingMode, SetupStep, Shortcut};
 
 use super::NoticeRegion;
-use super::actions::DisabledReason;
 use super::labels;
+use super::microphone_test::MicrophoneTest;
 use super::ui::{
     Banner, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconName, ShortcutLabel, Tone,
 };
 use super::updates::UpdateStatus;
-use crate::{
-    HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext, UiOperation,
-};
+use crate::{HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext};
 
 /// The steps the setup checklist lists, each done once setup has moved past it.
 const CHECKLIST: [(&str, SetupStep); 4] = [
@@ -42,7 +39,6 @@ pub(super) fn HomePage() -> Element {
         let settings = &view.settings;
         (settings.recording_mode, settings.recording_shortcut.clone())
     });
-    let test = management.microphone_test.clone();
     drop(management);
     rsx! { div { class: "home-grid",
         if let Some(step) = setup_step {
@@ -51,7 +47,7 @@ pub(super) fn HomePage() -> Element {
         UpdateStatus {}
         StatusCard { status }
         ShortcutsCard { shortcut }
-        MicrophoneCard { test }
+        MicrophoneCard {}
         LatestTranscript { transcript }
     } }
 }
@@ -156,86 +152,15 @@ fn ShortcutsCard(shortcut: Option<(RecordingMode, Shortcut)>) -> Element {
 }
 
 #[component]
-fn MicrophoneCard(test: Option<MicrophoneTestResponse>) -> Element {
-    let context = use_context::<UiContext>();
-    let blocked = context
-        .blocked(UiOperation::TestMicrophone)
-        .or(context.phase_blocked());
-    let testing = context
-        .management
-        .read()
-        .is_busy(UiOperation::TestMicrophone);
+fn MicrophoneCard() -> Element {
     rsx! {
         article { class: "card home-card", aria_labelledby: "home-microphone-title",
             h2 { id: "home-microphone-title", "Microphone" }
             p { "Listens for three seconds. Nothing is kept." }
-            div { class: "microphone-test",
-                Button {
-                    id: "test-microphone",
-                    disabled: blocked.is_some(),
-                    aria_describedby: (blocked.is_some() && !testing).then_some("test-microphone-disabled-reason"),
-                    onclick: move |_| context.test_microphone(),
-                    Icon { name: IconName::Mic }
-                    if testing { "Listening…" } else { "Test microphone" }
-                }
-                if testing {
-                    p { class: "status-detail", role: "status", "Say a few words." }
-                } else {
-                    DisabledReason { id: "test-microphone-disabled-reason", reason: blocked }
-                }
-            }
-            if let Some(test) = test {
-                LevelMeter { test }
-            }
+            MicrophoneTest { id_prefix: "test-microphone" }
             NoticeRegion { scope: NoticeScope::Home }
         }
     }
-}
-
-#[component]
-pub(super) fn LevelMeter(test: MicrophoneTestResponse) -> Element {
-    let peak = percent(test.peak);
-    let bars = test
-        .levels
-        .iter()
-        .enumerate()
-        .map(|(index, level)| {
-            // Speech is quiet on a linear scale; the square root keeps it visible.
-            let height = (level.clamp(0.0, 1.0).sqrt() * 20.0).max(0.5);
-            (index, 20.0 - height, height)
-        })
-        .collect::<Vec<_>>();
-    let width = bars.len().max(1);
-    rsx! {
-        div {
-            id: "microphone-level",
-            class: "level-meter",
-            role: "meter",
-            aria_label: "Microphone level",
-            aria_valuemin: "0",
-            aria_valuemax: "100",
-            aria_valuenow: "{peak}",
-            aria_valuetext: "Loudest sound {peak}%",
-            svg { class: "level-meter-bars", view_box: "0 0 {width} 20", preserve_aspect_ratio: "none",
-                "aria-hidden": "true", "focusable": "false",
-                for (index, y, height) in bars {
-                    rect { x: "{index}", y: "{y}", width: "0.7", height: "{height}" }
-                }
-            }
-            p { class: "level-meter-caption", "Loudest sound: {peak}%" }
-        }
-    }
-}
-
-pub(super) fn percent(level: f32) -> u8 {
-    // Clamped to 0..=100 before the cast.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "the value is clamped to 0..=100 first"
-    )]
-    let value = (level.clamp(0.0, 1.0) * 100.0).round() as u8;
-    value
 }
 
 #[component]

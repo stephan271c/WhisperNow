@@ -6,7 +6,6 @@ use std::{
 use whispernow_domain::AppError;
 
 use whispernow_core::audio::{AudioDeviceChoice, AudioInput, AudioInputError};
-use whispernow_domain::LlmProvider;
 use whispernow_domain::ipc::{
     AudioDevice, ErrorCategory, EventPayload, MicrophoneTestResponse, PermissionKind,
     PermissionStatus, PermissionsResponse, SaveSettingsResponse, SettingsView,
@@ -15,7 +14,7 @@ use whispernow_domain::{
     EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, Settings, SetupCheckpoint, SetupStep,
 };
 use whispernow_platform::{
-    AppPaths, LocalCleanupService, PrivacySettingsPage, open_in_file_manager, open_privacy_settings,
+    AppPaths, LocalCleanupService, open_in_file_manager, open_privacy_settings,
 };
 
 pub(crate) use dictation::Dictation;
@@ -50,7 +49,7 @@ pub(crate) struct NativeServices {
     pub(crate) state: Arc<StateCell>,
     pub(crate) dictation: Dictation,
     paths: AppPaths,
-    output: Arc<OutputCoordinator>,
+    pub(crate) output: Arc<OutputCoordinator>,
     paste_helper_setup_dir: PathBuf,
     microphone_access: MicrophoneAccess,
     local_cleanup: Arc<LocalCleanupService>,
@@ -94,41 +93,32 @@ impl NativeServices {
         if !matches!(pruning, Ok(false)) {
             self.publish_history_changed();
         }
-        let mut warnings = settings.warnings.clone();
-        warnings.extend(pruning.err().map(|warning| warning.summary));
+        let warnings = pruning
+            .err()
+            .map(|warning| warning.summary)
+            .into_iter()
+            .collect();
         Ok((before, SaveSettingsResponse { settings, warnings }))
     }
 
     /// Loads the chosen local cleanup model in the background when AI cleanup uses it, and
     /// frees it otherwise.
     fn follow_cleanup_provider(&self, settings: &Settings) {
-        if settings.llm_provider == LlmProvider::LocalCleanup && settings.cleanup_enabled {
+        if settings.uses_local_cleanup() {
             self.local_cleanup.preload(settings.cleanup_model_id());
         } else {
             self.local_cleanup.unload();
         }
     }
 
-    /// Whether [`Self::copy_last_transcript`] can work in this session; native Wayland output
-    /// has no clipboard access of its own.
-    pub(crate) fn can_copy_transcripts(&self) -> bool {
-        self.output.can_copy()
-    }
-
     pub(crate) fn copy_last_transcript(&self) -> Result<(), AppError> {
-        let text = self
-            .state
-            .lock()
-            .last_transcript
-            .clone()
-            .filter(|text| !text.is_empty())
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCategory::NotFound,
-                    "no_transcript",
-                    "There is no transcript to copy yet",
-                )
-            })?;
+        let text = self.state.lock().last_transcript.clone().ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::NotFound,
+                "no_transcript",
+                "There is no transcript to copy yet",
+            )
+        })?;
         self.output.copy(&text).map_err(|_| {
             AppError::new(
                 ErrorCategory::Output,
@@ -139,27 +129,13 @@ impl NativeServices {
     }
 
     pub(crate) fn list_audio_devices(&self) -> Result<Vec<AudioDevice>, AppError> {
-        Ok(self
-            .audio
-            .list_input_devices()
-            .map_err(|_| {
-                AppError::new(
-                    ErrorCategory::Audio,
-                    "audio_devices",
-                    "Audio input devices could not be listed",
-                )
-            })?
-            .into_iter()
-            // The windows offer the system default themselves.
-            .filter_map(|device| match device.choice {
-                AudioDeviceChoice::SystemDefault => None,
-                AudioDeviceChoice::Device(id) => Some(AudioDevice {
-                    id: id.as_str().to_owned(),
-                    display_name: device.display_name,
-                    is_default: device.is_current_default,
-                }),
-            })
-            .collect())
+        self.audio.list_input_devices().map_err(|_| {
+            AppError::new(
+                ErrorCategory::Audio,
+                "audio_devices",
+                "Audio input devices could not be listed",
+            )
+        })
     }
 
     /// Listens to the selected microphone for a few seconds and reports its levels. No audio
@@ -214,14 +190,7 @@ impl NativeServices {
     }
 
     pub(crate) fn open_permission_settings(kind: PermissionKind) -> Result<(), AppError> {
-        let page = match kind {
-            PermissionKind::Microphone => PrivacySettingsPage::Microphone,
-            PermissionKind::Accessibility => PrivacySettingsPage::Accessibility,
-            PermissionKind::GlobalShortcuts
-            | PermissionKind::RemoteDesktop
-            | PermissionKind::PasteSupport => return Err(no_permission_settings()),
-        };
-        open_privacy_settings(page).map_err(|_| no_permission_settings())
+        open_privacy_settings(kind).map_err(|_| no_permission_settings())
     }
 
     /// Listens to the default microphone briefly, which is how each platform
@@ -263,7 +232,7 @@ impl NativeServices {
         }
         {
             let state = self.state.lock();
-            if state.setup_complete {
+            if before.first_run_complete {
                 return Err(AppError::new(
                     ErrorCategory::General,
                     "setup_already_complete",
@@ -285,7 +254,6 @@ impl NativeServices {
         let mut settings = transaction.load()?;
         apply_checkpoint(&mut settings, checkpoint);
         transaction.save(&settings)?;
-        self.state.lock().setup_complete = true;
         Ok(SettingsView::new(&settings))
     }
 

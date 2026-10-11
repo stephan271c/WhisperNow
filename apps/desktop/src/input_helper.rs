@@ -9,7 +9,6 @@
 //! portal paste.
 
 use std::{
-    collections::HashMap,
     ffi::OsStr,
     fs, io,
     io::{BufRead as _, BufReader, Read, Write as _},
@@ -82,7 +81,7 @@ fn stop(child: &mut Child) {
 pub(crate) type OnRelease = Arc<dyn Fn(ShortcutId, Duration) + Send + Sync>;
 
 pub(crate) struct ReleaseWatcher {
-    chords: HashMap<ShortcutId, String>,
+    chord: Option<(ShortcutId, String)>,
     child: Option<Child>,
     on_release: OnRelease,
     reported_missing: bool,
@@ -91,7 +90,7 @@ pub(crate) struct ReleaseWatcher {
 impl ReleaseWatcher {
     pub(crate) fn new(on_release: OnRelease) -> Self {
         Self {
-            chords: HashMap::new(),
+            chord: None,
             child: None,
             on_release,
             reported_missing: false,
@@ -99,15 +98,12 @@ impl ReleaseWatcher {
     }
 
     pub(crate) fn watch(&mut self, binding: &ShortcutBinding) {
-        self.chords.insert(
-            binding.id,
-            format!("{:x}={}", binding.id.0, chord(&binding.shortcut)),
-        );
+        self.chord = Some((binding.id, chord(&binding.shortcut)));
         self.restart();
     }
 
     pub(crate) fn unwatch(&mut self, id: ShortcutId) {
-        if self.chords.remove(&id).is_some() {
+        if self.chord.take_if(|(bound, _)| *bound == id).is_some() {
             self.restart();
         }
     }
@@ -118,12 +114,13 @@ impl ReleaseWatcher {
         }
     }
 
-    /// The helper takes its chords as arguments, so a change starts a new one.
+    /// The helper takes its chord as an argument, so a change starts a new one.
     fn restart(&mut self) {
         self.stop();
-        if self.chords.is_empty() {
+        let Some((id, chord)) = &self.chord else {
             return;
-        }
+        };
+        let id = *id;
         let Some(helper) = helper_path() else {
             if !std::mem::replace(&mut self.reported_missing, true) {
                 tracing::info!("{HELPER} is not installed; shortcut releases rely on key repeats");
@@ -131,8 +128,8 @@ impl ReleaseWatcher {
             return;
         };
         let on_release = Arc::clone(&self.on_release);
-        let spawned = spawn(&helper, self.chords.values(), move |line| {
-            if let Some((id, at)) = parse_release(&line) {
+        let spawned = spawn(&helper, [chord], move |line| {
+            if let Some(at) = parse_release(&line) {
                 on_release(id, at);
             }
             true
@@ -308,12 +305,8 @@ fn shell_quoted(text: &str) -> String {
     }
 }
 
-fn parse_release(line: &str) -> Option<(ShortcutId, Duration)> {
-    let (id, millis) = line.split_once(' ')?;
-    Some((
-        ShortcutId(u32::from_str_radix(id, 16).ok()?),
-        Duration::from_millis(millis.parse().ok()?),
-    ))
+fn parse_release(line: &str) -> Option<Duration> {
+    Some(Duration::from_millis(line.parse().ok()?))
 }
 
 /// The helper's chord for `shortcut`: each key's Linux input codes, modifiers on either side.
@@ -403,12 +396,12 @@ mod tests {
     }
 
     #[test]
-    fn release_lines_carry_the_shortcut_and_its_time() {
+    fn release_lines_carry_the_monotonic_time() {
         assert_eq!(
-            parse_release("8003e 123456"),
-            Some((ShortcutId(0x8003e), Duration::from_millis(123_456)))
+            parse_release("123456"),
+            Some(Duration::from_millis(123_456))
         );
-        assert_eq!(parse_release("8003e"), None);
-        assert_eq!(parse_release("zz 1"), None);
+        assert_eq!(parse_release("not-a-time"), None);
+        assert_eq!(parse_release("123 456"), None);
     }
 }

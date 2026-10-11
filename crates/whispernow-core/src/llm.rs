@@ -4,7 +4,6 @@ use std::{fmt, future::Future, pin::Pin};
 
 use thiserror::Error;
 use whispernow_domain::{ApiKey, CleanupTarget, ModelId, RemoteCleanupTarget};
-pub use whispernow_domain::{LlmProvider, ProviderEndpoint};
 
 use crate::CancellationToken;
 

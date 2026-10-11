@@ -56,7 +56,7 @@ class ReleaseVersionTests(unittest.TestCase):
         self.assertTrue(any("updater version" in error for error in errors))
         self.assertTrue(any("artifact version" in error for error in errors))
 
-    def test_inherited_tauri_version_and_matching_outputs_pass(self):
+    def test_only_tauri_may_inherit_the_workspace_version(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manifest = root / "Cargo.toml"
@@ -67,20 +67,26 @@ class ReleaseVersionTests(unittest.TestCase):
             tauri = root / "tauri.conf.json"
             tauri.write_text("{}", encoding="utf-8")
             updater = root / "latest.json"
-            updater.write_text(json.dumps({"version": "0.2.0"}), encoding="utf-8")
-            errors = release_version.validate(
-                manifest=manifest,
-                tauri_configs=[tauri],
-                tag="v0.2.0",
-                metadata_versions={"desktop": "0.2.0", "core": "0.2.0"},
-                updater_metadata=[updater],
-                artifacts=[
-                    "WhisperNow_0.2.0_amd64.deb",
-                    "WhisperNow-0.2.0-1.x86_64.rpm",
-                    "WhisperNow_0.2.0_amd64.AppImage.sig",
-                ],
-            )
-        self.assertEqual(errors, [])
+            for document in ({"version": "0.2.0"}, {}):
+                with self.subTest(updater=document):
+                    updater.write_text(json.dumps(document), encoding="utf-8")
+                    errors = release_version.validate(
+                        manifest=manifest,
+                        tauri_configs=[tauri],
+                        tag="v0.2.0",
+                        metadata_versions={"desktop": "0.2.0", "core": "0.2.0"},
+                        updater_metadata=[updater],
+                        artifacts=[
+                            "WhisperNow_0.2.0_amd64.deb",
+                            "WhisperNow-0.2.0-1.x86_64.rpm",
+                            "WhisperNow_0.2.0_amd64.AppImage.sig",
+                        ],
+                    )
+                    if document:
+                        self.assertEqual(errors, [])
+                    else:
+                        self.assertEqual(len(errors), 1)
+                        self.assertIn("updater version is None", errors[0])
 
     def test_missing_or_ambiguous_artifact_version_is_rejected(self):
         errors = release_version.validate_artifacts(

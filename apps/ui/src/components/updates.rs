@@ -1,10 +1,9 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{ManualUpdatePackage, UpdateError, UpdatePhase};
 
-use super::NoticeRegion;
-use super::actions::DisabledReason;
 use super::ui::{Banner, Button, ButtonVariant, ProgressBar, Tone};
-use crate::{NoticeScope, UiContext, UiOperation};
+use crate::blocked_reason::DisabledReason;
+use crate::{UiContext, UiOperation};
 
 #[component]
 pub(super) fn AboutPage() -> Element {
@@ -26,11 +25,10 @@ pub(super) fn AboutPage() -> Element {
             h2 { id: "about-title", "WhisperNow" }
             p { id: "about-version", "Version {env!(\"CARGO_PKG_VERSION\")}" }
             UpdateStatus {}
-            NoticeRegion { scope: NoticeScope::Updates }
             Button {
                 id: "check-for-updates",
                 disabled: checking || updates_disabled || check_blocked.is_some(),
-                aria_describedby: check_blocked.map(|_| "check-disabled-reason"),
+                aria_describedby: check_blocked.as_ref().map(|_| "check-disabled-reason"),
                 onclick: move |_| context.check_for_updates(),
                 if checking { "Checking…" } else { "Check for updates" }
             }

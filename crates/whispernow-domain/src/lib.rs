@@ -18,9 +18,9 @@ pub use history::{
     HistoryPageRequest, NewHistoryEntry, UtcMillis,
 };
 pub use models::{
-    ArchiveFormat, CLEANUP_MODEL_IDS, CUDA_PACK_ID, DEFAULT_CLEANUP_MODEL_ID, DownloadPhase,
-    ModelAvailability, ModelDefinition, ModelFamily, ModelId, ModelLayout, ModelProfile,
-    ModelRegistry, ModelSource, Rating, SpeechBenchmark, WerSource,
+    CLEANUP_MODEL_IDS, CUDA_PACK_ID, DEFAULT_CLEANUP_MODEL_ID, DownloadPhase, ModelAvailability,
+    ModelDefinition, ModelFamily, ModelId, ModelLayout, ModelProfile, ModelRegistry, ModelSource,
+    Rating, SpeechBenchmark, WerSource,
 };
 pub use provider::{EndpointError, LlmProvider, ProviderEndpoint};
 pub use settings::{

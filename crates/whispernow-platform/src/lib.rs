@@ -22,11 +22,11 @@ pub mod wayland;
 
 pub use asr::SherpaAsrEngine;
 pub use audio::CpalAudioInput;
-pub use clear_data::{ClearDataCategory, ClearDataError};
+pub use clear_data::ClearDataError;
 #[cfg(any(test, feature = "test-support"))]
 pub use credential_store::MemoryCredentialStore;
 pub use credential_store::{CredentialStore, CredentialStoreUnavailable};
-pub use file_manager::{PrivacySettingsPage, open_in_file_manager, open_privacy_settings};
+pub use file_manager::{open_in_file_manager, open_privacy_settings};
 pub use llama::{CUDA_LIBRARIES, Llama};
 pub use llm::complete;
 pub use local_cleanup::{CleanupModelLocator, CudaPackLocator, LocalCleanupService};

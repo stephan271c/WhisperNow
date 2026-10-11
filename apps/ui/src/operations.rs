@@ -1,5 +1,3 @@
-use crate::NoticeScope;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiOperation {
     LoadSettings,
@@ -44,32 +42,5 @@ impl UiOperation {
                 | Self::RestartSetup
                 | Self::ClearData
         )
-    }
-
-    pub(crate) const fn notice_scope(self) -> NoticeScope {
-        match self {
-            Self::LoadSettings | Self::CredentialMutation => NoticeScope::Settings,
-            Self::DownloadModel | Self::CancelDownload | Self::ModelSwitch | Self::ModelDelete => {
-                NoticeScope::Models
-            }
-            Self::SaveSetup
-            | Self::CompleteSetup
-            | Self::RestartSetup
-            | Self::OpenPermissionSettings
-            | Self::LoadPermissions
-            | Self::StartSetupTest
-            | Self::StopSetupTest => NoticeScope::Setup,
-            Self::ChangeHistory | Self::OpenRecordingsFolder => NoticeScope::History,
-            Self::UpdateInstallRestart
-            | Self::CheckForUpdates
-            | Self::DismissUpdate
-            | Self::OpenUpdateReleasePage => NoticeScope::Updates,
-            Self::ListDataLocations | Self::ClearData => NoticeScope::Data,
-            Self::TestMicrophone => NoticeScope::Home,
-            Self::ListDevices
-            | Self::StopRecording
-            | Self::CancelRecording
-            | Self::OverlayAction => NoticeScope::Global,
-        }
     }
 }

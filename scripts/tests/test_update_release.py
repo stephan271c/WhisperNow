@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).parents[1] / "update_release.py"
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("update_release", SCRIPT)
 update_release = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

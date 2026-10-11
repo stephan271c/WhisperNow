@@ -5,11 +5,11 @@ use whispernow_domain::{
 };
 
 use super::NoticeRegion;
-use super::actions::DisabledReason;
 use super::labels::{self, format_bytes};
 use super::ui::{
     Banner, Button, ButtonSize, ButtonVariant, ConfirmButton, ProgressBar, Section, Tone,
 };
+use crate::blocked_reason::DisabledReason;
 use crate::{BlockedReason, NoticeScope, SettingKey, UiContext, UiOperation};
 
 #[component]
@@ -39,7 +39,10 @@ pub(super) fn ModelsPage() -> Element {
     let delete_blocked = context
         .blocked(UiOperation::ModelDelete)
         .or(context.phase_blocked());
-    let reason = switch_blocked.or(download_blocked).or(delete_blocked);
+    let reason = switch_blocked
+        .clone()
+        .or(download_blocked.clone())
+        .or(delete_blocked.clone());
     let failed_active = (active_state == ModelState::Failed)
         .then(|| active_id.clone())
         .flatten();
@@ -51,7 +54,7 @@ pub(super) fn ModelsPage() -> Element {
                 Button {
                     id: "reload-model",
                     disabled: switch_blocked.is_some(),
-                    aria_describedby: switch_blocked.map(|_| "models-disabled-reason"),
+                    aria_describedby: switch_blocked.as_ref().map(|_| "models-disabled-reason"),
                     onclick: move |_| context.switch_model(model_id.clone()),
                     "Reload model"
                 }
@@ -72,9 +75,9 @@ pub(super) fn ModelsPage() -> Element {
                         kind: ModelRowKind::Speech {
                             state: (active_id.as_ref() == Some(&model.id)).then_some(active_state),
                         },
-                        switch_blocked,
-                        download_blocked,
-                        delete_blocked,
+                        switch_blocked: switch_blocked.clone(),
+                        download_blocked: download_blocked.clone(),
+                        delete_blocked: delete_blocked.clone(),
                         model,
                     }
                 }
@@ -113,14 +116,14 @@ pub(super) fn ModelRow(
     let id = model.id.clone();
     let slug = id.as_str().replace('.', "-");
     let name = model.display_name.clone();
-    let download = context.download(&id);
+    let download = context.active_download(&id);
     let active_state = match kind {
         ModelRowKind::Speech { state } => state,
         _ => None,
     };
     let active = active_state.is_some();
     let describe =
-        |blocked: Option<crate::BlockedReason>| blocked.map(|_| "models-disabled-reason");
+        |blocked: &Option<crate::BlockedReason>| blocked.as_ref().map(|_| "models-disabled-reason");
     rsx! {
         li { class: if active { "model-row active" } else { "model-row" },
             div { class: "model-summary",
@@ -157,7 +160,7 @@ pub(super) fn ModelRow(
                         id: "model-{slug}-download",
                         aria_label: "Download {name}",
                         disabled: download_blocked.is_some(),
-                        aria_describedby: describe(download_blocked),
+                        aria_describedby: describe(&download_blocked),
                         onclick: { let id = id.clone(); move |_| context.download_model(id.clone()) },
                         "Download"
                     }
@@ -167,7 +170,7 @@ pub(super) fn ModelRow(
                         variant: ButtonVariant::Primary,
                         aria_label: "Use {name}",
                         disabled: switch_blocked.is_some(),
-                        aria_describedby: describe(switch_blocked),
+                        aria_describedby: describe(&switch_blocked),
                         onclick: { let id = id.clone(); move |_| context.switch_model(id.clone()) },
                         "Use"
                     }

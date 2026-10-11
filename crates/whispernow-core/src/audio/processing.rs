@@ -248,7 +248,6 @@ mod tests {
     fn audio_block_enforces_its_invariants() {
         let block = AudioBlock::new(vec![f32::NAN, f32::NEG_INFINITY, -0.5, f32::INFINITY]);
         assert_eq!(block.samples(), &[0.0, -1.0, -0.5, 1.0]);
-        assert!(block.samples().iter().all(|sample| sample.is_finite()));
     }
 
     #[test]

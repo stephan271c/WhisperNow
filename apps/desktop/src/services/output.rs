@@ -19,14 +19,12 @@ use std::{
 };
 #[cfg(target_os = "linux")]
 use whispernow_platform::wayland::{
-    RemoteDesktopRestoreTokenStore, WaylandOutput, WaylandPasteOutcome, WaylandPortalError,
+    RemoteDesktopRestoreTokenStore, WaylandOutput, WaylandPortalError,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OutputNotice {
-    PastedAndRestored,
-    PastedClipboardNotRestored,
-    RestoreSkippedClipboardChanged,
+    Pasted,
     PermissionDenied,
     CapabilityUnavailable,
     PasteFailed,
@@ -181,11 +179,9 @@ impl TranscriptOutput for OutputCoordinator {
 
 const fn native_notice(outcome: PasteOutcome<NativePasteError>) -> OutputNotice {
     match outcome {
-        PasteOutcome::PastedAndRestored => OutputNotice::PastedAndRestored,
-        PasteOutcome::PastedWithoutRestore => OutputNotice::PastedClipboardNotRestored,
-        PasteOutcome::RestoreSkippedClipboardChanged => {
-            OutputNotice::RestoreSkippedClipboardChanged
-        }
+        PasteOutcome::PastedAndRestored
+        | PasteOutcome::PastedWithoutRestore
+        | PasteOutcome::RestoreSkippedClipboardChanged => OutputNotice::Pasted,
         PasteOutcome::Failed(NativePasteError::PermissionDenied) => OutputNotice::PermissionDenied,
         PasteOutcome::Cancelled => OutputNotice::Cancelled,
         PasteOutcome::Failed(_) => OutputNotice::PasteFailed,
@@ -207,7 +203,7 @@ where
     P: PastePlatform<Error = NativePasteError> + Send + 'static,
 {
     enum Progress {
-        Sent { restoring: bool },
+        Sent,
         Finished(PasteOutcome<NativePasteError>),
     }
     let (progress, reports) = std_mpsc::channel();
@@ -218,8 +214,8 @@ where
         .name("whispernow-paste".to_owned())
         .spawn(move || {
             let sent = progress.clone();
-            let outcome = queue.paste_reporting_keystroke(&text, &cancellation, move |restoring| {
-                let _ = sent.send(Progress::Sent { restoring });
+            let outcome = queue.paste_reporting_keystroke(&text, &cancellation, move |_| {
+                let _ = sent.send(Progress::Sent);
             });
             tracing::debug!(?outcome, "paste finished");
             let _ = progress.send(Progress::Finished(outcome));
@@ -228,8 +224,7 @@ where
         return OutputNotice::PasteFailed;
     }
     match reports.recv() {
-        Ok(Progress::Sent { restoring: true }) => OutputNotice::PastedAndRestored,
-        Ok(Progress::Sent { restoring: false }) => OutputNotice::PastedClipboardNotRestored,
+        Ok(Progress::Sent) => OutputNotice::Pasted,
         Ok(Progress::Finished(outcome)) => native_notice(outcome),
         Err(_) => OutputNotice::PasteFailed,
     }
@@ -240,7 +235,7 @@ enum WaylandOutputCommand {
     Paste {
         text: String,
         cancellation: CancellationToken,
-        reply: std_mpsc::SyncSender<Result<WaylandPasteOutcome, WaylandPortalError>>,
+        reply: std_mpsc::SyncSender<PasteOutcome<WaylandPortalError>>,
     },
     Prepare {
         reply: std_mpsc::SyncSender<Result<(), WaylandPortalError>>,
@@ -317,7 +312,9 @@ impl WaylandOutputPortal {
                                     }
                                 };
                                 let _ =
-                                    reply.send(result.unwrap_or(Err(WaylandPortalError::Backend)));
+                                    reply.send(result.unwrap_or(PasteOutcome::Failed(
+                                        WaylandPortalError::Backend,
+                                    )));
                             }
                             WaylandOutputCommand::Prepare { reply } => {
                                 // Stopping the application drops the wait for the
@@ -412,23 +409,25 @@ impl WaylandOutputPortal {
         let Ok(response) = receiver.recv() else {
             return OutputNotice::CapabilityUnavailable;
         };
-        self.record_consent(&response);
+        let consent = match response {
+            PasteOutcome::Failed(error) => Err(error),
+            PasteOutcome::Cancelled => Err(WaylandPortalError::Cancelled),
+            _ => Ok(()),
+        };
+        self.record_consent(&consent);
         match response {
-            Ok(WaylandPasteOutcome::PastedAndRestored) => OutputNotice::PastedAndRestored,
-            Ok(WaylandPasteOutcome::PastedWithoutRestore) => {
-                OutputNotice::PastedClipboardNotRestored
-            }
-            Ok(WaylandPasteOutcome::RestoreSkippedClipboardChanged) => {
-                OutputNotice::RestoreSkippedClipboardChanged
-            }
-            Err(WaylandPortalError::PermissionDenied | WaylandPortalError::KeyboardUnavailable) => {
-                OutputNotice::PermissionDenied
-            }
-            Err(WaylandPortalError::PortalUnavailable | WaylandPortalError::Disconnected) => {
-                OutputNotice::CapabilityUnavailable
-            }
-            Err(_) if cancellation.is_cancelled() => OutputNotice::Cancelled,
-            Err(_) => OutputNotice::PasteFailed,
+            PasteOutcome::PastedAndRestored
+            | PasteOutcome::PastedWithoutRestore
+            | PasteOutcome::RestoreSkippedClipboardChanged => OutputNotice::Pasted,
+            PasteOutcome::Failed(
+                WaylandPortalError::PermissionDenied | WaylandPortalError::KeyboardUnavailable,
+            ) => OutputNotice::PermissionDenied,
+            PasteOutcome::Failed(
+                WaylandPortalError::PortalUnavailable | WaylandPortalError::Disconnected,
+            ) => OutputNotice::CapabilityUnavailable,
+            PasteOutcome::Cancelled => OutputNotice::Cancelled,
+            PasteOutcome::Failed(_) if cancellation.is_cancelled() => OutputNotice::Cancelled,
+            PasteOutcome::Failed(_) => OutputNotice::PasteFailed,
         }
     }
 
@@ -458,10 +457,7 @@ mod tests {
     #[test]
     fn native_outcomes_map_to_notices_and_only_permission_failures_ask_for_permission() {
         for (outcome, expected) in [
-            (
-                PasteOutcome::PastedAndRestored,
-                OutputNotice::PastedAndRestored,
-            ),
+            (PasteOutcome::PastedAndRestored, OutputNotice::Pasted),
             (
                 PasteOutcome::Failed(NativePasteError::PermissionDenied),
                 OutputNotice::PermissionDenied,
@@ -477,39 +473,43 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_helper_paste_answers_once_sent_and_then_restores_the_clipboard() {
+    fn a_helper_paste_answers_before_the_clipboard_is_restored() {
         use std::{
-            sync::{Arc, Mutex},
-            time::{Duration, Instant},
+            sync::{Arc, mpsc},
+            thread,
+            time::Duration,
         };
-
         use whispernow_core::{
             CancellationToken,
             text_output::{KeystrokeOutcome, PastePlatform, PasteQueue},
         };
 
-        /// A clipboard the test reads while the paste thread restores it.
-        struct Desktop(Arc<Mutex<Option<String>>>);
+        struct Desktop {
+            release_restore: mpsc::Receiver<()>,
+            restored: mpsc::Sender<()>,
+        }
 
         impl PastePlatform for Desktop {
-            type Snapshot = String;
+            type Snapshot = ();
             type Error = NativePasteError;
 
-            fn snapshot_clipboard(&mut self) -> Result<Option<String>, NativePasteError> {
-                Ok(self.0.lock().expect("clipboard").clone())
+            fn snapshot_clipboard(&mut self) -> Result<Option<()>, NativePasteError> {
+                Ok(Some(()))
             }
 
-            fn write_transcript(&mut self, text: &str) -> Result<(), NativePasteError> {
-                *self.0.lock().expect("clipboard") = Some(text.to_owned());
+            fn write_transcript(&mut self, _: &str) -> Result<(), NativePasteError> {
                 Ok(())
             }
 
-            fn clipboard_holds(&mut self, text: &str) -> Result<bool, NativePasteError> {
-                Ok(self.0.lock().expect("clipboard").as_deref() == Some(text))
+            fn clipboard_holds(&mut self, _: &str) -> Result<bool, NativePasteError> {
+                Ok(true)
             }
 
-            fn restore_clipboard(&mut self, snapshot: String) -> Result<(), NativePasteError> {
-                *self.0.lock().expect("clipboard") = Some(snapshot);
+            fn restore_clipboard(&mut self, (): ()) -> Result<(), NativePasteError> {
+                self.release_restore
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("release restore");
+                self.restored.send(()).expect("restoration observer");
                 Ok(())
             }
 
@@ -518,17 +518,25 @@ mod tests {
             }
         }
 
-        let clipboard = Arc::new(Mutex::new(Some("copied earlier".to_owned())));
-        let queue = Arc::new(PasteQueue::new(Desktop(Arc::clone(&clipboard))));
-        assert_eq!(
-            super::helper_output(&queue, "dictated words", &CancellationToken::default()),
-            OutputNotice::PastedAndRestored
-        );
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while clipboard.lock().expect("clipboard").as_deref() != Some("copied earlier") {
-            assert!(Instant::now() < deadline, "the clipboard was not restored");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let (release_restore, restore_release) = mpsc::channel();
+        let (restored, restoration) = mpsc::channel();
+        let queue = Arc::new(PasteQueue::new(Desktop {
+            release_restore: restore_release,
+            restored,
+        }));
+        let (answer, response) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let notice =
+                super::helper_output(&queue, "dictated words", &CancellationToken::default());
+            answer.send(notice).expect("paste response");
+        });
+        let answered_before_restore = response.recv_timeout(Duration::from_secs(5));
+        release_restore.send(()).expect("release restore");
+        worker.join().expect("paste caller");
+        restoration
+            .recv_timeout(Duration::from_secs(5))
+            .expect("clipboard restored");
+        assert_eq!(answered_before_restore, Ok(OutputNotice::Pasted));
     }
 
     #[cfg(target_os = "linux")]
@@ -541,11 +549,9 @@ mod tests {
             thread,
         };
 
-        use whispernow_core::CancellationToken;
+        use whispernow_core::{CancellationToken, text_output::PasteOutcome};
         use whispernow_domain::ipc::PermissionStatus;
-        use whispernow_platform::wayland::{
-            RemoteDesktopRestoreTokenStore, WaylandPasteOutcome, WaylandPortalError,
-        };
+        use whispernow_platform::wayland::{RemoteDesktopRestoreTokenStore, WaylandPortalError};
 
         use super::super::{
             OutputCoordinator, OutputNotice, OutputOperation, WaylandOutputCommand,
@@ -555,7 +561,7 @@ mod tests {
         /// A coordinator whose portal worker answers every paste with `reply`
         /// and counts the pastes it was asked to perform.
         fn scripted(
-            reply: Result<WaylandPasteOutcome, WaylandPortalError>,
+            reply: PasteOutcome<WaylandPortalError>,
         ) -> (OutputCoordinator, Arc<AtomicUsize>) {
             let pastes = Arc::new(AtomicUsize::new(0));
             let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -569,7 +575,12 @@ mod tests {
                                 sender.send(reply).expect("paste reply");
                             }
                             WaylandOutputCommand::Prepare { reply: sender, .. } => {
-                                sender.send(reply.map(drop)).expect("prepare reply");
+                                let result = match reply {
+                                    PasteOutcome::Failed(error) => Err(error),
+                                    PasteOutcome::Cancelled => Err(WaylandPortalError::Cancelled),
+                                    _ => Ok(()),
+                                };
+                                sender.send(result).expect("prepare reply");
                             }
                             WaylandOutputCommand::Shutdown { reply } => {
                                 reply.send(()).expect("shutdown reply");
@@ -598,14 +609,17 @@ mod tests {
         fn only_portal_permission_failures_ask_for_permission() {
             for (reply, expected) in [
                 (
-                    Err(WaylandPortalError::PermissionDenied),
+                    PasteOutcome::Failed(WaylandPortalError::PermissionDenied),
                     OutputNotice::PermissionDenied,
                 ),
                 (
-                    Err(WaylandPortalError::KeyboardUnavailable),
+                    PasteOutcome::Failed(WaylandPortalError::KeyboardUnavailable),
                     OutputNotice::PermissionDenied,
                 ),
-                (Err(WaylandPortalError::Backend), OutputNotice::PasteFailed),
+                (
+                    PasteOutcome::Failed(WaylandPortalError::Backend),
+                    OutputNotice::PasteFailed,
+                ),
             ] {
                 let (coordinator, pastes) = scripted(reply);
                 assert_eq!(
@@ -620,7 +634,7 @@ mod tests {
 
         #[test]
         fn empty_stopping_and_cancelled_output_never_reach_the_portal() {
-            let (coordinator, pastes) = scripted(Ok(WaylandPasteOutcome::PastedAndRestored));
+            let (coordinator, pastes) = scripted(PasteOutcome::PastedAndRestored);
             assert_eq!(
                 coordinator.output("", &CancellationToken::default()),
                 OutputNotice::PasteFailed
@@ -672,20 +686,17 @@ mod tests {
         #[test]
         fn the_last_portal_answer_decides_the_paste_consent() {
             for (reply, expected) in [
+                (PasteOutcome::PastedAndRestored, PermissionStatus::Granted),
                 (
-                    Ok(WaylandPasteOutcome::PastedAndRestored),
-                    PermissionStatus::Granted,
-                ),
-                (
-                    Err(WaylandPortalError::PermissionDenied),
+                    PasteOutcome::Failed(WaylandPortalError::PermissionDenied),
                     PermissionStatus::Denied,
                 ),
                 (
-                    Err(WaylandPortalError::PortalUnavailable),
+                    PasteOutcome::Failed(WaylandPortalError::PortalUnavailable),
                     PermissionStatus::Unavailable,
                 ),
                 (
-                    Err(WaylandPortalError::Backend),
+                    PasteOutcome::Failed(WaylandPortalError::Backend),
                     PermissionStatus::NotDetermined,
                 ),
             ] {

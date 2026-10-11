@@ -5,7 +5,6 @@ use whispernow_domain::{Settings, ThemePreference};
 
 use super::ManagementState;
 use crate::NoticeScope;
-use crate::components::ui::Tone;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SettingKey {
@@ -37,13 +36,6 @@ pub enum SaveStatus {
 
 impl ManagementState {
     pub fn install_settings(&mut self, settings: SettingsView) {
-        if let Some(warning) = settings.warnings.first() {
-            self.notify(Tone::Warning, NoticeScope::Settings, warning.clone());
-            self.cleanup_warning_notice = Some(self.next_notice);
-        } else {
-            self.clear_notice_scope(NoticeScope::Settings);
-            self.cleanup_warning_notice = None;
-        }
         self.settings = Some(settings);
     }
 
@@ -57,10 +49,6 @@ impl ManagementState {
     /// The document `data-theme` for the chosen theme, following a theme change at once;
     /// `None` follows the system colour scheme.
     #[must_use]
-    #[cfg_attr(
-        not(any(test, target_arch = "wasm32")),
-        expect(dead_code, reason = "called by the browser's window root and by tests")
-    )]
     pub fn theme_attribute(&self) -> Option<&'static str> {
         let theme = self
             .shown_settings()
@@ -81,16 +69,12 @@ impl ManagementState {
                 .any(|operation| operation.changes_settings())
     }
 
-    pub(super) fn begin_settings_change(&self) -> bool {
-        !self.settings_pending()
-    }
-
     pub fn begin_settings_update(
         &mut self,
         key: SettingKey,
         edit: impl FnOnce(&mut Settings),
     ) -> Option<Settings> {
-        if !self.begin_settings_change() {
+        if self.settings_pending() {
             return None;
         }
         let mut settings = self
@@ -130,16 +114,11 @@ impl ManagementState {
         let key = self.saving.take().expect("a settings save is pending");
         match answer {
             Ok(SaveSettingsResponse { settings, warnings }) => {
-                let cleanup_warning_only = !warnings.is_empty() && warnings == settings.warnings;
-                self.settings = Some(settings);
+                self.install_settings(settings);
                 if warnings.is_empty() {
-                    if let Some(id) = self.cleanup_warning_notice.take() {
-                        self.dismiss_notice(id);
-                    }
                     self.saved_setting = Some(key);
                 } else {
-                    let id = self.notify_saved(NoticeScope::Settings, "Saved", &warnings);
-                    self.cleanup_warning_notice = cleanup_warning_only.then_some(id);
+                    self.notify_saved(NoticeScope::Settings, "Saved", &warnings);
                 }
             }
             Err(message) => {

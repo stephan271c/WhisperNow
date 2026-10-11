@@ -11,8 +11,8 @@ use tar::{Builder as TarBuilder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
 use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::{
-    ArchiveFormat, DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout,
-    ModelProfile, ModelRegistry, ModelSource,
+    DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout, ModelProfile,
+    ModelRegistry, ModelSource,
 };
 use whispernow_platform::{
     AppPaths, DownloadProgress, DownloadTimeouts, ModelStore, ModelStoreError,
@@ -99,7 +99,6 @@ fn definition(url: String, archive: &[u8]) -> ModelDefinition {
         display_name: "Fixture Whisper".to_owned(),
         source: ModelSource {
             url,
-            archive_format: ArchiveFormat::TarBz2,
             archive_size_bytes: archive.len() as u64,
             sha256: sha256(archive),
         },
@@ -127,7 +126,6 @@ fn make_manager_for_url(url: &str, archive: &[u8]) -> (tempfile::TempDir, ModelS
 /// A manager for one model downloaded as a single GGUF file, like the cleanup model.
 fn make_single_file_manager(url: &str, file: &[u8]) -> (tempfile::TempDir, ModelStore, ModelId) {
     let mut definition = definition(url.to_owned(), file);
-    definition.source.archive_format = ArchiveFormat::SingleFile;
     definition.layout = ModelLayout::Gguf {
         model: "model-Q8_0.gguf".to_owned(),
     };
@@ -213,48 +211,31 @@ fn a_single_file_model_is_downloaded_verified_installed_and_removed_as_is() {
 }
 
 #[test]
-fn an_archive_whose_entries_start_with_a_dot_directory_installs() {
-    let archive = archive_under(
-        &format!("./{MODEL_ID}"),
-        &[
-            (ARTIFACTS[0], b"encoder"),
-            (ARTIFACTS[1], b"decoder"),
-            (ARTIFACTS[2], b"tokens"),
-        ],
-    );
-    let server = serve(Response::ok(archive.clone()));
-    let (_root, manager, id) = make_manager(&server, &archive);
-
-    let resolved = manager
-        .download(&id, &CancellationToken::default(), &|_| {})
-        .expect("fixture download");
-
-    for artifact in ARTIFACTS {
-        assert!(resolved.root.join(artifact).is_file());
-    }
-}
-
-#[test]
-fn an_archive_may_name_its_directory_in_another_case_than_the_id() {
-    const PATH: &str = "/Fixture-Whisper.tar.bz2";
-    let archive = archive_under(
-        "Fixture-Whisper",
-        &[
-            (ARTIFACTS[0], b"encoder"),
-            (ARTIFACTS[1], b"decoder"),
-            (ARTIFACTS[2], b"tokens"),
-        ],
-    );
-    let server = FixtureServer::start([(PATH, Response::ok(archive.clone()))]);
-    let (_root, manager, id) = make_manager_for_url(&server.url(PATH), &archive);
-
-    let resolved = manager
-        .download(&id, &CancellationToken::default(), &|_| {})
-        .expect("fixture download");
-
-    assert!(resolved.root.ends_with(MODEL_ID));
-    for artifact in ARTIFACTS {
-        assert!(resolved.root.join(artifact).is_file());
+fn archive_directory_prefixes_and_case_do_not_change_the_installed_model_id() {
+    for (directory, path) in [
+        (format!("./{MODEL_ID}"), MODEL_PATH),
+        ("Fixture-Whisper".to_owned(), "/Fixture-Whisper.tar.bz2"),
+    ] {
+        let archive = archive_under(
+            &directory,
+            &[
+                (ARTIFACTS[0], b"encoder"),
+                (ARTIFACTS[1], b"decoder"),
+                (ARTIFACTS[2], b"tokens"),
+            ],
+        );
+        let server = FixtureServer::start([(path, Response::ok(archive.clone()))]);
+        let (_root, manager, id) = make_manager_for_url(&server.url(path), &archive);
+        let resolved = manager
+            .download(&id, &CancellationToken::default(), &|_| {})
+            .expect("fixture download");
+        assert!(resolved.root.ends_with(MODEL_ID), "{directory}");
+        for artifact in ARTIFACTS {
+            assert!(
+                resolved.root.join(artifact).is_file(),
+                "{directory}/{artifact}"
+            );
+        }
     }
 }
 

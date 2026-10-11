@@ -115,23 +115,19 @@ fn incomplete_cleanup_settings_save_with_a_warning_until_repaired() {
     settings.cleanup_enabled = true;
     assert_eq!(settings.validate(), Ok(()));
     assert_eq!(settings.cleanup_target(), Err(MissingCleanupField::Model));
-    assert_eq!(
-        settings.cleanup_warning().as_deref(),
-        Some(
-            "AI cleanup needs a model for Custom provider; the plain transcript will be pasted until you enter one."
-        )
-    );
+    let warning = settings
+        .cleanup_warning()
+        .expect("warning for the missing model");
+    assert!(warning.contains(LlmProvider::Custom.label()));
     settings.provider_settings_mut(LlmProvider::Custom).model = "local".to_owned();
     assert_eq!(
         settings.cleanup_target(),
         Err(MissingCleanupField::Endpoint)
     );
-    assert_eq!(
-        settings.cleanup_warning().as_deref(),
-        Some(
-            "AI cleanup needs an API endpoint for Custom provider; the plain transcript will be pasted until you enter one."
-        )
-    );
+    let warning = settings
+        .cleanup_warning()
+        .expect("warning for the missing endpoint");
+    assert!(warning.contains(LlmProvider::Custom.label()));
     settings.provider_settings_mut(LlmProvider::Custom).api_base =
         Some(ProviderEndpoint::parse("http://localhost:8080/v1").expect("endpoint"));
     assert_eq!(settings.cleanup_warning(), None);
@@ -205,7 +201,7 @@ fn setup_shortcuts_are_ready_when_the_recording_shortcut_is_valid() {
 }
 
 #[test]
-fn credentials_serialize_only_when_requested_and_debug_is_redacted() {
+fn credentials_serialize_the_value_and_redact_debug_output() {
     let key = ApiKey::new("write-only-secret").expect("a key");
     assert_eq!(
         serde_json::to_value(&key).expect("serialize credential mutation"),

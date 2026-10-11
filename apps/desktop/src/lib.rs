@@ -137,7 +137,7 @@ pub fn run() {
             move |app, _args, _cwd| {
                 let activate = callback_activation.request_activation(|| {
                     app.try_state::<Gateway>()
-                        .map(|state| state.services_state().phase)
+                        .map(|state| state.services.state.snapshot().phase)
                 });
                 if activate {
                     show_settings_window(app);
@@ -178,7 +178,7 @@ pub fn run() {
                 NativeServices::compose(events, native_wayland, resource_dir).map_err(|error| {
                     io::Error::other(format!("desktop setup failed ({})", error.code))
                 })?;
-            if !services.can_copy_transcripts() {
+            if !services.output.can_copy() {
                 tray.mark_copy_unavailable();
             }
             let settings = services.settings.load().map_err(|error| {
@@ -226,7 +226,7 @@ pub fn run() {
                 }),
                 startup_failure,
             ));
-            if let Some(error) = shortcuts.registration_diagnostic() {
+            if let Some(error) = shortcuts.failure() {
                 tracing::warn!("configured push-to-talk shortcut is unavailable");
                 services.state.publish_error(gateway::shortcut_error(error));
             }
@@ -247,13 +247,13 @@ pub fn run() {
                 updater::spawn_periodic_checks(update_controller);
             }
             // A second launch during setup asked for the window before there was a state.
-            if activation
-                .release_deferred_activation(&app.state::<Gateway>().services_state().phase)
-            {
+            if activation.release_deferred_activation(
+                &app.state::<Gateway>().services.state.snapshot().phase,
+            ) {
                 show_settings_window(app.handle());
             }
             forward_events(app.handle().clone(), overlay, event_receiver)?;
-            app.state::<Gateway>().publish_state();
+            app.state::<Gateway>().services.state.publish();
             let shortcut_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = shortcut_receiver.recv().await {
@@ -298,7 +298,8 @@ pub fn run() {
                     let app = window.app_handle().clone();
                     tauri::async_runtime::spawn_blocking(move || {
                         if let Some(state) = app.try_state::<Gateway>()
-                            && let Err(error) = state.save_window_geometry(geometry)
+                            && let Err(error) =
+                                state.services.settings.save_window_geometry(geometry)
                         {
                             tracing::warn!(code = error.code, "window geometry could not be saved");
                         }
@@ -420,7 +421,12 @@ fn handle_tray_action(app: &tauri::AppHandle, action: TrayAction) {
             show_settings_window(app);
         }
         TrayAction::CheckForUpdates => {
-            if let Err(error) = app.state::<Gateway>().refuse_during_maintenance() {
+            if let Err(error) = app
+                .state::<Gateway>()
+                .services
+                .state
+                .refuse_during_maintenance()
+            {
                 tracing::debug!(code = error.code, "update check was not admitted");
                 return;
             }

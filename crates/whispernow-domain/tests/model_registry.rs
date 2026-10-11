@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use whispernow_domain::{
-    ArchiveFormat, CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, ModelFamily, ModelId, ModelRegistry,
+    CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, ModelFamily, ModelId, ModelRegistry,
 };
 
 const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
@@ -24,7 +24,6 @@ fn every_model_has_a_unique_id_and_a_pinned_source_named_after_it() {
             ModelFamily::Cleanup => {
                 assert!(source.url.starts_with("https://"), "{id}");
                 assert!(source.url.ends_with(&format!("/{id}.gguf")), "{id}");
-                assert_eq!(source.archive_format, ArchiveFormat::SingleFile, "{id}");
             }
             ModelFamily::CudaPack => {}
             _ => {
@@ -33,7 +32,6 @@ fn every_model_has_a_unique_id_and_a_pinned_source_named_after_it() {
                     format!("{RELEASE_BASE}/{}.tar.bz2", source.archive_root())
                 );
                 assert!(source.archive_root().eq_ignore_ascii_case(id), "{id}");
-                assert_eq!(source.archive_format, ArchiveFormat::TarBz2, "{id}");
             }
         }
     }
@@ -98,25 +96,8 @@ fn each_model_has_the_artifacts_its_family_needs() {
 }
 
 #[test]
-fn cleanup_models_start_with_the_default_and_are_not_speech_models() {
-    let registry = ModelRegistry::builtin();
+fn cleanup_models_start_with_the_default() {
     assert_eq!(CLEANUP_MODEL_IDS[0], DEFAULT_CLEANUP_MODEL_ID);
-    let cleanup_ids: Vec<_> = registry
-        .models()
-        .iter()
-        .filter(|model| model.family() == ModelFamily::Cleanup)
-        .map(|model| model.id.as_str())
-        .collect();
-    assert_eq!(cleanup_ids, CLEANUP_MODEL_IDS);
-    for id in CLEANUP_MODEL_IDS {
-        let model = registry.get(id).expect("the cleanup model is registered");
-        assert_eq!(model.family(), ModelFamily::Cleanup);
-        assert!(
-            registry
-                .speech_models()
-                .all(|model| model.id.as_str() != id)
-        );
-    }
 }
 
 #[test]

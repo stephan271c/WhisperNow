@@ -15,7 +15,7 @@ TIMEOUT_EXIT = 124
 MISSING_EXECUTABLE_EXIT = 127
 
 
-def _terminate_tree(process: subprocess.Popen[bytes], grace_seconds: float) -> None:
+def terminate_tree(process: subprocess.Popen[bytes], grace_seconds: float) -> None:
     if process.poll() is not None:
         return
     if os.name == "nt":
@@ -81,7 +81,7 @@ def run_bounded(
     try:
         return_code = process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
-        _terminate_tree(process, grace_seconds)
+        terminate_tree(process, grace_seconds)
         print(f"bounded process {label}: deadline exceeded", file=sys.stderr)
         return TIMEOUT_EXIT
     if return_code == 0:

@@ -31,7 +31,7 @@ jobs:
         run: python3 scripts/check_rust_toolchain.py
 
       - name: Verify the single-source product version
-        run: python3 scripts/release_version.py --check
+        run: python3 scripts/release_version.py
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2

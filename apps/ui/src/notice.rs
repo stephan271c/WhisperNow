@@ -11,7 +11,6 @@ pub enum NoticeScope {
     Settings,
     Models,
     Data,
-    Updates,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

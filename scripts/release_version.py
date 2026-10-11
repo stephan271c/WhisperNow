@@ -72,7 +72,9 @@ def validate_cargo_metadata(versions: dict[str, str], expected: str) -> list[str
     ]
 
 
-def validate_tauri_configs(paths: list[Path], expected: str) -> list[str]:
+def validate_json_versions(
+    paths: list[Path], expected: str, *, label: str, allow_missing: bool
+) -> list[str]:
     errors: list[str] = []
     for path in paths:
         try:
@@ -81,22 +83,8 @@ def validate_tauri_configs(paths: list[Path], expected: str) -> list[str]:
             errors.append(f"{path}: {error}")
             continue
         configured = document.get("version")
-        if configured is not None and configured != expected:
-            errors.append(f"{path}: Tauri version is {configured!r}, expected {expected}")
-    return errors
-
-
-def validate_updater_metadata(paths: list[Path], expected: str) -> list[str]:
-    errors: list[str] = []
-    for path in paths:
-        try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            errors.append(f"{path}: {error}")
-            continue
-        version = document.get("version")
-        if version != expected:
-            errors.append(f"{path}: updater version is {version!r}, expected {expected}")
+        if configured != expected and not (allow_missing and configured is None):
+            errors.append(f"{path}: {label} version is {configured!r}, expected {expected}")
     return errors
 
 
@@ -141,8 +129,12 @@ def validate(
         else:
             if tagged != expected:
                 errors.append(f"release tag version is {tagged}, expected {expected}")
-    errors.extend(validate_tauri_configs(tauri_configs, expected))
-    errors.extend(validate_updater_metadata(updater_metadata, expected))
+    errors.extend(
+        validate_json_versions(tauri_configs, expected, label="Tauri", allow_missing=True)
+    )
+    errors.extend(
+        validate_json_versions(updater_metadata, expected, label="updater", allow_missing=False)
+    )
     errors.extend(validate_artifacts(artifacts, expected))
     return errors
 
@@ -151,7 +143,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Check Cargo, Tauri, updater, tag, and artifact versions without modifying files."
     )
-    parser.add_argument("--check", action="store_true", help="explicit check-only mode")
     parser.add_argument("--manifest", type=Path, default=Path("Cargo.toml"))
     parser.add_argument("--tauri-config", action="append", type=Path, default=[])
     parser.add_argument("--release-tag")

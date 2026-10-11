@@ -14,7 +14,7 @@ use tempfile::{Builder, NamedTempFile};
 use thiserror::Error;
 use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::{
-    ArchiveFormat, DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelRegistry,
+    DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout, ModelRegistry,
 };
 
 use crate::{AppPaths, atomic_file::sync_directory, clear_data::remove_path};
@@ -196,10 +196,8 @@ impl ModelStore {
         definition: &ModelDefinition,
         download: NamedTempFile,
         staging_base: &Path,
+        artifact: &str,
     ) -> Result<PathBuf, ModelStoreError> {
-        let [artifact] = definition.layout.required_artifacts()[..] else {
-            return Err(ModelStoreError::InvalidArchive);
-        };
         let staged_root = staging_base.join(definition.id.as_str());
         let destination = staged_root.join(artifact);
         if let Some(parent) = destination.parent() {
@@ -364,6 +362,13 @@ impl ModelStore {
         observer: &dyn Fn(DownloadProgress),
     ) -> Result<ResolvedModel, ModelStoreError> {
         let definition = self.definition(model_id)?.clone();
+        let complete = |phase| {
+            observer(DownloadProgress {
+                phase,
+                downloaded_bytes: definition.source.archive_size_bytes,
+                total_bytes: Some(definition.source.archive_size_bytes),
+            });
+        };
         fs::create_dir_all(self.paths.models_dir())
             .map_err(|_| filesystem("create models directory"))?;
         let mut archive_file = Builder::new()
@@ -382,46 +387,30 @@ impl ModelStore {
             cancellation,
             observer,
         ))?;
-        observer(DownloadProgress {
-            phase: DownloadPhase::ValidatingArchive,
-            downloaded_bytes: definition.source.archive_size_bytes,
-            total_bytes: Some(definition.source.archive_size_bytes),
-        });
+        complete(DownloadPhase::ValidatingArchive);
         check_cancelled(cancellation)?;
         let staging = Builder::new()
             .prefix(".model-stage-")
             .tempdir_in(self.paths.models_dir())
             .map_err(|_| filesystem("create model staging directory"))?;
-        observer(DownloadProgress {
-            phase: DownloadPhase::Extracting,
-            downloaded_bytes: definition.source.archive_size_bytes,
-            total_bytes: Some(definition.source.archive_size_bytes),
-        });
-        let staged_root = match definition.source.archive_format {
-            ArchiveFormat::TarBz2 => Self::extract_archive(
+        complete(DownloadPhase::Extracting);
+        let staged_root = match &definition.layout {
+            ModelLayout::Gguf { model: artifact } => {
+                Self::stage_single_file(&definition, archive_file, staging.path(), artifact)?
+            }
+            _ => Self::extract_archive(
                 &definition,
                 archive_file.path(),
                 staging.path(),
                 cancellation,
             )?,
-            ArchiveFormat::SingleFile => {
-                Self::stage_single_file(&definition, archive_file, staging.path())?
-            }
         };
-        observer(DownloadProgress {
-            phase: DownloadPhase::Installing,
-            downloaded_bytes: definition.source.archive_size_bytes,
-            total_bytes: Some(definition.source.archive_size_bytes),
-        });
+        complete(DownloadPhase::Installing);
         let root = {
             let _guard = self.lock_store();
             self.install_staged(&definition, &staged_root, cancellation)?
         };
-        observer(DownloadProgress {
-            phase: DownloadPhase::Complete,
-            downloaded_bytes: definition.source.archive_size_bytes,
-            total_bytes: Some(definition.source.archive_size_bytes),
-        });
+        complete(DownloadPhase::Complete);
         Ok(ResolvedModel { definition, root })
     }
 }
