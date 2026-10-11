@@ -50,17 +50,9 @@ impl AppPaths {
         &self,
         categories: &[ClearDataCategory],
     ) -> Result<Vec<ClearDataResultEntry>, ClearDataError> {
-        self.clear_data_except(categories, None)
-    }
-
-    pub fn clear_data_except(
-        &self,
-        categories: &[ClearDataCategory],
-        excluded_target: Option<&Path>,
-    ) -> Result<Vec<ClearDataResultEntry>, ClearDataError> {
+        let cuda_pack = self.cuda_pack_dir();
         let targets = self.data_locations()?.into_iter().filter(|location| {
-            categories.contains(&location.category)
-                && Some(location.path.as_path()) != excluded_target
+            categories.contains(&location.category) && location.path != cuda_pack
         });
         let mut retained_audio_removed = true;
         let mut entries = Vec::new();
@@ -68,7 +60,15 @@ impl AppPaths {
             let outcome = if !retained_audio_removed && self.is_lifecycle_database(&path) {
                 Err(io::ErrorKind::Other)
             } else {
-                delete(&path)
+                remove_path(&path)
+                    .or_else(|error| {
+                        if error.kind() == io::ErrorKind::NotFound {
+                            Ok(())
+                        } else {
+                            Err(error)
+                        }
+                    })
+                    .map_err(|error| error.kind())
             };
             if path == self.recordings_dir() && outcome.is_err() {
                 retained_audio_removed = false;
@@ -123,17 +123,13 @@ impl AppPaths {
     }
 }
 
-fn delete(path: &Path) -> Result<(), io::ErrorKind> {
-    let result = match fs::symlink_metadata(path) {
-        Err(error) => Err(error),
-        // `symlink_metadata` ensures a symlink is unlinked itself instead of
-        // following its destination.
-        Ok(metadata) if metadata.file_type().is_dir() => fs::remove_dir_all(path),
-        Ok(_) => fs::remove_file(path),
-    };
-    match result {
-        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error.kind()),
-        _ => Ok(()),
+pub(crate) fn remove_path(path: &Path) -> io::Result<()> {
+    // `symlink_metadata` keeps deletion from following the target of a symlink.
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
     }
 }
 
@@ -234,9 +230,11 @@ mod tests {
         );
 
         let report = paths.clear_data(&EVERYTHING).expect("clear");
-        assert_eq!(report.len(), 11);
+        assert_eq!(report.len(), 10);
         assert!(report.iter().all(|entry| entry.outcome.is_ok()));
-        assert_eq!(paths.data_locations(), Ok(Vec::new()));
+        let remaining = paths.data_locations().expect("remaining targets");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].path, paths.cuda_pack_dir());
         assert!(config_sentinel.exists());
         assert!(data_sentinel.exists());
         assert!(fixture.paths.config_dir().is_dir());
@@ -408,7 +406,7 @@ mod tests {
         assert!(report.iter().all(|entry| entry.outcome.is_ok()));
         assert!(outside.join("content").exists());
         assert!(!fixture.paths.models_dir().exists());
-        assert!(!fixture.paths.cuda_pack_dir().exists());
+        assert!(fixture.paths.cuda_pack_dir().exists());
         assert!(!fixture.paths.logs_dir().exists());
     }
 }

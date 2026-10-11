@@ -1,11 +1,8 @@
-use whispernow_domain::UtcMillis;
-
 use crate::llm::CleanupFallback;
 
 /// Has not yet caused history or output side effects.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedTranscription {
-    pub timestamp: UtcMillis,
     pub raw_text: String,
     /// The raw text after vocabulary replacements: what AI cleanup edits.
     pub deterministic_text: String,
@@ -27,7 +24,6 @@ impl PreparedTranscription {
 pub enum PipelineFailureKind {
     NoAudio,
     NoSpeech,
-    Cancelled,
     RecognitionFailed,
     EmptyTranscription,
     UnknownTokens,

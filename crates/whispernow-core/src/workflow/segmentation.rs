@@ -258,9 +258,6 @@ impl SpeechSegmenter {
 }
 
 fn mean_square(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
     #[allow(
         clippy::cast_precision_loss,
         reason = "frame lengths are far below f32's exact integer range"
@@ -269,9 +266,8 @@ fn mean_square(samples: &[f32]) -> f32 {
     samples.iter().map(|sample| sample * sample).sum::<f32>() / count
 }
 
-/// Segments a complete recording with fresh detector state, as a live recording did.
-#[must_use]
-pub fn segment_recording(samples: &[f32], activity: Box<dyn VoiceActivity>) -> Vec<AudioSegment> {
+#[cfg(test)]
+fn segment_recording(samples: &[f32], activity: Box<dyn VoiceActivity>) -> Vec<AudioSegment> {
     let mut segmenter = SpeechSegmenter::new(activity);
     let mut segments = segmenter.push(samples);
     segments.extend(segmenter.finish());

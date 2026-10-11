@@ -24,7 +24,7 @@ pub(crate) use dictation::tests::Fixture;
 use history::HistoryStore;
 use models::ModelCoordinator;
 use output::OutputCoordinator;
-use permissions::{MicrophoneAccess, PermissionFacts, permission_states};
+use permissions::{MicrophoneAccess, SessionFacts, permission_states};
 use settings::{SettingsCoordinator, device_choice, require_connected_device, settings_error};
 pub(crate) use state::{Events, StateCell};
 pub(crate) use whispernow_domain::ipc::{Phase, RecordingTrigger};
@@ -196,7 +196,10 @@ impl NativeServices {
     /// The shortcut portal's consent is the shortcut coordinator's to report, so the caller
     /// passes it in.
     pub(crate) fn permissions(&self, global_shortcuts: PermissionStatus) -> PermissionsResponse {
-        permission_states(PermissionFacts::collect(self, global_shortcuts))
+        permission_states(
+            self.microphone_access.status(),
+            SessionFacts::collect(self, global_shortcuts),
+        )
     }
 
     /// Asks for one first-run permission where the desktop services can.
@@ -249,6 +252,7 @@ impl NativeServices {
     pub(crate) fn complete_setup(
         &self,
         checkpoint: &SetupCheckpoint,
+        before: &Settings,
     ) -> Result<SettingsView, AppError> {
         if checkpoint.step != SetupStep::TryIt {
             return Err(AppError::new(
@@ -270,27 +274,16 @@ impl NativeServices {
         }
         let device = device_choice(checkpoint.input_device.as_deref())?;
         require_connected_device(self.audio.as_ref(), &device)?;
-        let before = self.settings.get()?.settings;
-        let edited = Settings {
-            input_device: checkpoint.input_device.clone(),
-            recording_shortcut: checkpoint.recording_shortcut.clone(),
-            recording_mode: checkpoint.recording_mode,
-            first_run_complete: true,
-            setup: None,
-            ..before.clone()
-        };
+        let mut edited = before.clone();
+        apply_checkpoint(&mut edited, checkpoint);
         edited
-            .validate_update(&before)
+            .validate_update(before)
             .map_err(|error| settings_error(&error))?;
         self.models
             .select(checkpoint.model_id.clone(), &self.settings, &self.dictation)?;
         let transaction = self.settings.transaction();
         let mut settings = transaction.load()?;
-        settings.input_device = edited.input_device;
-        settings.recording_shortcut = edited.recording_shortcut;
-        settings.recording_mode = edited.recording_mode;
-        settings.first_run_complete = true;
-        settings.setup = None;
+        apply_checkpoint(&mut settings, checkpoint);
         transaction.save(&settings)?;
         self.state.lock().setup_complete = true;
         Ok(SettingsView::new(&settings))
@@ -404,4 +397,14 @@ fn capture_start_error(error: &AudioInputError) -> AppError {
             "Audio capture could not be started",
         )
     }
+}
+
+fn apply_checkpoint(settings: &mut Settings, checkpoint: &SetupCheckpoint) {
+    settings.input_device.clone_from(&checkpoint.input_device);
+    settings
+        .recording_shortcut
+        .clone_from(&checkpoint.recording_shortcut);
+    settings.recording_mode = checkpoint.recording_mode;
+    settings.first_run_complete = true;
+    settings.setup = None;
 }

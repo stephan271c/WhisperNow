@@ -1,3 +1,4 @@
+mod cleanup;
 mod data;
 mod history;
 pub mod ipc;
@@ -10,16 +11,16 @@ mod validation;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use cleanup::{CleanupTarget, MissingCleanupField, RemoteCleanupTarget, RemoteProvider};
 pub use data::ClearDataCategory;
 pub use history::{
-    EntryId, EntryStatus, HistoryCursor, HistoryEntry, HistoryFilter, HistoryLimit, HistoryPage,
+    EntryId, EntryStatus, HistoryEntry, HistoryFilter, HistoryLimit, HistoryPage,
     HistoryPageRequest, NewHistoryEntry, UtcMillis,
 };
 pub use models::{
-    ArchiveFormat, CLEANUP_MODEL_FILE, CLEANUP_MODEL_IDS, CUDA_PACK_ID, DEFAULT_CLEANUP_MODEL_ID,
-    DownloadPhase, MINICPM_CLEANUP_MODEL_ID, ModelAvailability, ModelDefinition, ModelFamily,
-    ModelId, ModelLayout, ModelProfile, ModelRegistry, ModelSource, Rating, SpeechBenchmark,
-    WerSource,
+    ArchiveFormat, CLEANUP_MODEL_IDS, CUDA_PACK_ID, DEFAULT_CLEANUP_MODEL_ID, DownloadPhase,
+    ModelAvailability, ModelDefinition, ModelFamily, ModelId, ModelLayout, ModelProfile,
+    ModelRegistry, ModelSource, Rating, SpeechBenchmark, WerSource,
 };
 pub use provider::{EndpointError, LlmProvider, ProviderEndpoint};
 pub use settings::{

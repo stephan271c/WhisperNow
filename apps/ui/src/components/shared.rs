@@ -2,48 +2,29 @@ use crate::UiContext;
 use std::collections::BTreeSet;
 
 use dioxus::prelude::*;
-use whispernow_domain::ipc::{PasteHelperSetup, PermissionStatus};
+use whispernow_domain::ipc::PasteHelperSetup;
 use whispernow_domain::{Shortcut, ShortcutKey, ShortcutModifier};
 
 use super::ui::{Banner, Button, Kbd, Tone, shortcut_parts};
 use crate::NoticeScope;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum CaptureStatus {
     Idle,
     Listening,
     ModifierOnly,
     MissingModifier,
     Unsupported,
-    Captured,
+    Captured(Shortcut),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CaptureError {
-    MissingModifier,
-    UnsupportedKey,
-}
-
-#[component]
-pub(super) fn MicrophonePermissionNotice(status: Option<PermissionStatus>) -> Element {
-    let (label, guidance) = match status {
-        Some(PermissionStatus::Granted) => (
-            "Microphone access is available",
-            "Starting a recording remains the final permission check.",
-        ),
-        Some(PermissionStatus::Denied) => (
-            "Microphone access is denied",
-            "Allow microphone access in system privacy settings, then reopen or retry setup.",
-        ),
-        _ => (
-            "Microphone permission is unknown",
-            "Your system will request access when capture starts. If it fails, enable microphone access in system privacy settings.",
-        ),
-    };
-    rsx! { div { class: "permission-status", role: "status",
-        strong { "{label}" }
-        p { "{guidance}" }
-    } }
+impl CaptureStatus {
+    fn is_capturing(&self) -> bool {
+        matches!(
+            self,
+            Self::Listening | Self::ModifierOnly | Self::MissingModifier | Self::Unsupported
+        )
+    }
 }
 
 /// Shown while Wayland paste goes through the `RemoteDesktop` portal because the
@@ -51,7 +32,7 @@ pub(super) fn MicrophonePermissionNotice(status: Option<PermissionStatus>) -> El
 /// set the helper up.
 #[component]
 pub(super) fn PasteHelperNotice(setup: PasteHelperSetup, scope: NoticeScope) -> Element {
-    let actions = use_context::<UiContext>();
+    let context = use_context::<UiContext>();
     rsx! { div { id: "paste-helper-notice",
         Banner { tone: Tone::Warning, title: "Your desktop shows a remote control indicator",
             p { "WhisperNow's paste helper is not set up, so your desktop presses the paste keys for it and shows its remote control indicator while WhisperNow runs." }
@@ -61,7 +42,7 @@ pub(super) fn PasteHelperNotice(setup: PasteHelperSetup, scope: NoticeScope) -> 
                     code { id: "paste-helper-command", class: "command", "{command}" }
                     div { class: "card-actions",
                         Button { id: "paste-helper-copy",
-                            onclick: move |_| actions.copy_text(command.clone(), scope),
+                            onclick: move |_| context.copy_text(command.clone(), scope),
                             "Copy command"
                         }
                     }
@@ -87,11 +68,10 @@ pub(super) fn ShortcutCapture(
     #[props(default)] disabled: bool,
     #[props(default)] lone_keys: bool,
 ) -> Element {
-    let mut capturing = use_signal(|| false);
     let mut status = use_signal(|| CaptureStatus::Idle);
     // While listening, the desktop's global shortcuts are suspended so pressing
     // the current shortcut is captured instead of starting a recording.
-    use_effect(move || sync_shortcut_capture(capturing()));
+    use_effect(move || sync_shortcut_capture(status().is_capturing()));
     use_drop(|| sync_shortcut_capture(false));
     let parts = shortcut.as_ref().map_or_else(Vec::new, shortcut_parts);
     let help_id = format!("{id}-help");
@@ -112,9 +92,10 @@ pub(super) fn ShortcutCapture(
         CaptureStatus::Unsupported => {
             "That key is not supported. Try a letter, number, navigation key, or F1–F24."
         }
-        CaptureStatus::Captured => "Shortcut captured.",
+        CaptureStatus::Captured(_) => "Shortcut captured.",
     };
-    let visible = if capturing() {
+    let capturing = status().is_capturing();
+    let visible = if capturing {
         "Press shortcut…"
     } else if parts.is_empty() {
         "Choose shortcut"
@@ -133,29 +114,26 @@ pub(super) fn ShortcutCapture(
             button {
                 id: "{id}",
                 r#type: "button",
-                class: if capturing() { "shortcut-capture capturing" } else { "shortcut-capture" },
+                class: if capturing { "shortcut-capture capturing" } else { "shortcut-capture" },
                 aria_label: "{visible} {label}",
                 aria_describedby: "{keys_id} {help_id}",
-                aria_pressed: capturing(),
+                aria_pressed: capturing,
                 disabled,
                 onclick: move |_| {
-                    capturing.set(true);
                     status.set(CaptureStatus::Listening);
                 },
                 onblur: move |_| {
-                    capturing.set(false);
-                    if status() != CaptureStatus::Captured {
+                    if !matches!(status(), CaptureStatus::Captured(_)) {
                         status.set(CaptureStatus::Idle);
                     }
                 },
                 onkeydown: move |event| {
-                    if !capturing() {
+                    if !status().is_capturing() {
                         return;
                     }
                     let modifiers = event.modifiers();
                     let code = event.code().to_string();
                     if code == "Tab" && modifiers.is_empty() {
-                        capturing.set(false);
                         status.set(CaptureStatus::Idle);
                         return;
                     }
@@ -164,23 +142,13 @@ pub(super) fn ShortcutCapture(
                         return;
                     }
                     if code == "Escape" && modifiers.is_empty() && !lone_keys {
-                        capturing.set(false);
                         status.set(CaptureStatus::Idle);
                         return;
                     }
-                    match captured_shortcut(&code, modifiers, lone_keys) {
-                        Ok(Some(shortcut)) => {
-                            capturing.set(false);
-                            status.set(CaptureStatus::Captured);
-                            oncapture.call(shortcut);
-                        }
-                        Ok(None) => status.set(CaptureStatus::ModifierOnly),
-                        Err(CaptureError::MissingModifier) => {
-                            status.set(CaptureStatus::MissingModifier);
-                        }
-                        Err(CaptureError::UnsupportedKey) => {
-                            status.set(CaptureStatus::Unsupported);
-                        }
+                    let captured = captured_shortcut(&code, modifiers, lone_keys);
+                    status.set(captured.clone());
+                    if let CaptureStatus::Captured(shortcut) = captured {
+                        oncapture.call(shortcut);
                     }
                 },
                 "{visible}"
@@ -207,11 +175,13 @@ fn captured_shortcut(
     code: &str,
     modifiers: dioxus::prelude::keyboard_types::Modifiers,
     lone_keys: bool,
-) -> Result<Option<Shortcut>, CaptureError> {
+) -> CaptureStatus {
     if is_modifier_code(code) {
-        return Ok(None);
+        return CaptureStatus::ModifierOnly;
     }
-    let key = ShortcutKey::from_code(code).ok_or(CaptureError::UnsupportedKey)?;
+    let Some(key) = ShortcutKey::from_code(code) else {
+        return CaptureStatus::Unsupported;
+    };
     let shortcut = Shortcut {
         modifiers: captured_modifiers(modifiers),
         key,
@@ -222,9 +192,9 @@ fn captured_shortcut(
         shortcut.is_recording_shortcut()
     };
     if !valid {
-        return Err(CaptureError::MissingModifier);
+        return CaptureStatus::MissingModifier;
     }
-    Ok(Some(shortcut))
+    CaptureStatus::Captured(shortcut)
 }
 
 fn captured_modifiers(
@@ -268,12 +238,10 @@ mod tests {
             "Space",
             Modifiers::META | Modifiers::SHIFT | Modifiers::CONTROL,
             false,
-        )
-        .expect("supported chord")
-        .expect("primary key");
+        );
         assert_eq!(
             captured,
-            Shortcut {
+            CaptureStatus::Captured(Shortcut {
                 modifiers: [
                     ShortcutModifier::Control,
                     ShortcutModifier::Shift,
@@ -281,7 +249,7 @@ mod tests {
                 ]
                 .into(),
                 key: ShortcutKey::Space,
-            }
+            })
         );
     }
 
@@ -289,19 +257,19 @@ mod tests {
     fn capture_waits_for_a_primary_key_and_requires_a_modifier() {
         assert_eq!(
             captured_shortcut("ControlLeft", Modifiers::CONTROL, false),
-            Ok(None)
+            CaptureStatus::ModifierOnly
         );
         assert_eq!(
             captured_shortcut("KeyR", Modifiers::empty(), false),
-            Err(CaptureError::MissingModifier)
+            CaptureStatus::MissingModifier
         );
         assert_eq!(
             captured_shortcut("Escape", Modifiers::empty(), false),
-            Err(CaptureError::MissingModifier)
+            CaptureStatus::MissingModifier
         );
         assert_eq!(
             captured_shortcut("Semicolon", Modifiers::CONTROL, false),
-            Err(CaptureError::UnsupportedKey)
+            CaptureStatus::Unsupported
         );
     }
 
@@ -310,25 +278,25 @@ mod tests {
         for (code, key) in [("Escape", ShortcutKey::Escape), ("F13", ShortcutKey::F13)] {
             assert_eq!(
                 captured_shortcut(code, Modifiers::empty(), true),
-                Ok(Some(Shortcut {
+                CaptureStatus::Captured(Shortcut {
                     modifiers: [].into(),
                     key,
-                }))
+                })
             );
         }
         for code in ["KeyR", "Space", "Enter"] {
             assert_eq!(
                 captured_shortcut(code, Modifiers::empty(), true),
-                Err(CaptureError::MissingModifier),
+                CaptureStatus::MissingModifier,
                 "{code}"
             );
         }
         assert_eq!(
             captured_shortcut("KeyR", Modifiers::CONTROL, true),
-            Ok(Some(Shortcut {
+            CaptureStatus::Captured(Shortcut {
                 modifiers: [ShortcutModifier::Control].into(),
                 key: ShortcutKey::R,
-            }))
+            })
         );
     }
 }

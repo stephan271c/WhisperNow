@@ -21,7 +21,7 @@ impl Gateway {
     /// dictation could not register, and start-on-login drift.
     pub(crate) async fn settings_view(&self) -> Result<SettingsView, AppError> {
         let mut view = self
-            .run_command("get_settings", Failure::Published, |services, _| {
+            .run_command("get_settings", Failure::Published, |services| {
                 services.settings.get()
             })
             .await?;
@@ -73,7 +73,7 @@ impl Gateway {
         let mut edited = request;
         let (refused, registered) = self.register_shortcuts(&saved, &mut edited).await;
         let saving = self
-            .run_command("update_settings", Failure::Local, move |services, _| {
+            .run_command("update_settings", Failure::Local, move |services| {
                 services.update_settings(edited)
             })
             .await;
@@ -115,9 +115,10 @@ impl Gateway {
         let (refused, registered) = self.register_shortcuts(&saved, &mut chosen).await;
         checkpoint.recording_shortcut = chosen.recording_shortcut;
         checkpoint.recording_mode = chosen.recording_mode;
+        let before = saved.clone();
         let completing = self
-            .run_command("complete_setup", Failure::Published, move |services, _| {
-                services.complete_setup(&checkpoint)
+            .run_command("complete_setup", Failure::Published, move |services| {
+                services.complete_setup(&checkpoint, &before)
             })
             .await;
         let settings = match completing {
@@ -144,10 +145,8 @@ impl Gateway {
         operation: &'static str,
         failure: Failure,
     ) -> Result<Settings, AppError> {
-        self.run_command(operation, failure, |services, _| {
-            Ok(services.settings.get()?.settings)
-        })
-        .await
+        self.run_command(operation, failure, |services| services.settings.load())
+            .await
     }
 
     /// Registers the recording shortcut `chosen` names in place of `saved`'s, before `chosen`
@@ -278,7 +277,7 @@ impl Gateway {
         let _native_settings = self.native_settings.lock().await;
         let clears_settings = request.contains(&ClearDataCategory::Settings);
         let result = self
-            .run_command("clear_data", Failure::Published, move |services, _| {
+            .run_command("clear_data", Failure::Published, move |services| {
                 services.clear_data(&request)
             })
             .await?;

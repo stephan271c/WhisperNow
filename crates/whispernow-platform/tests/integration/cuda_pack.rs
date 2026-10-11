@@ -322,7 +322,7 @@ fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
     );
     let cleared = fixture
         .paths
-        .clear_data_except(&[ClearDataCategory::Models], Some(&directory))
+        .clear_data(&[ClearDataCategory::Models])
         .expect("clear other model data");
     assert_eq!(cleared.len(), 1);
     assert_eq!(cleared[0].path, models);

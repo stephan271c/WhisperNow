@@ -9,7 +9,7 @@ use std::{
         mpsc,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use whispernow_domain::AppError;
 
@@ -21,7 +21,7 @@ use whispernow_core::{
     },
     workflow::{
         AudioSegment, PipelineFailureKind, PreparedTranscription, SpeechSegmenter, VoiceActivity,
-        has_microphone_audio, prepare_segmented, recognize_segment,
+        has_microphone_audio, prepare_segmented,
     },
 };
 use whispernow_domain::ipc::{ErrorCategory, EventPayload, MicrophoneTestResponse};
@@ -607,7 +607,7 @@ impl Worker {
             tracing::warn!("audio capture could not be stopped cleanly");
         }
         let CapturedSpeech { samples, .. } = recording.sink.take();
-        let outcome = self.cancelled(&recording, &samples);
+        let outcome = self.cancelled(&recording, &samples, has_microphone_audio(&samples));
         self.finish(recording.trigger, outcome);
         tracing::info!(trigger = ?recording.trigger, "recording cancelled");
     }
@@ -616,10 +616,12 @@ impl Worker {
         let stopped = recording.stop_capture();
         let CapturedSpeech { samples, segments } = recording.sink.take();
         let samples = Arc::<[f32]>::from(samples);
+        let has_audio = has_microphone_audio(&samples);
         if stopped.is_err() {
             return self.failed_with_audio(
                 recording,
                 &samples,
+                has_audio,
                 AppError::new(
                     ErrorCategory::Audio,
                     "audio_stop",
@@ -628,27 +630,32 @@ impl Worker {
             );
         }
         if recording.cancellation.is_cancelled() {
-            return self.cancelled(recording, &samples);
+            return self.cancelled(recording, &samples, has_audio);
         }
-        if !has_microphone_audio(&samples) {
-            return self.pipeline_failure(recording, &samples, PipelineFailureKind::NoAudio);
-        }
-        if segments.is_empty() {
-            return self.pipeline_failure(recording, &samples, PipelineFailureKind::NoSpeech);
+        if !has_audio {
+            return self.pipeline_failure(
+                recording,
+                &samples,
+                has_audio,
+                PipelineFailureKind::NoAudio,
+            );
         }
         // Every segment decodes or the dictation fails: a transcript never has a silent gap.
         let decoded = match self.decode_rest(recording, &samples, &segments) {
             Ok(decoded) => decoded,
-            Err(DecodeFailure::Cancelled) => return self.cancelled(recording, &samples),
+            Err(DecodeFailure::Cancelled) => return self.cancelled(recording, &samples, has_audio),
             Err(DecodeFailure::Failed) => {
                 tracing::warn!("speech recognition failed; retrying once on the same audio");
                 match self.decode_all(recording, &samples, &segments) {
                     Ok(decoded) => decoded,
-                    Err(DecodeFailure::Cancelled) => return self.cancelled(recording, &samples),
+                    Err(DecodeFailure::Cancelled) => {
+                        return self.cancelled(recording, &samples, has_audio);
+                    }
                     Err(DecodeFailure::Failed) => {
                         return self.pipeline_failure(
                             recording,
                             &samples,
+                            has_audio,
                             PipelineFailureKind::RecognitionFailed,
                         );
                     }
@@ -656,11 +663,10 @@ impl Worker {
             }
         };
         let settings = recording.settings.clone();
-        let mut prepared =
-            match prepare_segmented(recording.started_at, &decoded, &settings.vocabulary) {
-                Ok(prepared) => prepared,
-                Err(kind) => return self.pipeline_failure(recording, &samples, kind),
-            };
+        let mut prepared = match prepare_segmented(&decoded, &settings.vocabulary) {
+            Ok(prepared) => prepared,
+            Err(kind) => return self.pipeline_failure(recording, &samples, has_audio, kind),
+        };
         if settings.cleanup.is_some() {
             self.parts.state.apply(|state| {
                 state.phase = Phase::Processing { cleaning_up: true };
@@ -672,7 +678,7 @@ impl Worker {
             &recording.cancellation,
         );
         if recording.cancellation.is_cancelled() {
-            return self.cancelled(recording, &samples);
+            return self.cancelled(recording, &samples, has_audio);
         }
         if recording.trigger.is_setup_test() {
             return Outcome::Heard(prepared.final_text);
@@ -690,7 +696,7 @@ impl Worker {
     ) -> Outcome {
         let history = self.parts.history.insert(
             NewHistoryEntry {
-                created_at: prepared.timestamp,
+                created_at: recording.started_at,
                 duration_millis: Some(capture_duration_millis(samples)),
                 raw_text: Some(prepared.raw_text.clone()),
                 cleaned_text: (prepared.final_text != prepared.raw_text)
@@ -711,7 +717,7 @@ impl Worker {
             .output(&prepared.final_text, &recording.cancellation);
         let history_warning = self.parts.history.take_warning();
         if let (Some(reason), Ok(entry)) = (delivery_failure(notice), &history) {
-            match self.parts.history.mark_not_delivered(entry.id, reason) {
+            match self.parts.history.mark_not_delivered(*entry, reason) {
                 Ok(()) => self.history_changed(),
                 Err(error) => {
                     tracing::warn!(code = error.code, "the paste failure was not recorded");
@@ -800,10 +806,22 @@ impl Worker {
         samples: &[f32],
         cancellation: &CancellationToken,
     ) -> Result<String, DecodeFailure> {
-        let engine = self.engine.as_mut();
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            recognize_segment(samples, engine, cancellation)
-        }));
+        if cancellation.is_cancelled() {
+            return Err(DecodeFailure::Cancelled);
+        }
+        let started = Instant::now();
+        let result = catch_unwind(AssertUnwindSafe(|| self.engine.transcribe(samples)));
+        tracing::info!(
+            stage = "segment_asr",
+            duration_ms = started.elapsed().as_secs_f64() * 1_000.0,
+            sample_count = samples.len(),
+            outcome = if matches!(result, Ok(Ok(_))) {
+                "completed"
+            } else {
+                "failed"
+            },
+            "batch pipeline stage completed"
+        );
         match result {
             Err(_) => {
                 tracing::warn!("the speech recognizer panicked; it is rebuilt before the retry");
@@ -812,7 +830,6 @@ impl Worker {
             }
             Ok(_) if cancellation.is_cancelled() => Err(DecodeFailure::Cancelled),
             Ok(Ok(result)) => Ok(result),
-            Ok(Err(PipelineFailureKind::Cancelled)) => Err(DecodeFailure::Cancelled),
             Ok(Err(_)) => Err(DecodeFailure::Failed),
         }
     }

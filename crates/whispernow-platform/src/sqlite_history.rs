@@ -14,7 +14,7 @@ use rusqlite::{
 };
 use whispernow_core::audio::TARGET_SAMPLE_RATE;
 use whispernow_domain::{
-    EntryId, EntryStatus, ErrorCategory, HistoryCursor, HistoryEntry, HistoryLimit, HistoryPage,
+    EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryLimit, HistoryPage,
     HistoryPageRequest, ModelId, NewHistoryEntry, UtcMillis,
 };
 
@@ -68,7 +68,7 @@ impl SqliteHistoryRepository {
         connection
             .execute_batch(SCHEMA)
             .map_err(|_| open_error("history_schema"))?;
-        let diagnostic = legacy::import_legacy(&mut connection, &paths.history_file())
+        let diagnostic = legacy::import_legacy(&mut connection, paths)
             .map_err(|error| open_error(&error.code))?;
         let audio_dir = paths.recordings_dir();
         remove_orphan_audio(&connection, &audio_dir);
@@ -90,7 +90,7 @@ impl SqliteHistoryRepository {
         audio: &[f32],
         keep_audio: bool,
         limit: HistoryLimit,
-    ) -> Result<HistoryEntry, AppError> {
+    ) -> Result<EntryId, AppError> {
         let NewHistoryEntry {
             created_at,
             duration_millis,
@@ -133,7 +133,7 @@ impl SqliteHistoryRepository {
             }
         }
         prune(connection, &self.audio_dir, limit)?;
-        get(connection, id)?.ok_or_else(|| history_error("history_insert"))
+        Ok(id)
     }
 
     pub fn mark_not_delivered(&self, id: EntryId, error: &str) -> Result<(), AppError> {
@@ -151,12 +151,6 @@ impl SqliteHistoryRepository {
         let limit = request.limit.max(1);
         let mut clauses = Vec::new();
         let mut values: Vec<Value> = Vec::new();
-        if let Some(cursor) = request.before {
-            clauses.push("(created_at_ms < ? OR (created_at_ms = ? AND id < ?))");
-            values.push(Value::Integer(cursor.created_at.get()));
-            values.push(Value::Integer(cursor.created_at.get()));
-            values.push(Value::Integer(cursor.id.0));
-        }
         if let Some(text) = request.filter.search_text() {
             clauses.push("(raw_text LIKE ? ESCAPE '\\' OR cleaned_text LIKE ? ESCAPE '\\')");
             let pattern = format!("%{}%", escape_like(text));
@@ -184,19 +178,9 @@ impl SqliteHistoryRepository {
             .query_map(params_from_iter(values), entry_from_row)
             .and_then(Iterator::collect::<Result<Vec<_>, _>>)
             .map_err(|_| history_error("history_list"))?;
-        let next_cursor = if entries.len() > limit as usize {
-            entries.truncate(limit as usize);
-            entries.last().map(|last| HistoryCursor {
-                created_at: last.created_at,
-                id: last.id,
-            })
-        } else {
-            None
-        };
-        Ok(HistoryPage {
-            entries,
-            next_cursor,
-        })
+        let has_more = entries.len() > limit as usize;
+        entries.truncate(limit as usize);
+        Ok(HistoryPage { entries, has_more })
     }
 
     pub fn get(&self, id: EntryId) -> Result<Option<HistoryEntry>, AppError> {

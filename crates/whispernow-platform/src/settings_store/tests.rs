@@ -43,7 +43,7 @@ fn settings_round_trip() {
     let fixture = fixture();
     assert_eq!(
         fixture.persistence.load().expect("no file"),
-        Settings::default()
+        (Settings::default(), None)
     );
 
     let settings = Settings {
@@ -56,9 +56,8 @@ fn settings_round_trip() {
         ..Settings::default()
     };
     fixture.persistence.save(&settings).expect("save");
-    assert_eq!(fixture.persistence.load().expect("load"), settings);
+    assert_eq!(fixture.persistence.load().expect("load"), (settings, None));
     assert_eq!(fixture.saved()["settings_version"], 2);
-    assert_eq!(fixture.persistence.take_notice(), None);
 }
 
 #[test]
@@ -70,10 +69,8 @@ fn an_unreadable_file_is_renamed_and_the_defaults_load() {
         let fixture = fixture();
         fixture.write(document);
 
-        assert_eq!(
-            fixture.persistence.load().expect("load"),
-            Settings::default()
-        );
+        let (loaded, notice) = fixture.persistence.load().expect("load");
+        assert_eq!(loaded, Settings::default());
         let moved = fixture.paths.settings_backup_files().expect("list");
         assert_eq!(moved.len(), 1, "{document}");
         assert!(
@@ -85,17 +82,15 @@ fn an_unreadable_file_is_renamed_and_the_defaults_load() {
         assert_eq!(fs::read_to_string(&moved[0]).expect("moved"), document);
         assert!(!fixture.paths.settings_file().exists());
         assert_eq!(
-            fixture.persistence.take_notice(),
+            notice,
             Some(SettingsNotice::Unreadable {
                 path: moved[0].clone()
             })
         );
-        assert_eq!(fixture.persistence.take_notice(), None, "told once");
         assert_eq!(
             fixture.persistence.load().expect("reload"),
-            Settings::default()
+            (Settings::default(), None)
         );
-        assert_eq!(fixture.persistence.take_notice(), None);
     }
 }
 
@@ -112,7 +107,7 @@ fn python_settings_are_imported_once_with_their_keys_moved_to_the_store() {
     .to_string();
     fixture.write(&python);
 
-    let imported = fixture.persistence.load().expect("import");
+    let (imported, notice) = fixture.persistence.load().expect("import");
     assert!(imported.first_run_complete);
     assert_eq!(imported.api_keys, [LlmProvider::OpenAi].into());
     assert_eq!(
@@ -128,8 +123,11 @@ fn python_settings_are_imported_once_with_their_keys_moved_to_the_store() {
         fs::read_to_string(fixture.paths.python_settings_file()).expect("kept"),
         python
     );
-    assert_eq!(fixture.persistence.take_notice(), None);
-    assert_eq!(fixture.persistence.load().expect("reload"), imported);
+    assert_eq!(notice, None);
+    assert_eq!(
+        fixture.persistence.load().expect("reload"),
+        (imported, None)
+    );
 }
 
 #[test]
@@ -138,11 +136,11 @@ fn a_python_key_the_store_refuses_stays_in_the_kept_file() {
     fixture.store.set_available(false);
     fixture.write(r#"{"llm_provider_settings":{"gemini":{"model":"g","api_key":"k"}}}"#);
 
-    let imported = fixture.persistence.load().expect("import");
+    let (imported, notice) = fixture.persistence.load().expect("import");
     assert!(imported.api_keys.is_empty());
     assert_eq!(imported.provider_settings(LlmProvider::Gemini).model, "g");
     assert_eq!(
-        fixture.persistence.take_notice(),
+        notice,
         Some(SettingsNotice::ApiKeysNotImported {
             path: fixture.paths.python_settings_file()
         })

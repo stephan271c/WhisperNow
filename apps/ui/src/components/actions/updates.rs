@@ -17,7 +17,7 @@ impl UiContext {
         call: impl Future<Output = Result<UpdateState, AppError>> + 'static,
     ) {
         self.run(operation, call, |mut actions, answer| match answer {
-            Ok(update) => actions.state.write().hydrate_update(update),
+            Ok(update) => actions.state.write().apply_update_state(update),
             Err(error) => actions
                 .state
                 .write()

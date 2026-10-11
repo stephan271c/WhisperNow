@@ -22,12 +22,12 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-fn sync_directory(directory: &Path) -> io::Result<()> {
+pub(crate) fn sync_directory(directory: &Path) -> io::Result<()> {
     fs::File::open(directory)?.sync_all()
 }
 
 #[cfg(not(unix))]
-fn sync_directory(_directory: &Path) -> io::Result<()> {
+pub(crate) fn sync_directory(_directory: &Path) -> io::Result<()> {
     // std cannot open a directory to sync it on Windows; the file itself was synced.
     Ok(())
 }

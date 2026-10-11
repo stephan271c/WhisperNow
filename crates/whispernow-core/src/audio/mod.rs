@@ -3,7 +3,7 @@ mod pipeline;
 mod ports;
 mod processing;
 
-use level::AudioLevelAccumulator;
+pub(crate) use level::AudioLevelAccumulator;
 pub use level::AudioLevelSummary;
 pub use pipeline::AudioProcessor;
 pub use ports::{
@@ -11,4 +11,4 @@ pub use ports::{
     AudioInputError, AudioObservation, AudioSink, AudioSinkError,
 };
 pub use processing::{AudioBlock, TARGET_SAMPLE_RATE};
-use processing::{AudioProcessingError, StreamingResampler, convert_interleaved_to_mono};
+use processing::{AudioProcessingError, Resampling, convert_interleaved_to_mono};

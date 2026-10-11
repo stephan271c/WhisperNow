@@ -24,7 +24,7 @@ use x11rb::{
 use super::{NativePasteError, NativePasteInjection, wait_until_modifiers_released};
 use crate::{
     PasteKeys,
-    destination::{NativeDestination, NativeWindow, x11_property_u32},
+    destination::{NativeDestination, x11_property_u32},
 };
 
 const XK_V_LOWER: u32 = 0x0076;
@@ -170,7 +170,7 @@ fn revalidate(
     root: Window,
     expected: NativeDestination,
 ) -> Result<Keys, NativePasteError> {
-    let NativeWindow::X11(window) = expected.window();
+    let window = expected.window();
     let active_window =
         x11_property_u32(connection, root, b"_NET_ACTIVE_WINDOW", AtomEnum::WINDOW)?;
     let process_id = x11_property_u32(

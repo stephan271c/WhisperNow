@@ -116,9 +116,12 @@ impl Page {
     }
 
     pub(crate) fn click(&mut self, id: &str) -> &mut Self {
-        if tag(&self.html(), id).is_some_and(|element| element.contains(" disabled=")) {
-            return self;
-        }
+        let html = self.html();
+        let element = tag(&html, id).unwrap_or_else(|| panic!("rendered element {id}"));
+        assert!(
+            !element.contains(" disabled="),
+            "cannot click disabled target {id}"
+        );
         let mutations = click_rendered(&mut self.dom, &self.rendered, id);
         self.keep(mutations);
         self.settle()
@@ -337,7 +340,7 @@ pub(crate) fn show_history(management: &mut crate::ManagementState, entries: Vec
         request_id,
         HistoryPage {
             entries,
-            next_cursor: None,
+            has_more: false,
         },
     );
 }

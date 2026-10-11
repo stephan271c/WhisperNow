@@ -45,10 +45,10 @@ fn matches(entry: &VocabularyReplacement, query: &str) -> bool {
 
 #[component]
 pub(super) fn VocabularyPage() -> Element {
-    let actions = use_context::<UiContext>();
-    let settings_blocked = actions.settings_blocked();
+    let context = use_context::<UiContext>();
+    let settings_blocked = context.settings_blocked();
     let disabled = settings_blocked.is_some();
-    let management = use_context::<UiContext>().management;
+    let management = context.management;
     let mut source = use_signal(String::new);
     let mut replacement = use_signal(String::new);
     let mut search = use_signal(String::new);
@@ -62,9 +62,8 @@ pub(super) fn VocabularyPage() -> Element {
     let Some(settings) = management.read().shown_settings().cloned() else {
         return rsx! { SettingsLoading {} };
     };
-    let vocabulary_status = management.read().setting_status(&SettingKey::Vocabulary);
+    let vocabulary_status = management.read().setting_status(SettingKey::Vocabulary);
     let (status, error) = status_parts(vocabulary_status);
-    let status = status.unwrap_or_default();
     let filtering = !search().trim().is_empty();
     let total = settings.vocabulary_replacements.len();
     let shown = settings
@@ -93,7 +92,7 @@ pub(super) fn VocabularyPage() -> Element {
                     let add = move |settings: &mut Settings| {
                         settings.vocabulary_replacements.push(entry.clone());
                     };
-                    actions.change_setting(SettingKey::Vocabulary, add);
+                    context.change_setting(SettingKey::Vocabulary, add);
                     source.set(String::new());
                     replacement.set(String::new());
                 },
@@ -152,7 +151,7 @@ fn VocabularyRow(
     focus: Signal<Option<RuleFocus>>,
     after_delete: RuleFocus,
 ) -> Element {
-    let actions = use_context::<UiContext>();
+    let context = use_context::<UiContext>();
     let mut row = use_signal(|| None::<Rc<MountedData>>);
     use_effect(move || {
         if focus() == Some(RuleFocus::Rule(index)) {
@@ -162,12 +161,12 @@ fn VocabularyRow(
     let name = rule_name(&entry);
     let number = index + 1;
     let change = move |edit: fn(&mut Vec<VocabularyReplacement>, usize)| {
-        actions.change_setting(SettingKey::Vocabulary, move |settings| {
+        context.change_setting(SettingKey::Vocabulary, move |settings| {
             edit(&mut settings.vocabulary_replacements, index);
         });
     };
     let edit = move |edited: VocabularyReplacement| {
-        actions.change_setting(SettingKey::Vocabulary, move |settings| {
+        context.change_setting(SettingKey::Vocabulary, move |settings| {
             if let Some(rule) = settings.vocabulary_replacements.get_mut(index) {
                 *rule = edited;
             }
@@ -214,8 +213,8 @@ fn VocabularyRow(
 
 #[component]
 fn VocabularyTransfer(rules: Vec<VocabularyReplacement>, disabled: bool) -> Element {
-    let actions = use_context::<UiContext>();
-    let mut management = use_context::<UiContext>().management;
+    let context = use_context::<UiContext>();
+    let mut management = context.management;
     let mut pasted = use_signal(String::new);
     let export = serde_json::to_string_pretty(
         &rules
@@ -232,7 +231,7 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>, disabled: bool) -> Elem
             description: "A JSON list of {{\"source\": …, \"replacement\": …}} pairs.",
             div { class: "card-actions",
                 Button { id: "vocabulary-export", disabled: rules.is_empty(),
-                    onclick: move |_| actions.copy_text(export.clone(), NoticeScope::Settings),
+                    onclick: move |_| context.copy_text(export.clone(), NoticeScope::Settings),
                     "Copy rules as JSON"
                 }
             }
@@ -248,7 +247,7 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>, disabled: bool) -> Elem
                     disabled: disabled || pasted().trim().is_empty(),
                     onclick: move |_| match serde_json::from_str::<Vec<TransferRule>>(pasted().trim()) {
                         Ok(entries) => {
-                            actions.change_setting(SettingKey::Vocabulary, move |settings| import_rules(settings, &entries));
+                            context.change_setting(SettingKey::Vocabulary, move |settings| import_rules(settings, &entries));
                             pasted.set(String::new());
                         },
                         Err(_) => management.write().reject_setting(

@@ -60,7 +60,6 @@ const SPEECH: [f32; 4] = [0.0, 0.5, -0.5, 0.25];
 fn all(repository: &SqliteHistoryRepository) -> Vec<whispernow_domain::HistoryEntry> {
     repository
         .list(&HistoryPageRequest {
-            before: None,
             limit: 100,
             filter: HistoryFilter::default(),
         })
@@ -84,6 +83,7 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
             HistoryLimit::Last20,
         )
         .expect("insert");
+    let spoken = history.get(spoken).expect("get").expect("entry");
     assert_eq!(spoken.raw_text.as_deref(), Some("hello"));
     assert_eq!(spoken.text(), Some("Hello."));
     assert!(!spoken.has_audio);
@@ -97,6 +97,7 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
             HistoryLimit::Last20,
         )
         .expect("insert");
+    let kept = history.get(kept).expect("get").expect("entry");
     assert!(kept.has_audio);
     let wav = history.audio(kept.id).expect("audio").expect("kept audio");
     assert_eq!(&wav[..4], b"RIFF");
@@ -124,6 +125,8 @@ fn failed_and_cancelled_entries_keep_their_audio_when_keep_audio_is_off() {
             HistoryLimit::Last20,
         )
         .expect("insert");
+    let failed = history.get(failed).expect("get").expect("entry");
+    let cancelled = history.get(cancelled).expect("get").expect("entry");
     assert!(failed.has_audio && cancelled.has_audio);
     assert_eq!(failed.error.as_deref(), Some("Speech recognition failed"));
     assert_eq!(fixture.wav_names().len(), 2);
@@ -143,8 +146,7 @@ fn inserting_beyond_the_limit_deletes_the_oldest_entries_with_their_audio() {
                     true,
                     HistoryLimit::Last20,
                 )
-                .expect("insert")
-                .id,
+                .expect("insert"),
         );
     }
     let kept = all(&history);
@@ -172,7 +174,7 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
                 HistoryLimit::Unlimited,
             )
             .expect("insert");
-        notes.push(note.id);
+        notes.push(note);
     }
     let failed = history
         .insert(
@@ -185,7 +187,6 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
 
     let first = history
         .list(&HistoryPageRequest {
-            before: None,
             limit: 4,
             filter: HistoryFilter::default(),
         })
@@ -196,12 +197,12 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
             .iter()
             .map(|entry| entry.id)
             .collect::<Vec<_>>(),
-        [failed.id, notes[4], notes[3], notes[2]]
+        [failed, notes[4], notes[3], notes[2]]
     );
+    assert!(first.has_more);
     let second = history
         .list(&HistoryPageRequest {
-            before: first.next_cursor,
-            limit: 4,
+            limit: 8,
             filter: HistoryFilter::default(),
         })
         .expect("second page");
@@ -211,9 +212,10 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
             .iter()
             .map(|entry| entry.id)
             .collect::<Vec<_>>(),
-        [notes[1], notes[0]]
+        [failed, notes[4], notes[3], notes[2], notes[1], notes[0]]
     );
-    assert_eq!(second.next_cursor, None);
+    assert_eq!(second.entries[..first.entries.len()], first.entries);
+    assert!(!second.has_more);
 
     let search = |query: &str, failed_only| {
         history
@@ -252,15 +254,15 @@ fn delivery_failure_delete_and_clear_update_entries_and_audio() {
         )
         .expect("insert");
     history
-        .mark_not_delivered(first.id, "The paste failed")
+        .mark_not_delivered(first, "The paste failed")
         .expect("mark");
-    let first = history.get(first.id).expect("get").expect("entry");
+    let first = history.get(first).expect("get").expect("entry");
     assert_eq!(first.status, EntryStatus::NotDelivered);
     assert_eq!(first.error.as_deref(), Some("The paste failed"));
 
     assert!(history.delete(first.id).expect("delete"));
     assert!(!history.delete(first.id).expect("delete again"));
-    assert_eq!(fixture.wav_names(), vec![format!("{}.wav", second.id.0)]);
+    assert_eq!(fixture.wav_names(), vec![format!("{}.wav", second.0)]);
     assert!(history.clear().expect("clear"));
     assert!(!history.clear().expect("clear again"));
     assert!(all(&history).is_empty());
@@ -279,7 +281,7 @@ fn ids_are_never_reused_after_a_delete() {
             HistoryLimit::Last20,
         )
         .expect("insert");
-    history.delete(first.id).expect("delete");
+    history.delete(first).expect("delete");
     let second = history
         .insert(
             entry(2, EntryStatus::Ok, "two"),
@@ -288,7 +290,7 @@ fn ids_are_never_reused_after_a_delete() {
             HistoryLimit::Last20,
         )
         .expect("insert");
-    assert!(second.id > first.id);
+    assert!(second > first);
 }
 
 #[test]
@@ -310,8 +312,8 @@ fn startup_removes_audio_files_that_no_entry_owns() {
     fs::write(audio_dir.join("20260101T000000.000000Z.wav"), b"old").expect("old name");
 
     let reopened = fixture.open();
-    assert_eq!(fixture.wav_names(), vec![format!("{}.wav", kept.id.0)]);
-    assert!(reopened.audio(kept.id).expect("audio").is_some());
+    assert_eq!(fixture.wav_names(), vec![format!("{}.wav", kept.0)]);
+    assert!(reopened.audio(kept).expect("audio").is_some());
 }
 
 #[test]
@@ -331,7 +333,7 @@ fn an_entry_with_an_unknown_status_fails_to_load() {
         .expect("database")
         .execute("UPDATE entries SET status = 'lost'", [])
         .expect("unknown status");
-    let error = fixture.open().get(stored.id).expect_err("unknown status");
+    let error = fixture.open().get(stored).expect_err("unknown status");
     assert_eq!(error.category, ErrorCategory::General);
 }
 

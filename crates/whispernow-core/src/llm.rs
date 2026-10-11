@@ -3,7 +3,7 @@
 use std::{fmt, future::Future, pin::Pin};
 
 use thiserror::Error;
-use whispernow_domain::ApiKey;
+use whispernow_domain::{ApiKey, CleanupTarget, ModelId, RemoteCleanupTarget};
 pub use whispernow_domain::{LlmProvider, ProviderEndpoint};
 
 use crate::CancellationToken;
@@ -20,34 +20,19 @@ const TRANSIENT_RETRIES: u32 = 2;
 
 /// `Debug` never exposes the key, model, or endpoint.
 #[derive(Clone, Eq, PartialEq)]
-pub struct LlmProviderConfig {
-    pub provider: LlmProvider,
-    pub model: String,
+pub struct LlmRemoteConfig {
+    pub target: RemoteCleanupTarget,
     pub api_key: Option<ApiKey>,
-    pub endpoint: Option<ProviderEndpoint>,
 }
 
-impl fmt::Debug for LlmProviderConfig {
+impl fmt::Debug for LlmRemoteConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("LlmProviderConfig")
-            .field("provider", &self.provider)
+            .debug_struct("LlmRemoteConfig")
+            .field("target", &self.target)
             .field("credential_present", &self.api_key.is_some())
-            .field("custom_endpoint", &self.endpoint.is_some())
             .finish_non_exhaustive()
     }
-}
-
-/// The output budget and draft sent with one request. API providers get neither and decode
-/// with their own defaults.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum LlmDecoding {
-    #[default]
-    ProviderDefaults,
-    LocalCleanup {
-        max_output_tokens: u64,
-        draft: Option<DraftText>,
-    },
 }
 
 /// The pre-cleaned transcript the local cleanup model drafts from (see `draft`).
@@ -55,6 +40,11 @@ pub enum LlmDecoding {
 pub struct DraftText(String);
 
 impl DraftText {
+    #[must_use]
+    pub fn from_transcript(text: &str) -> Self {
+        Self(draft::preclean(text))
+    }
+
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -70,27 +60,41 @@ impl fmt::Debug for DraftText {
     }
 }
 
-impl LlmDecoding {
-    /// The local cleanup model's budget, as its evaluation ran it: 2.5 tokens per input
-    /// word (at least 64), so a loop is cut off early and falls back to the deterministic
-    /// text. The transcript, pre-cleaned by code, goes along as the draft for speculative
-    /// decoding. Its repeat penalty is fixed (`local::REPEAT_PENALTY`).
-    #[must_use]
-    pub fn local_cleanup(deterministic_text: &str) -> Self {
-        let words =
-            u64::try_from(deterministic_text.split_whitespace().count()).unwrap_or(u64::MAX);
-        Self::LocalCleanup {
-            max_output_tokens: words.saturating_mul(5).div_ceil(2).max(64),
-            draft: Some(DraftText(draft::preclean(deterministic_text))),
-        }
-    }
+#[derive(Clone)]
+pub enum LlmRequest {
+    Local {
+        model: ModelId,
+        prompt: LlmPrompt,
+        max_output_tokens: usize,
+        draft: DraftText,
+    },
+    Remote {
+        config: LlmRemoteConfig,
+        prompt: LlmPrompt,
+    },
 }
 
-#[derive(Clone, Debug)]
-pub struct LlmRequest {
-    pub config: LlmProviderConfig,
-    pub prompt: LlmPrompt,
-    pub decoding: LlmDecoding,
+impl fmt::Debug for LlmRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Local {
+                prompt,
+                max_output_tokens,
+                draft,
+                ..
+            } => formatter
+                .debug_struct("LlmRequest::Local")
+                .field("prompt", prompt)
+                .field("max_output_tokens", max_output_tokens)
+                .field("draft", draft)
+                .finish_non_exhaustive(),
+            Self::Remote { config, prompt } => formatter
+                .debug_struct("LlmRequest::Remote")
+                .field("config", config)
+                .field("prompt", prompt)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -154,13 +158,6 @@ pub trait LlmService: Send + Sync {
     fn complete(&self, request: LlmRequest) -> LlmFuture<'_>;
 }
 
-/// Removes `<think>` blocks, the reasoning some providers inline with the answer, and the
-/// surrounding whitespace. The answer itself is used as returned.
-#[must_use]
-pub(crate) fn sanitize_output(text: &str) -> String {
-    strip_think_blocks(text).trim().to_owned()
-}
-
 fn strip_think_blocks(text: &str) -> String {
     const OPEN: &str = "<think>";
     const CLOSE: &str = "</think>";
@@ -192,7 +189,7 @@ fn accept_response(response: &LlmResponse) -> Result<String, CleanupFallback> {
         LlmFinishReason::ContentFilter => return Err(CleanupFallback::ContentFiltered),
         LlmFinishReason::Unknown | LlmFinishReason::Completed => {}
     }
-    let text = sanitize_output(&response.text);
+    let text = strip_think_blocks(&response.text).trim().to_owned();
     // The sentinel means the model found no dictated words; the deterministic
     // transcript is kept rather than pasting the sentinel or nothing.
     if text.is_empty() || text == EMPTY_TRANSCRIPT_SENTINEL {
@@ -219,24 +216,28 @@ pub enum CleanupFallback {
 pub async fn clean_up(
     service: &dyn LlmService,
     deterministic_text: &str,
-    config: &LlmProviderConfig,
+    target: &CleanupTarget,
+    api_key: Option<ApiKey>,
     cancellation: &CancellationToken,
 ) -> Result<String, CleanupFallback> {
-    let (prompt, decoding) = if config.provider == LlmProvider::LocalCleanup {
-        (
-            build_local_cleanup_prompt(deterministic_text),
-            LlmDecoding::local_cleanup(deterministic_text),
-        )
-    } else {
-        (
-            build_cleanup_prompt(deterministic_text),
-            LlmDecoding::default(),
-        )
-    };
-    let request = LlmRequest {
-        config: config.clone(),
-        prompt,
-        decoding,
+    let request = match target {
+        CleanupTarget::Local { model } => {
+            let words = deterministic_text.split_whitespace().count();
+            LlmRequest::Local {
+                model: model.clone(),
+                prompt: build_local_cleanup_prompt(deterministic_text),
+                // Evaluation uses 2.5 tokens per input word, with a minimum of 64.
+                max_output_tokens: words.saturating_mul(5).div_ceil(2).max(64),
+                draft: DraftText::from_transcript(deterministic_text),
+            }
+        }
+        CleanupTarget::Remote(target) => LlmRequest::Remote {
+            config: LlmRemoteConfig {
+                target: target.clone(),
+                api_key,
+            },
+            prompt: build_cleanup_prompt(deterministic_text),
+        },
     };
     let result = tokio::select! {
         biased;

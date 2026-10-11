@@ -11,7 +11,7 @@ const DEFAULT_SPEECH_MODEL_ID: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int
 
 pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-lfm2.5-350m-q8_0";
 /// The larger local cleanup model (a `MiniCPM5-1B` fine-tune): slower, but keeps more facts.
-pub const MINICPM_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-minicpm5-1b-q8_0";
+const MINICPM_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-minicpm5-1b-q8_0";
 /// Every local cleanup model, the default first.
 pub const CLEANUP_MODEL_IDS: [&str; CLEANUP_MODELS.len()] = {
     let mut ids = [""; CLEANUP_MODELS.len()];
@@ -25,7 +25,7 @@ pub const CLEANUP_MODEL_IDS: [&str; CLEANUP_MODELS.len()] = {
 /// The CUDA pack's id among downloads: llama.cpp's CUDA backend and NVIDIA's CUDA runtime,
 /// which run the cleanup models on NVIDIA GPUs. Not a model, and not in the registry.
 pub const CUDA_PACK_ID: &str = "llama-cuda-13.4";
-pub const CLEANUP_MODEL_FILE: &str = "model-Q8_0.gguf";
+const CLEANUP_MODEL_FILE: &str = "model-Q8_0.gguf";
 /// Where the local cleanup models are published: pinned release assets. They are
 /// placeholders until the models are uploaded, which waits for the user's go-ahead.
 const CLEANUP_MODEL_RELEASE: &str =
@@ -285,13 +285,8 @@ impl Rating {
 
     #[must_use]
     pub const fn new(score: u8) -> Self {
-        Self(if score == 0 {
-            1
-        } else if score > Self::MAX {
-            Self::MAX
-        } else {
-            score
-        })
+        assert!(score >= 1 && score <= Self::MAX);
+        Self(score)
     }
 
     #[must_use]

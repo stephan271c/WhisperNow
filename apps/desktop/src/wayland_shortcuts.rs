@@ -238,7 +238,6 @@ impl ShortcutPortal for AshpdShortcutPortal {
 pub(crate) struct WaylandShortcutRegistrar {
     commands: mpsc::UnboundedSender<Command>,
     worker: Mutex<Option<thread::JoinHandle<()>>>,
-    diagnostic: Arc<Mutex<Option<ShortcutRegistrationError>>>,
 }
 
 impl WaylandShortcutRegistrar {
@@ -248,11 +247,9 @@ impl WaylandShortcutRegistrar {
     pub(crate) fn spawn(
         identity: PortalIdentity,
         events: mpsc::UnboundedSender<ShortcutEvent>,
-    ) -> Arc<Self> {
+    ) -> (Arc<Self>, Option<ShortcutRegistrationError>) {
         let (commands, receiver) = mpsc::unbounded_channel();
         let (ready, ready_receiver) = std_mpsc::sync_channel(1);
-        let diagnostic = Arc::new(Mutex::new(None));
-        let actor_diagnostic = Arc::clone(&diagnostic);
         let worker = thread::Builder::new()
             .name("whispernow-wayland-shortcuts".to_owned())
             .spawn(move || {
@@ -261,7 +258,6 @@ impl WaylandShortcutRegistrar {
                     .build();
                 let Ok(runtime) = runtime else {
                     let error = ShortcutRegistrationError::PortalUnavailable;
-                    set_diagnostic(&actor_diagnostic, Some(error));
                     let _ = ready.send(Err(error));
                     return;
                 };
@@ -270,29 +266,26 @@ impl WaylandShortcutRegistrar {
                     match AshpdShortcutPortal::connect().await {
                         Ok((portal, signals)) => {
                             let _ = ready.send(Ok(()));
-                            actor_loop(portal, receiver, signals, events, actor_diagnostic).await;
+                            actor_loop(portal, receiver, signals, events).await;
                         }
                         Err(error) => {
-                            set_diagnostic(&actor_diagnostic, Some(error));
                             let _ = ready.send(Err(error));
                         }
                     }
                 });
             })
             .ok();
-        match ready_receiver.recv_timeout(STARTUP_TIMEOUT) {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => set_diagnostic(&diagnostic, Some(error)),
-            Err(_) => set_diagnostic(
-                &diagnostic,
-                Some(ShortcutRegistrationError::PortalUnavailable),
-            ),
-        }
-        Arc::new(Self {
-            commands,
-            worker: Mutex::new(worker),
-            diagnostic,
-        })
+        let startup_failure = match ready_receiver.recv_timeout(STARTUP_TIMEOUT) {
+            Ok(result) => result.err(),
+            Err(_) => Some(ShortcutRegistrationError::PortalUnavailable),
+        };
+        (
+            Arc::new(Self {
+                commands,
+                worker: Mutex::new(worker),
+            }),
+            startup_failure,
+        )
     }
 
     fn request(
@@ -302,10 +295,9 @@ impl WaylandShortcutRegistrar {
         ) -> Command,
     ) -> Result<(), ShortcutRegistrationError> {
         let (reply, receiver) = std_mpsc::sync_channel(1);
-        self.commands.send(make_command(reply)).map_err(|_| {
-            self.diagnostic()
-                .unwrap_or(ShortcutRegistrationError::PortalUnavailable)
-        })?;
+        self.commands
+            .send(make_command(reply))
+            .map_err(|_| ShortcutRegistrationError::PortalUnavailable)?;
         receiver
             .recv_timeout(COMMAND_TIMEOUT)
             .unwrap_or(Err(ShortcutRegistrationError::PortalUnavailable))
@@ -325,13 +317,6 @@ impl ShortcutRegistrar for WaylandShortcutRegistrar {
             id: binding.id,
             reply,
         })
-    }
-
-    fn diagnostic(&self) -> Option<ShortcutRegistrationError> {
-        *self
-            .diagnostic
-            .lock()
-            .expect("shortcut diagnostic lock poisoned")
     }
 
     /// Each registration opens a portal session the compositor may ask the user
@@ -484,7 +469,6 @@ async fn actor_loop<P: ShortcutPortal>(
     mut commands: mpsc::UnboundedReceiver<Command>,
     mut signals: mpsc::UnboundedReceiver<PortalSignal>,
     events: mpsc::UnboundedSender<ShortcutEvent>,
-    diagnostic: Arc<Mutex<Option<ShortcutRegistrationError>>>,
 ) {
     let mut active = HashSet::new();
     let mut held = HeldShortcuts::default();
@@ -508,9 +492,6 @@ async fn actor_loop<P: ShortcutPortal>(
                         let result = portal.register(&binding).await;
                         if result.is_ok() {
                             active.insert(id);
-                            set_diagnostic(&diagnostic, None);
-                        } else if let Err(error) = result {
-                            set_diagnostic(&diagnostic, Some(error));
                         }
                         let _ = reply.send(result);
                     }
@@ -534,7 +515,6 @@ async fn actor_loop<P: ShortcutPortal>(
                 let Some(signal) = signal else {
                     notify_capability_lost(
                         &events,
-                        &diagnostic,
                         ShortcutRegistrationError::PortalUnavailable,
                     );
                     break;
@@ -552,7 +532,6 @@ async fn actor_loop<P: ShortcutPortal>(
                         held.forget(id);
                         notify_capability_lost(
                             &events,
-                            &diagnostic,
                             ShortcutRegistrationError::SessionClosed,
                         );
                     }
@@ -563,7 +542,6 @@ async fn actor_loop<P: ShortcutPortal>(
                         active.clear();
                         notify_capability_lost(
                             &events,
-                            &diagnostic,
                             ShortcutRegistrationError::PortalUnavailable,
                         );
                         portal.shutdown().await;
@@ -618,20 +596,9 @@ async fn forward_ordered_transitions(
 
 fn notify_capability_lost(
     events: &mpsc::UnboundedSender<ShortcutEvent>,
-    diagnostic: &Mutex<Option<ShortcutRegistrationError>>,
     error: ShortcutRegistrationError,
 ) {
-    set_diagnostic(diagnostic, Some(error));
     let _ = events.send(ShortcutEvent::CapabilityLost(error));
-}
-
-fn set_diagnostic(
-    diagnostic: &Mutex<Option<ShortcutRegistrationError>>,
-    value: Option<ShortcutRegistrationError>,
-) {
-    *diagnostic
-        .lock()
-        .expect("shortcut diagnostic lock poisoned") = value;
 }
 
 fn portal_id(id: ShortcutId) -> String {
@@ -706,6 +673,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_stopped_actor_reports_the_portal_unavailable() {
+        let (commands, receiver) = mpsc::unbounded_channel();
+        drop(receiver);
+        let registrar = WaylandShortcutRegistrar {
+            commands,
+            worker: Mutex::new(None),
+        };
+        assert_eq!(
+            registrar.register(&binding(1)),
+            Err(ShortcutRegistrationError::PortalUnavailable)
+        );
+        assert_eq!(
+            registrar.unregister(&binding(1)),
+            Err(ShortcutRegistrationError::PortalUnavailable)
+        );
+
+        let coordinator = crate::shortcuts::ShortcutCoordinator::new(
+            Arc::new(registrar),
+            Ok(crate::shortcuts::RecordingBinding {
+                mode: whispernow_domain::RecordingMode::Hold,
+                binding: binding(1),
+            }),
+            Arc::new(|| true),
+            Some(ShortcutRegistrationError::PermissionDenied),
+        );
+        assert!(!coordinator.registration_active());
+        assert_eq!(
+            coordinator.registration_diagnostic(),
+            Some(ShortcutRegistrationError::PermissionDenied)
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fake_portal_binds_rebinds_orders_transitions_and_shuts_down() {
         let registered = Arc::new(Mutex::new(HashSet::new()));
@@ -719,14 +719,7 @@ mod tests {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (signals, signal_rx) = mpsc::unbounded_channel();
         let (events, mut event_rx) = mpsc::unbounded_channel();
-        let diagnostic = Arc::new(Mutex::new(None));
-        let actor = tokio::spawn(actor_loop(
-            portal,
-            command_rx,
-            signal_rx,
-            events,
-            Arc::clone(&diagnostic),
-        ));
+        let actor = tokio::spawn(actor_loop(portal, command_rx, signal_rx, events));
 
         for value in [1, 2] {
             let (reply, response) = std_mpsc::sync_channel(1);
@@ -797,14 +790,7 @@ mod tests {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (signals, signal_rx) = mpsc::unbounded_channel();
         let (events, mut event_rx) = mpsc::unbounded_channel();
-        let diagnostic = Arc::new(Mutex::new(None));
-        let actor = tokio::spawn(actor_loop(
-            portal,
-            command_rx,
-            signal_rx,
-            events,
-            Arc::clone(&diagnostic),
-        ));
+        let actor = tokio::spawn(actor_loop(portal, command_rx, signal_rx, events));
 
         let (reply, response) = std_mpsc::sync_channel(1);
         commands
@@ -839,10 +825,6 @@ mod tests {
             Some(ShortcutEvent::CapabilityLost(
                 ShortcutRegistrationError::SessionClosed
             ))
-        );
-        assert_eq!(
-            *diagnostic.lock().expect("diagnostic"),
-            Some(ShortcutRegistrationError::SessionClosed)
         );
         drop(commands);
         drop(signals);
@@ -921,13 +903,7 @@ mod tests {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (signals, signal_rx) = mpsc::unbounded_channel();
         let (events, mut event_rx) = mpsc::unbounded_channel();
-        let actor = tokio::spawn(actor_loop(
-            portal,
-            command_rx,
-            signal_rx,
-            events,
-            Arc::new(Mutex::new(None)),
-        ));
+        let actor = tokio::spawn(actor_loop(portal, command_rx, signal_rx, events));
         let (reply, response) = std_mpsc::sync_channel(1);
         commands
             .send(Command::Register {

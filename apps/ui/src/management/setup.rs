@@ -45,10 +45,15 @@ impl ManagementState {
         self.setup.as_ref().map(|setup| &setup.checkpoint)
     }
 
-    pub fn setup_move(&mut self, step: SetupStep) -> Option<SetupCheckpoint> {
-        let mut checkpoint = self.setup.as_ref()?.checkpoint.clone();
+    pub fn setup_move(&mut self, step: SetupStep) -> SetupCheckpoint {
+        let mut checkpoint = self
+            .setup
+            .as_ref()
+            .expect("setup controls render after loading")
+            .checkpoint
+            .clone();
         checkpoint.step = step;
-        Some(checkpoint)
+        checkpoint
     }
 
     /// Whether microphones may be listed: listing can ask for microphone access, so setup waits
@@ -92,13 +97,6 @@ impl ManagementState {
         })
     }
 
-    /// The saved checkpoint with this window's unsaved choices, for "Finish later".
-    #[must_use]
-    pub fn finish_setup_later_request(&self) -> Option<SetupCheckpoint> {
-        let setup = self.setup.as_ref()?;
-        (!setup.first_run_complete).then(|| setup.checkpoint.clone())
-    }
-
     pub fn finish_setup_later(&mut self, response: SetupStateView) {
         self.setup = Some(response);
         self.notify(
@@ -114,13 +112,6 @@ impl ManagementState {
         self.end_permission_watch();
         self.setup_test = None;
         self.setup = Some(response);
-    }
-
-    #[must_use]
-    pub fn complete_setup_request(&self) -> Option<SetupCheckpoint> {
-        let setup = self.setup.as_ref()?;
-        (!setup.first_run_complete && setup.checkpoint.step == SetupStep::TryIt)
-            .then(|| setup.checkpoint.clone())
     }
 
     pub fn finish_setup(&mut self, saved: SaveSettingsResponse) {
@@ -167,9 +158,7 @@ impl ManagementState {
             return None;
         }
         self.end_permission_watch();
-        (microphone == Some(PermissionStatus::Granted))
-            .then(|| self.setup_move(SetupStep::Model))
-            .flatten()
+        (microphone == Some(PermissionStatus::Granted)).then(|| self.setup_move(SetupStep::Model))
     }
 
     fn end_permission_watch(&mut self) {

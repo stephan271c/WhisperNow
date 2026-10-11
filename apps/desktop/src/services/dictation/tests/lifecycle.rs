@@ -120,6 +120,7 @@ fn a_failed_tray_pause_does_not_leave_a_settings_warning() {
         Arc::new(Registrar::default()),
         recording_binding(&Settings::default()),
         Arc::new(|| true),
+        None,
     ));
     let gateway = Gateway::new(
         Arc::new(services),
@@ -173,6 +174,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         registrar.clone(),
         recording_binding(&saved),
         Arc::new(|| true),
+        None,
     ));
     let autostart = Arc::new(Autostart::default());
     let gateway = Arc::new(Gateway::new(
@@ -330,7 +332,10 @@ fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
         let loaded = services.state.lock().model.clone();
 
         let error = services
-            .complete_setup(&checkpoint)
+            .complete_setup(
+                &checkpoint,
+                &services.settings.load().expect("saved settings"),
+            )
             .expect_err("setup refused");
 
         assert_eq!(error.code, expected);
@@ -361,7 +366,10 @@ fn setup_loads_and_selects_the_model_then_saves_its_choices() {
     };
 
     let view = services
-        .complete_setup(&checkpoint)
+        .complete_setup(
+            &checkpoint,
+            &services.settings.load().expect("saved settings"),
+        )
         .expect("complete setup");
 
     assert!(view.settings.first_run_complete);
@@ -435,7 +443,10 @@ fn invalid_setup_choices_leave_the_saved_and_selected_model_unchanged() {
     };
 
     let error = services
-        .complete_setup(&checkpoint)
+        .complete_setup(
+            &checkpoint,
+            &services.settings.load().expect("saved settings"),
+        )
         .expect_err("invalid setup choices");
 
     assert_eq!(error.code, "invalid_settings");

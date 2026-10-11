@@ -256,8 +256,8 @@ impl WaylandOutput {
             while let Ok(signal) = output.signals.try_recv() {
                 match signal {
                     ClipboardSignal::Closed => closed = true,
-                    owner @ ClipboardSignal::OwnerChanged { .. } => {
-                        apply_non_transfer_signal(output, owner);
+                    ClipboardSignal::OwnerChanged { mime_types } => {
+                        output.advertised_mime_types = Some(mime_types);
                     }
                 }
             }
@@ -367,7 +367,12 @@ async fn snapshot_clipboard(
             .await
             .map_err(|_| WaylandPortalError::ClipboardUnavailable)?
             .ok_or(WaylandPortalError::Disconnected)?;
-        apply_non_transfer_signal(output, signal);
+        match signal {
+            ClipboardSignal::OwnerChanged { mime_types } => {
+                output.advertised_mime_types = Some(mime_types);
+            }
+            ClipboardSignal::Closed => return Err(WaylandPortalError::Disconnected),
+        }
     }
     let advertised = output
         .advertised_mime_types
@@ -403,7 +408,7 @@ async fn read_selection(
     let mut bytes = SecretBytes::default();
     tokio::time::timeout(
         READ_TIMEOUT,
-        file.take(u64::try_from(MAX_FORMAT_BYTES).unwrap_or(u64::MAX) + 1)
+        file.take(MAX_FORMAT_BYTES as u64 + 1)
             .read_to_end(&mut bytes),
     )
     .await
@@ -451,8 +456,8 @@ async fn serve_for(
             Ok(None | Some(ClipboardSignal::Closed)) => {
                 return Err(WaylandPortalError::Disconnected);
             }
-            Ok(Some(owner @ ClipboardSignal::OwnerChanged { .. })) => {
-                apply_non_transfer_signal(output, owner);
+            Ok(Some(ClipboardSignal::OwnerChanged { mime_types })) => {
+                output.advertised_mime_types = Some(mime_types);
             }
         }
     }
@@ -484,12 +489,6 @@ async fn serve_transfer(
     let _ignored = clipboard
         .selection_write_done(session, serial, success)
         .await;
-}
-
-fn apply_non_transfer_signal(output: &mut OutputSession, signal: ClipboardSignal) {
-    if let ClipboardSignal::OwnerChanged { mime_types } = signal {
-        output.advertised_mime_types = Some(mime_types);
-    }
 }
 
 async fn inject_balanced_paste(

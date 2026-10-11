@@ -4,8 +4,8 @@ use whispernow_domain::ipc::{SaveSettingsResponse, SettingsView};
 use whispernow_domain::{Settings, ThemePreference};
 
 use super::ManagementState;
+use crate::NoticeScope;
 use crate::components::ui::Tone;
-use crate::{NoticeScope, UiOperation};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SettingKey {
@@ -37,9 +37,12 @@ pub enum SaveStatus {
 
 impl ManagementState {
     pub fn install_settings(&mut self, settings: SettingsView) {
-        match settings.warnings.first() {
-            Some(warning) => self.notify(Tone::Warning, NoticeScope::Settings, warning.clone()),
-            None => self.clear_notice_scope(NoticeScope::Settings),
+        if let Some(warning) = settings.warnings.first() {
+            self.notify(Tone::Warning, NoticeScope::Settings, warning.clone());
+            self.cleanup_warning_notice = Some(self.next_notice);
+        } else {
+            self.clear_notice_scope(NoticeScope::Settings);
+            self.cleanup_warning_notice = None;
         }
         self.settings = Some(settings);
     }
@@ -72,18 +75,14 @@ impl ManagementState {
     #[must_use]
     pub fn settings_pending(&self) -> bool {
         self.saving.is_some()
-            || self.busy.iter().any(|operation| {
-                matches!(
-                    operation,
-                    UiOperation::LoadSettings
-                        | UiOperation::CredentialMutation
-                        | UiOperation::ModelSwitch
-                        | UiOperation::SaveSetup
-                        | UiOperation::CompleteSetup
-                        | UiOperation::RestartSetup
-                        | UiOperation::ClearData
-                )
-            })
+            || self
+                .busy
+                .iter()
+                .any(|operation| operation.changes_settings())
+    }
+
+    pub(super) fn begin_settings_change(&self) -> bool {
+        !self.settings_pending()
     }
 
     pub fn begin_settings_update(
@@ -91,7 +90,7 @@ impl ManagementState {
         key: SettingKey,
         edit: impl FnOnce(&mut Settings),
     ) -> Option<Settings> {
-        if self.settings_pending() {
+        if !self.begin_settings_change() {
             return None;
         }
         let mut settings = self
@@ -115,12 +114,12 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn setting_status(&self, key: &SettingKey) -> SaveStatus {
-        if let Some(message) = self.setting_errors.get(key) {
+    pub fn setting_status(&self, key: SettingKey) -> SaveStatus {
+        if let Some(message) = self.setting_errors.get(&key) {
             SaveStatus::Failed(message.clone())
-        } else if self.saving.as_ref() == Some(key) {
+        } else if self.saving == Some(key) {
             SaveStatus::Saving
-        } else if self.saved_setting.as_ref() == Some(key) {
+        } else if self.saved_setting == Some(key) {
             SaveStatus::Saved
         } else {
             SaveStatus::Idle
@@ -131,31 +130,16 @@ impl ManagementState {
         let key = self.saving.take().expect("a settings save is pending");
         match answer {
             Ok(SaveSettingsResponse { settings, warnings }) => {
-                let resolved_cleanup_warning = settings
-                    .settings
-                    .cleanup_warning()
-                    .is_none()
-                    .then(|| {
-                        self.settings
-                            .as_ref()
-                            .and_then(|view| view.settings.cleanup_warning())
-                    })
-                    .flatten();
+                let cleanup_warning_only = !warnings.is_empty() && warnings == settings.warnings;
                 self.settings = Some(settings);
                 if warnings.is_empty() {
-                    if let Some(warning) = resolved_cleanup_warning
-                        && let Some(notice) = &self.notice
-                        && notice.scope == NoticeScope::Settings
-                        && notice.tone == Tone::Warning
-                        && (notice.message == warning
-                            || notice.message
-                                == format!("Saved, but not everything took effect. {warning}"))
-                    {
-                        self.dismiss_notice(notice.id);
+                    if let Some(id) = self.cleanup_warning_notice.take() {
+                        self.dismiss_notice(id);
                     }
                     self.saved_setting = Some(key);
                 } else {
-                    self.notify_saved(NoticeScope::Settings, "Saved", &warnings);
+                    let id = self.notify_saved(NoticeScope::Settings, "Saved", &warnings);
+                    self.cleanup_warning_notice = cleanup_warning_only.then_some(id);
                 }
             }
             Err(message) => {

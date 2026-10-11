@@ -18,7 +18,7 @@ use whispernow_domain::AppError;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use whispernow_domain::ClearDataCategory;
-use whispernow_domain::ipc::{EventPayload, PermissionKind, Phase};
+use whispernow_domain::ipc::{EventPayload, Phase};
 
 use super::ui::Tone;
 use crate::client;
@@ -79,11 +79,6 @@ impl UiContext {
             .cloned()
     }
 
-    /// Whether a request for permission `kind` is waiting for the system's answer.
-    pub(crate) fn permission_requested(self, kind: PermissionKind) -> bool {
-        self.management.read().requested_permission == Some(kind)
-    }
-
     // Actions read state with `peek`: one called from an effect must not subscribe it.
 
     /// Runs `call` with `operation` busy until it is answered, then hands the answer to
@@ -93,13 +88,16 @@ impl UiContext {
         operation: UiOperation,
         call: impl Future<Output = Result<R, AppError>> + 'static,
         finish: impl FnOnce(Self, Result<R, AppError>) + 'static,
-    ) {
-        self.management.write().begin_busy(operation);
+    ) -> bool {
+        if !self.management.write().begin_busy(operation) {
+            return false;
+        }
         spawn_forever(async move {
             let answer = call.await;
             self.management.write().end_busy(operation);
             finish(self, answer);
         });
+        true
     }
 
     fn report(mut self, operation: UiOperation, error: &AppError) {
@@ -114,10 +112,7 @@ impl UiContext {
     /// history. Used at startup and after clearing data.
     pub(crate) fn refresh_all(mut self) {
         spawn_forever(async move {
-            match client::call("get_state").await {
-                Ok(snapshot) => self.state.write().hydrate(snapshot),
-                Err(error) => self.state.write().report_client_error(error),
-            }
+            self.hydrate_state().await;
         });
         self.run(
             UiOperation::LoadSettings,
@@ -182,7 +177,12 @@ impl UiContext {
     pub(crate) fn copy_text(mut self, text: String, scope: NoticeScope) {
         spawn_forever(async move {
             let copied = client::write_clipboard(&text).await.is_ok();
-            self.management.write().finish_copy(scope, copied);
+            let (tone, message) = if copied {
+                (Tone::Success, "Copied to the clipboard")
+            } else {
+                (Tone::Error, "Could not copy to the clipboard")
+            };
+            self.management.write().notify(tone, scope, message);
         });
     }
 
@@ -219,9 +219,6 @@ impl UiContext {
 
     /// Removes every kind of application data, then reads everything again.
     pub(crate) fn clear_data(self) {
-        if self.management.peek().settings_pending() {
-            return;
-        }
         let operation = UiOperation::ClearData;
         let request = ClearDataCategory::ALL.to_vec();
         self.run(

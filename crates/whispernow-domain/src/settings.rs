@@ -50,7 +50,7 @@ pub enum ThemePreference {
 
 /// Download operation identifiers are intentionally excluded because they are process-scoped. The
 /// saved settings stay in effect until setup finishes and commits these choices.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct SetupCheckpoint {
     pub step: SetupStep,
@@ -59,18 +59,6 @@ pub struct SetupCheckpoint {
     #[serde(rename = "hotkey")]
     pub recording_shortcut: Shortcut,
     pub recording_mode: RecordingMode,
-}
-
-impl Default for SetupCheckpoint {
-    fn default() -> Self {
-        Self {
-            step: SetupStep::Welcome,
-            model_id: ModelId::default(),
-            input_device: None,
-            recording_shortcut: Shortcut::default(),
-            recording_mode: RecordingMode::default(),
-        }
-    }
 }
 
 /// A secret API key, kept in the OS credential store. It crosses to the desktop only when the
@@ -249,11 +237,13 @@ impl Settings {
     /// The local cleanup model AI cleanup uses with the Local cleanup model provider: the one
     /// saved as that provider's model, or the default when none, or an unknown one, is saved.
     #[must_use]
-    pub fn cleanup_model_id(&self) -> &'static str {
-        self.llm_provider_settings
+    pub fn cleanup_model_id(&self) -> ModelId {
+        let id = self
+            .llm_provider_settings
             .get(&LlmProvider::LocalCleanup)
             .and_then(|saved| CLEANUP_MODEL_IDS.into_iter().find(|id| *id == saved.model))
-            .unwrap_or(DEFAULT_CLEANUP_MODEL_ID)
+            .unwrap_or(DEFAULT_CLEANUP_MODEL_ID);
+        ModelId::new(id).expect("cleanup registry IDs are valid")
     }
 
     #[must_use]

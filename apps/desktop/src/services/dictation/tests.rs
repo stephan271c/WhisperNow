@@ -16,10 +16,7 @@ use whispernow_core::{
         AudioBlock, AudioCapture, AudioDeviceChoice, AudioDeviceDescriptor, AudioInput,
         AudioInputError, AudioSink, TARGET_SAMPLE_RATE,
     },
-    llm::{
-        LlmDecoding, LlmError, LlmFinishReason, LlmFuture, LlmProvider, LlmRequest, LlmResponse,
-        LlmService,
-    },
+    llm::{LlmError, LlmFinishReason, LlmFuture, LlmProvider, LlmRequest, LlmResponse, LlmService},
     workflow::VoiceActivity,
 };
 use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest};
@@ -339,7 +336,6 @@ impl Fixture {
     fn history(&self) -> Vec<HistoryEntry> {
         self.history
             .list(&HistoryPageRequest {
-                before: None,
                 limit: 100,
                 filter: HistoryFilter::default(),
             })
@@ -377,6 +373,30 @@ fn a_dictation_is_transcribed_saved_and_pasted() {
     assert_eq!(history[0].status, EntryStatus::Ok);
     assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
     assert!(history[0].has_audio);
+}
+
+#[test]
+fn vocabulary_that_empties_a_transcript_clears_the_last_transcript() {
+    let fixture = Fixture::new();
+    fixture.state.lock().last_transcript = Some("earlier dictation".to_owned());
+    let mut settings = fixture.settings.load().expect("saved settings");
+    settings.vocabulary_replacements = vec![whispernow_domain::VocabularyReplacement::new(
+        TRANSCRIPT, " ",
+    )];
+    fixture
+        .settings
+        .transaction()
+        .save(&settings)
+        .expect("save vocabulary");
+    fixture.start();
+    fixture.dictation.stop().expect("stop");
+
+    assert_eq!(fixture.settled(), Phase::Idle);
+    assert!(fixture.state.lock().last_transcript.is_none());
+    let history = fixture.history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
+    assert_eq!(history[0].cleaned_text.as_deref(), Some(" "));
 }
 
 #[test]
@@ -570,7 +590,10 @@ impl Fixture {
         let requests = self.provider.requests.lock().expect("requests");
         requests
             .iter()
-            .map(|request| request.config.model.clone())
+            .map(|request| match request {
+                LlmRequest::Local { model, .. } => model.as_str().to_owned(),
+                LlmRequest::Remote { config, .. } => config.target.model.clone(),
+            })
             .collect()
     }
 }
@@ -617,13 +640,12 @@ fn a_saved_remote_api_key_reaches_the_cleanup_request() {
     assert_eq!(fixture.pasted(), ["Cleaned with the saved key."]);
     let requests = fixture.provider.requests.lock().expect("requests");
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].config.provider, LlmProvider::OpenAi);
+    let LlmRequest::Remote { config, .. } = &requests[0] else {
+        panic!("remote cleanup request");
+    };
+    assert_eq!(config.target.provider.provider(), LlmProvider::OpenAi);
     assert_eq!(
-        requests[0]
-            .config
-            .api_key
-            .as_ref()
-            .map(ApiKey::expose_secret),
+        config.api_key.as_ref().map(ApiKey::expose_secret),
         Some("test-provider-key")
     );
 }
@@ -646,12 +668,12 @@ fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
     assert_eq!(fixture.settled(), Phase::Idle);
     assert_eq!(fixture.pasted(), ["Hello from the worker."]);
     let requests = fixture.provider.requests.lock().expect("requests");
-    assert_eq!(requests[0].config.provider, LlmProvider::LocalCleanup);
+    let LlmRequest::Local { model, draft, .. } = &requests[0] else {
+        panic!("local cleanup request");
+    };
+    assert_eq!(*model, saved.cleanup_model_id());
     assert!(
-        matches!(
-            &requests[0].decoding,
-            LlmDecoding::LocalCleanup { draft: Some(_), .. }
-        ),
+        !draft.as_str().is_empty(),
         "the local model drafts from the transcript"
     );
     drop(requests);
@@ -662,7 +684,7 @@ fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
     );
     assert_eq!(
         history[0].llm_model.as_deref(),
-        Some(saved.cleanup_model_id())
+        Some(saved.cleanup_model_id().as_str())
     );
 }
 

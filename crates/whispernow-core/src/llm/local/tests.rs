@@ -2,7 +2,8 @@ use std::ops::ControlFlow;
 
 use super::{
     DRAFT_TOKENS, DecodeContext, LocalDecodeError, LocalDecodeOutput, LocalDecodeRequest,
-    LocalFinish, Outputs, Reply, State, Token, decode, ngram_draft, prompt_chunks, render_prompt,
+    LocalFinish, Outputs, PromptBatching, Reply, State, Token, decode, ngram_draft, prompt_chunks,
+    render_prompt,
 };
 use crate::llm::build_local_cleanup_prompt;
 
@@ -243,24 +244,50 @@ fn text(output: &LocalDecodeOutput) -> &str {
 #[test]
 fn the_prompt_is_split_where_the_server_checkpoints_it() {
     assert_eq!(
-        prompt_chunks(710, 2_048, 512, Some(Some(1))),
+        prompt_chunks(
+            710,
+            2_048,
+            512,
+            PromptBatching::Checkpointed { user_turn: Some(1) }
+        ),
         [0..1, 1..194, 194..706, 706..710]
     );
     assert_eq!(
-        prompt_chunks(3_000, 2_048, 512, Some(Some(1))),
+        prompt_chunks(
+            3_000,
+            2_048,
+            512,
+            PromptBatching::Checkpointed { user_turn: Some(1) }
+        ),
         [0..1, 1..2_049, 2_049..2_484, 2_484..2_996, 2_996..3_000]
     );
-    assert_eq!(prompt_chunks(3, 2_048, 512, Some(Some(1))), [0..1, 1..3]);
     assert_eq!(
-        prompt_chunks(600, 2_048, 512, Some(None)),
+        prompt_chunks(
+            3,
+            2_048,
+            512,
+            PromptBatching::Checkpointed { user_turn: Some(1) }
+        ),
+        [0..1, 1..3]
+    );
+    assert_eq!(
+        prompt_chunks(
+            600,
+            2_048,
+            512,
+            PromptBatching::Checkpointed { user_turn: None }
+        ),
         [0..84, 84..596, 596..600]
     );
     // Without checkpoints only the batch size splits it.
     assert_eq!(
-        prompt_chunks(5_000, 2_048, 512, None),
+        prompt_chunks(5_000, 2_048, 512, PromptBatching::Plain),
         [0..2_048, 2_048..4_096, 4_096..5_000]
     );
-    assert_eq!(prompt_chunks(10, 4, 512, Some(None)), [0..4, 4..6, 6..10]);
+    assert_eq!(
+        prompt_chunks(10, 4, 512, PromptBatching::Checkpointed { user_turn: None }),
+        [0..4, 4..6, 6..10]
+    );
 }
 
 #[test]

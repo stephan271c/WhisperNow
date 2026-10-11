@@ -9,60 +9,68 @@ use whispernow_domain::ipc::{
 
 use super::NativeServices;
 
-/// The desktop session, which decides which permissions dictation needs.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PermissionSession {
-    MacOs,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SessionFacts {
+    #[cfg_attr(all(not(test), not(target_os = "macos")), expect(dead_code))]
+    MacOs { accessibility_trusted: bool },
+    #[cfg_attr(all(not(test), not(target_os = "windows")), expect(dead_code))]
     Windows,
-    /// X11 on Linux: the paste keystroke needs the XTEST extension.
-    X11,
-    /// Native Wayland: shortcuts need portal consent, and so does the paste
-    /// keystroke unless the paste helper presses it.
-    Wayland,
+    #[cfg_attr(
+        all(not(test), any(target_os = "macos", target_os = "windows")),
+        expect(dead_code)
+    )]
+    X11 { paste_injection_available: bool },
+    #[cfg_attr(
+        all(not(test), any(target_os = "macos", target_os = "windows")),
+        expect(dead_code)
+    )]
+    Wayland {
+        global_shortcuts: PermissionStatus,
+        paste: WaylandPaste,
+    },
 }
 
 /// Who presses the paste keystroke in a native Wayland session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WaylandPaste {
     /// The paste helper's virtual keyboard, which needs no consent.
+    #[cfg_attr(
+        all(not(test), any(target_os = "macos", target_os = "windows")),
+        expect(dead_code)
+    )]
     Helper,
     /// The `RemoteDesktop` portal, with its consent and the command that sets
     /// the helper up instead.
+    #[cfg_attr(
+        all(not(test), any(target_os = "macos", target_os = "windows")),
+        expect(dead_code)
+    )]
     Portal {
         consent: PermissionStatus,
         setup_command: Option<String>,
     },
 }
 
-#[derive(Clone)]
-pub(crate) struct PermissionFacts {
-    session: PermissionSession,
+pub(crate) fn permission_states(
     microphone: PermissionStatus,
-    accessibility_trusted: bool,
-    paste_injection_available: bool,
-    global_shortcuts: PermissionStatus,
-    wayland_paste: WaylandPaste,
-}
-
-pub(crate) fn permission_states(facts: PermissionFacts) -> PermissionsResponse {
-    let session = facts.session;
-    let settings_page = matches!(
-        session,
-        PermissionSession::MacOs | PermissionSession::Windows
-    );
+    session: SessionFacts,
+) -> PermissionsResponse {
+    let settings_page = matches!(session, SessionFacts::MacOs { .. } | SessionFacts::Windows);
     let mut permissions = vec![Permission {
         kind: PermissionKind::Microphone,
-        status: facts.microphone,
+        status: microphone,
         can_request: true,
         can_open_settings: settings_page,
     }];
     let mut paste_helper_setup = None;
     match session {
-        PermissionSession::MacOs => permissions.push(Permission {
+        SessionFacts::MacOs {
+            accessibility_trusted,
+        } => permissions.push(Permission {
             kind: PermissionKind::Accessibility,
             // macOS reports only whether the app is trusted; until it is, the
             // user grants it in System Settings.
-            status: if facts.accessibility_trusted {
+            status: if accessibility_trusted {
                 PermissionStatus::Granted
             } else {
                 PermissionStatus::NotDetermined
@@ -70,10 +78,12 @@ pub(crate) fn permission_states(facts: PermissionFacts) -> PermissionsResponse {
             can_request: false,
             can_open_settings: true,
         }),
-        PermissionSession::Windows => {}
-        PermissionSession::X11 => permissions.push(Permission {
+        SessionFacts::Windows => {}
+        SessionFacts::X11 {
+            paste_injection_available,
+        } => permissions.push(Permission {
             kind: PermissionKind::PasteSupport,
-            status: if facts.paste_injection_available {
+            status: if paste_injection_available {
                 PermissionStatus::Granted
             } else {
                 PermissionStatus::Unavailable
@@ -81,12 +91,15 @@ pub(crate) fn permission_states(facts: PermissionFacts) -> PermissionsResponse {
             can_request: false,
             can_open_settings: false,
         }),
-        PermissionSession::Wayland => {
+        SessionFacts::Wayland {
+            global_shortcuts,
+            paste,
+        } => {
             permissions.push(portal_card(
                 PermissionKind::GlobalShortcuts,
-                facts.global_shortcuts,
+                global_shortcuts,
             ));
-            permissions.push(match facts.wayland_paste {
+            permissions.push(match paste {
                 WaylandPaste::Helper => Permission {
                     kind: PermissionKind::PasteSupport,
                     status: PermissionStatus::Granted,
@@ -124,51 +137,45 @@ fn portal_card(kind: PermissionKind, status: PermissionStatus) -> Permission {
     }
 }
 
-impl PermissionFacts {
+impl SessionFacts {
     pub(super) fn collect(services: &NativeServices, global_shortcuts: PermissionStatus) -> Self {
-        let session = if cfg!(target_os = "macos") {
-            PermissionSession::MacOs
-        } else if cfg!(target_os = "windows") {
-            PermissionSession::Windows
-        } else if services.output.native_wayland() {
-            PermissionSession::Wayland
-        } else {
-            PermissionSession::X11
-        };
-        let mut facts = Self {
-            session,
-            microphone: services.microphone_access.status(),
-            accessibility_trusted: false,
-            paste_injection_available: false,
-            global_shortcuts: PermissionStatus::NotDetermined,
-            wayland_paste: WaylandPaste::Helper,
-        };
-        match session {
-            PermissionSession::MacOs => {
-                #[cfg(target_os = "macos")]
-                {
-                    facts.accessibility_trusted = whispernow_platform::accessibility_trusted();
-                }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = (services, global_shortcuts);
+            Self::MacOs {
+                accessibility_trusted: whispernow_platform::accessibility_trusted(),
             }
-            PermissionSession::Windows => {}
-            PermissionSession::X11 => {
-                #[cfg(target_os = "linux")]
-                {
-                    facts.paste_injection_available =
-                        whispernow_platform::x11_paste_injection_available();
-                }
-            }
-            PermissionSession::Wayland => {
-                facts.global_shortcuts = global_shortcuts;
-                if let Some(consent) = services.output.remote_desktop_consent() {
-                    facts.wayland_paste = WaylandPaste::Portal {
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = (services, global_shortcuts);
+            Self::Windows
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            if services.output.native_wayland() {
+                let paste = match services.output.remote_desktop_consent() {
+                    Some(consent) => WaylandPaste::Portal {
                         consent,
                         setup_command: services.paste_helper_setup_command(),
-                    };
+                    },
+                    None => WaylandPaste::Helper,
+                };
+                Self::Wayland {
+                    global_shortcuts,
+                    paste,
+                }
+            } else {
+                #[cfg(target_os = "linux")]
+                let paste_injection_available =
+                    whispernow_platform::x11_paste_injection_available();
+                #[cfg(not(target_os = "linux"))]
+                let paste_injection_available = false;
+                Self::X11 {
+                    paste_injection_available,
                 }
             }
         }
-        facts
     }
 }
 
@@ -208,26 +215,11 @@ mod tests {
     };
 
     use super::{
-        AppError, MicrophoneAccess, PasteHelperSetup, PermissionFacts, PermissionSession,
-        WaylandPaste, permission_states,
+        AppError, MicrophoneAccess, PasteHelperSetup, SessionFacts, WaylandPaste, permission_states,
     };
 
-    fn facts_on(session: PermissionSession) -> PermissionFacts {
-        PermissionFacts {
-            session,
-            microphone: Status::NotDetermined,
-            accessibility_trusted: false,
-            paste_injection_available: false,
-            global_shortcuts: Status::NotDetermined,
-            wayland_paste: WaylandPaste::Portal {
-                consent: Status::NotDetermined,
-                setup_command: None,
-            },
-        }
-    }
-
-    fn cards(facts: &PermissionFacts) -> Vec<(Kind, Status, bool, bool)> {
-        permission_states(facts.clone())
+    fn cards(microphone: Status, session: SessionFacts) -> Vec<(Kind, Status, bool, bool)> {
+        permission_states(microphone, session)
             .permissions
             .into_iter()
             .map(|card| {
@@ -243,62 +235,91 @@ mod tests {
 
     #[test]
     fn macos_asks_for_the_microphone_and_accessibility_in_system_settings() {
-        let mut facts = facts_on(PermissionSession::MacOs);
         assert_eq!(
-            cards(&facts),
+            cards(
+                Status::NotDetermined,
+                SessionFacts::MacOs {
+                    accessibility_trusted: false,
+                },
+            ),
             [
                 (Kind::Microphone, Status::NotDetermined, true, true),
                 (Kind::Accessibility, Status::NotDetermined, false, true),
             ]
         );
-        facts.microphone = Status::Granted;
-        facts.accessibility_trusted = true;
-        assert!(permission_states(facts).all_granted());
+        assert!(
+            permission_states(
+                Status::Granted,
+                SessionFacts::MacOs {
+                    accessibility_trusted: true,
+                },
+            )
+            .all_granted()
+        );
     }
 
     #[test]
     fn windows_needs_only_the_microphone() {
-        let mut facts = facts_on(PermissionSession::Windows);
-        facts.microphone = Status::Denied;
         assert_eq!(
-            cards(&facts),
+            cards(Status::Denied, SessionFacts::Windows),
             [(Kind::Microphone, Status::Denied, true, true)]
         );
     }
 
     #[test]
     fn x11_checks_that_the_paste_keystroke_can_be_sent() {
-        let mut facts = facts_on(PermissionSession::X11);
-        facts.microphone = Status::Granted;
         assert_eq!(
-            cards(&facts),
+            cards(
+                Status::Granted,
+                SessionFacts::X11 {
+                    paste_injection_available: false,
+                },
+            ),
             [
                 (Kind::Microphone, Status::Granted, true, false),
                 (Kind::PasteSupport, Status::Unavailable, false, false),
             ]
         );
-        facts.paste_injection_available = true;
-        assert!(permission_states(facts).all_granted());
+        assert!(
+            permission_states(
+                Status::Granted,
+                SessionFacts::X11 {
+                    paste_injection_available: true,
+                },
+            )
+            .all_granted()
+        );
     }
 
     #[test]
     fn wayland_asks_each_portal_until_it_answers() {
-        let mut facts = facts_on(PermissionSession::Wayland);
-        facts.global_shortcuts = Status::Denied;
         assert_eq!(
-            cards(&facts),
+            cards(
+                Status::NotDetermined,
+                SessionFacts::Wayland {
+                    global_shortcuts: Status::Denied,
+                    paste: WaylandPaste::Portal {
+                        consent: Status::NotDetermined,
+                        setup_command: None,
+                    },
+                },
+            ),
             [
                 (Kind::Microphone, Status::NotDetermined, true, false),
                 (Kind::GlobalShortcuts, Status::Denied, true, false),
                 (Kind::RemoteDesktop, Status::NotDetermined, true, false),
             ]
         );
-        facts.global_shortcuts = Status::Granted;
-        facts.wayland_paste = WaylandPaste::Portal {
-            consent: Status::Unavailable,
-            setup_command: None,
-        };
-        let states = permission_states(facts);
+        let states = permission_states(
+            Status::NotDetermined,
+            SessionFacts::Wayland {
+                global_shortcuts: Status::Granted,
+                paste: WaylandPaste::Portal {
+                    consent: Status::Unavailable,
+                    setup_command: None,
+                },
+            },
+        );
         let shortcuts = states.get(Kind::GlobalShortcuts).expect("shortcut card");
         assert!(!shortcuts.can_request, "a granted portal needs no asking");
         let paste = states.get(Kind::RemoteDesktop).expect("paste card");
@@ -308,14 +329,19 @@ mod tests {
 
     #[test]
     fn wayland_paste_through_the_portal_offers_the_helper_setup() {
-        let mut facts = facts_on(PermissionSession::Wayland);
         let command = "sudo sh /setup/install_input_helper.sh".to_owned();
-        facts.wayland_paste = WaylandPaste::Portal {
-            consent: Status::Granted,
-            setup_command: Some(command.clone()),
-        };
         assert_eq!(
-            permission_states(facts).paste_helper_setup,
+            permission_states(
+                Status::NotDetermined,
+                SessionFacts::Wayland {
+                    global_shortcuts: Status::NotDetermined,
+                    paste: WaylandPaste::Portal {
+                        consent: Status::Granted,
+                        setup_command: Some(command.clone()),
+                    },
+                },
+            )
+            .paste_helper_setup,
             Some(PasteHelperSetup {
                 command: Some(command)
             })
@@ -324,13 +350,13 @@ mod tests {
 
     #[test]
     fn the_wayland_paste_helper_needs_no_consent() {
-        let mut facts = facts_on(PermissionSession::Wayland);
-        facts.microphone = Status::Granted;
-        facts.global_shortcuts = Status::Granted;
-        facts.wayland_paste = WaylandPaste::Helper;
-        let states = permission_states(facts.clone());
+        let session = SessionFacts::Wayland {
+            global_shortcuts: Status::Granted,
+            paste: WaylandPaste::Helper,
+        };
+        let states = permission_states(Status::Granted, session.clone());
         assert_eq!(
-            cards(&facts),
+            cards(Status::Granted, session),
             [
                 (Kind::Microphone, Status::Granted, true, false),
                 (Kind::GlobalShortcuts, Status::Granted, false, false),

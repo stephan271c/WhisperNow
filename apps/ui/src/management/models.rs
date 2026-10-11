@@ -1,4 +1,3 @@
-use whispernow_domain::ModelFamily;
 use whispernow_domain::ipc::ModelSummary;
 
 use super::ManagementState;
@@ -7,19 +6,6 @@ use crate::components::ui::Tone;
 impl ManagementState {
     pub fn speech_models(&self) -> impl Iterator<Item = &ModelSummary> {
         self.models.iter().filter(|model| model.family.is_speech())
-    }
-
-    #[must_use]
-    pub fn cuda_pack(&self) -> Option<&ModelSummary> {
-        self.models
-            .iter()
-            .find(|model| model.family == ModelFamily::CudaPack)
-    }
-
-    pub fn cleanup_models(&self) -> impl Iterator<Item = &ModelSummary> {
-        self.models
-            .iter()
-            .filter(|model| model.family == ModelFamily::Cleanup)
     }
 
     #[must_use]
@@ -52,10 +38,5 @@ impl ManagementState {
             );
         }
         self.microphone_test = Some(result);
-    }
-
-    pub fn install_models(&mut self, models: Vec<ModelSummary>) {
-        self.models = models;
-        self.models_loaded = true;
     }
 }

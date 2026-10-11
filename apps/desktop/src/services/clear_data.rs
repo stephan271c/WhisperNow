@@ -1,12 +1,10 @@
-use std::time::Duration;
-
 use whispernow_domain::AppError;
 use whispernow_domain::ClearDataCategory;
 use whispernow_domain::ModelId;
 use whispernow_domain::ipc::{ClearDataItem, ClearDataResult, DataLocation, ErrorCategory};
 use whispernow_platform::{ClearDataError, CudaPackRemovalOutcome, Llama, ModelStoreError};
 
-use super::NativeServices;
+use super::{NativeServices, models::hold_cleanup_unloaded};
 
 impl NativeServices {
     /// The existing data each category would remove, including the credential store entry.
@@ -29,28 +27,14 @@ impl NativeServices {
         let _quiescent = self.dictation.begin_data_clear()?;
         let clears_models = categories.contains(&ClearDataCategory::Models);
         let _cleanup_unloaded = if clears_models {
-            Some(
-                self.local_cleanup
-                    .hold_unloaded(Duration::from_secs(10))
-                    .ok_or_else(|| {
-                        AppError::new(
-                            ErrorCategory::General,
-                            "model_in_use",
-                            "The cleanup model is busy; try again when the current cleanup finishes",
-                        )
-                    })?,
-            )
+            Some(hold_cleanup_unloaded(&self.local_cleanup)?)
         } else {
             None
         };
         let clears_settings = categories.contains(&ClearDataCategory::Settings);
         let settings_lock = clears_settings.then(|| self.settings.transaction());
         let cuda_path = self.paths.cuda_pack_dir();
-        let clear_files = || {
-            self.paths
-                .clear_data_except(categories, Some(&cuda_path))
-                .map_err(inspect_error)
-        };
+        let clear_files = || self.paths.clear_data(categories).map_err(inspect_error);
         let entries = if categories.contains(&ClearDataCategory::History) {
             let result = self.history.with_repository_closed(clear_files);
             self.publish_history_changed();

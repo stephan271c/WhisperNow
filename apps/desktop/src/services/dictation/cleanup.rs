@@ -2,14 +2,15 @@ use std::{sync::Arc, time::Instant};
 
 use whispernow_core::{
     CancellationToken,
-    llm::{CleanupFallback, LlmProviderConfig, LlmService, clean_up},
+    llm::{CleanupFallback, LlmService, clean_up},
     workflow::PreparedTranscription,
 };
+use whispernow_domain::CleanupTarget;
 use whispernow_platform::SettingsStore;
 
 #[derive(Clone)]
 pub(crate) struct CleanupPlan {
-    pub(crate) config: LlmProviderConfig,
+    pub(crate) config: CleanupTarget,
     /// Whether the credential store holds the provider's API key, so it is asked only then.
     pub(crate) key_saved: bool,
 }
@@ -28,9 +29,8 @@ impl AiCleanup {
         cancellation: &CancellationToken,
     ) -> Option<String> {
         let plan = plan?;
-        let config = &plan.config;
         let started = Instant::now();
-        let result = self.run(plan, config, &prepared.deterministic_text, cancellation);
+        let result = self.run(plan, &prepared.deterministic_text, cancellation);
         tracing::info!(
             stage = "cleanup",
             duration_ms = started.elapsed().as_secs_f64() * 1_000.0,
@@ -41,7 +41,10 @@ impl AiCleanup {
             },
             "batch pipeline stage completed"
         );
-        let llm_model = result.is_ok().then(|| config.model.clone());
+        let llm_model = result.is_ok().then(|| match &plan.config {
+            CleanupTarget::Local { model } => model.as_str().to_owned(),
+            CleanupTarget::Remote(target) => target.model.clone(),
+        });
         prepared.apply_cleanup(result);
         llm_model
     }
@@ -49,17 +52,16 @@ impl AiCleanup {
     fn run(
         &self,
         plan: &CleanupPlan,
-        config: &LlmProviderConfig,
         deterministic_text: &str,
         cancellation: &CancellationToken,
     ) -> Result<String, CleanupFallback> {
-        let mut config = config.clone();
-        if plan.key_saved {
+        let api_key = if let CleanupTarget::Remote(target) = &plan.config
+            && plan.key_saved
+        {
             // An unreadable key leaves the call without one; the provider then rejects it
             // and the transcript keeps its deterministic text.
-            config.api_key = self
-                .api_keys
-                .api_key(config.provider)
+            self.api_keys
+                .api_key(target.provider.provider())
                 .inspect_err(|error| {
                     tracing::warn!(
                         code = error.code,
@@ -67,12 +69,15 @@ impl AiCleanup {
                     );
                 })
                 .ok()
-                .flatten();
-        }
+                .flatten()
+        } else {
+            None
+        };
         self.runtime.block_on(clean_up(
             self.service.as_ref(),
             deterministic_text,
-            &config,
+            &plan.config,
+            api_key,
             cancellation,
         ))
     }

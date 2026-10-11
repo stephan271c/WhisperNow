@@ -91,9 +91,7 @@ impl PythonSettings {
                 Value::Null => HistoryLimit::Unlimited,
                 value => value
                     .as_u64()
-                    .map_or_else(HistoryLimit::default, |entries| {
-                        HistoryLimit::at_least(Some(u32::try_from(entries).unwrap_or(u32::MAX)))
-                    }),
+                    .map_or_else(HistoryLimit::default, HistoryLimit::at_least),
             };
         }
         pick(

@@ -103,7 +103,7 @@ enum SileroVadError {
 #[cfg(test)]
 mod tests {
     use sha2::{Digest as _, Sha256};
-    use whispernow_core::workflow::{AudioSegment, segment_recording};
+    use whispernow_core::workflow::{AudioSegment, SpeechSegmenter};
 
     use super::*;
 
@@ -135,10 +135,12 @@ mod tests {
     }
 
     fn segments(samples: &[f32]) -> Vec<AudioSegment> {
-        segment_recording(
-            samples,
-            Box::new(SileroVoiceActivity::new(&bundled_model_path()).expect("native detector")),
-        )
+        let mut segmenter = SpeechSegmenter::new(Box::new(
+            SileroVoiceActivity::new(&bundled_model_path()).expect("native detector"),
+        ));
+        let mut segments = segmenter.push(samples);
+        segments.extend(segmenter.finish());
+        segments
     }
 
     #[test]

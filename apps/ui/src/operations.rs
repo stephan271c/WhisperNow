@@ -9,7 +9,6 @@ pub enum UiOperation {
     SaveSetup,
     CompleteSetup,
     RestartSetup,
-    RequestPermission,
     OpenPermissionSettings,
     LoadPermissions,
     ListDevices,
@@ -34,6 +33,19 @@ pub enum UiOperation {
 }
 
 impl UiOperation {
+    pub(crate) const fn changes_settings(self) -> bool {
+        matches!(
+            self,
+            Self::LoadSettings
+                | Self::CredentialMutation
+                | Self::ModelSwitch
+                | Self::SaveSetup
+                | Self::CompleteSetup
+                | Self::RestartSetup
+                | Self::ClearData
+        )
+    }
+
     pub(crate) const fn notice_scope(self) -> NoticeScope {
         match self {
             Self::LoadSettings | Self::CredentialMutation => NoticeScope::Settings,
@@ -43,7 +55,6 @@ impl UiOperation {
             Self::SaveSetup
             | Self::CompleteSetup
             | Self::RestartSetup
-            | Self::RequestPermission
             | Self::OpenPermissionSettings
             | Self::LoadPermissions
             | Self::StartSetupTest

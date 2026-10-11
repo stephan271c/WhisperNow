@@ -5,7 +5,6 @@
 //! loaded, so removing a pack in use only marks it; it is deleted when the app next starts.
 
 use std::{
-    collections::HashMap,
     fs::{self, File},
     io::BufReader,
     path::{Path, PathBuf},
@@ -20,7 +19,6 @@ use super::{
     DownloadProgress, ModelStore, ModelStoreError, PinnedFile, check_cancelled, download_file,
     extract_tar, filesystem, remove_path, sync_directory, validate_artifact_path, write_member,
 };
-use crate::llama::CUDA_LIBRARIES;
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     all(target_os = "windows", target_arch = "x86_64")
@@ -167,28 +165,23 @@ impl ModelStore {
     }
 
     fn validate_cuda_pack(&self, root: &Path) -> Result<(), ModelStoreError> {
-        let libraries = CUDA_LIBRARIES.ok_or(ModelStoreError::InvalidArchive)?;
-        let mut required: HashMap<_, _> = self
+        if self.cuda_pack.is_empty() {
+            return Err(ModelStoreError::InvalidArchive);
+        }
+        let required = self
             .cuda_pack
             .iter()
-            .flat_map(|archive| archive.members.iter())
-            .map(|&(member, name)| (name, Some(member)))
-            .collect();
-        for name in libraries.files() {
-            required.entry(name).or_insert(None);
-        }
+            .flat_map(|archive| archive.members.iter());
         let mut artifacts = Vec::new();
         let mut invalid_archive = false;
-        for (name, member) in required {
+        for &(member, name) in required {
             if validate_artifact_path(root, Path::new(name))
                 .map_err(|_| ModelStoreError::InvalidArchive)?
             {
                 continue;
             }
             invalid_archive = true;
-            if let Some(member) = member
-                && !root.join(name).exists()
-            {
+            if !root.join(name).exists() {
                 artifacts.push(member.to_owned());
             }
         }
@@ -237,7 +230,6 @@ impl ModelStore {
             .prefix(".llama-cuda-stage-")
             .tempdir_in(data_dir)
             .map_err(|_| filesystem("create CUDA pack staging directory"))?;
-        let http = &self.http;
         let mut done = 0_u64;
         for archive in self.cuda_pack {
             let mut file = Builder::new()
@@ -253,8 +245,8 @@ impl ModelStore {
                     total_bytes: Some(total),
                 });
             };
-            http.runtime.block_on(download_file(
-                &http.client,
+            self.runtime.block_on(download_file(
+                &self.client,
                 &PinnedFile {
                     url: archive.url,
                     size_bytes: archive.size_bytes,
@@ -283,7 +275,7 @@ impl ModelStore {
             fs::rename(staging.path(), &root).map_err(|_| filesystem("install the CUDA pack"))?;
             // The directory moved; nothing is left for the guard to delete.
             let _moved = staging.keep();
-            sync_directory(data_dir)?;
+            sync_directory(data_dir).map_err(|_| filesystem("sync models directory"))?;
         }
         observer(complete(DownloadPhase::Complete));
         Ok(())

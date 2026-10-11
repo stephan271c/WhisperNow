@@ -10,12 +10,11 @@ use super::labels::{self, format_bytes};
 use super::ui::{
     Banner, Button, ButtonSize, ButtonVariant, ConfirmButton, ProgressBar, Section, Tone,
 };
-use crate::{NoticeScope, SettingKey, UiContext, UiOperation};
+use crate::{BlockedReason, NoticeScope, SettingKey, UiContext, UiOperation};
 
 #[component]
 pub(super) fn ModelsPage() -> Element {
     let context = use_context::<UiContext>();
-    let actions = context;
     let management = context.management;
     let snapshot = context.state.read().snapshot.clone();
     let active_id = snapshot
@@ -33,13 +32,13 @@ pub(super) fn ModelsPage() -> Element {
         active_id.as_ref(),
     );
     let loaded = management.read().models_loaded;
-    let switch_blocked = actions
+    let switch_blocked = context
         .blocked(UiOperation::ModelSwitch)
-        .or(actions.settings_blocked());
-    let download_blocked = actions.blocked(UiOperation::DownloadModel);
-    let delete_blocked = actions
+        .or(context.settings_blocked());
+    let download_blocked = context.blocked(UiOperation::DownloadModel);
+    let delete_blocked = context
         .blocked(UiOperation::ModelDelete)
-        .or(actions.phase_blocked());
+        .or(context.phase_blocked());
     let reason = switch_blocked.or(download_blocked).or(delete_blocked);
     let failed_active = (active_state == ModelState::Failed)
         .then(|| active_id.clone())
@@ -53,7 +52,7 @@ pub(super) fn ModelsPage() -> Element {
                     id: "reload-model",
                     disabled: switch_blocked.is_some(),
                     aria_describedby: switch_blocked.map(|_| "models-disabled-reason"),
-                    onclick: move |_| actions.switch_model(model_id.clone()),
+                    onclick: move |_| context.switch_model(model_id.clone()),
                     "Reload model"
                 }
             }
@@ -73,6 +72,9 @@ pub(super) fn ModelsPage() -> Element {
                         kind: ModelRowKind::Speech {
                             state: (active_id.as_ref() == Some(&model.id)).then_some(active_state),
                         },
+                        switch_blocked,
+                        download_blocked,
+                        delete_blocked,
                         model,
                     }
                 }
@@ -102,25 +104,21 @@ pub(super) enum ModelRowKind {
 pub(super) fn ModelRow(
     model: ModelSummary,
     kind: ModelRowKind,
+    switch_blocked: Option<BlockedReason>,
+    download_blocked: Option<BlockedReason>,
+    delete_blocked: Option<BlockedReason>,
     #[props(default)] settings_disabled: bool,
 ) -> Element {
-    let actions = use_context::<UiContext>();
+    let context = use_context::<UiContext>();
     let id = model.id.clone();
     let slug = id.as_str().replace('.', "-");
     let name = model.display_name.clone();
-    let download = actions.download(&id);
+    let download = context.download(&id);
     let active_state = match kind {
         ModelRowKind::Speech { state } => state,
         _ => None,
     };
     let active = active_state.is_some();
-    let switch_blocked = actions
-        .blocked(UiOperation::ModelSwitch)
-        .or(actions.settings_blocked());
-    let download_blocked = actions.blocked(UiOperation::DownloadModel);
-    let delete_blocked = actions
-        .blocked(UiOperation::ModelDelete)
-        .or(actions.phase_blocked());
     let describe =
         |blocked: Option<crate::BlockedReason>| blocked.map(|_| "models-disabled-reason");
     rsx! {
@@ -160,7 +158,7 @@ pub(super) fn ModelRow(
                         aria_label: "Download {name}",
                         disabled: download_blocked.is_some(),
                         aria_describedby: describe(download_blocked),
-                        onclick: { let id = id.clone(); move |_| actions.download_model(id.clone()) },
+                        onclick: { let id = id.clone(); move |_| context.download_model(id.clone()) },
                         "Download"
                     }
                 } else if kind == (ModelRowKind::Speech { state: None }) {
@@ -170,7 +168,7 @@ pub(super) fn ModelRow(
                         aria_label: "Use {name}",
                         disabled: switch_blocked.is_some(),
                         aria_describedby: describe(switch_blocked),
-                        onclick: { let id = id.clone(); move |_| actions.switch_model(id.clone()) },
+                        onclick: { let id = id.clone(); move |_| context.switch_model(id.clone()) },
                         "Use"
                     }
                 } else if kind == (ModelRowKind::Cleanup { chosen: false }) {
@@ -181,7 +179,7 @@ pub(super) fn ModelRow(
                         aria_label: "Use {name}",
                         onclick: { let id = id.clone(); move |_| {
                             let model = id.as_str().to_owned();
-                            actions.change_setting(SettingKey::ProviderModel, move |settings| {
+                            context.change_setting(SettingKey::ProviderModel, move |settings| {
                                 settings.provider_settings_mut(LlmProvider::LocalCleanup).model.clone_from(&model);
                             });
                         } },
@@ -196,7 +194,7 @@ pub(super) fn ModelRow(
                         target: name.clone(),
                         size: ButtonSize::Md,
                         disabled: delete_blocked.is_some(),
-                        onconfirm: { let id = id.clone(); move |()| actions.delete_model(id.clone()) },
+                        onconfirm: { let id = id.clone(); move |()| context.delete_model(id.clone()) },
                     }
                 }
             }
@@ -206,36 +204,25 @@ pub(super) fn ModelRow(
 
 #[component]
 pub(super) fn DownloadProgress(download: ActiveDownload, name: String) -> Element {
-    let actions = use_context::<UiContext>();
-    let cancel_blocked = actions.blocked(UiOperation::CancelDownload);
-    let max = download
-        .total_bytes
-        .unwrap_or(download.downloaded_bytes.max(1));
-    let amount = download.total_bytes.map_or_else(
-        || format!("{} downloaded", format_bytes(download.downloaded_bytes)),
-        |total| {
-            format!(
-                "{} of {}",
-                format_bytes(download.downloaded_bytes),
-                format_bytes(total)
-            )
-        },
-    );
-    let progress = download.bytes_per_second.map_or_else(
-        || amount.clone(),
-        |rate| format!("{amount} · {}/s", format_bytes(rate)),
-    );
+    let context = use_context::<UiContext>();
+    let cancel_blocked = context.blocked(UiOperation::CancelDownload);
+    let rate = download
+        .bytes_per_second
+        .map(|rate| format!("{}/s", format_bytes(rate)));
     let model_id = download.model_id.clone();
     rsx! {
         div { class: "download-progress", role: "status",
-            span { class: "download-phase", "{labels::download_phase(download.phase)}: {progress}" }
-            ProgressBar { label: "{name} download progress", value: download.downloaded_bytes, max, value_text: progress.clone() }
+            span { class: "download-phase",
+                "{labels::download_phase(download.phase)}"
+                if let Some(rate) = rate { " · {rate}" }
+            }
+            ProgressBar { label: "{name} download progress", downloaded: download.downloaded_bytes, total: download.total_bytes }
         }
         Button {
             size: ButtonSize::Sm,
             aria_label: "Cancel download {name}",
             disabled: cancel_blocked.is_some(),
-            onclick: move |_| actions.cancel_download(model_id.clone()),
+            onclick: move |_| context.cancel_download(model_id.clone()),
             "Cancel download"
         }
     }

@@ -101,7 +101,7 @@ fn switchable_memory_coordinator(
 ) -> (Arc<MemoryRegistrar>, Arc<AtomicBool>, ShortcutCoordinator) {
     let registrar = Arc::new(MemoryRegistrar::default());
     let (running, probe) = lifecycle_switch();
-    let coordinator = ShortcutCoordinator::new(registrar.clone(), Ok(hold(key)), probe);
+    let coordinator = ShortcutCoordinator::new(registrar.clone(), Ok(hold(key)), probe, None);
     (registrar, running, coordinator)
 }
 
@@ -300,11 +300,8 @@ fn a_refused_shortcut_change_registers_the_previous_shortcut_again() {
 fn unavailable_shortcuts_are_reported_and_retried_without_restarting() {
     let registrar = Arc::new(MemoryRegistrar::default());
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F1").0);
-    let coordinator = ShortcutCoordinator::new(
-        registrar.clone(),
-        Ok(hold("F1")),
-        always_running(),
-    );
+    let coordinator =
+        ShortcutCoordinator::new(registrar.clone(), Ok(hold("F1")), always_running(), None);
     assert!(!coordinator.registration_active());
     assert_eq!(
         coordinator.registration_diagnostic(),
@@ -321,9 +318,37 @@ fn unavailable_shortcuts_are_reported_and_retried_without_restarting() {
         registrar,
         Err(ShortcutRegistrationError::ConflictOrUnsupported),
         always_running(),
+        None,
     );
     assert_eq!(
         invalid.registration_diagnostic(),
+        Some(ShortcutRegistrationError::ConflictOrUnsupported)
+    );
+}
+
+#[test]
+fn registration_after_a_backend_startup_timeout_reports_its_actual_result() {
+    let registrar = Arc::new(MemoryRegistrar::default());
+    let coordinator = ShortcutCoordinator::new(
+        registrar.clone(),
+        Ok(hold("F1")),
+        always_running(),
+        Some(ShortcutRegistrationError::PortalUnavailable),
+    );
+    assert!(coordinator.registration_active());
+    assert_eq!(coordinator.registration_diagnostic(), None);
+    assert!(registrar.holds(&binding(&control("F1"))));
+
+    *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F2").0);
+    let conflict = ShortcutCoordinator::new(
+        registrar,
+        Ok(hold("F2")),
+        always_running(),
+        Some(ShortcutRegistrationError::PortalUnavailable),
+    );
+    assert!(!conflict.registration_active());
+    assert_eq!(
+        conflict.registration_diagnostic(),
         Some(ShortcutRegistrationError::ConflictOrUnsupported)
     );
 }
@@ -523,6 +548,7 @@ fn native_registration_never_runs_under_the_input_locks() {
         registrar.clone(),
         Ok(hold("F1")),
         probe,
+        None,
     ));
     assert!(
         registrar

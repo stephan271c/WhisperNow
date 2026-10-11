@@ -54,18 +54,14 @@ impl HistoryLimit {
         }
     }
 
-    /// The smallest choice that keeps at least `entries` (`None` meaning all), for importing
-    /// older settings.
     #[must_use]
-    pub fn at_least(entries: Option<u32>) -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|limit| match (limit.max_entries(), entries) {
-                (None, _) => true,
-                (Some(_), None) => false,
-                (Some(kept), Some(wanted)) => kept >= wanted,
-            })
-            .unwrap_or(Self::Unlimited)
+    pub const fn at_least(entries: u64) -> Self {
+        match entries {
+            0..=20 => Self::Last20,
+            21..=100 => Self::Last100,
+            101..=1_000 => Self::Last1000,
+            _ => Self::Unlimited,
+        }
     }
 
     #[must_use]
@@ -136,13 +132,6 @@ pub struct NewHistoryEntry {
     pub llm_model: Option<String>,
 }
 
-/// Where a newest-first listing continues.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct HistoryCursor {
-    pub created_at: UtcMillis,
-    pub id: EntryId,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct HistoryFilter {
@@ -165,7 +154,6 @@ impl HistoryFilter {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HistoryPageRequest {
-    pub before: Option<HistoryCursor>,
     pub limit: u32,
     #[serde(default)]
     pub filter: HistoryFilter,
@@ -177,7 +165,6 @@ impl HistoryPageRequest {
     #[must_use]
     pub fn first_page(filter: HistoryFilter) -> Self {
         Self {
-            before: None,
             limit: Self::DEFAULT_PAGE_SIZE,
             filter,
         }
@@ -187,7 +174,7 @@ impl HistoryPageRequest {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HistoryPage {
     pub entries: Vec<HistoryEntry>,
-    pub next_cursor: Option<HistoryCursor>,
+    pub has_more: bool,
 }
 
 #[cfg(test)]
@@ -196,12 +183,12 @@ mod tests {
 
     #[test]
     fn history_limit_imports_to_the_smallest_choice_that_keeps_everything() {
-        assert_eq!(HistoryLimit::at_least(Some(1)), HistoryLimit::Last20);
-        assert_eq!(HistoryLimit::at_least(Some(20)), HistoryLimit::Last20);
-        assert_eq!(HistoryLimit::at_least(Some(21)), HistoryLimit::Last100);
-        assert_eq!(HistoryLimit::at_least(Some(1_000)), HistoryLimit::Last1000);
-        assert_eq!(HistoryLimit::at_least(Some(5_000)), HistoryLimit::Unlimited);
-        assert_eq!(HistoryLimit::at_least(None), HistoryLimit::Unlimited);
+        assert_eq!(HistoryLimit::at_least(1), HistoryLimit::Last20);
+        assert_eq!(HistoryLimit::at_least(20), HistoryLimit::Last20);
+        assert_eq!(HistoryLimit::at_least(21), HistoryLimit::Last100);
+        assert_eq!(HistoryLimit::at_least(1_000), HistoryLimit::Last1000);
+        assert_eq!(HistoryLimit::at_least(5_000), HistoryLimit::Unlimited);
+        assert_eq!(HistoryLimit::at_least(u64::MAX), HistoryLimit::Unlimited);
         assert_eq!(
             serde_json::to_string(&HistoryLimit::Last100).expect("encode"),
             r#""100""#

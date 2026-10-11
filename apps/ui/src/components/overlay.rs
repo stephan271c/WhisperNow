@@ -27,7 +27,7 @@ fn meter_bars(view: &OverlayView) -> Vec<MeterBar> {
         .enumerate()
         .map(|(index, level)| {
             let level = if view.levels_seen { *level } else { 0.0 };
-            let height = MIN_BAR_HEIGHT + (METER_HEIGHT - MIN_BAR_HEIGHT) * level.clamp(0.0, 1.0);
+            let height = MIN_BAR_HEIGHT + (METER_HEIGHT - MIN_BAR_HEIGHT) * level;
             #[allow(clippy::cast_precision_loss, reason = "the index is below LEVEL_BARS")]
             let x = index as f32 * (BAR_WIDTH + BAR_GAP);
             MeterBar {
@@ -86,8 +86,7 @@ pub fn RecordingBar() -> Element {
     let visible = in_flight || failed;
     drop(state);
 
-    let actions = context;
-    let blocked = |operation| actions.blocked(operation).is_some();
+    let blocked = |operation| context.blocked(operation).is_some();
     let stop_blocked = blocked(UiOperation::StopRecording);
     let close_blocked = if in_flight {
         blocked(UiOperation::CancelRecording)
@@ -139,7 +138,7 @@ pub fn RecordingBar() -> Element {
                             if let Some((label, section)) = action {
                                 Button { id: "overlay-action", variant: ButtonVariant::Secondary,
                                     size: ButtonSize::Sm, disabled: action_blocked,
-                                    onclick: move |_| actions.overlay_action(section),
+                                    onclick: move |_| context.overlay_action(section),
                                     "{label}"
                                 }
                             }
@@ -147,15 +146,15 @@ pub fn RecordingBar() -> Element {
                                 IconButton { id: "overlay-stop", icon: IconName::Stop,
                                     label: "Stop and transcribe", size: ButtonSize::Sm,
                                     disabled: stop_blocked,
-                                    onclick: move |_| actions.stop_recording(),
+                                    onclick: move |_| context.stop_recording(),
                                 }
                             }
                             IconButton { id: "overlay-close", icon: IconName::Close,
                                 label: "{close_label}", size: ButtonSize::Sm, disabled: close_blocked,
                                 onclick: move |_| if in_flight {
-                                    actions.cancel_recording();
+                                    context.cancel_recording();
                                 } else {
-                                    actions.dismiss_overlay();
+                                    context.dismiss_overlay();
                                 },
                             }
                         }

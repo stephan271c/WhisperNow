@@ -54,9 +54,7 @@ pub fn init_logging() {
     // credential-bearing request URLs. Application code uses its own metadata-only
     // events, so provider-library logging is disabled structurally at the root.
     for directive in ["rig=off", "rig_core=off"] {
-        if let Ok(disable_rig) = directive.parse() {
-            filter = filter.add_directive(disable_rig);
-        }
+        filter = filter.add_directive(directive.parse().expect("static logging directive"));
     }
     let _subscriber_was_installed = tracing_subscriber::fmt()
         .with_env_filter(filter)

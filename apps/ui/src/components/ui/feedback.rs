@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 use super::{Icon, IconName};
+use crate::components::labels::format_bytes;
 
 /// Severity of a banner or toast. Warnings and errors are announced assertively.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,21 +54,21 @@ pub(crate) fn Banner(tone: Tone, title: Option<String>, children: Element) -> El
     }
 }
 
-#[component]
-pub(crate) fn ToastRegion(children: Element) -> Element {
-    rsx! { section { class: "toast-region", aria_label: "Notifications", {children} } }
-}
-
 /// A determinate progress bar. `label` is required so the bar always has an accessible name.
 #[component]
-pub(crate) fn ProgressBar(
-    label: String,
-    value: u64,
-    max: u64,
-    value_text: Option<String>,
-) -> Element {
-    let max = max.max(1);
-    let percent = value.min(max).saturating_mul(100) / max;
+pub(crate) fn ProgressBar(label: String, downloaded: u64, total: Option<u64>) -> Element {
+    let max = total.unwrap_or(downloaded).max(1);
+    let percent = downloaded.min(max).saturating_mul(100) / max;
+    let amount = total.map_or_else(
+        || format!("{} downloaded", format_bytes(downloaded)),
+        |total| {
+            format!(
+                "{} of {} downloaded",
+                format_bytes(downloaded),
+                format_bytes(total)
+            )
+        },
+    );
     rsx! {
         div {
             class: "progress",
@@ -76,11 +77,12 @@ pub(crate) fn ProgressBar(
             aria_valuemin: "0",
             aria_valuemax: "100",
             aria_valuenow: "{percent}",
-            aria_valuetext: value_text,
+            aria_valuetext: "{amount}",
             svg { class: "progress-track", view_box: "0 0 100 4", preserve_aspect_ratio: "none",
                 "aria-hidden": "true", "focusable": "false",
                 rect { class: "progress-fill", x: "0", y: "0", width: "{percent}", height: "4" }
             }
         }
+        p { class: "download-phase", "{amount}" }
     }
 }

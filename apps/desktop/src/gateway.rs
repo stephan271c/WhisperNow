@@ -83,9 +83,7 @@ impl Gateway {
         &self,
         operation: &'static str,
         failure: Failure,
-        work: impl FnOnce(Arc<NativeServices>, CancellationToken) -> Result<R, AppError>
-        + Send
-        + 'static,
+        work: impl FnOnce(Arc<NativeServices>) -> Result<R, AppError> + Send + 'static,
     ) -> Result<R, AppError> {
         let services = Arc::clone(&self.services);
         let commands = Arc::clone(&self.commands);
@@ -100,7 +98,7 @@ impl Gateway {
                     "The application is closing",
                 ));
             }
-            work(services, shutdown)
+            work(services)
         })
         .await
         .and_then(|result| result);

@@ -85,15 +85,36 @@ fn setting_row_toggle_is_a_labelled_switch() {
 
 #[test]
 fn progress_bar_always_has_a_name_and_a_clamped_value() {
-    for (value, max, expected) in [(2, 5, "40"), (9, 5, "100"), (0, 0, "0")] {
+    for (downloaded, total, expected) in [
+        (2, Some(5), "40"),
+        (9, Some(5), "100"),
+        (0, Some(0), "0"),
+        (0, None, "0"),
+        (2, None, "100"),
+    ] {
         let html = dioxus_ssr::render_element(
-            rsx! { ProgressBar { label: "Model download", value, max } },
+            rsx! { ProgressBar { label: "Model download", downloaded, total } },
         );
         let bar = element(&html, "role=\"progressbar\"").expect("element");
         assert!(bar.contains("aria-label=\"Model download\""));
         assert!(bar.contains(&format!("aria-valuenow=\"{expected}\"")));
         assert!(bar.contains("aria-valuemax=\"100\""));
     }
+}
+
+#[test]
+fn progress_bar_describes_known_and_unknown_download_sizes() {
+    let known = dioxus_ssr::render_element(rsx! {
+        ProgressBar { label: "Model download", downloaded: 2_048, total: Some(4_096) }
+    });
+    assert!(known.contains("aria-valuetext=\"2.0 KiB of 4.0 KiB downloaded\""));
+    assert!(known.contains("class=\"download-phase\">2.0 KiB of 4.0 KiB downloaded</p>"));
+
+    let unknown = dioxus_ssr::render_element(rsx! {
+        ProgressBar { label: "Model download", downloaded: 2_048, total: None }
+    });
+    assert!(unknown.contains("aria-valuetext=\"2.0 KiB downloaded\""));
+    assert!(unknown.contains("class=\"download-phase\">2.0 KiB downloaded</p>"));
 }
 
 #[test]

@@ -18,23 +18,23 @@ use std::{
 
 use tokio::sync::oneshot;
 use whispernow_core::llm::{
-    DraftText, LlmDecoding, LlmError, LlmFinishReason, LlmFuture, LlmPrompt, LlmRequest,
-    LlmResponse, LlmService,
+    DraftText, LlmError, LlmFinishReason, LlmFuture, LlmPrompt, LlmResponse,
     local::{LocalDecodeError, LocalDecodeOutput, LocalFinish},
 };
 
 use self::engine::{EngineError, LocalCleanupEngine, default_threads};
 use crate::llama::{Backend, LlamaError};
+use whispernow_domain::ModelId;
 
 /// Finds a cleanup model's GGUF by its registry id when it is needed; `None` while it is not
 /// installed, or the id is not a cleanup model's.
-pub type CleanupModelLocator = Arc<dyn Fn(&str) -> Option<PathBuf> + Send + Sync>;
+pub type CleanupModelLocator = Arc<dyn Fn(&ModelId) -> Option<PathBuf> + Send + Sync>;
 
 /// Finds the installed CUDA pack's directory when a model loads; `None` while there is none.
 pub type CudaPackLocator = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 
 enum Command {
-    Load(String),
+    Load(ModelId),
     Reload,
     /// Frees the model, then signals the sender.
     Unload(Option<mpsc::Sender<()>>),
@@ -42,27 +42,22 @@ enum Command {
 }
 
 struct Job {
-    model: String,
+    model: ModelId,
     prompt: LlmPrompt,
-    max_output_tokens: u64,
-    draft: Option<DraftText>,
+    max_output_tokens: usize,
+    draft: DraftText,
     /// Closed when the caller stops waiting, as on cancellation or timeout.
     reply: oneshot::Sender<Result<LocalDecodeOutput, EngineError>>,
 }
 
 struct Worker {
     commands: mpsc::Sender<Command>,
-    thread: Option<JoinHandle<()>>,
+    thread: JoinHandle<()>,
 }
 
 pub struct LocalCleanupService {
-    library_directory: PathBuf,
-    model: CleanupModelLocator,
-    cuda: CudaPackLocator,
+    shared: Arc<Shared>,
     worker: Mutex<Option<Worker>>,
-    shutdown: Arc<AtomicBool>,
-    /// Set while the model's file is being removed: nothing loads it meanwhile.
-    held: Arc<AtomicBool>,
 }
 
 impl LocalCleanupService {
@@ -76,19 +71,21 @@ impl LocalCleanupService {
         cuda: CudaPackLocator,
     ) -> Self {
         Self {
-            library_directory,
-            model,
-            cuda,
+            shared: Arc::new(Shared {
+                library_directory,
+                model,
+                cuda,
+                shutdown: AtomicBool::new(false),
+                held: AtomicBool::new(false),
+            }),
             worker: Mutex::new(None),
-            shutdown: Arc::new(AtomicBool::new(false)),
-            held: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Loads the model `model_id` names in the background, so the first cleanup does not
     /// wait for it.
-    pub fn preload(&self, model_id: &str) {
-        let _ = self.send(Command::Load(model_id.to_owned()));
+    pub fn preload(&self, model_id: ModelId) {
+        let _ = self.send(Command::Load(model_id));
     }
 
     /// Loads the loaded model again in the background, so a newly installed CUDA pack takes
@@ -110,7 +107,7 @@ impl LocalCleanupService {
     /// returned guard is dropped, so its file can be removed. `None` if it was not freed in
     /// time, as while a long cleanup runs.
     pub fn hold_unloaded(&self, timeout: std::time::Duration) -> Option<HeldUnloaded<'_>> {
-        self.held.store(true, Ordering::Release);
+        self.shared.held.store(true, Ordering::Release);
         let held = HeldUnloaded(self);
         if self.lock_worker().is_none() {
             return Some(held);
@@ -143,21 +140,12 @@ impl LocalCleanupService {
         worker: &'worker mut Option<Worker>,
     ) -> Result<&'worker Worker, LlmError> {
         let (commands, received) = mpsc::channel();
-        let shared = Shared {
-            library_directory: self.library_directory.clone(),
-            model: Arc::clone(&self.model),
-            cuda: Arc::clone(&self.cuda),
-            shutdown: Arc::clone(&self.shutdown),
-            held: Arc::clone(&self.held),
-        };
+        let shared = Arc::clone(&self.shared);
         let thread = std::thread::Builder::new()
             .name("whispernow-cleanup".to_owned())
             .spawn(move || run(&received, &shared))
             .map_err(|_| LlmError::TemporarilyUnavailable)?;
-        Ok(worker.insert(Worker {
-            commands,
-            thread: Some(thread),
-        }))
+        Ok(worker.insert(Worker { commands, thread }))
     }
 }
 
@@ -165,7 +153,7 @@ pub struct HeldUnloaded<'service>(&'service LocalCleanupService);
 
 impl Drop for HeldUnloaded<'_> {
     fn drop(&mut self) {
-        self.0.held.store(false, Ordering::Release);
+        self.0.shared.held.store(false, Ordering::Release);
     }
 }
 
@@ -173,36 +161,34 @@ struct Shared {
     library_directory: PathBuf,
     model: CleanupModelLocator,
     cuda: CudaPackLocator,
-    shutdown: Arc<AtomicBool>,
-    held: Arc<AtomicBool>,
+    shutdown: AtomicBool,
+    /// Prevents a model from loading while its file is being removed.
+    held: AtomicBool,
 }
 
 impl Drop for LocalCleanupService {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Release);
-        if let Some(mut worker) = self.lock_worker().take() {
+        self.shared.shutdown.store(true, Ordering::Release);
+        if let Some(worker) = self.lock_worker().take() {
             drop(worker.commands);
-            if let Some(thread) = worker.thread.take() {
-                let _ = thread.join();
-            }
+            let _ = worker.thread.join();
         }
     }
 }
 
-impl LlmService for LocalCleanupService {
-    fn complete(&self, request: LlmRequest) -> LlmFuture<'_> {
+impl LocalCleanupService {
+    pub fn complete(
+        &self,
+        model: ModelId,
+        prompt: LlmPrompt,
+        max_output_tokens: usize,
+        draft: DraftText,
+    ) -> LlmFuture<'_> {
         Box::pin(async move {
-            let LlmDecoding::LocalCleanup {
-                max_output_tokens,
-                draft,
-            } = request.decoding
-            else {
-                return Err(LlmError::InvalidRequest);
-            };
             let (reply, replied) = oneshot::channel();
             self.send(Command::Decode(Job {
-                model: request.config.model,
-                prompt: request.prompt,
+                model,
+                prompt,
                 max_output_tokens,
                 draft,
                 reply,
@@ -233,8 +219,8 @@ fn response(output: &LocalDecodeOutput) -> LlmResponse {
 /// another is freed first.
 fn load<'engine>(
     shared: &Shared,
-    engine: &'engine mut Option<(String, LocalCleanupEngine)>,
-    model_id: &str,
+    engine: &'engine mut Option<(ModelId, LocalCleanupEngine)>,
+    model_id: &ModelId,
 ) -> Result<&'engine mut LocalCleanupEngine, LlamaError> {
     let (_, loaded) = match engine.take().filter(|(loaded, _)| loaded == model_id) {
         Some(kept) => engine.insert(kept),
@@ -243,7 +229,7 @@ fn load<'engine>(
     Ok(loaded)
 }
 
-fn load_engine(shared: &Shared, model_id: &str) -> Result<LocalCleanupEngine, LlamaError> {
+fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine, LlamaError> {
     if shared.held.load(Ordering::Acquire) {
         return Err(LlamaError::NotInstalled);
     }
@@ -252,13 +238,13 @@ fn load_engine(shared: &Shared, model_id: &str) -> Result<LocalCleanupEngine, Ll
     let threads = default_threads();
     let loaded = LocalCleanupEngine::load(&shared.library_directory, cuda.as_deref(), &path, threads)
         .inspect_err(|error| {
-            tracing::warn!(target: "whispernow::local_cleanup", %error, model = model_id, "the cleanup model did not load");
+            tracing::warn!(target: "whispernow::local_cleanup", %error, model = model_id.as_str(), "the cleanup model did not load");
         })?;
     let (kind, device) = match loaded.backend() {
         Backend::Gpu(device) => ("gpu", device.as_str()),
         Backend::Cpu => ("cpu", ""),
     };
-    tracing::info!(target: "whispernow::local_cleanup", model = model_id, backend = kind, device, threads, "cleanup model loaded");
+    tracing::info!(target: "whispernow::local_cleanup", model = model_id.as_str(), backend = kind, device, threads, "cleanup model loaded");
     Ok(loaded)
 }
 
@@ -266,7 +252,7 @@ fn load_engine(shared: &Shared, model_id: &str) -> Result<LocalCleanupEngine, Ll
 fn run(commands: &mpsc::Receiver<Command>, shared: &Shared) {
     let shutdown = || shared.shutdown.load(Ordering::Acquire);
     // The loaded model and the id it was loaded for.
-    let mut engine: Option<(String, LocalCleanupEngine)> = None;
+    let mut engine: Option<(ModelId, LocalCleanupEngine)> = None;
     while let Ok(command) = commands.recv() {
         match command {
             Command::Load(model_id) => {
@@ -293,18 +279,15 @@ fn run(commands: &mpsc::Receiver<Command>, shared: &Shared) {
                     continue;
                 }
                 let result = match load(shared, &mut engine, &job.model) {
-                    Ok(loaded) => loaded.decode(
-                        &job.prompt,
-                        job.max_output_tokens,
-                        job.draft.as_ref(),
-                        |_| {
+                    Ok(loaded) => {
+                        loaded.decode(&job.prompt, job.max_output_tokens, &job.draft, |_| {
                             if stopped() {
                                 ControlFlow::Break(())
                             } else {
                                 ControlFlow::Continue(())
                             }
-                        },
-                    ),
+                        })
+                    }
                     Err(error) => Err(EngineError::Load(error)),
                 };
                 if let Err(EngineError::Decode(
@@ -327,8 +310,6 @@ fn run(commands: &mpsc::Receiver<Command>, shared: &Shared) {
 mod tests {
     use std::time::Duration;
 
-    use whispernow_core::llm::{LlmProvider, LlmProviderConfig, build_local_cleanup_prompt};
-
     use super::*;
 
     fn service(installed: bool) -> LocalCleanupService {
@@ -339,24 +320,22 @@ mod tests {
         )
     }
 
-    fn request(model: &str) -> LlmRequest {
+    async fn complete(service: &LocalCleanupService, model: &str) -> Result<LlmResponse, LlmError> {
         let transcript = "um so the meeting is at three";
-        LlmRequest {
-            config: LlmProviderConfig {
-                provider: LlmProvider::LocalCleanup,
-                model: model.to_owned(),
-                api_key: None,
-                endpoint: None,
-            },
-            prompt: build_local_cleanup_prompt(transcript),
-            decoding: LlmDecoding::local_cleanup(transcript),
-        }
+        service
+            .complete(
+                ModelId::new(model).expect("model ID"),
+                whispernow_core::llm::build_local_cleanup_prompt(transcript),
+                64,
+                DraftText::from_transcript(transcript),
+            )
+            .await
     }
 
     #[tokio::test]
     async fn a_missing_model_or_library_is_an_invalid_request_and_never_a_hang() {
         for installed in [false, true] {
-            let result = service(installed).complete(request("cleanup")).await;
+            let result = complete(&service(installed), "cleanup").await;
             assert!(matches!(result, Err(LlmError::InvalidRequest)));
         }
     }
@@ -373,16 +352,16 @@ mod tests {
             }),
             Arc::new(|| None),
         );
-        service.preload("cleanup");
+        service.preload(ModelId::new("cleanup").expect("model ID"));
         let held = service
             .hold_unloaded(Duration::from_secs(5))
             .expect("an idle model is freed at once");
         let before = loads.load(Ordering::SeqCst);
-        let result = service.complete(request("cleanup")).await;
+        let result = complete(&service, "cleanup").await;
         assert!(matches!(result, Err(LlmError::InvalidRequest)));
         assert_eq!(loads.load(Ordering::SeqCst), before);
         drop(held);
-        let _ = service.complete(request("cleanup")).await;
+        let _ = complete(&service, "cleanup").await;
         assert_eq!(loads.load(Ordering::SeqCst), before + 1);
     }
 
@@ -392,18 +371,18 @@ mod tests {
         let recorded = Arc::clone(&looked_up);
         let service = LocalCleanupService::new(
             PathBuf::from("/nonexistent/llama"),
-            Arc::new(move |model_id: &str| {
+            Arc::new(move |model_id: &ModelId| {
                 recorded
                     .lock()
                     .expect("not poisoned")
-                    .push(model_id.to_owned());
+                    .push(model_id.as_str().to_owned());
                 None
             }),
             Arc::new(|| None),
         );
-        service.preload("small");
+        service.preload(ModelId::new("small").expect("model ID"));
         for model in ["large", "small"] {
-            let result = service.complete(request(model)).await;
+            let result = complete(&service, model).await;
             assert!(matches!(result, Err(LlmError::InvalidRequest)));
         }
         assert_eq!(

@@ -30,20 +30,20 @@ const SEARCH_PAUSE_MS: u32 = 300;
 
 #[component]
 pub(super) fn HistoryScreen() -> Element {
-    let actions = use_context::<UiContext>();
-    let navigator = use_context::<UiContext>().navigator;
-    let mut management = use_context::<UiContext>().management;
+    let context = use_context::<UiContext>();
+    let navigator = context.navigator;
+    let mut management = context.management;
     let clock = use_clock();
     // The search waiting for typing to pause; a key press restarts it.
     let mut search = use_signal(|| None::<Task>);
     let copied = management.read().history_copied;
-    let blocked = |operation| actions.blocked(operation);
+    let blocked = |operation| context.blocked(operation);
     let settings = management.read().shown_settings().cloned();
     let change_blocked = blocked(UiOperation::ChangeHistory);
     let unavailable = management.read().history_unavailable.clone();
     let loading = !management.read().history_loaded();
     let entries = management.read().history.clone();
-    let has_more = management.read().history_next_cursor.is_some();
+    let has_more = management.read().history_has_more;
     let filter = management.read().history_filter.clone();
     let search_text = management.read().history_search.clone();
     let search_failed = management.read().history_search_failed.clone();
@@ -64,7 +64,7 @@ pub(super) fn HistoryScreen() -> Element {
             div { class: "history-header-actions",
                 Button { id: OPEN_FOLDER_ID, size: ButtonSize::Sm,
                     disabled: folder_pending,
-                    onclick: move |_| actions.open_recordings_folder(),
+                    onclick: move |_| context.open_recordings_folder(),
                     Icon { name: IconName::Folder }
                     "Open recordings folder"
                 }
@@ -72,7 +72,7 @@ pub(super) fn HistoryScreen() -> Element {
                     ConfirmButton { id: CLEAR_ID, size: ButtonSize::Sm,
                         label: "Clear history", confirm_label: "Delete every transcript",
                         disabled: change_blocked.is_some(),
-                        onconfirm: move |()| actions.clear_history(),
+                        onconfirm: move |()| context.clear_history(),
                     }
                 }
             }
@@ -83,7 +83,7 @@ pub(super) fn HistoryScreen() -> Element {
         if let Some(summary) = &unavailable {
             div { class: "history-unavailable", role: "alert",
                 p { "{summary}" }
-                Button { id: RELOAD_ID, onclick: move |_| actions.refresh_history(),
+                Button { id: RELOAD_ID, onclick: move |_| context.refresh_history(),
                     "Try again"
                 }
             }
@@ -103,14 +103,14 @@ pub(super) fn HistoryScreen() -> Element {
                         search.set(Some(spawn(async move {
                             crate::client::delay(SEARCH_PAUSE_MS).await;
                             search.set(None);
-                            actions.search_history();
+                            context.search_history();
                         })));
                     },
                 }
                 button { r#type: "button", id: FAILED_FILTER_ID,
                     class: if filter.failed_only { "filter-chip selected" } else { "filter-chip" },
                     aria_pressed: if filter.failed_only { "true" } else { "false" },
-                    onclick: move |_| actions.show_failed_history_only(!filter.failed_only),
+                    onclick: move |_| context.show_failed_history_only(!filter.failed_only),
                     Icon { name: IconName::AlertCircle }
                     "Failed only"
                 }
@@ -123,7 +123,7 @@ pub(super) fn HistoryScreen() -> Element {
                 EmptyState { icon: IconName::History, title: "No matching transcripts",
                     p { "Try other words, or show every transcript." }
                     Button { id: CLEAR_FILTER_ID, size: ButtonSize::Sm,
-                        onclick: move |_| actions.clear_history_filter(),
+                        onclick: move |_| context.clear_history_filter(),
                         "Show all transcripts"
                     }
                 }
@@ -158,7 +158,7 @@ pub(super) fn HistoryScreen() -> Element {
             }
             if has_more && !loading {
                 div { class: "history-more",
-                    Button { id: LOAD_MORE_ID, onclick: move |_| actions.load_older_history(),
+                    Button { id: LOAD_MORE_ID, onclick: move |_| context.load_older_history(),
                         "Load more"
                     }
                 }

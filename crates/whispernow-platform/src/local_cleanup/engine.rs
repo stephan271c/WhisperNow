@@ -57,25 +57,23 @@ impl LocalCleanupEngine {
         self.model.backend()
     }
 
-    /// Decodes the reply to `prompt`: speculatively when given a draft.
+    /// Decodes the reply to `prompt` speculatively from the draft.
     /// `between_passes` sees the reply so far and stops the decode by breaking.
     pub(crate) fn decode(
         &mut self,
         prompt: &LlmPrompt,
-        max_output_tokens: u64,
-        draft: Option<&DraftText>,
+        max_output_tokens: usize,
+        draft: &DraftText,
         between_passes: impl FnMut(&[u8]) -> ControlFlow<()>,
     ) -> Result<LocalDecodeOutput, EngineError> {
         let rendered = local::render_prompt(&self.model.bos_text(), prompt);
-        let max_tokens = usize::try_from(max_output_tokens)
-            .map_err(|_| EngineError::Decode(LocalDecodeError::PromptTooLong))?;
         let prompt_tokens = self
             .model
             .tokenize(rendered.as_bytes(), true)
             .map_err(EngineError::Decode)?
             .len();
         let context_size = prompt_tokens
-            .saturating_add(max_tokens)
+            .saturating_add(max_output_tokens)
             .saturating_add(2)
             .max(MIN_CONTEXT)
             .next_multiple_of(CONTEXT_STEP);
@@ -86,8 +84,8 @@ impl LocalCleanupEngine {
             context,
             &LocalDecodeRequest {
                 prompt: &rendered,
-                max_tokens,
-                draft: draft.map(DraftText::as_str),
+                max_tokens: max_output_tokens,
+                draft: Some(draft.as_str()),
             },
             between_passes,
         )

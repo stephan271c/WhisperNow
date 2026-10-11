@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 
 use whispernow_domain::{
-    ArchiveFormat, CLEANUP_MODEL_FILE, CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, ModelFamily,
-    ModelId, ModelRegistry,
+    ArchiveFormat, CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, ModelFamily, ModelId, ModelRegistry,
 };
 
 const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
@@ -92,7 +91,7 @@ fn each_model_has_the_artifacts_its_family_needs() {
                     assert!(has(suffix), "{id} {suffix}");
                 }
             }
-            ModelFamily::Cleanup => assert_eq!(artifacts, [CLEANUP_MODEL_FILE], "{id}"),
+            ModelFamily::Cleanup => assert_eq!(artifacts, ["model-Q8_0.gguf"], "{id}"),
             ModelFamily::CudaPack => {}
         }
     }

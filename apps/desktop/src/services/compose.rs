@@ -8,8 +8,8 @@ use whispernow_core::{
     audio::AudioInput,
     llm::{LlmFuture, LlmProvider, LlmRequest, LlmService},
 };
+use whispernow_domain::ModelLayout;
 use whispernow_domain::ipc::ErrorCategory;
-use whispernow_domain::{ModelId, ModelLayout};
 use whispernow_platform::{
     AppPaths, CleanupModelLocator, CpalAudioInput, CudaPackLocator, LocalCleanupService,
     ModelStore, SettingsStore, SherpaAsrEngine, silero_vad_model_path, silero_voice_activity,
@@ -44,7 +44,7 @@ impl NativeServices {
         let output = Arc::new(OutputCoordinator::native(wayland_token_path));
         let audio: Arc<dyn AudioInput> = Arc::new(CpalAudioInput::new());
         let persistence = Arc::new(SettingsStore::new(paths.clone()));
-        let persisted = persistence.load()?;
+        let (persisted, settings_notice) = persistence.load()?;
         let history = Arc::new(HistoryStore::open(paths.clone()));
         let startup_history_warning = history.take_warning();
         let llm_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -70,7 +70,7 @@ impl NativeServices {
             Arc::clone(&persistence),
             Arc::clone(&state),
         ));
-        settings.report_loaded(&persisted);
+        settings.report_loaded(&persisted, settings_notice);
         let store = Arc::new(ModelStore::new(paths.clone()));
         store.finish_cuda_pack_removal();
         let local_cleanup = Arc::new(LocalCleanupService::new(
@@ -139,8 +139,7 @@ fn llama_dir(resource_dir: &Path) -> PathBuf {
 /// An installed cleanup model's GGUF, looked up by id when it is needed.
 fn installed_cleanup_model(store: Arc<ModelStore>) -> CleanupModelLocator {
     Arc::new(move |model_id| {
-        let id = ModelId::new(model_id).ok()?;
-        let model = store.resolve(&id).ok().flatten()?;
+        let model = store.resolve(model_id).ok().flatten()?;
         match &model.definition.layout {
             ModelLayout::Gguf { model: artifact } => Some(model.root.join(artifact)),
             _ => None,
@@ -160,10 +159,16 @@ struct ProviderRouter {
 
 impl LlmService for ProviderRouter {
     fn complete(&self, request: LlmRequest) -> LlmFuture<'_> {
-        if request.config.provider == LlmProvider::LocalCleanup {
-            self.local.complete(request)
-        } else {
-            Box::pin(whispernow_platform::complete(request))
+        match request {
+            LlmRequest::Local {
+                model,
+                prompt,
+                max_output_tokens,
+                draft,
+            } => self.local.complete(model, prompt, max_output_tokens, draft),
+            LlmRequest::Remote { config, prompt } => {
+                Box::pin(whispernow_platform::complete(config, prompt))
+            }
         }
     }
 }

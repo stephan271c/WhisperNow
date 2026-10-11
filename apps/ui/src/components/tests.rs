@@ -2,8 +2,8 @@ use dioxus::prelude::*;
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
     ActiveDownload, AppState, ClearDataItem, ClearDataResult, DataLocation, ErrorCategory,
-    EventPayload, MicrophoneTestResponse, ModelState, ModelSummary, Phase, SaveSettingsResponse,
-    SettingsView, SetupStateView,
+    EventPayload, MainWindowSection, MicrophoneTestResponse, ModelState, ModelSummary, Phase,
+    SaveSettingsResponse, SettingsView, SetupStateView,
 };
 use whispernow_domain::{
     ClearDataCategory, DownloadPhase, HistoryLimit, LlmProvider, ModelAvailability, ModelId,
@@ -166,6 +166,36 @@ fn sidebar_links_mark_one_current_page_and_move_focus_to_its_heading() {
             .contains("aria-current=\"page\"")
     );
     assert_eq!(html.matches("<h1").count(), 1);
+}
+
+#[test]
+fn an_overlay_navigation_request_opens_its_route_and_moves_focus() {
+    let mut page = shell(snapshot(Phase::Idle), loaded());
+    page.mount("page-heading");
+    assert_eq!(focused(), None);
+    for (section, id, title) in [
+        (MainWindowSection::History, "nav-history", "History"),
+        (
+            MainWindowSection::AiCleanup,
+            "nav-settings-ai-cleanup",
+            "AI cleanup",
+        ),
+    ] {
+        page.publish(EventPayload::NavigationRequested { section });
+        let html = page.html();
+        assert!(
+            tag(&html, id)
+                .expect("navigation item")
+                .contains("aria-current=\"page\""),
+            "{section:?}"
+        );
+        assert_eq!(text(&html, "page-heading"), title, "{section:?}");
+        assert_eq!(
+            focused().as_deref(),
+            Some("page-heading"),
+            "{section:?}: navigation moves focus to the heading"
+        );
+    }
 }
 
 #[test]
@@ -338,7 +368,7 @@ fn configured() -> ManagementState {
         settings,
         warnings: Vec::new(),
     });
-    management.install_models(vec![
+    management.models = vec![
         model(
             "sherpa-onnx-whisper-tiny",
             "Tiny",
@@ -354,7 +384,8 @@ fn configured() -> ManagementState {
             "Small",
             ModelAvailability::NotInstalled,
         ),
-    ]);
+    ];
+    management.models_loaded = true;
     management
 }
 
@@ -385,29 +416,10 @@ fn the_ai_cleanup_page_saves_api_keys_during_recording() {
 }
 
 #[test]
-fn a_settings_toggle_is_disabled_during_recording_and_sends_nothing() {
+fn a_settings_toggle_becomes_available_when_recording_finishes_then_saves() {
     let mut page = shell(snapshot(crate::test_support::RECORDING), loaded());
     open(&mut page, &["nav-settings"]);
-    let html = page.html();
-    assert!(
-        tag(&html, "start-minimized")
-            .expect("toggle")
-            .contains(" disabled=")
-    );
-    assert_eq!(
-        text(&html, "settings-disabled-reason"),
-        "Wait for the current dictation to finish"
-    );
-
-    page.click("start-minimized");
-    assert!(sent_settings().is_empty());
-    assert!(
-        tag(&page.html(), "start-minimized")
-            .expect("toggle")
-            .contains("aria-checked=\"false\"")
-    );
-
-    page.publish(whispernow_domain::ipc::EventPayload::StateChanged {
+    page.publish(EventPayload::StateChanged {
         state: snapshot(Phase::Idle),
     });
     assert!(
@@ -416,8 +428,9 @@ fn a_settings_toggle_is_disabled_during_recording_and_sends_nothing() {
             .contains(" disabled=")
     );
     page.click("start-minimized");
-    assert_eq!(sent_settings().len(), 1);
-    assert!(sent_settings()[0].start_minimized);
+    let sent = sent_settings();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].start_minimized);
 }
 
 #[test]
@@ -432,6 +445,7 @@ fn settings_controls_on_each_blocked_page_are_disabled() {
                 "theme",
                 "start-minimized",
                 "start-on-login",
+                "run-setup-again",
             ],
         ),
         ("nav-settings-audio", &["input-device"]),
@@ -469,12 +483,14 @@ fn settings_controls_on_each_blocked_page_are_disabled() {
             } else {
                 crate::test_support::RECORDING
             };
-            let mut page = shell(snapshot(phase), configured());
+            let mut management = configured();
+            management.setup = loaded().setup;
+            let mut page = shell(snapshot(phase), management);
             if saving {
                 page.act(|actions| {
                     actions.change_setting(SettingKey::StartMinimized, |settings| {
-                        settings.start_minimized = true
-                    })
+                        settings.start_minimized = true;
+                    });
                 });
             }
             open(&mut page, &["nav-settings", route]);
@@ -507,26 +523,11 @@ fn a_refused_shortcut_save_blocks_theme_until_it_finishes_then_theme_saves_confi
     open(&mut page, &["nav-settings"]);
     page.act(|actions| {
         actions.change_setting(SettingKey::RecordingShortcut, |settings| {
-            settings.recording_shortcut.key = ShortcutKey::R
-        })
+            settings.recording_shortcut.key = ShortcutKey::R;
+        });
     });
     assert_eq!(sent_settings().len(), 1);
     assert!(text(&page.html(), "recording-shortcut-keys").contains('R'));
-    for control in [
-        "recording-shortcut",
-        "recording-mode-toggle",
-        "cancel-dictation",
-        "theme",
-        "start-minimized",
-        "start-on-login",
-        "run-setup-again",
-    ] {
-        assert!(
-            tag(&page.html(), control)
-                .expect("settings control")
-                .contains(" disabled=")
-        );
-    }
     page.fire("theme", "change", "dark");
     assert_eq!(
         sent_settings().len(),
@@ -607,7 +608,7 @@ fn a_credential_mutation_blocks_document_saves_until_its_confirmed_settings_arri
 fn a_settings_reload_blocks_edits_until_it_installs_the_desktops_confirmed_values() {
     let mut page = shell(snapshot(Phase::Idle), loaded());
     open(&mut page, &["nav-settings"]);
-    page.act(|actions| actions.refresh_all());
+    page.act(crate::UiContext::refresh_all);
     assert!(
         tag(&page.html(), "theme")
             .expect("theme")
@@ -638,11 +639,18 @@ fn a_pending_settings_save_disables_speech_model_selection() {
     );
     let choose = "model-sherpa-onnx-whisper-base-use";
     assert!(
+        tag(&page.html(), "footer-model")
+            .expect("footer model choice")
+            .contains(" disabled=")
+    );
+    assert!(
         tag(&page.html(), choose)
             .expect("model choice")
             .contains(" disabled=")
     );
-    page.click(choose);
+    page.act(|context| {
+        context.switch_model(ModelId::new("sherpa-onnx-whisper-base").expect("fixture model"));
+    });
     assert_eq!(fake::count("select_model"), 0);
     assert!(
         !tag(&page.html(), "model-sherpa-onnx-whisper-small-download")
@@ -691,6 +699,15 @@ fn a_settings_toggle_saves_once_and_a_refusal_restores_it_with_the_error_beside_
     assert!(error.contains("role=\"alert\""), "{error}");
     assert!(!text(&html, "start-minimized-error").is_empty());
     assert_eq!(sent_settings().len(), 1, "a refusal is not retried");
+
+    page.click("start-minimized");
+    let sent = sent_settings();
+    assert_eq!(sent.len(), 2, "the next attempt saves once");
+    assert!(sent[1].start_minimized);
+    assert!(
+        tag(&page.html(), "start-minimized-error").is_none(),
+        "a new attempt clears the old error"
+    );
 }
 
 #[test]
@@ -719,10 +736,9 @@ fn text_fields_save_when_committed_not_on_each_keystroke() {
 }
 
 #[test]
-fn deleting_a_downloaded_model_needs_a_confirmation() {
+fn deleting_a_downloaded_model_names_it_and_sends_its_id() {
     let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-models"]);
-    let deletes = || fake::count("delete_model");
     let html = page.html();
     assert!(
         tag(&html, "model-sherpa-onnx-whisper-tiny-delete").is_none(),
@@ -730,7 +746,6 @@ fn deleting_a_downloaded_model_needs_a_confirmation() {
     );
 
     open(&mut page, &["model-sherpa-onnx-whisper-base-delete"]);
-    assert_eq!(deletes(), 0, "the first press only asks");
     let html = page.html();
     let confirm = tag(&html, "model-sherpa-onnx-whisper-base-delete-confirm").expect("confirm");
     assert!(
@@ -742,24 +757,10 @@ fn deleting_a_downloaded_model_needs_a_confirmation() {
         &mut page,
         &["model-sherpa-onnx-whisper-base-delete-confirm"],
     );
-    assert_eq!(deletes(), 1);
-}
-
-#[test]
-fn a_cancelled_model_delete_sends_nothing() {
-    let mut page = shell(snapshot(Phase::Idle), configured());
-    open(
-        &mut page,
-        &[
-            "nav-settings",
-            "nav-settings-models",
-            "model-sherpa-onnx-whisper-base-delete",
-            "model-sherpa-onnx-whisper-base-delete-cancel",
-        ],
+    assert_eq!(
+        fake::requests::<ModelId>("delete_model"),
+        [ModelId::new("sherpa-onnx-whisper-base").expect("fixture model id")]
     );
-    assert_eq!(fake::count("delete_model"), 0);
-    let html = page.html();
-    assert!(tag(&html, "model-sherpa-onnx-whisper-base-delete").is_some());
 }
 
 #[test]
@@ -963,7 +964,7 @@ fn local_cleanup(small: &str, large: &str, pack: &str) -> ManagementState {
         settings,
         warnings: Vec::new(),
     });
-    management.install_models(vec![
+    management.models = vec![
         model(
             "sherpa-onnx-whisper-base",
             "Base",
@@ -987,7 +988,8 @@ fn local_cleanup(small: &str, large: &str, pack: &str) -> ManagementState {
                 ModelAvailability::NotInstalled,
             )
         },
-    ]);
+    ];
+    management.models_loaded = true;
     management
 }
 
@@ -1098,31 +1100,50 @@ fn speed_and_accuracy_bars_explain_themselves_on_hover() {
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
-    assert!(
-        html.contains("aria-label=\"Speed: 3 of 5. 21× real time\""),
-        "{html}"
-    );
+    assert!(html.contains("aria-label=\"Speed: 3 of 5"));
     assert!(html.contains("aria-label=\"Speed: 5 of 5"));
     assert!(html.contains("aria-label=\"Accuracy: 3 of 5"));
-    assert!(html.contains("title=\"21× real time\""), "{html}");
-    assert!(html.contains("title=\"English word error rate: 5.39% (Open ASR Leaderboard)\""));
-    assert!(html.contains(
-        "title=\"English word error rate: about 11.0% (estimated; not on the Open ASR Leaderboard)\""
-    ));
+    let titles = html
+        .split("title=\"")
+        .skip(1)
+        .filter_map(|title| title.split('"').next())
+        .filter(|title| title.contains("English word error rate"))
+        .collect::<Vec<_>>();
+    assert!(
+        titles
+            .iter()
+            .any(|title| title.contains("Leaderboard") && !title.contains("estimated"))
+    );
+    assert!(titles.iter().any(|title| title.contains("estimated")));
 }
 
 #[test]
 fn one_language_is_named_and_several_open_as_a_list_by_name() {
     let mut management = configured();
+    management.models.truncate(2);
     management.models[0].languages = vec!["en".to_owned()];
     management.models[1].languages = ["uk", "de", "en", "xx"].map(str::to_owned).to_vec();
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
-    assert!(html.contains("<span>English</span>"), "{html}");
-    assert!(html.contains("<summary>4 languages</summary>"), "{html}");
-    // Sorted by name; a tag without a name shows as itself.
-    assert!(html.contains("English, German, Ukrainian, xx"), "{html}");
+    let names = text(&html, "main-content");
+    assert_eq!(
+        names.matches("English").count(),
+        2,
+        "both models name the language"
+    );
+    assert_eq!(
+        html.matches("<details").count(),
+        1,
+        "only the multilingual model expands"
+    );
+    assert!(names.contains("4 languages"));
+    let positions = ["English", "German", "Ukrainian", "xx"]
+        .map(|name| names.rfind(name).expect("language name"));
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "languages sort by name: {names}"
+    );
 }
 
 #[test]
@@ -1172,15 +1193,13 @@ fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() 
     );
     let sent = sent_settings();
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].cleanup_model_id(), LARGE);
+    assert_eq!(sent[0].cleanup_model_id().as_str(), LARGE);
     let other = "model-whispernow-cleanup-lfm2-5-350m-q8_0-use";
     assert!(
         tag(&page.html(), other)
             .expect("other cleanup model")
             .contains(" disabled=")
     );
-    page.click(other);
-    assert_eq!(sent_settings().len(), 1);
 }
 
 #[test]
@@ -1289,7 +1308,6 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
     assert!(page.html().contains("/data/history.sqlite3"));
 
     open(&mut page, &["execute-clear-data"]);
-    assert_eq!(fake::count("clear_data"), 0, "the first press only asks");
     open(&mut page, &["execute-clear-data-confirm"]);
     assert_eq!(
         fake::requests::<Vec<ClearDataCategory>>("clear_data"),

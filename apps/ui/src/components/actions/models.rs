@@ -40,9 +40,6 @@ impl UiContext {
 
     /// Makes `model_id` the model in use, or loads it again after it failed to load.
     pub(crate) fn switch_model(self, model_id: ModelId) {
-        if self.management.peek().settings_pending() {
-            return;
-        }
         let operation = UiOperation::ModelSwitch;
         self.run(
             operation,
@@ -70,7 +67,11 @@ impl UiContext {
     pub(super) fn reload_models(mut self) {
         spawn_forever(async move {
             match client::call("list_models").await {
-                Ok(models) => self.management.write().install_models(models),
+                Ok(models) => {
+                    let mut management = self.management.write();
+                    management.models = models;
+                    management.models_loaded = true;
+                }
                 Err(error) => self.load_failed("Speech models", &error),
             }
         });

@@ -34,9 +34,10 @@ use home::HomePage;
 use models::ModelsPage;
 pub use overlay::RecordingBar;
 use setup::SetupScreen;
-use shared::{MicrophonePermissionNotice, PasteHelperNotice, ShortcutCapture};
+use shared::{PasteHelperNotice, ShortcutCapture};
 use titlebar::{TitleBar, use_window_chrome};
-use ui::{BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName, ToastRegion};
+use ui::focus::{focus, take_focus};
+use ui::{BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
 use updates::AboutPage;
 use vocabulary::VocabularyPage;
 
@@ -150,7 +151,7 @@ fn nav_class(entry: &NavEntry, current: Route) -> &'static str {
 #[component]
 pub fn AppShell() -> Element {
     let context = use_context::<UiContext>();
-    let navigator = use_context::<UiContext>().navigator;
+    let navigator = context.navigator;
     let mut heading = use_signal(|| None::<Rc<MountedData>>);
     use_effect(move || {
         if (navigator.focus_requests)() == 0 {
@@ -158,11 +159,7 @@ pub fn AppShell() -> Element {
         }
         #[cfg(target_arch = "wasm32")]
         crate::client::reset_settings_scroll();
-        if let Some(heading) = heading.peek().clone() {
-            spawn(async move {
-                let _ = heading.set_focus(true).await;
-            });
-        }
+        take_focus(heading);
     });
     let chrome = use_window_chrome()();
     let route = navigator.route();
@@ -201,7 +198,7 @@ pub fn AppShell() -> Element {
                         "{route.title()}"
                     }
                 }
-                ToastRegion {
+                section { class: "toast-region", aria_label: "Notifications",
                     if let Some(notice) = toast {
                         NoticeView { notice, inline: false }
                     }
@@ -218,7 +215,8 @@ pub fn AppShell() -> Element {
 
 #[component]
 fn Sidebar(route: Route) -> Element {
-    let navigator = use_context::<UiContext>().navigator;
+    let context = use_context::<UiContext>();
+    let navigator = context.navigator;
     let entries = nav_entries(route);
     let count = entries.len();
     // Mounted links by id; kept outside the reactive graph because mounting is not a change.
@@ -237,9 +235,7 @@ fn Sidebar(route: Route) -> Element {
                 event.prevent_default();
                 let link = ids.get(target).and_then(|id| links.borrow().get(id).cloned());
                 if let Some(link) = link {
-                    spawn(async move {
-                        let _ = link.set_focus(true).await;
-                    });
+                    focus(link);
                 }
                 }
             },
@@ -272,8 +268,7 @@ fn Sidebar(route: Route) -> Element {
 #[component]
 fn SidebarFooter() -> Element {
     let context = use_context::<UiContext>();
-    let actions = context;
-    let navigator = use_context::<UiContext>().navigator;
+    let navigator = context.navigator;
     let state = context.state.read();
     let management = context.management.read();
     let selected = state.snapshot.as_ref().map(|snapshot| {
@@ -287,10 +282,6 @@ fn SidebarFooter() -> Element {
         .filter(|model| model.availability != ModelAvailability::NotInstalled)
         .map(|model| (model.id.clone(), model.display_name.clone()))
         .collect::<Vec<_>>();
-    let choices = installed
-        .iter()
-        .map(|(id, _)| id.clone())
-        .collect::<Vec<_>>();
     let (model_name, model_state) = selected.as_ref().map_or_else(
         || ("Connecting…".to_owned(), None),
         |(id, model_state)| (management.model_display_name(id), Some(*model_state)),
@@ -301,10 +292,10 @@ fn SidebarFooter() -> Element {
         _ => "status-dot waiting",
     };
     let state_label = model_state.map_or("Connecting", labels::model_state);
-    let switch_blocked = actions
+    let switch_blocked = context
         .blocked(UiOperation::ModelSwitch)
-        .or(actions.phase_blocked());
-    let update = update_summary(state.update_snapshot.as_ref().map(|update| update.phase));
+        .or(context.settings_blocked());
+    let update = update_summary(state.update_snapshot.as_ref().map(|update| &update.phase));
     let selected_id = selected.map(|(id, _)| id).unwrap_or_default();
     rsx! {
         footer { class: "sidebar-footer",
@@ -323,8 +314,11 @@ fn SidebarFooter() -> Element {
                     aria_describedby: switch_blocked.map(|_| "footer-model-disabled-reason"),
                     onchange: move |event| {
                         let value = event.value();
-                        if let Some(id) = choices.iter().find(|id| id.as_str() == value) {
-                            actions.switch_model(id.clone());
+                        let id = context.management.read().speech_models()
+                            .find(|model| model.id.as_str() == value && model.availability != ModelAvailability::NotInstalled)
+                            .map(|model| model.id.clone());
+                        if let Some(id) = id {
+                            context.switch_model(id);
                         }
                     },
                     for (id, name) in installed {
@@ -348,12 +342,12 @@ fn SidebarFooter() -> Element {
 }
 
 /// A short footer line for update phases that need the user.
-const fn update_summary(phase: Option<UpdatePhase>) -> Option<&'static str> {
+const fn update_summary(phase: Option<&UpdatePhase>) -> Option<&'static str> {
     match phase {
-        Some(UpdatePhase::ReadyToRestart) => Some("Update ready to install"),
-        Some(UpdatePhase::ManualInstallAvailable) => Some("Update available"),
-        Some(UpdatePhase::Downloading) => Some("Downloading update"),
-        Some(UpdatePhase::Error) => Some("Update needs attention"),
+        Some(UpdatePhase::ReadyToRestart { .. }) => Some("Update ready to install"),
+        Some(UpdatePhase::ManualInstallAvailable { .. }) => Some("Update available"),
+        Some(UpdatePhase::Downloading { .. }) => Some("Downloading update"),
+        Some(UpdatePhase::Error { .. }) => Some("Update needs attention"),
         _ => None,
     }
 }
@@ -393,7 +387,7 @@ fn SettingsPage(page: SettingsRoute) -> Element {
 #[component]
 pub(super) fn NoticeRegion(scope: NoticeScope) -> Element {
     let context = use_context::<UiContext>();
-    let navigator = use_context::<UiContext>().navigator;
+    let navigator = context.navigator;
     let notice = context
         .management
         .read()
@@ -411,7 +405,8 @@ pub(super) fn NoticeRegion(scope: NoticeScope) -> Element {
 
 #[component]
 fn NoticeView(notice: Notice, inline: bool) -> Element {
-    let mut management = use_context::<UiContext>().management;
+    let context = use_context::<UiContext>();
+    let mut management = context.management;
     let id = notice.id;
     let auto_dismisses = notice.auto_dismisses();
     use_effect(use_reactive!(|id, auto_dismisses| {

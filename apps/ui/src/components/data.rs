@@ -8,13 +8,12 @@ use crate::{NoticeScope, UiContext, UiOperation};
 #[component]
 pub(super) fn ClearDataCard() -> Element {
     let context = use_context::<UiContext>();
-    let actions = context;
     let locations = context.management.read().data_locations.clone();
     let result = context.management.read().clear_result.clone();
-    let review_blocked = actions.blocked(UiOperation::ListDataLocations);
-    let clear_blocked = actions
+    let review_blocked = context.blocked(UiOperation::ListDataLocations);
+    let clear_blocked = context
         .blocked(UiOperation::ClearData)
-        .or(actions.settings_blocked());
+        .or(context.settings_blocked());
     rsx! {
         Section { id: "clear-data", title: "Application data",
             description: "Settings, history, downloaded models and logs.",
@@ -23,7 +22,7 @@ pub(super) fn ClearDataCard() -> Element {
                     id: "preview-clear-data",
                     disabled: review_blocked.is_some(),
                     aria_describedby: review_blocked.map(|_| "preview-disabled-reason"),
-                    onclick: move |_| actions.review_data(),
+                    onclick: move |_| context.review_data(),
                     "Review data to remove"
                 }
                 DisabledReason { id: "preview-disabled-reason", reason: review_blocked }
@@ -47,7 +46,7 @@ pub(super) fn ClearDataCard() -> Element {
                                 label: "Remove these items",
                                 confirm_label: "Remove permanently",
                                 disabled: clear_blocked.is_some(),
-                                onconfirm: move |()| actions.clear_data(),
+                                onconfirm: move |()| context.clear_data(),
                             }
                             DisabledReason { id: "execute-disabled-reason", reason: clear_blocked }
                         }

@@ -1,12 +1,9 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use whispernow_domain::AppError;
 
-use whispernow_core::{
-    audio::{AudioDeviceChoice, AudioDeviceId, AudioInput},
-    llm::LlmProviderConfig,
-};
+use whispernow_core::audio::{AudioDeviceChoice, AudioDeviceId, AudioInput};
 use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest, SettingsView, SetupStateView};
-use whispernow_domain::{LlmProvider, SettingsError};
+use whispernow_domain::{CleanupTarget, LlmProvider, SettingsError};
 use whispernow_domain::{ModelId, Settings, SetupCheckpoint, SetupStep, WindowGeometry};
 use whispernow_platform::{ModelStore, SettingsNotice, SettingsStore};
 
@@ -25,9 +22,9 @@ pub(super) struct SettingsTransaction<'a> {
 impl SettingsTransaction<'_> {
     /// A file that could not be read is reported once here.
     pub(super) fn load(&self) -> Result<Settings, AppError> {
-        let loaded = self.coordinator.persistence.load();
-        self.coordinator.report_notice();
-        loaded
+        let (settings, notice) = self.coordinator.persistence.load()?;
+        self.coordinator.report_notice(notice);
+        Ok(settings)
     }
 
     pub(super) fn save(&self, settings: &Settings) -> Result<(), AppError> {
@@ -74,8 +71,8 @@ impl SettingsCoordinator {
     }
 
     /// Publishes, once, what happened to the settings file as a state warning.
-    pub(super) fn report_notice(&self) {
-        let (code, summary) = match self.persistence.take_notice() {
+    pub(super) fn report_notice(&self, notice: Option<SettingsNotice>) {
+        let (code, summary) = match notice {
             None => return,
             Some(SettingsNotice::Unreadable { path }) => (
                 "settings_unreadable",
@@ -98,8 +95,8 @@ impl SettingsCoordinator {
     /// Publishes what happened to the settings file as it loaded, and warns when the saved
     /// settings break a rule, such as after a hand edit. They stay in effect, and an edit that
     /// leaves that rule alone still saves.
-    pub(super) fn report_loaded(&self, saved: &Settings) {
-        self.report_notice();
+    pub(super) fn report_loaded(&self, saved: &Settings, notice: Option<SettingsNotice>) {
+        self.report_notice(notice);
         if let Err(error) = saved.validate() {
             self.warn(
                 "settings_break_a_rule",
@@ -116,9 +113,10 @@ impl SettingsCoordinator {
     /// Provider configurations in the snapshot carry no API key.
     pub(super) fn recording_settings(&self) -> Result<RecordingSettings, AppError> {
         let settings = self.transaction().load()?;
+        let input_device = device_choice(settings.input_device.as_deref())?;
         let cleanup = cleanup_plan(&settings);
-        let (model_id, input_device) = (settings.model_id.clone(), settings.input_device.clone());
-        recording(settings, model_id, input_device, cleanup)
+        let model_id = settings.model_id.clone();
+        Ok(recording(settings, model_id, input_device, cleanup))
     }
 
     /// The snapshot a first-run test dictation records with: the model and microphone setup
@@ -126,17 +124,26 @@ impl SettingsCoordinator {
     /// so the test never reaches a provider.
     pub(super) fn setup_test_settings(&self) -> Result<RecordingSettings, AppError> {
         let settings = self.transaction().load()?;
-        let (model_id, input_device) = if settings.first_run_complete {
-            (settings.model_id.clone(), settings.input_device.clone())
+        let (model_id, selected_device) = if settings.first_run_complete {
+            (settings.model_id.clone(), settings.input_device.as_deref())
+        } else if let Some(checkpoint) = settings.setup.as_ref() {
+            (
+                checkpoint.model_id.clone(),
+                checkpoint.input_device.as_deref(),
+            )
         } else {
-            let checkpoint = settings.setup.clone().unwrap_or_default();
-            (checkpoint.model_id, checkpoint.input_device)
+            (ModelId::default(), None)
         };
-        recording(settings, model_id, input_device, None)
+        let input_device = device_choice(selected_device)?;
+        Ok(recording(settings, model_id, input_device, None))
+    }
+
+    pub(crate) fn load(&self) -> Result<Settings, AppError> {
+        self.transaction().load()
     }
 
     pub(crate) fn get(&self) -> Result<SettingsView, AppError> {
-        Ok(SettingsView::new(&self.transaction().load()?))
+        Ok(SettingsView::new(&self.load()?))
     }
 
     pub(crate) fn save_window_geometry(&self, geometry: WindowGeometry) -> Result<(), AppError> {
@@ -295,11 +302,11 @@ pub(crate) fn settings_error(error: &SettingsError) -> AppError {
 fn recording(
     settings: Settings,
     model_id: ModelId,
-    input_device: Option<String>,
+    input_device: AudioDeviceChoice,
     cleanup: Option<CleanupPlan>,
-) -> Result<RecordingSettings, AppError> {
-    Ok(RecordingSettings {
-        input_device: device_choice(input_device.as_deref())?,
+) -> RecordingSettings {
+    RecordingSettings {
+        input_device,
         dictation: DictationSettings {
             model_id,
             vocabulary: settings.vocabulary_replacements,
@@ -307,7 +314,7 @@ fn recording(
             history_limit: settings.history_limit,
             keep_audio: settings.keep_audio,
         },
-    })
+    }
 }
 
 /// What capture opens for the saved input device: the system default when none is chosen.
@@ -362,29 +369,8 @@ fn cleanup_plan(settings: &Settings) -> Option<CleanupPlan> {
     })
 }
 
-fn provider_config(settings: &Settings) -> Option<LlmProviderConfig> {
-    let provider = settings.llm_provider;
-    if provider == LlmProvider::LocalCleanup {
-        // It runs in process: its model is a cleanup model's id, and an endpoint is ignored.
-        return Some(LlmProviderConfig {
-            provider,
-            model: settings.cleanup_model_id().to_owned(),
-            api_key: None,
-            endpoint: None,
-        });
-    }
-    let provider_settings = settings.provider_settings(provider);
-    let model = provider.request_model(&provider_settings.model);
-    let endpoint = provider_settings.api_base.clone();
-    if model.is_empty() || (provider == LlmProvider::Custom && endpoint.is_none()) {
-        return None;
-    }
-    Some(LlmProviderConfig {
-        provider,
-        model: model.to_owned(),
-        api_key: None,
-        endpoint,
-    })
+fn provider_config(settings: &Settings) -> Option<CleanupTarget> {
+    settings.cleanup_target().ok()
 }
 
 #[cfg(test)]
@@ -464,22 +450,27 @@ mod tests {
 
     #[test]
     fn the_local_cleanup_provider_names_the_chosen_cleanup_model() {
-        use whispernow_domain::{DEFAULT_CLEANUP_MODEL_ID, MINICPM_CLEANUP_MODEL_ID, Settings};
+        use whispernow_domain::{
+            CLEANUP_MODEL_IDS, CleanupTarget, DEFAULT_CLEANUP_MODEL_ID, Settings,
+        };
 
         let mut settings = Settings {
             llm_provider: LlmProvider::LocalCleanup,
             ..Settings::default()
         };
         let model = |settings: &Settings| {
-            super::provider_config(settings)
+            let CleanupTarget::Local { model } = super::provider_config(settings)
                 .expect("the local cleanup provider always has a config")
-                .model
+            else {
+                panic!("local cleanup target");
+            };
+            model.as_str().to_owned()
         };
         assert_eq!(model(&settings), DEFAULT_CLEANUP_MODEL_ID);
         settings
             .provider_settings_mut(LlmProvider::LocalCleanup)
-            .model = MINICPM_CLEANUP_MODEL_ID.to_owned();
-        assert_eq!(model(&settings), MINICPM_CLEANUP_MODEL_ID);
+            .model = CLEANUP_MODEL_IDS[1].to_owned();
+        assert_eq!(model(&settings), CLEANUP_MODEL_IDS[1]);
     }
 
     fn geometry() -> WindowGeometry {
@@ -622,9 +613,8 @@ mod tests {
             } else {
                 fixture.settings.recording_settings()
             };
-            let error = match snapshot {
-                Ok(_) => panic!("invalid saved microphone accepted"),
-                Err(error) => error,
+            let Err(error) = snapshot else {
+                panic!("invalid saved microphone accepted");
             };
             assert_eq!(error.code, "audio_device_invalid");
         }
@@ -780,7 +770,7 @@ mod tests {
 
         let saved = fixture.settings.get().expect("settings load").settings;
         assert_eq!(saved.vocabulary_replacements[0].source, " ");
-        fixture.settings.report_loaded(&saved);
+        fixture.settings.report_loaded(&saved, None);
         assert_eq!(
             fixture.warning_code().as_deref(),
             Some("settings_break_a_rule")

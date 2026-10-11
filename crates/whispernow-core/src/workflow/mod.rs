@@ -9,11 +9,9 @@ mod types;
 
 pub use join::join_segment_texts;
 
-pub use pipeline::{apply_vocabulary_replacements, prepare_segmented, recognize_segment};
+pub use pipeline::{apply_vocabulary_replacements, prepare_segmented};
 pub use presence::has_microphone_audio;
-pub use segmentation::{
-    AlwaysSpeech, AudioSegment, FRAME_SAMPLES, SpeechSegmenter, VoiceActivity, segment_recording,
-};
+pub use segmentation::{AlwaysSpeech, AudioSegment, FRAME_SAMPLES, SpeechSegmenter, VoiceActivity};
 pub use types::{PipelineFailureKind, PreparedTranscription};
 
 #[cfg(test)]

@@ -1,5 +1,3 @@
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-
 const NO_AUDIO_PEAK_THRESHOLD: f32 = 0.000_5;
 
 const NO_AUDIO_RMS_THRESHOLD: f32 = 0.000_1;
@@ -7,17 +5,10 @@ const NO_AUDIO_RMS_THRESHOLD: f32 = 0.000_1;
 /// Whether a normalized recording holds more than flat device noise. No speech detector runs.
 #[must_use]
 pub fn has_microphone_audio(samples: &[f32]) -> bool {
-    if samples.is_empty() {
-        return false;
-    }
-    let mut peak = 0.0_f32;
-    let mut square_sum = 0.0_f64;
-    for sample in samples.iter().copied() {
-        peak = peak.max(sample.abs());
-        square_sum += f64::from(sample) * f64::from(sample);
-    }
-    let rms = (square_sum / samples.len() as f64).sqrt() as f32;
-    peak >= NO_AUDIO_PEAK_THRESHOLD || rms >= NO_AUDIO_RMS_THRESHOLD
+    let mut levels = crate::audio::AudioLevelAccumulator::default();
+    levels.observe(samples);
+    let summary = levels.summary();
+    summary.peak >= NO_AUDIO_PEAK_THRESHOLD || summary.rms >= NO_AUDIO_RMS_THRESHOLD
 }
 
 #[cfg(test)]

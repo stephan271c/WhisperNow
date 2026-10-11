@@ -20,8 +20,6 @@ use crate::services::Dictation;
 pub(crate) const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_hours(6);
 const MAX_RELEASE_NOTES_BYTES: usize = 8 * 1024;
 
-type StateCallback = Arc<dyn Fn(UpdateState) + Send + Sync>;
-
 /// The plugin's version comparator: only a stable release newer than the running one.
 pub(crate) fn is_newer_stable(current: &Version, release: &Version) -> bool {
     release.pre.is_empty() && release > current
@@ -44,20 +42,12 @@ struct ManualUpdate {
 
 impl ManualUpdate {
     fn publish(&self, state: &mut UpdateState) {
-        state.phase = UpdatePhase::ManualInstallAvailable;
-        state.available_version = Some(self.version.clone());
-        state.release_notes.clone_from(&self.notes);
-        state.manual_package = Some(self.package);
-        state.progress = None;
-    }
-
-    /// The GitHub release page, which lists the packages.
-    fn release_page(&self) -> String {
-        format!(
-            "{}/releases/tag/v{}",
-            env!("CARGO_PKG_REPOSITORY"),
-            self.version
-        )
+        state.phase = UpdatePhase::ManualInstallAvailable {
+            version: self.version.clone(),
+            release_notes: self.notes.clone(),
+            package: self.package,
+            error: None,
+        };
     }
 }
 
@@ -87,13 +77,8 @@ impl<U> Updates<U> {
                 } else {
                     UpdatePhase::Disabled
                 },
-                available_version: None,
-                release_notes: None,
-                progress: None,
-                error: None,
                 notification_dismissed: false,
                 restart_deferred: false,
-                manual_package: None,
             },
             ready: None,
             manual: None,
@@ -104,16 +89,16 @@ impl<U> Updates<U> {
     /// Whether a check starts. A check asked while one runs joins it.
     fn begin_check(&mut self, manual: bool) -> bool {
         match self.state.phase {
-            UpdatePhase::Disabled | UpdatePhase::ReadyToRestart | UpdatePhase::Installing => false,
-            UpdatePhase::Checking | UpdatePhase::Downloading => {
+            UpdatePhase::Disabled
+            | UpdatePhase::ReadyToRestart { .. }
+            | UpdatePhase::Installing { .. } => false,
+            UpdatePhase::Checking | UpdatePhase::Downloading { .. } => {
                 self.check_is_manual |= manual;
                 false
             }
             _ => {
                 self.check_is_manual = manual;
                 self.state.phase = UpdatePhase::Checking;
-                self.state.progress = None;
-                self.state.error = None;
                 self.state.restart_deferred = false;
                 if manual {
                     self.state.notification_dismissed = false;
@@ -129,11 +114,6 @@ impl<U> Updates<U> {
         } else {
             UpdatePhase::Idle
         };
-        self.state.available_version = None;
-        self.state.release_notes = None;
-        self.state.manual_package = None;
-        self.state.progress = None;
-        self.state.error = None;
         self.manual = None;
     }
 
@@ -146,34 +126,44 @@ impl<U> Updates<U> {
             self.state.notification_dismissed = false;
         }
         update.publish(&mut self.state);
-        self.state.error = None;
         self.manual = Some(update);
     }
 
     fn downloading(&mut self, version: String, notes: Option<String>) {
-        self.state.phase = UpdatePhase::Downloading;
-        self.state.available_version = Some(version);
-        self.state.release_notes = notes;
-        self.state.progress = Some(UpdateProgress {
-            downloaded_bytes: 0,
-            total_bytes: None,
-        });
+        self.state.phase = UpdatePhase::Downloading {
+            version,
+            release_notes: notes,
+            progress: UpdateProgress {
+                downloaded_bytes: 0,
+                total_bytes: None,
+            },
+        };
     }
 
     fn progress(&mut self, downloaded_bytes: u64, total_bytes: Option<u64>) {
-        if self.state.phase == UpdatePhase::Downloading {
-            self.state.progress = Some(UpdateProgress {
+        if let UpdatePhase::Downloading { progress, .. } = &mut self.state.phase {
+            *progress = UpdateProgress {
                 downloaded_bytes,
                 total_bytes,
-            });
+            };
         }
     }
 
     fn downloaded(&mut self, update: U, bytes: Vec<u8>) {
+        let UpdatePhase::Downloading {
+            version,
+            release_notes,
+            ..
+        } = &self.state.phase
+        else {
+            panic!("an update finishes downloading only from the downloading phase");
+        };
+        self.state.phase = UpdatePhase::ReadyToRestart {
+            version: version.clone(),
+            release_notes: release_notes.clone(),
+            error: None,
+        };
         self.ready = Some(Arc::new(ReadyUpdate { update, bytes }));
-        self.state.phase = UpdatePhase::ReadyToRestart;
-        self.state.progress = None;
-        self.state.error = None;
         self.state.notification_dismissed = false;
     }
 
@@ -181,13 +171,10 @@ impl<U> Updates<U> {
     fn failed(&mut self, code: UpdateError) {
         let manual = self.check_is_manual;
         self.state.phase = if manual {
-            UpdatePhase::Error
+            UpdatePhase::Error { error: code }
         } else {
             UpdatePhase::Idle
         };
-        self.state.manual_package = None;
-        self.state.progress = None;
-        self.state.error = manual.then_some(code);
         if let (false, Some(update)) = (manual, &self.manual) {
             update.publish(&mut self.state);
         }
@@ -199,39 +186,70 @@ impl<U> Updates<U> {
     fn dismiss(&mut self) {
         if matches!(
             self.state.phase,
-            UpdatePhase::ReadyToRestart | UpdatePhase::ManualInstallAvailable
+            UpdatePhase::ReadyToRestart { .. } | UpdatePhase::ManualInstallAvailable { .. }
         ) {
             self.state.notification_dismissed = true;
         }
     }
 
     fn release_page(&self) -> Option<String> {
-        (self.state.phase == UpdatePhase::ManualInstallAvailable)
-            .then(|| self.manual.as_ref().map(ManualUpdate::release_page))
-            .flatten()
+        if let UpdatePhase::ManualInstallAvailable { version, .. } = &self.state.phase {
+            Some(format!(
+                "{}/releases/tag/v{version}",
+                env!("CARGO_PKG_REPOSITORY")
+            ))
+        } else {
+            None
+        }
     }
 
     /// Takes the downloaded update for installing. `dictating` tells the user the restart
     /// waits for the dictation in flight.
     fn take_ready(&mut self, dictating: bool) -> Option<Arc<ReadyUpdate<U>>> {
-        if self.state.phase != UpdatePhase::ReadyToRestart {
+        let UpdatePhase::ReadyToRestart { error, .. } = &mut self.state.phase else {
             return None;
-        }
+        };
         let ready = self.ready.take()?;
         self.state.restart_deferred = dictating;
-        self.state.error = None;
+        *error = None;
         Some(ready)
     }
 
     fn installing(&mut self) {
-        self.state.phase = UpdatePhase::Installing;
+        let UpdatePhase::ReadyToRestart {
+            version,
+            release_notes,
+            ..
+        } = &self.state.phase
+        else {
+            panic!("an update installs only from the ready phase");
+        };
+        self.state.phase = UpdatePhase::Installing {
+            version: version.clone(),
+            release_notes: release_notes.clone(),
+        };
         self.state.restart_deferred = false;
     }
 
     fn restore_ready(&mut self, ready: Arc<ReadyUpdate<U>>, error: Option<UpdateError>) {
+        let (UpdatePhase::ReadyToRestart {
+            version,
+            release_notes,
+            ..
+        }
+        | UpdatePhase::Installing {
+            version,
+            release_notes,
+        }) = &self.state.phase
+        else {
+            panic!("an update is restored only from the ready or installing phase");
+        };
+        self.state.phase = UpdatePhase::ReadyToRestart {
+            version: version.clone(),
+            release_notes: release_notes.clone(),
+            error,
+        };
         self.ready = Some(ready);
-        self.state.phase = UpdatePhase::ReadyToRestart;
-        self.state.error = error;
         self.state.restart_deferred = false;
     }
 
@@ -260,15 +278,13 @@ impl<U> Updates<U> {
 
 pub(crate) struct UpdateController {
     app: AppHandle,
-    on_state: StateCallback,
     updates: Mutex<Updates<Update>>,
 }
 
 impl UpdateController {
-    pub(crate) fn new(app: AppHandle, enabled: bool, on_state: StateCallback) -> Arc<Self> {
+    pub(crate) fn new(app: AppHandle, enabled: bool) -> Arc<Self> {
         Arc::new(Self {
             app,
-            on_state,
             updates: Mutex::new(Updates::new(enabled)),
         })
     }
@@ -288,7 +304,10 @@ impl UpdateController {
             let result = change(&mut updates);
             (result, updates.state.clone())
         };
-        (self.on_state)(snapshot);
+        crate::gateway::emit(
+            &self.app,
+            whispernow_domain::ipc::EventPayload::UpdateChanged { state: snapshot },
+        );
         result
     }
 
@@ -371,7 +390,13 @@ impl UpdateController {
             return self.snapshot();
         };
         let error = open_in_browser(&release_page).err();
-        self.update(|updates| updates.state.error = error);
+        self.update(|updates| {
+            if let UpdatePhase::ManualInstallAvailable { error: current, .. } =
+                &mut updates.state.phase
+            {
+                *current = error;
+            }
+        });
         self.snapshot()
     }
 
@@ -710,10 +735,15 @@ mod tests {
         let mut updates = updates();
         assert!(updates.begin_check(true));
         updates.found_manual(manual("0.2.1"));
-        assert_eq!(updates.state.phase, UpdatePhase::ManualInstallAvailable);
-        assert_eq!(updates.state.available_version.as_deref(), Some("0.2.1"));
-        assert_eq!(updates.state.release_notes.as_deref(), Some("notes"));
-        assert_eq!(updates.state.manual_package, Some(ManualUpdatePackage::Deb));
+        assert_eq!(
+            updates.state.phase,
+            UpdatePhase::ManualInstallAvailable {
+                version: "0.2.1".to_owned(),
+                release_notes: Some("notes".to_owned()),
+                package: ManualUpdatePackage::Deb,
+                error: None,
+            }
+        );
         assert_eq!(
             updates.release_page().as_deref(),
             Some("https://github.com/stephan271c/WhisperNow/releases/tag/v0.2.1")
@@ -737,7 +767,6 @@ mod tests {
         assert!(updates.begin_check(true));
         updates.up_to_date();
         assert_eq!(updates.state.phase, UpdatePhase::UpToDate);
-        assert_eq!(updates.state.manual_package, None);
         assert_eq!(updates.release_page(), None);
     }
 
@@ -747,27 +776,33 @@ mod tests {
         updates.begin_check(false);
         updates.failed(UpdateError::Offline);
         assert_eq!(updates.state.phase, UpdatePhase::Idle);
-        assert_eq!(updates.state.error, None);
 
         updates.begin_check(false);
         updates.found_manual(manual("0.2.1"));
         updates.begin_check(false);
         updates.failed(UpdateError::ServerUnavailable);
-        assert_eq!(updates.state.phase, UpdatePhase::ManualInstallAvailable);
-        assert_eq!(updates.state.available_version.as_deref(), Some("0.2.1"));
+        assert_eq!(
+            updates.state.phase,
+            UpdatePhase::ManualInstallAvailable {
+                version: "0.2.1".to_owned(),
+                release_notes: Some("notes".to_owned()),
+                package: ManualUpdatePackage::Deb,
+                error: None,
+            }
+        );
 
         updates.begin_check(true);
         updates.failed(UpdateError::InvalidSignature);
-        assert_eq!(updates.state.phase, UpdatePhase::Error);
-        assert_eq!(updates.state.manual_package, None);
-        assert_eq!(updates.state.error, Some(UpdateError::InvalidSignature));
-        assert!(
-            !updates
-                .state
-                .error
-                .expect("manual failure")
-                .is_recoverable()
+        assert_eq!(
+            updates.state.phase,
+            UpdatePhase::Error {
+                error: UpdateError::InvalidSignature,
+            }
         );
+        let UpdatePhase::Error { error } = updates.state.phase else {
+            panic!("manual failure");
+        };
+        assert!(!error.is_recoverable());
         assert_eq!(updates.release_page(), None);
     }
 
@@ -777,8 +812,12 @@ mod tests {
         assert!(updates.begin_check(false));
         assert!(!updates.begin_check(true), "the running check is joined");
         updates.failed(UpdateError::Offline);
-        assert_eq!(updates.state.phase, UpdatePhase::Error);
-        assert_eq!(updates.state.error, Some(UpdateError::Offline));
+        assert_eq!(
+            updates.state.phase,
+            UpdatePhase::Error {
+                error: UpdateError::Offline,
+            }
+        );
     }
 
     #[test]
@@ -788,14 +827,25 @@ mod tests {
         updates.downloading("0.2.1".to_owned(), None);
         updates.progress(2, Some(4));
         assert_eq!(
-            updates.state.progress,
-            Some(UpdateProgress {
-                downloaded_bytes: 2,
-                total_bytes: Some(4),
-            })
+            updates.state.phase,
+            UpdatePhase::Downloading {
+                version: "0.2.1".to_owned(),
+                release_notes: None,
+                progress: UpdateProgress {
+                    downloaded_bytes: 2,
+                    total_bytes: Some(4),
+                },
+            }
         );
         updates.downloaded("update", vec![1, 2, 3, 4]);
-        assert_eq!(updates.state.phase, UpdatePhase::ReadyToRestart);
+        assert_eq!(
+            updates.state.phase,
+            UpdatePhase::ReadyToRestart {
+                version: "0.2.1".to_owned(),
+                release_notes: None,
+                error: None,
+            }
+        );
         updates.dismiss();
         assert!(updates.state.notification_dismissed);
         assert!(
@@ -805,11 +855,23 @@ mod tests {
 
         let ready = updates.take_ready(false).expect("ready update");
         updates.installing();
-        assert_eq!(updates.state.phase, UpdatePhase::Installing);
+        assert_eq!(
+            updates.state.phase,
+            UpdatePhase::Installing {
+                version: "0.2.1".to_owned(),
+                release_notes: None,
+            }
+        );
         assert!(!updates.begin_check(true), "no check runs while installing");
         updates.restore_ready(ready, Some(UpdateError::InstallFailed));
-        assert_eq!(updates.state.phase, UpdatePhase::ReadyToRestart);
-        assert_eq!(updates.state.error, Some(UpdateError::InstallFailed));
+        assert_eq!(
+            updates.state.phase,
+            UpdatePhase::ReadyToRestart {
+                version: "0.2.1".to_owned(),
+                release_notes: None,
+                error: Some(UpdateError::InstallFailed),
+            }
+        );
         assert_eq!(
             updates.take_ready(false),
             Some(Arc::new(ReadyUpdate {
@@ -839,7 +901,13 @@ mod tests {
             fixture.state.snapshot().phase,
             crate::services::Phase::Updating
         );
-        assert_eq!(updates.state.phase, UpdatePhase::Installing);
+        assert_eq!(
+            updates.state.phase,
+            UpdatePhase::Installing {
+                version: "0.2.1".to_owned(),
+                release_notes: None,
+            }
+        );
         let worker_ready = Arc::clone(&ready);
 
         let result = runtime.block_on(async move {
@@ -857,14 +925,23 @@ mod tests {
         assert_eq!(error.code, "worker_stopped");
         assert_eq!(error.category, ErrorCategory::General);
         assert_eq!(fixture.state.snapshot().phase, crate::services::Phase::Idle);
-        assert_eq!(updates.state.phase, UpdatePhase::ReadyToRestart);
-        assert_eq!(updates.state.error, Some(UpdateError::InstallFailed));
+        assert_eq!(
+            updates.state.phase,
+            UpdatePhase::ReadyToRestart {
+                version: "0.2.1".to_owned(),
+                release_notes: None,
+                error: Some(UpdateError::InstallFailed),
+            }
+        );
         assert!(!updates.state.restart_deferred);
         assert!(!updates.begin_check(true), "the download remains ready");
         let retry = updates.take_ready(false).expect("retry the installation");
         assert_eq!(retry.bytes, [1, 2, 3, 4]);
         assert_eq!(retry.update, "update");
-        assert_eq!(updates.state.error, None);
+        assert!(matches!(
+            updates.state.phase,
+            UpdatePhase::ReadyToRestart { error: None, .. }
+        ));
         fixture
             .dictation
             .begin_update()
@@ -883,6 +960,7 @@ mod tests {
     fn a_restart_while_dictating_tells_the_user_it_waits() {
         let mut updates = updates();
         updates.begin_check(true);
+        updates.downloading("0.2.1".to_owned(), None);
         updates.downloaded("update", vec![1]);
         assert!(updates.take_ready(true).is_some());
         assert!(updates.state.restart_deferred);

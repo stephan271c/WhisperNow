@@ -31,8 +31,7 @@ pub(super) fn HomePage() -> Element {
         .snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.last_transcript.as_ref())
-        .cloned()
-        .filter(|text| !text.trim().is_empty());
+        .cloned();
     let management = context.management.read();
     let setup_step = management
         .setup
@@ -60,7 +59,8 @@ pub(super) fn HomePage() -> Element {
 /// Setup waits here until the user continues it.
 #[component]
 fn SetupChecklist(step: SetupStep) -> Element {
-    let navigator = use_context::<UiContext>().navigator;
+    let context = use_context::<UiContext>();
+    let navigator = context.navigator;
     rsx! {
         section { class: "setup-checklist-card", aria_labelledby: "setup-checklist-title",
             Banner { tone: Tone::Info,
@@ -90,7 +90,8 @@ fn SetupChecklist(step: SetupStep) -> Element {
 
 #[component]
 fn StatusCard(status: HomeStatus) -> Element {
-    let navigator = use_context::<UiContext>().navigator;
+    let context = use_context::<UiContext>();
+    let navigator = context.navigator;
     let dot = match status.kind {
         HomeStatusKind::Ready => "status-dot",
         HomeStatusKind::Recording => "status-dot recording",
@@ -130,7 +131,8 @@ fn StatusCard(status: HomeStatus) -> Element {
 
 #[component]
 fn ShortcutsCard(shortcut: Option<(RecordingMode, Shortcut)>) -> Element {
-    let navigator = use_context::<UiContext>().navigator;
+    let context = use_context::<UiContext>();
+    let navigator = context.navigator;
     rsx! {
         article { class: "card home-card", aria_labelledby: "home-shortcuts-title",
             h2 { id: "home-shortcuts-title", "Shortcuts" }
@@ -155,11 +157,11 @@ fn ShortcutsCard(shortcut: Option<(RecordingMode, Shortcut)>) -> Element {
 
 #[component]
 fn MicrophoneCard(test: Option<MicrophoneTestResponse>) -> Element {
-    let actions = use_context::<UiContext>();
-    let blocked = actions
+    let context = use_context::<UiContext>();
+    let blocked = context
         .blocked(UiOperation::TestMicrophone)
-        .or(actions.phase_blocked());
-    let testing = actions
+        .or(context.phase_blocked());
+    let testing = context
         .management
         .read()
         .is_busy(UiOperation::TestMicrophone);
@@ -172,7 +174,7 @@ fn MicrophoneCard(test: Option<MicrophoneTestResponse>) -> Element {
                     id: "test-microphone",
                     disabled: blocked.is_some(),
                     aria_describedby: (blocked.is_some() && !testing).then_some("test-microphone-disabled-reason"),
-                    onclick: move |_| actions.test_microphone(),
+                    onclick: move |_| context.test_microphone(),
                     Icon { name: IconName::Mic }
                     if testing { "Listening…" } else { "Test microphone" }
                 }
@@ -238,8 +240,8 @@ pub(super) fn percent(level: f32) -> u8 {
 
 #[component]
 fn LatestTranscript(transcript: Option<String>) -> Element {
-    let actions = use_context::<UiContext>();
-    let navigator = use_context::<UiContext>().navigator;
+    let context = use_context::<UiContext>();
+    let navigator = context.navigator;
     rsx! {
         article { class: "card home-card home-transcript", aria_labelledby: "home-transcript-title",
             h2 { id: "home-transcript-title", "Latest transcript" }
@@ -249,7 +251,7 @@ fn LatestTranscript(transcript: Option<String>) -> Element {
                     Button {
                         id: "copy-latest",
                         size: ButtonSize::Sm,
-                        onclick: move |_| actions.copy_text(text.clone(), NoticeScope::Home),
+                        onclick: move |_| context.copy_text(text.clone(), NoticeScope::Home),
                         Icon { name: IconName::Copy }
                         "Copy"
                     }

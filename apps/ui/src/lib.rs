@@ -33,6 +33,15 @@ struct UiContext {
     navigator: Navigator,
 }
 
+impl UiContext {
+    async fn hydrate_state(mut self) {
+        match client::call("get_state").await {
+            Ok(snapshot) => self.state.write().hydrate(snapshot),
+            Err(error) => self.state.write().report_client_error(error),
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn app() -> Element {
     let window_label = use_signal(current_window_label);
@@ -47,7 +56,6 @@ pub fn app() -> Element {
         management,
         navigator,
     });
-    let actions = context;
     // Follows a theme change at once; the recording bar uses theme-independent inverse colours.
     use_effect(move || client::apply_theme(management.read().theme_attribute().map(str::to_owned)));
     let mut listeners = use_signal(|| None::<ListenerOwner>);
@@ -63,7 +71,7 @@ pub fn app() -> Element {
                 if recording_bar {
                     event_state.write().apply_event(event);
                 } else {
-                    actions.apply_event(event);
+                    context.apply_event(event);
                 }
             });
         })
@@ -77,15 +85,15 @@ pub fn app() -> Element {
         }
 
         if recording_bar {
-            hydrate_recording_bar(state).await;
+            context.hydrate_state().await;
             return;
         }
 
         match client::call("get_update_state").await {
-            Ok(snapshot) => state.write().hydrate_update(snapshot),
+            Ok(snapshot) => state.write().apply_update_state(snapshot),
             Err(error) => state.write().report_update_command_failure(error.summary),
         }
-        actions.refresh_all();
+        context.refresh_all();
     });
 
     rsx! {
@@ -99,15 +107,6 @@ pub fn app() -> Element {
             link { rel: "stylesheet", href: "/settings.css" }
             AppShell {}
         }
-    }
-}
-
-/// Installs the recording bar's first snapshot; a newer event wins over it.
-#[cfg(target_arch = "wasm32")]
-async fn hydrate_recording_bar(mut state: Signal<UiState>) {
-    match client::call("get_state").await {
-        Ok(snapshot) => state.write().hydrate(snapshot),
-        Err(error) => state.write().report_client_error(error),
     }
 }
 

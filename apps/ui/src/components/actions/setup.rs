@@ -16,31 +16,32 @@ pub(crate) const PERMISSION_POLLS: u32 = 120;
 impl UiContext {
     pub(crate) fn move_setup(mut self, step: SetupStep) {
         let request = self.management.write().setup_move(step);
-        if let Some(request) = request {
-            self.save_setup_checkpoint(request);
-        }
+        self.save_setup_checkpoint(request);
     }
 
-    fn save_setup_checkpoint(self, request: SetupCheckpoint) {
+    fn save_setup_checkpoint(self, request: SetupCheckpoint) -> bool {
         self.save_checkpoint(request, |mut actions, setup| {
             actions.management.write().setup = Some(setup);
-        });
+        })
     }
 
     pub(crate) fn finish_setup_later(self) {
-        let request = self.management.peek().finish_setup_later_request();
-        if let Some(request) = request {
-            self.save_checkpoint(request, |mut actions, setup| {
-                actions.management.write().finish_setup_later(setup);
-            });
-        }
+        let request = self
+            .management
+            .peek()
+            .setup_checkpoint()
+            .expect("setup controls render after loading")
+            .clone();
+        self.save_checkpoint(request, |mut actions, setup| {
+            actions.management.write().finish_setup_later(setup);
+        });
     }
 
     fn save_checkpoint(
         self,
         request: SetupCheckpoint,
         finish: impl FnOnce(Self, SetupStateView) + 'static,
-    ) {
+    ) -> bool {
         let operation = UiOperation::SaveSetup;
         self.run(
             operation,
@@ -52,31 +53,32 @@ impl UiContext {
                 }
                 Err(error) => actions.report(operation, &error),
             },
-        );
+        )
     }
 
     pub(crate) fn save_setup_edit(mut self, edit: impl FnOnce(&mut SetupCheckpoint)) {
-        if self.management.peek().settings_pending() {
-            return;
-        }
-        self.management.write().edit_setup(edit);
-        let request = self
+        let mut request = self
             .management
             .peek()
             .setup_checkpoint()
             .expect("setup is loaded")
             .clone();
-        self.save_setup_checkpoint(request);
+        edit(&mut request);
+        if self.save_setup_checkpoint(request.clone()) {
+            self.management
+                .write()
+                .edit_setup(|checkpoint| *checkpoint = request);
+        }
     }
 
     pub(crate) fn complete_setup(self) {
-        if self.management.peek().settings_pending() {
-            return;
-        }
         let operation = UiOperation::CompleteSetup;
-        let Some(request) = self.management.peek().complete_setup_request() else {
-            return;
-        };
+        let request = self
+            .management
+            .peek()
+            .setup_checkpoint()
+            .expect("setup controls render after loading")
+            .clone();
         self.run(
             operation,
             async move { client::invoke("complete_setup", Some(&request)).await },
@@ -88,9 +90,6 @@ impl UiContext {
     }
 
     pub(crate) fn restart_setup(self) {
-        if self.management.peek().settings_pending() {
-            return;
-        }
         let operation = UiOperation::RestartSetup;
         self.run(
             operation,
@@ -161,19 +160,19 @@ impl UiContext {
 
     /// Asks for `kind`, then watches the cards until none can change any more.
     pub(crate) fn request_permission(mut self, kind: PermissionKind) {
-        let operation = UiOperation::RequestPermission;
         self.management.write().requested_permission = Some(kind);
-        self.run(
-            operation,
-            async move { client::invoke("request_permission", Some(&kind)).await },
-            move |mut actions, answer| {
-                actions.management.write().requested_permission = None;
-                match answer {
-                    Ok(permissions) => actions.install_permissions(permissions),
-                    Err(error) => actions.report(operation, &error),
-                }
-            },
-        );
+        spawn_forever(async move {
+            let answer = client::invoke("request_permission", Some(&kind)).await;
+            self.management.write().requested_permission = None;
+            match answer {
+                Ok(permissions) => self.install_permissions(permissions),
+                Err(error) => self.management.write().notify(
+                    super::Tone::Error,
+                    crate::NoticeScope::Setup,
+                    error.summary,
+                ),
+            }
+        });
         self.watch_permissions();
     }
 

@@ -68,31 +68,12 @@ impl Settings {
     pub fn shortcut_problems(&self) -> Vec<SettingsError> {
         shortcut_problems(&self.recording_shortcut, self.cancel_shortcut.as_ref())
     }
-
-    #[must_use]
-    pub fn cleanup_warning(&self) -> Option<String> {
-        if !self.cleanup_enabled || self.llm_provider == LlmProvider::LocalCleanup {
-            return None;
-        }
-        let provider = self.provider_settings(self.llm_provider);
-        let missing = if self.llm_provider.request_model(&provider.model).is_empty() {
-            "a model"
-        } else if self.llm_provider == LlmProvider::Custom && provider.api_base.is_none() {
-            "an API endpoint"
-        } else {
-            return None;
-        };
-        Some(format!(
-            "AI cleanup needs {missing} for {}; the plain transcript will be pasted until you enter one.",
-            self.llm_provider.label()
-        ))
-    }
 }
 
 impl SetupCheckpoint {
     #[must_use]
     pub fn shortcuts_ready(&self) -> bool {
-        shortcut_problems(&self.recording_shortcut, None).is_empty()
+        self.recording_shortcut.is_recording_shortcut()
     }
 }
 

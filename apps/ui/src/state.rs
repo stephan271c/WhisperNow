@@ -1,11 +1,10 @@
-use std::fmt;
 use whispernow_domain::AppError;
 
-use whispernow_domain::ipc::{AppState, EventPayload, ModelState, Phase, UpdateState};
+use whispernow_domain::ipc::{AppState, EventPayload, Phase, UpdateState};
 
 use crate::OverlayView;
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct UiState {
     pub snapshot: Option<AppState>,
     pub update_snapshot: Option<UpdateState>,
@@ -18,23 +17,6 @@ pub struct UiState {
     pub recording_bar: bool,
 }
 
-impl fmt::Debug for UiState {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("UiState")
-            .field("snapshot", &self.snapshot)
-            .field("update_snapshot", &self.update_snapshot)
-            .field("audio_rms", &self.audio_rms)
-            .field("error", &self.error)
-            .field("update_command_error", &self.update_command_error)
-            .field("connection_failed", &self.connection_failed)
-            .field("event_stream_failed", &self.event_stream_failed)
-            .field("overlay_levels_seen", &self.overlay.levels_seen)
-            .field("recording_bar", &self.recording_bar)
-            .finish()
-    }
-}
-
 impl UiState {
     /// Installs a snapshot read at startup unless an event already brought a newer one.
     pub(crate) fn hydrate(&mut self, state: AppState) {
@@ -42,10 +24,6 @@ impl UiState {
             self.apply_state(state);
         }
         self.connection_failed = false;
-    }
-
-    pub fn hydrate_update(&mut self, state: UpdateState) {
-        self.apply_update_state(state);
     }
 
     pub fn apply_event(&mut self, event: EventPayload) {
@@ -59,7 +37,7 @@ impl UiState {
                     .as_ref()
                     .is_some_and(|state| matches!(state.phase, Phase::Recording { .. }))
                 {
-                    self.audio_rms = rms.clamp(0.0, 1.0);
+                    self.audio_rms = rms;
                     if self.recording_bar {
                         self.overlay.apply_level(rms, elapsed_ms);
                     }
@@ -71,7 +49,7 @@ impl UiState {
         }
     }
 
-    fn apply_update_state(&mut self, state: UpdateState) {
+    pub fn apply_update_state(&mut self, state: UpdateState) {
         self.update_command_error = None;
         self.update_snapshot = Some(state);
     }
@@ -98,16 +76,6 @@ impl UiState {
             _ => state.error.clone(),
         };
         self.snapshot = Some(state);
-    }
-
-    #[must_use]
-    pub fn is_loading_model(&self) -> bool {
-        self.snapshot.as_ref().is_some_and(|snapshot| {
-            matches!(
-                snapshot.model_state,
-                ModelState::Downloading | ModelState::Loading
-            )
-        })
     }
 
     pub fn report_client_error(&mut self, error: AppError) {

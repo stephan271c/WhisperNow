@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use super::{
-    AudioBlock, AudioLevelAccumulator, AudioLevelSummary, AudioProcessingError, StreamingResampler,
+    AudioBlock, AudioLevelAccumulator, AudioLevelSummary, AudioProcessingError, Resampling,
     convert_interleaved_to_mono,
 };
 
@@ -11,7 +11,7 @@ const OUTPUT_BLOCK_SAMPLES: usize = 320;
 /// hand that storage to a worker before calling this allocation-heavy type.
 pub struct AudioProcessor {
     channels: NonZeroUsize,
-    resampler: StreamingResampler,
+    resampler: Resampling,
     delivery_pending: AudioBlock,
     levels: AudioLevelAccumulator,
 }
@@ -23,7 +23,7 @@ impl AudioProcessor {
     ) -> Result<Self, AudioProcessingError> {
         Ok(Self {
             channels,
-            resampler: StreamingResampler::new(input_sample_rate)?,
+            resampler: Resampling::new(input_sample_rate)?,
             delivery_pending: AudioBlock::default(),
             levels: AudioLevelAccumulator::default(),
         })
@@ -41,11 +41,11 @@ impl AudioProcessor {
     }
 
     /// Flushes the resampler and any final partial delivery block.
-    pub fn finish(&mut self) -> Result<Vec<AudioBlock>, AudioProcessingError> {
+    pub fn finish(mut self) -> Result<(Vec<AudioBlock>, AudioLevelSummary), AudioProcessingError> {
         let tail = self.resampler.finish()?;
         let mut blocks = self.process_resampled(tail);
         self.emit_delivery_blocks(&mut blocks, true);
-        Ok(blocks)
+        Ok((blocks, self.levels.take_summary()))
     }
 
     pub fn take_level_summary(&mut self) -> AudioLevelSummary {
@@ -102,7 +102,7 @@ mod tests {
         for chunk in samples.chunks(2) {
             output.extend(processor.process_resampled(AudioBlock::new(chunk.to_vec())));
         }
-        output.extend(processor.finish().expect("finish"));
+        output.extend(processor.finish().expect("finish").0);
         assert_eq!(
             output
                 .iter()
@@ -130,7 +130,8 @@ mod tests {
             .expect("processor");
         let stereo = vec![0.25_f32; 96_000];
         let mut output = processor.push_interleaved(&stereo).expect("push");
-        output.extend(processor.finish().expect("finish"));
+        let (tail, levels) = processor.finish().expect("finish");
+        output.extend(tail);
         assert_eq!(output.len(), 50);
         assert!(
             output
@@ -143,9 +144,7 @@ mod tests {
                 .flat_map(AudioBlock::samples)
                 .all(|sample| sample.is_finite() && sample.abs() <= 1.0)
         );
-        let levels = processor.take_level_summary();
         assert_eq!(levels.sample_count, u64::from(TARGET_SAMPLE_RATE));
         assert!(levels.peak <= 1.0);
-        assert_eq!(processor.take_level_summary().sample_count, 0);
     }
 }

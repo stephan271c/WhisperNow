@@ -186,19 +186,41 @@ pub struct ClearDataItem {
     pub deleted: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "phase",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum UpdatePhase {
     Disabled,
     Idle,
     Checking,
-    Downloading,
-    ReadyToRestart,
-    Installing,
+    Downloading {
+        version: String,
+        release_notes: Option<String>,
+        progress: UpdateProgress,
+    },
+    ReadyToRestart {
+        version: String,
+        release_notes: Option<String>,
+        error: Option<UpdateError>,
+    },
+    Installing {
+        version: String,
+        release_notes: Option<String>,
+    },
     /// A newer signed release exists, but this installation's package manager owns upgrades.
-    ManualInstallAvailable,
+    ManualInstallAvailable {
+        version: String,
+        release_notes: Option<String>,
+        package: ManualUpdatePackage,
+        error: Option<UpdateError>,
+    },
     UpToDate,
-    Error,
+    Error {
+        error: UpdateError,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -244,15 +266,9 @@ impl UpdateError {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateState {
     pub phase: UpdatePhase,
-    pub available_version: Option<String>,
-    pub release_notes: Option<String>,
-    pub progress: Option<UpdateProgress>,
-    pub error: Option<UpdateError>,
     pub notification_dismissed: bool,
     /// A restart was requested and waits for the dictation in flight to finish.
     pub restart_deferred: bool,
-    /// The package to download while the phase is `ManualInstallAvailable`.
-    pub manual_package: Option<ManualUpdatePackage>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

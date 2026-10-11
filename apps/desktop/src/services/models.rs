@@ -267,17 +267,7 @@ impl ModelCoordinator {
         let family = self.require_deletable(model_id)?;
         // A cleanup model is freed, and kept from loading, until its file is gone.
         let _unloaded = if family == ModelFamily::Cleanup {
-            Some(
-                self.local_cleanup
-                    .hold_unloaded(Duration::from_secs(10))
-                    .ok_or_else(|| {
-                        AppError::new(
-                            ErrorCategory::General,
-                            "model_in_use",
-                            "The cleanup model is busy; try again when the current cleanup finishes",
-                        )
-                    })?,
-            )
+            Some(hold_cleanup_unloaded(&self.local_cleanup)?)
         } else {
             None
         };
@@ -416,6 +406,20 @@ fn transfer_rate(bytes: u64, elapsed: Duration) -> Option<u64> {
         let rate = u128::from(bytes) * 1_000 / elapsed.as_millis();
         u64::try_from(rate).unwrap_or(u64::MAX)
     })
+}
+
+pub(super) fn hold_cleanup_unloaded(
+    cleanup: &LocalCleanupService,
+) -> Result<impl Drop + '_, AppError> {
+    cleanup
+        .hold_unloaded(Duration::from_secs(10))
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::General,
+                "model_in_use",
+                "The cleanup model is busy; try again when the current cleanup finishes",
+            )
+        })
 }
 
 #[cfg(test)]

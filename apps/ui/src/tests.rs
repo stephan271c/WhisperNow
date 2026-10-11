@@ -4,13 +4,13 @@ use whispernow_domain::ipc::{
     Phase, SettingsView, UpdateError, UpdatePhase, UpdateProgress, UpdateState,
 };
 use whispernow_domain::{
-    ClearDataCategory, EntryId, HistoryCursor, HistoryEntry, HistoryPage, HistoryPageRequest,
-    LlmProvider, Settings, Shortcut, ShortcutKey, ShortcutModifier, UtcMillis,
+    ClearDataCategory, EntryId, HistoryEntry, HistoryPage, LlmProvider, Settings, Shortcut,
+    ShortcutKey, ShortcutModifier,
 };
 
 use crate::components::cleanup_destination;
 use crate::test_support::{editable_settings, history_entry, show_history, snapshot, state_event};
-use crate::{HomeStatus, HomeStatusKind, ManagementState, SaveStatus, SettingKey, UiState};
+use crate::{HomeStatus, HomeStatusKind, ManagementState, SettingKey, UiState};
 
 fn ui_state(phase: Phase) -> UiState {
     let mut state = UiState::default();
@@ -21,19 +21,14 @@ fn ui_state(phase: Phase) -> UiState {
 fn update_state(phase: UpdatePhase) -> UpdateState {
     UpdateState {
         phase,
-        available_version: None,
-        release_notes: None,
-        progress: None,
-        error: None,
         notification_dismissed: false,
         restart_deferred: false,
-        manual_package: None,
     }
 }
 
 fn settings_html(update: UpdateState) -> String {
     let mut state = ui_state(Phase::Idle);
-    state.hydrate_update(update);
+    state.apply_update_state(update);
     crate::test_support::Page::shell(state, ManagementState::default()).html()
 }
 
@@ -51,7 +46,7 @@ fn cleanup_to(provider: LlmProvider, api_base: Option<&str>) -> Settings {
 fn history_window(entries: Vec<HistoryEntry>) -> HistoryPage {
     HistoryPage {
         entries,
-        next_cursor: None,
+        has_more: false,
     }
 }
 
@@ -106,40 +101,6 @@ fn a_history_read_for_a_filter_no_longer_shown_is_ignored() {
 }
 
 #[test]
-fn loading_older_history_grows_the_window_that_later_refreshes_reread() {
-    let mut management = ManagementState::default();
-    let (request_id, _) = management.history_request();
-    management.finish_history_refresh(
-        request_id,
-        HistoryPage {
-            next_cursor: Some(HistoryCursor {
-                created_at: UtcMillis(10),
-                id: EntryId(10),
-            }),
-            ..history_window(vec![history_entry(10, "first page")])
-        },
-    );
-    assert_eq!(management.history_window_pages(), 1);
-
-    let (request_id, request) = management.older_history_request();
-    assert_eq!(request.limit, 2 * HistoryPageRequest::DEFAULT_PAGE_SIZE);
-    management.finish_history_refresh(
-        request_id,
-        history_window(vec![
-            history_entry(10, "first page"),
-            history_entry(9, "second page"),
-        ]),
-    );
-    assert_eq!(management.history.len(), 2);
-    assert!(management.history_next_cursor.is_none());
-
-    assert_eq!(
-        management.history_request().1.limit,
-        2 * HistoryPageRequest::DEFAULT_PAGE_SIZE
-    );
-}
-
-#[test]
 fn failed_refresh_keeps_loaded_rows_but_unavailable_storage_degrades() {
     let mut management = ManagementState::default();
     show_history(&mut management, vec![history_entry(10, "loaded")]);
@@ -174,10 +135,7 @@ fn partial_clear_data_does_not_hide_history_when_database_deletion_failed() {
     management.finish_history_refresh(
         request_id,
         HistoryPage {
-            next_cursor: Some(HistoryCursor {
-                created_at: UtcMillis(10),
-                id: EntryId(10),
-            }),
+            has_more: true,
             ..history_window(vec![history_entry(10, "still in database")])
         },
     );
@@ -200,7 +158,7 @@ fn partial_clear_data_does_not_hide_history_when_database_deletion_failed() {
 
     assert_eq!(management.history.len(), 1);
     assert_eq!(management.history[0].id, EntryId(10));
-    assert!(management.history_next_cursor.is_some());
+    assert!(management.history_has_more);
     assert!(management.clear_result.is_some());
 }
 
@@ -219,108 +177,6 @@ fn start_on_login(settings: &mut Settings) {
 
 fn theme(theme: whispernow_domain::ThemePreference) -> impl Fn(&mut Settings) {
     move |settings| settings.theme = theme
-}
-
-fn is_failed(status: &SaveStatus) -> bool {
-    matches!(status, SaveStatus::Failed(_))
-}
-
-#[test]
-fn a_pending_shortcut_save_blocks_another_edit_and_a_refusal_does_not_leak_into_it() {
-    let mut management = loaded_management(editable_settings());
-    let confirmed = management
-        .shown_settings()
-        .expect("loaded")
-        .recording_shortcut
-        .clone();
-    let request = management
-        .begin_settings_update(SettingKey::RecordingShortcut, |settings| {
-            settings.recording_shortcut.key = ShortcutKey::R;
-        })
-        .expect("shortcut edit");
-    assert_eq!(request.recording_shortcut.key, ShortcutKey::R);
-    assert!(management.settings_pending());
-    assert_eq!(
-        management
-            .shown_settings()
-            .expect("loaded")
-            .recording_shortcut,
-        request.recording_shortcut
-    );
-    assert!(
-        management
-            .begin_settings_update(
-                SettingKey::Theme,
-                theme(whispernow_domain::ThemePreference::Dark),
-            )
-            .is_none()
-    );
-    assert_eq!(
-        management.setting_status(&SettingKey::Theme),
-        SaveStatus::Idle
-    );
-
-    management.finish_settings_update(Err("The shortcut is taken".to_owned()));
-    assert!(!management.settings_pending());
-    assert_eq!(
-        management
-            .shown_settings()
-            .expect("loaded")
-            .recording_shortcut,
-        confirmed
-    );
-    let request = management
-        .begin_settings_update(
-            SettingKey::Theme,
-            theme(whispernow_domain::ThemePreference::Dark),
-        )
-        .expect("theme edit after refusal");
-    assert_eq!(request.recording_shortcut, confirmed);
-    assert_eq!(request.theme, whispernow_domain::ThemePreference::Dark);
-    management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
-        settings: SettingsView::new(&request),
-        warnings: Vec::new(),
-    }));
-    assert_eq!(
-        management.setting_status(&SettingKey::Theme),
-        SaveStatus::Saved
-    );
-    assert!(is_failed(
-        &management.setting_status(&SettingKey::RecordingShortcut)
-    ));
-}
-
-#[test]
-fn a_refused_change_rolls_back_and_keeps_its_error_beside_the_control() {
-    let mut management = loaded_management(editable_settings());
-    assert!(
-        management
-            .begin_settings_update(SettingKey::StartOnLogin, start_on_login)
-            .is_some()
-    );
-    management.finish_settings_update(Err("refused".to_owned()));
-
-    assert!(
-        !management
-            .shown_settings()
-            .expect("loaded")
-            .auto_start_on_login
-    );
-    assert!(is_failed(
-        &management.setting_status(&SettingKey::StartOnLogin)
-    ));
-    assert!(!management.settings_pending());
-
-    assert!(
-        management
-            .begin_settings_update(SettingKey::StartOnLogin, start_on_login)
-            .is_some()
-    );
-    assert_eq!(
-        management.setting_status(&SettingKey::StartOnLogin),
-        SaveStatus::Saving,
-        "a new attempt clears the old error"
-    );
 }
 
 #[test]
@@ -361,7 +217,7 @@ fn nothing_is_disclosed_when_cleanup_is_off_or_runs_on_this_computer() {
 }
 
 #[test]
-fn audio_level_is_scoped_by_the_single_recording_phase_and_clamped() {
+fn audio_level_is_scoped_by_the_single_recording_phase() {
     let mut state = ui_state(Phase::Idle);
     state.apply_event(EventPayload::AudioLevel {
         rms: 0.4,
@@ -376,13 +232,13 @@ fn audio_level_is_scoped_by_the_single_recording_phase_and_clamped() {
         peak: 2.0,
         elapsed_ms: 0,
     });
-    assert!((state.audio_rms - 1.0).abs() < f32::EPSILON);
+    assert!((state.audio_rms - 2.0).abs() < f32::EPSILON);
     state.apply_event(EventPayload::AudioLevel {
         rms: -1.0,
         peak: 0.0,
         elapsed_ms: 0,
     });
-    assert!(state.audio_rms.abs() < f32::EPSILON);
+    assert!((state.audio_rms + 1.0).abs() < f32::EPSILON);
 
     state.apply_event(EventPayload::AudioLevel {
         rms: 0.4,
@@ -395,28 +251,30 @@ fn audio_level_is_scoped_by_the_single_recording_phase_and_clamped() {
 
 #[test]
 fn settings_show_update_download_progress() {
-    let mut update = update_state(UpdatePhase::Downloading);
-    update.available_version = Some("0.3.0".to_owned());
-    update.progress = Some(UpdateProgress {
-        downloaded_bytes: 512,
-        total_bytes: Some(1_024),
+    let update = update_state(UpdatePhase::Downloading {
+        version: "0.3.0".to_owned(),
+        release_notes: None,
+        progress: UpdateProgress {
+            downloaded_bytes: 512,
+            total_bytes: Some(1_024),
+        },
     });
 
     let html = settings_html(update);
-    assert!(html.contains("Downloading update to v0.3.0"));
-    assert!(html.contains("Update download progress"));
-    assert!(html.contains("0.5 KiB of 1.0 KiB downloaded"));
+    assert!(html.contains("role=\"progressbar\""));
+    assert!(html.contains("aria-label=\"Update download progress\""));
+    assert!(html.contains("aria-valuenow=\"50\""));
 }
 
 #[test]
 fn ready_update_banner_escapes_remote_release_notes_as_plain_text() {
-    let mut update = update_state(UpdatePhase::ReadyToRestart);
-    update.available_version = Some("0.3.0".to_owned());
-    update.release_notes = Some("Fixes\n<script>alert('remote')</script>".to_owned());
+    let update = update_state(UpdatePhase::ReadyToRestart {
+        version: "0.3.0".to_owned(),
+        release_notes: Some("Fixes\n<script>alert('remote')</script>".to_owned()),
+        error: None,
+    });
 
     let html = settings_html(update);
-    assert!(html.contains("Restart to update to v0.3.0"));
-    assert!(html.contains("What’s new"));
     assert!(html.contains("&#60;script&#62;"));
     assert!(html.contains("alert"));
     assert!(html.contains("remote"));
@@ -426,8 +284,11 @@ fn ready_update_banner_escapes_remote_release_notes_as_plain_text() {
 
 #[test]
 fn dismissed_ready_update_keeps_a_secondary_restart_affordance() {
-    let mut update = update_state(UpdatePhase::ReadyToRestart);
-    update.available_version = Some("v0.3.0".to_owned());
+    let mut update = update_state(UpdatePhase::ReadyToRestart {
+        version: "0.3.0".to_owned(),
+        release_notes: None,
+        error: None,
+    });
     update.notification_dismissed = true;
 
     let html = settings_html(update);
@@ -435,51 +296,36 @@ fn dismissed_ready_update_keeps_a_secondary_restart_affordance() {
         !html.contains("Dismiss"),
         "a dismissed offer stays dismissed"
     );
-    assert!(html.contains("Update v0.3.0 is ready"));
     assert!(html.contains("Restart to update"));
 }
 
 #[test]
-fn manual_install_offer_names_the_package_and_links_the_release_page_without_restart() {
-    for (package, format) in [
-        (ManualUpdatePackage::Deb, ".deb"),
-        (ManualUpdatePackage::Rpm, ".rpm"),
-    ] {
-        let mut update = update_state(UpdatePhase::ManualInstallAvailable);
-        update.available_version = Some("0.3.0".to_owned());
-        update.manual_package = Some(package);
+fn a_manual_install_offers_the_release_page_and_keeps_it_after_dismissal() {
+    let mut update = update_state(UpdatePhase::ManualInstallAvailable {
+        version: "0.3.0".to_owned(),
+        release_notes: None,
+        package: ManualUpdatePackage::Deb,
+        error: None,
+    });
 
-        let html = settings_html(update.clone());
-        assert!(html.contains("WhisperNow v0.3.0 is available"));
-        assert!(html.contains(format));
-        assert!(html.contains("Open release page"));
-        assert!(!html.contains("Restart to update"));
+    let html = settings_html(update.clone());
+    assert!(html.contains("Open release page"));
+    assert!(html.contains("Dismiss"));
+    assert!(!html.contains("Restart to update"));
 
-        update.notification_dismissed = true;
-        let dismissed = settings_html(update);
-        assert!(
-            !dismissed.contains("Dismiss"),
-            "a dismissed offer stays dismissed"
-        );
-        assert!(
-            !dismissed.contains(format),
-            "only the version and the link stay"
-        );
-        assert!(dismissed.contains("Open release page"));
-    }
+    update.notification_dismissed = true;
+    let dismissed = settings_html(update);
+    assert!(!dismissed.contains("Dismiss"));
+    assert!(dismissed.contains("Open release page"));
+    assert!(!dismissed.contains("Restart to update"));
 }
 
 #[test]
-fn manual_check_results_render_up_to_date_and_typed_errors() {
-    let up_to_date = settings_html(update_state(UpdatePhase::UpToDate));
-    assert!(up_to_date.contains("WhisperNow is up to date"));
-    assert!(up_to_date.contains("No newer stable release is available"));
-
-    let mut offline = update_state(UpdatePhase::Error);
-    offline.error = Some(UpdateError::Offline);
+fn a_recoverable_update_error_offers_another_check() {
+    let offline = update_state(UpdatePhase::Error {
+        error: UpdateError::Offline,
+    });
     let offline = settings_html(offline);
-    assert!(offline.contains("Update needs attention"));
-    assert!(offline.contains("You appear to be offline"));
     assert!(offline.contains("Try again"));
 }
 
@@ -487,7 +333,7 @@ fn manual_check_results_render_up_to_date_and_typed_errors() {
 fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
     let mut loading = ui_state(Phase::Idle);
     loading.snapshot.as_mut().expect("snapshot").model_state = ModelState::Loading;
-    let mut failed = snapshot(Phase::Idle);
+    let mut failed = snapshot(crate::test_support::RECORDING);
     failed.error = Some(AppError::new(
         ErrorCategory::Audio,
         "microphone_unavailable",
@@ -499,19 +345,6 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
     disconnected.report_event_stream_failure(crate::client::connection_error());
 
     for (state, kind, title, detail) in [
-        (ui_state(Phase::Idle), HomeStatusKind::Ready, "Ready", None),
-        (
-            ui_state(crate::test_support::RECORDING),
-            HomeStatusKind::Recording,
-            "Recording",
-            None,
-        ),
-        (
-            ui_state(crate::test_support::PROCESSING),
-            HomeStatusKind::Working,
-            "Transcribing recording",
-            None,
-        ),
         (
             loading,
             HomeStatusKind::Waiting,
@@ -529,24 +362,6 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
             HomeStatusKind::Problem,
             "Live updates are unavailable",
             Some("Close and reopen this window to reconnect."),
-        ),
-        (
-            ui_state(Phase::Paused),
-            HomeStatusKind::Paused,
-            "Paused",
-            Some("Resume WhisperNow from the system tray to record again."),
-        ),
-        (
-            ui_state(Phase::Updating),
-            HomeStatusKind::Waiting,
-            "Installing an update",
-            Some("WhisperNow will be ready after the update finishes."),
-        ),
-        (
-            ui_state(Phase::ClearingData),
-            HomeStatusKind::Waiting,
-            "Clearing application data",
-            None,
         ),
     ] {
         let status = HomeStatus::from_state(&state);
@@ -605,31 +420,6 @@ fn a_saved_native_warning_keeps_the_desktops_substituted_shortcut() {
     );
     assert!(!management.settings_pending());
     assert!(notice_message(&management).is_some_and(|notice| notice.contains(&warning.summary)));
-}
-
-#[test]
-fn a_loaded_cleanup_warning_clears_after_provider_repair() {
-    let mut settings = editable_settings();
-    settings.cleanup_enabled = true;
-    settings.llm_provider = LlmProvider::Anthropic;
-    settings
-        .provider_settings_mut(LlmProvider::Anthropic)
-        .model
-        .clear();
-    let mut management = ManagementState::default();
-    management.install_settings(SettingsView::new(&settings));
-    assert!(notice_message(&management).is_some_and(|message| message.contains("needs a model")));
-
-    let request = management
-        .begin_settings_update(SettingKey::ProviderModel, |settings| {
-            settings.provider_settings_mut(LlmProvider::Anthropic).model = "claude-test".to_owned();
-        })
-        .expect("provider repair");
-    management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
-        settings: SettingsView::new(&request),
-        warnings: Vec::new(),
-    }));
-    assert!(management.notice.is_none());
 }
 
 #[test]

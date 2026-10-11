@@ -32,7 +32,6 @@ use services::NativeServices;
 use tauri::Manager as _;
 use tauri_plugin_global_shortcut::ShortcutState;
 use whispernow_domain::WindowGeometry;
-use whispernow_domain::ipc::EventPayload;
 
 use crate::shortcuts::{
     KeyTransition, ShortcutCoordinator, ShortcutEvent, ShortcutId, ShortcutRegistrar,
@@ -182,21 +181,21 @@ pub fn run() {
             if !services.can_copy_transcripts() {
                 tray.mark_copy_unavailable();
             }
-            let settings = services.settings.get().map_err(|error| {
+            let settings = services.settings.load().map_err(|error| {
                 io::Error::other(format!("settings unavailable ({})", error.code))
             })?;
-            let start_minimized = settings.settings.start_minimized;
+            let start_minimized = settings.start_minimized;
             let autostart: Arc<dyn AutostartRegistration> =
                 Arc::new(TauriAutostart::new(app.handle().clone()));
             if let Err(error) =
-                autostart::reconcile(autostart.as_ref(), settings.settings.auto_start_on_login)
+                autostart::reconcile(autostart.as_ref(), settings.auto_start_on_login)
             {
                 tracing::warn!("start-on-login registration could not be synchronized");
                 services
                     .state
                     .publish_error(gateway::autostart_error(error));
             }
-            if let Some(geometry) = settings.settings.window_geometry {
+            if let Some(geometry) = settings.window_geometry {
                 restore_settings_geometry(app, geometry);
             }
             // Linux draws the main window's titlebar in the page, which asks the window
@@ -208,8 +207,8 @@ pub fn run() {
             {
                 tracing::warn!("settings window decorations could not be removed");
             }
-            let persisted_binding = recording_binding(&settings.settings);
-            let registrar = shortcut_registrar(
+            let persisted_binding = recording_binding(&settings);
+            let (registrar, startup_failure) = shortcut_registrar(
                 app.handle().clone(),
                 native_wayland,
                 setup_shortcut_events.clone(),
@@ -225,13 +224,14 @@ pub fn run() {
                         .try_state::<Gateway>()
                         .is_some_and(|state| state.shortcuts_enabled())
                 }),
+                startup_failure,
             ));
             if let Some(error) = shortcuts.registration_diagnostic() {
                 tracing::warn!("configured push-to-talk shortcut is unavailable");
                 services.state.publish_error(gateway::shortcut_error(error));
             }
             // Registered only while a dictation runs, so nothing is registered here.
-            shortcuts.set_cancel_binding(cancel_binding(&settings.settings));
+            shortcuts.set_cancel_binding(cancel_binding(&settings));
             app.manage(Gateway::new(
                 services,
                 shortcuts,
@@ -239,13 +239,9 @@ pub fn run() {
                 Arc::clone(&activation),
                 Arc::clone(&tray),
             ));
-            let event_app = app.handle().clone();
-            let on_state = Arc::new(move |state| {
-                gateway::emit(&event_app, EventPayload::UpdateChanged { state });
-            });
             let updates_enabled = !cfg!(debug_assertions) && !public_key.is_empty();
             let update_controller =
-                updater::UpdateController::new(app.handle().clone(), updates_enabled, on_state);
+                updater::UpdateController::new(app.handle().clone(), updates_enabled);
             app.manage(Arc::clone(&update_controller));
             if updates_enabled {
                 updater::spawn_periodic_checks(update_controller);
@@ -363,7 +359,10 @@ fn shortcut_registrar(
     app: tauri::AppHandle,
     native_wayland: bool,
     events: tokio::sync::mpsc::UnboundedSender<ShortcutEvent>,
-) -> tauri::Result<Arc<dyn ShortcutRegistrar>> {
+) -> tauri::Result<(
+    Arc<dyn ShortcutRegistrar>,
+    Option<shortcuts::ShortcutRegistrationError>,
+)> {
     #[cfg(target_os = "linux")]
     if native_wayland {
         let identity = portal_identity::PortalIdentity::new(
@@ -371,12 +370,12 @@ fn shortcut_registrar(
             app.package_info().name.clone(),
             &app.path().data_dir()?,
         );
-        return Ok(wayland_shortcuts::WaylandShortcutRegistrar::spawn(
-            identity, events,
-        ));
+        let (registrar, failure) =
+            wayland_shortcuts::WaylandShortcutRegistrar::spawn(identity, events);
+        return Ok((registrar, failure));
     }
     let _ = (native_wayland, events);
-    Ok(Arc::new(TauriShortcutRegistrar::new(app)))
+    Ok((Arc::new(TauriShortcutRegistrar::new(app)), None))
 }
 
 #[cfg(target_os = "linux")]

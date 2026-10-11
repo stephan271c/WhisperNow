@@ -9,7 +9,7 @@ use crate::shortcuts::ShortcutRegistrationError;
 impl Gateway {
     pub(crate) async fn permissions(&self) -> Result<PermissionsResponse, AppError> {
         let global_shortcuts = self.global_shortcuts_consent();
-        self.run_command("get_permissions", Failure::Local, move |services, _| {
+        self.run_command("get_permissions", Failure::Local, move |services| {
             Ok(services.permissions(global_shortcuts))
         })
         .await
@@ -37,7 +37,7 @@ impl Gateway {
                 return Err(shortcut_error(error));
             }
         } else {
-            self.run_command("request_permission", Failure::Local, move |services, _| {
+            self.run_command("request_permission", Failure::Local, move |services| {
                 services.request_permission(request)
             })
             .await?;

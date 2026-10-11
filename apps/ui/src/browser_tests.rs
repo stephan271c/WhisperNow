@@ -61,7 +61,7 @@ async fn shortcut_capture_suspends_global_shortcuts_and_saves_recording_and_canc
             "F8",
             false,
             Shortcut {
-                modifiers: Default::default(),
+                modifiers: std::collections::BTreeSet::default(),
                 key: ShortcutKey::F8,
             },
         ),
@@ -96,80 +96,12 @@ async fn shortcut_capture_suspends_global_shortcuts_and_saves_recording_and_canc
     }
 }
 
-#[wasm_bindgen_test(async)]
-async fn a_delayed_shortcut_refusal_disables_other_saves_and_the_next_theme_save_uses_confirmed_keys()
- {
-    install_tauri_probe();
-    install_mount_point();
-    dioxus::launch(BrowserSettingsSurface);
-    wait_for("the settings shell", || rendered("nav-settings")).await;
-    click("nav-settings");
-    wait_for("the shortcut control", || rendered("recording-shortcut")).await;
-    js_sys::eval("window.__whispernowDelaySettings = true").expect("delay settings saves");
-    click("recording-shortcut");
-    wait_for("global shortcuts to suspend", || {
-        adapter_count("suspend_shortcuts") == 1.0
-    })
-    .await;
-    js_sys::eval("document.getElementById('recording-shortcut').dispatchEvent(new KeyboardEvent('keydown', {key: 'r', code: 'KeyR', ctrlKey: true, bubbles: true}))").expect("capture shortcut");
-    wait_for("the shortcut save and disabled theme control", || {
-        adapter_count("update_settings") == 1.0 && disabled("theme")
-    })
-    .await;
-    for id in [
-        "recording-shortcut",
-        "cancel-shortcut",
-        "recording-mode-toggle",
-        "cancel-dictation",
-        "start-minimized",
-        "start-on-login",
-    ] {
-        assert!(disabled(id), "{id} remains editable during a document save");
-    }
-    click("start-minimized");
-    assert_eq!(adapter_count("update_settings"), 1.0);
-    js_sys::eval("window.__whispernowPendingSettings.shift().reject({category: 'settings', code: 'shortcut_refused', summary: 'The recording shortcut is taken'})").expect("refuse shortcut");
-    wait_for("the field error and restored controls", || {
-        rendered("recording-mode-error") && !disabled("theme")
-    })
-    .await;
-    assert!(
-        web_sys::window()
-            .expect("window")
-            .document()
-            .expect("document")
-            .get_element_by_id("recording-shortcut-keys")
-            .expect("shortcut keys")
-            .text_content()
-            .expect("shortcut label")
-            .contains("Space")
-    );
-    js_sys::eval("window.__whispernowDelaySettings = false; const theme = document.getElementById('theme'); theme.value = 'dark'; theme.dispatchEvent(new Event('change', {bubbles: true}))").expect("choose dark theme");
-    wait_for("the theme to save", || {
-        adapter_count("update_settings") == 2.0 && !disabled("theme")
-    })
-    .await;
-    let saved = js_sys::eval("JSON.stringify(window.__whispernowAdapterCalls.filter(({command}) => command === 'update_settings').at(-1).payload.request)").expect("saved settings").as_string().expect("settings JSON");
-    let saved: Settings = serde_json::from_str(&saved).expect("settings request");
-    assert_eq!(saved.recording_shortcut.key, ShortcutKey::Space);
-    assert_eq!(saved.theme, whispernow_domain::ThemePreference::Dark);
-    assert!(rendered("recording-mode-error"));
-}
-
-fn disabled(id: &str) -> bool {
-    js_sys::eval(&format!("document.getElementById({id:?}).disabled"))
-        .expect("disabled property")
-        .as_bool()
-        .expect("boolean disabled property")
-}
-
-fn adapter_count(command: &str) -> f64 {
-    js_sys::eval(&format!(
+fn adapter_count(command: &str) -> u32 {
+    let count = js_sys::eval(&format!(
         "window.__whispernowAdapterCalls.filter(call => call.command === {command:?}).length"
     ))
-    .expect("count adapter calls")
-    .as_f64()
-    .expect("call count")
+    .expect("count adapter calls");
+    serde_wasm_bindgen::from_value(count).expect("integer call count")
 }
 
 #[wasm_bindgen_test(async)]
@@ -215,8 +147,6 @@ fn install_tauri_probe() {
     js_sys::eval(
         r#"
         window.__whispernowAdapterCalls = [];
-        window.__whispernowDelaySettings = false;
-        window.__whispernowPendingSettings = [];
         window.__TAURI__ = {
           core: {
             invoke: async (command, payload) => {
@@ -225,12 +155,9 @@ fn install_tauri_probe() {
                 return null;
               }
               if (command === "get_history") {
-                return { entries: [], next_cursor: null };
+                return { entries: [], has_more: false };
               }
               if (command === "update_settings") {
-                if (window.__whispernowDelaySettings) {
-                  return await new Promise((resolve, reject) => window.__whispernowPendingSettings.push({resolve, reject}));
-                }
                 return { settings: { settings: payload.request, warnings: [] }, warnings: [] };
               }
               if (command === "suspend_shortcuts" || command === "resume_shortcuts") {

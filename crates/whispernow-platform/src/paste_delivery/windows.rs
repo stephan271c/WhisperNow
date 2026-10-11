@@ -166,11 +166,11 @@ fn token_integrity_level(process: HANDLE) -> Result<u32, NativePasteError> {
     // SAFETY: `GetLastError` reads thread-local error state immediately after
     // the failed size query.
     let size_error = unsafe { GetLastError() };
+    let required = usize::try_from(required_bytes).map_err(|_| NativePasteError::Unavailable)?;
     if first_result != 0
         || size_error != ERROR_INSUFFICIENT_BUFFER
-        || usize::try_from(required_bytes).map_or(true, |size| {
-            size < size_of::<TOKEN_MANDATORY_LABEL>() || size > 64 * 1024
-        })
+        || required < size_of::<TOKEN_MANDATORY_LABEL>()
+        || required > 64 * 1024
     {
         return Err(if size_error == ERROR_ACCESS_DENIED {
             NativePasteError::PermissionDenied
@@ -179,7 +179,6 @@ fn token_integrity_level(process: HANDLE) -> Result<u32, NativePasteError> {
         });
     }
 
-    let required = usize::try_from(required_bytes).map_err(|_| NativePasteError::Unavailable)?;
     let words = required
         .checked_add(size_of::<usize>() - 1)
         .map(|size| size / size_of::<usize>())
@@ -267,11 +266,8 @@ fn send_shortcut(keys: PasteKeys) -> NativePasteInjection {
         *input = native_input(*stroke);
     }
 
-    let requested = u32::try_from(strokes.len()).unwrap_or(0);
-    let input_size = i32::try_from(size_of::<INPUT>()).unwrap_or(0);
-    if requested == 0 || input_size == 0 {
-        return NativePasteInjection::NotSent(NativePasteError::InjectionFailed);
-    }
+    let requested = u32::try_from(strokes.len()).expect("shortcut length fits u32");
+    let input_size = i32::try_from(size_of::<INPUT>()).expect("INPUT size fits i32");
 
     // SAFETY: the slice contains exactly `requested` initialized INPUT values,
     // and `input_size` is the ABI size of INPUT. This is the only SendInput

@@ -50,7 +50,7 @@ impl ManagementState {
         self.history_search_failed = None;
         self.history_rows_filter = Some(self.history_filter.clone());
         self.history = page.entries;
-        self.history_next_cursor = page.next_cursor;
+        self.history_has_more = page.has_more;
     }
 
     pub fn fail_history_refresh(&mut self, request_id: u64, error: &AppError) {
@@ -63,12 +63,12 @@ impl ManagementState {
             // Degraded mode: show the reason instead of rows that can no longer be confirmed.
             self.history.clear();
             self.history_rows_filter = None;
-            self.history_next_cursor = None;
+            self.history_has_more = false;
             self.history_unavailable = Some(summary);
         } else if self.history_rows_filter.as_ref() != Some(&self.history_filter) {
             // The rows answer an earlier search; showing them under this one would mislead.
             self.history.clear();
-            self.history_next_cursor = None;
+            self.history_has_more = false;
             self.history_search_failed = Some(summary);
         } else {
             self.notify(Tone::Error, NoticeScope::History, summary);
@@ -115,13 +115,5 @@ impl ManagementState {
     #[must_use]
     pub fn history_copy(&self, id: EntryId) -> Option<String> {
         self.history_entry(id)?.text().map(str::to_owned)
-    }
-
-    pub fn finish_copy(&mut self, scope: NoticeScope, copied: bool) {
-        if copied {
-            self.notify(Tone::Success, scope, "Copied to the clipboard");
-        } else {
-            self.notify(Tone::Error, scope, "Could not copy to the clipboard");
-        }
     }
 }

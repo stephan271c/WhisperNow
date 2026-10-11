@@ -75,10 +75,6 @@ pub(crate) trait ShortcutRegistrar: Send + Sync {
     fn register(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError>;
     fn unregister(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError>;
 
-    fn diagnostic(&self) -> Option<ShortcutRegistrationError> {
-        None
-    }
-
     /// Whether a shortcut may be registered for moments, such as the cancel
     /// shortcut for each dictation. A desktop portal that asks the user to
     /// approve every registration cannot.
@@ -213,11 +209,15 @@ impl ShortcutCoordinator {
         registrar: Arc<dyn ShortcutRegistrar>,
         recording: Result<RecordingBinding, ShortcutRegistrationError>,
         enabled: LifecycleProbe,
+        startup_failure: Option<ShortcutRegistrationError>,
     ) -> Self {
         let coordinator = Self {
             native: Mutex::new(Native::default()),
             pressed: Mutex::new(HashSet::new()),
-            published: Mutex::new(Published::default()),
+            published: Mutex::new(Published {
+                failure: startup_failure,
+                ..Published::default()
+            }),
             dictation_active: AtomicBool::new(false),
             registrar,
             enabled,
@@ -226,7 +226,12 @@ impl ShortcutCoordinator {
             Ok(recording) => {
                 let mut native = coordinator.native();
                 native.recording = Some(recording);
-                let _reported = coordinator.sync_locked(&mut native, true);
+                if coordinator.sync_locked(&mut native, true)
+                    == Err(ShortcutRegistrationError::PortalUnavailable)
+                    && let Some(error) = startup_failure
+                {
+                    coordinator.published().failure = Some(error);
+                }
             }
             Err(error) => coordinator.published().failure = Some(error),
         }
@@ -253,9 +258,7 @@ impl ShortcutCoordinator {
     }
 
     pub(crate) fn registration_diagnostic(&self) -> Option<ShortcutRegistrationError> {
-        self.published()
-            .failure
-            .or_else(|| self.registrar.diagnostic())
+        self.published().failure
     }
 
     /// Why the cancel shortcut could not be registered for the last dictation.
@@ -498,9 +501,9 @@ impl CancelShortcut {
     /// binding a recording shortcut already holds is never registered twice.
     /// A binding that could not be unregistered stays live, so the next sync
     /// tries again.
-    fn sync<R: ShortcutRegistrar + ?Sized>(
+    fn sync(
         &mut self,
-        registrar: &R,
+        registrar: &dyn ShortcutRegistrar,
         wanted: bool,
         recording: Option<ShortcutId>,
     ) {

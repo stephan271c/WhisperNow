@@ -1,7 +1,7 @@
 use whispernow_domain::{
-    ApiKey, DEFAULT_CLEANUP_MODEL_ID, InvalidApiKey, LlmProvider, MINICPM_CLEANUP_MODEL_ID,
-    ProviderEndpoint, Settings, SettingsError, SetupCheckpoint, Shortcut, ShortcutKey,
-    ShortcutModifier, VocabularyReplacement,
+    ApiKey, CLEANUP_MODEL_IDS, CleanupTarget, DEFAULT_CLEANUP_MODEL_ID, InvalidApiKey, LlmProvider,
+    MissingCleanupField, ProviderEndpoint, RemoteProvider, Settings, SettingsError,
+    SetupCheckpoint, Shortcut, ShortcutKey, ShortcutModifier, VocabularyReplacement,
 };
 
 fn shortcut(modifiers: &[ShortcutModifier], key: &str) -> Shortcut {
@@ -114,6 +114,7 @@ fn incomplete_cleanup_settings_save_with_a_warning_until_repaired() {
 
     settings.cleanup_enabled = true;
     assert_eq!(settings.validate(), Ok(()));
+    assert_eq!(settings.cleanup_target(), Err(MissingCleanupField::Model));
     assert_eq!(
         settings.cleanup_warning().as_deref(),
         Some(
@@ -121,6 +122,10 @@ fn incomplete_cleanup_settings_save_with_a_warning_until_repaired() {
         )
     );
     settings.provider_settings_mut(LlmProvider::Custom).model = "local".to_owned();
+    assert_eq!(
+        settings.cleanup_target(),
+        Err(MissingCleanupField::Endpoint)
+    );
     assert_eq!(
         settings.cleanup_warning().as_deref(),
         Some(
@@ -130,26 +135,43 @@ fn incomplete_cleanup_settings_save_with_a_warning_until_repaired() {
     settings.provider_settings_mut(LlmProvider::Custom).api_base =
         Some(ProviderEndpoint::parse("http://localhost:8080/v1").expect("endpoint"));
     assert_eq!(settings.cleanup_warning(), None);
+    let CleanupTarget::Remote(target) = settings.cleanup_target().expect("repaired target") else {
+        panic!("remote cleanup target");
+    };
+    assert_eq!(target.model, "local");
+    let RemoteProvider::Custom(endpoint) = target.provider else {
+        panic!("custom provider endpoint");
+    };
+    assert_eq!(endpoint.expose_url(), "http://localhost:8080/v1");
 }
 
 #[test]
 fn the_cleanup_model_is_the_one_saved_for_its_provider_else_the_default() {
     let mut settings = Settings::default();
-    assert_eq!(settings.cleanup_model_id(), DEFAULT_CLEANUP_MODEL_ID);
+    assert_eq!(
+        settings.cleanup_model_id().as_str(),
+        DEFAULT_CLEANUP_MODEL_ID
+    );
     settings
         .provider_settings_mut(LlmProvider::LocalCleanup)
-        .model = MINICPM_CLEANUP_MODEL_ID.to_owned();
-    assert_eq!(settings.cleanup_model_id(), MINICPM_CLEANUP_MODEL_ID);
+        .model = CLEANUP_MODEL_IDS[1].to_owned();
+    assert_eq!(settings.cleanup_model_id().as_str(), CLEANUP_MODEL_IDS[1]);
     // A model saved before there was a choice, or one no longer offered, is the default.
     for saved in ["", "cleanup", "whispernow-cleanup-gone"] {
         settings
             .provider_settings_mut(LlmProvider::LocalCleanup)
             .model = saved.to_owned();
-        assert_eq!(settings.cleanup_model_id(), DEFAULT_CLEANUP_MODEL_ID);
+        assert_eq!(
+            settings.cleanup_model_id().as_str(),
+            DEFAULT_CLEANUP_MODEL_ID
+        );
     }
     // Another provider's model never chooses it.
-    settings.provider_settings_mut(LlmProvider::Custom).model = MINICPM_CLEANUP_MODEL_ID.to_owned();
-    assert_eq!(settings.cleanup_model_id(), DEFAULT_CLEANUP_MODEL_ID);
+    settings.provider_settings_mut(LlmProvider::Custom).model = CLEANUP_MODEL_IDS[1].to_owned();
+    assert_eq!(
+        settings.cleanup_model_id().as_str(),
+        DEFAULT_CLEANUP_MODEL_ID
+    );
 }
 
 #[test]

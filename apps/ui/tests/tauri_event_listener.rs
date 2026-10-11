@@ -28,7 +28,7 @@ async fn history_changed_event_from_tauri_refreshes_history() {
         .expect("history event");
 
     let threw = eval_bool(&format!(
-        r#"(() => {{
+        r"(() => {{
           try {{
             window.__whispernowListeners.get({:?})({{ payload: {event} }});
             return false;
@@ -36,7 +36,7 @@ async fn history_changed_event_from_tauri_refreshes_history() {
             console.error(error);
             return true;
           }}
-        }})()"#,
+        }})()",
         whispernow_domain::ipc::HISTORY_CHANGED_EVENT
     ));
 

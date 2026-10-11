@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    io::ErrorKind,
-    path::{Path, PathBuf},
-};
+use std::{fs, io::ErrorKind};
 use whispernow_domain::AppError;
 
 use rusqlite::{Connection, Transaction, params};
@@ -11,6 +7,7 @@ use time::{OffsetDateTime, PrimitiveDateTime, format_description::well_known::Rf
 use whispernow_domain::{EntryStatus, ErrorCategory, UtcMillis};
 
 use super::{history_error, status_text};
+use crate::AppPaths;
 
 /// One record of the Python release's `history.json`; its other fields are not kept.
 #[derive(Deserialize)]
@@ -25,15 +22,15 @@ struct LegacyRecord {
 /// Imports `history.json` once: it is renamed to `history.json.migrated` afterwards.
 pub(super) fn import_legacy(
     connection: &mut Connection,
-    legacy_path: &Path,
+    paths: &AppPaths,
 ) -> Result<Option<AppError>, AppError> {
-    let document = match fs::read_to_string(legacy_path) {
+    let document = match fs::read_to_string(paths.history_file()) {
         Ok(document) => document,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(history_error("history_import_read")),
     };
     let Ok(records) = serde_json::from_str::<Vec<LegacyRecord>>(&document) else {
-        quarantine_legacy(legacy_path)?;
+        quarantine_legacy(paths)?;
         tracing::warn!(
             code = "history_import_invalid",
             "legacy transcription history was quarantined"
@@ -53,7 +50,7 @@ pub(super) fn import_legacy(
     transaction
         .commit()
         .map_err(|_| history_error("history_import_commit"))?;
-    rename_legacy(legacy_path, "migrated");
+    rename_legacy(paths);
     Ok(None)
 }
 
@@ -113,8 +110,8 @@ fn parse_legacy_timestamp(value: &str) -> Option<UtcMillis> {
         .map(UtcMillis)
 }
 
-fn rename_legacy(source: &Path, suffix: &str) {
-    if fs::rename(source, suffixed_path(source, suffix)).is_err() {
+fn rename_legacy(paths: &AppPaths) {
+    if fs::rename(paths.history_file(), paths.migrated_history_file()).is_err() {
         tracing::warn!(
             code = "history_import_rename",
             "legacy transcription history could not be renamed; it is imported again at the next start"
@@ -122,11 +119,8 @@ fn rename_legacy(source: &Path, suffix: &str) {
     }
 }
 
-fn quarantine_legacy(source: &Path) -> Result<(), AppError> {
-    let parent = source
-        .parent()
-        .ok_or_else(|| history_error("history_import_quarantine"))?;
-    let quarantine = parent.join("history-quarantine");
+fn quarantine_legacy(paths: &AppPaths) -> Result<(), AppError> {
+    let quarantine = paths.history_quarantine_dir();
     fs::create_dir_all(&quarantine).map_err(|_| history_error("history_import_quarantine"))?;
     let initial = quarantine.join("history.json.invalid");
     let destination = if initial.exists() {
@@ -137,13 +131,6 @@ fn quarantine_legacy(source: &Path) -> Result<(), AppError> {
     } else {
         initial
     };
-    fs::rename(source, destination).map_err(|_| history_error("history_import_quarantine"))
-}
-
-fn suffixed_path(path: &Path, suffix: &str) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("history.json");
-    path.with_file_name(format!("{file_name}.{suffix}"))
+    fs::rename(paths.history_file(), destination)
+        .map_err(|_| history_error("history_import_quarantine"))
 }

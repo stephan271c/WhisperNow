@@ -16,10 +16,9 @@ use rig_core::{
     streaming::StreamedAssistantContent,
 };
 use whispernow_core::llm::{
-    LlmDecoding, LlmError, LlmFinishReason, LlmProvider, LlmProviderConfig, LlmRequest,
-    LlmResponse, ProviderEndpoint,
+    LlmError, LlmFinishReason, LlmPrompt, LlmRemoteConfig, LlmResponse, ProviderEndpoint,
 };
-use whispernow_domain::ApiKey;
+use whispernow_domain::{ApiKey, RemoteProvider};
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Anthropic requires `max_tokens`. Rig fills in the output maximum of the Claude models it
@@ -30,19 +29,19 @@ const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 
-pub async fn complete(request: LlmRequest) -> Result<LlmResponse, LlmError> {
-    match ProviderModel::connect(&request.config)? {
+pub async fn complete(config: LlmRemoteConfig, prompt: LlmPrompt) -> Result<LlmResponse, LlmError> {
+    match ProviderModel::connect(&config)? {
         ProviderModel::Anthropic(model) => {
-            stream_model(model, &request, |_| LlmFinishReason::Unknown).await
+            stream_model(model, &prompt, |_| LlmFinishReason::Unknown).await
         }
         ProviderModel::Gemini(model) => {
-            stream_model(model, &request, |response| {
+            stream_model(model, &prompt, |response| {
                 gemini_finish_reason(response.and_then(|response| response.finish_reason.as_ref()))
             })
             .await
         }
         ProviderModel::OpenAiCompatible(model) => {
-            stream_model(model, &request, |_| LlmFinishReason::Unknown).await
+            stream_model(model, &prompt, |_| LlmFinishReason::Unknown).await
         }
     }
 }
@@ -56,16 +55,15 @@ enum ProviderModel {
 }
 
 impl ProviderModel {
-    fn connect(config: &LlmProviderConfig) -> Result<Self, LlmError> {
+    fn connect(config: &LlmRemoteConfig) -> Result<Self, LlmError> {
         let http = reqwest::Client::builder()
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
             .build()
             .map_err(|_| LlmError::InvalidRequest)?;
-        let endpoint = config.endpoint.as_ref();
         let key = config.api_key.as_ref();
-        let model_id = config.model.clone();
-        match config.provider {
-            LlmProvider::Anthropic => {
+        let model_id = config.target.model.clone();
+        match &config.target.provider {
+            RemoteProvider::Anthropic(endpoint) => {
                 let mut builder = anthropic::Client::builder()
                     .api_key(required_key(key)?)
                     .http_client(http);
@@ -79,7 +77,7 @@ impl ProviderModel {
                     .get_or_insert(ANTHROPIC_FALLBACK_MAX_TOKENS);
                 Ok(Self::Anthropic(model))
             }
-            LlmProvider::Gemini => {
+            RemoteProvider::Gemini(endpoint) => {
                 let mut builder = gemini::Client::builder()
                     .api_key(required_key(key)?)
                     .http_client(http);
@@ -89,49 +87,64 @@ impl ProviderModel {
                 let client = builder.build().map_err(|_| LlmError::InvalidRequest)?;
                 Ok(Self::Gemini(client.completion_model(model_id)))
             }
-            LlmProvider::OpenAi
-            | LlmProvider::OpenRouter
-            | LlmProvider::Ollama
-            | LlmProvider::Custom => {
-                let key = match config.provider {
-                    LlmProvider::OpenAi | LlmProvider::OpenRouter => required_key(key)?,
-                    _ => key
-                        .map(|key| key.expose_secret().to_owned())
-                        .unwrap_or_default(),
+            RemoteProvider::OpenAi(endpoint) => Self::openai_compatible(
+                http,
+                required_key(key)?,
+                model_id,
+                openai_compatible_base_url(endpoint.as_ref(), OPENAI_BASE_URL),
+            ),
+            RemoteProvider::OpenRouter(endpoint) => Self::openai_compatible(
+                http,
+                required_key(key)?,
+                model_id,
+                openai_compatible_base_url(endpoint.as_ref(), OPENROUTER_BASE_URL),
+            ),
+            RemoteProvider::Ollama(endpoint) => {
+                // Ollama serves the OpenAI protocol under `/v1`; a bare host means its default path.
+                let base_url = match endpoint {
+                    Some(endpoint) if endpoint.url().path() == "/" => {
+                        format!("{}/v1", endpoint.expose_url().trim_end_matches('/'))
+                    }
+                    _ => openai_compatible_base_url(endpoint.as_ref(), OLLAMA_BASE_URL),
                 };
-                let client = openai::CompletionsClient::builder()
-                    .api_key(key)
-                    .base_url(openai_compatible_base_url(config.provider, endpoint)?)
-                    .http_client(http)
-                    .build()
-                    .map_err(|_| LlmError::InvalidRequest)?;
-                Ok(Self::OpenAiCompatible(client.completion_model(model_id)))
+                Self::openai_compatible(
+                    http,
+                    key.map(|key| key.expose_secret().to_owned())
+                        .unwrap_or_default(),
+                    model_id,
+                    base_url,
+                )
             }
-            LlmProvider::LocalCleanup => Err(LlmError::InvalidRequest),
+            RemoteProvider::Custom(endpoint) => Self::openai_compatible(
+                http,
+                key.map(|key| key.expose_secret().to_owned())
+                    .unwrap_or_default(),
+                model_id,
+                endpoint.expose_url().to_owned(),
+            ),
         }
+    }
+
+    fn openai_compatible(
+        http: reqwest::Client,
+        key: String,
+        model: String,
+        base_url: String,
+    ) -> Result<Self, LlmError> {
+        let client = openai::CompletionsClient::builder()
+            .api_key(key)
+            .base_url(base_url)
+            .http_client(http)
+            .build()
+            .map_err(|_| LlmError::InvalidRequest)?;
+        Ok(Self::OpenAiCompatible(client.completion_model(model)))
     }
 }
 
-fn openai_compatible_base_url(
-    provider: LlmProvider,
-    endpoint: Option<&ProviderEndpoint>,
-) -> Result<String, LlmError> {
-    let Some(endpoint) = endpoint else {
-        return match provider {
-            LlmProvider::OpenAi => Ok(OPENAI_BASE_URL.to_owned()),
-            LlmProvider::OpenRouter => Ok(OPENROUTER_BASE_URL.to_owned()),
-            LlmProvider::Ollama => Ok(OLLAMA_BASE_URL.to_owned()),
-            _ => Err(LlmError::InvalidRequest),
-        };
-    };
-    // Ollama serves the OpenAI protocol under `/v1`; a bare host means its default path.
-    if provider == LlmProvider::Ollama && endpoint.url().path() == "/" {
-        return Ok(format!(
-            "{}/v1",
-            endpoint.expose_url().trim_end_matches('/')
-        ));
-    }
-    Ok(endpoint.expose_url().to_owned())
+fn openai_compatible_base_url(endpoint: Option<&ProviderEndpoint>, default: &str) -> String {
+    endpoint
+        .map_or(default, ProviderEndpoint::expose_url)
+        .to_owned()
 }
 
 fn required_key(key: Option<&ApiKey>) -> Result<String, LlmError> {
@@ -158,16 +171,10 @@ fn gemini_finish_reason(reason: Option<&GeminiFinishReason>) -> LlmFinishReason 
 /// limit or temperature of ours, so reasoning models keep their full budget. An empty
 /// system prompt sends no system message at all, where rig would otherwise send an empty
 /// one.
-fn completion_request<M: CompletionModel>(model: &M, request: &LlmRequest) -> CompletionRequest {
-    let mut builder = model.completion_request(request.prompt.user());
-    if let LlmDecoding::LocalCleanup {
-        max_output_tokens, ..
-    } = &request.decoding
-    {
-        builder = builder.max_tokens(*max_output_tokens);
-    }
-    if !request.prompt.system().is_empty() {
-        builder = builder.preamble(request.prompt.system().to_owned());
+fn completion_request<M: CompletionModel>(model: &M, prompt: &LlmPrompt) -> CompletionRequest {
+    let mut builder = model.completion_request(prompt.user());
+    if !prompt.system().is_empty() {
+        builder = builder.preamble(prompt.system().to_owned());
     }
     builder.build()
 }
@@ -176,14 +183,14 @@ fn completion_request<M: CompletionModel>(model: &M, request: &LlmRequest) -> Co
 /// response; for the other providers the reason is unknown.
 async fn stream_model<M, R>(
     model: M,
-    request: &LlmRequest,
+    prompt: &LlmPrompt,
     reported_finish: R,
 ) -> Result<LlmResponse, LlmError>
 where
     M: CompletionModel,
     R: FnOnce(Option<&M::StreamingResponse>) -> LlmFinishReason,
 {
-    let provider_request = completion_request(&model, request);
+    let provider_request = completion_request(&model, prompt);
     let mut stream = model
         .stream(provider_request)
         .await
@@ -221,26 +228,25 @@ fn map_error(error: &CompletionError) -> LlmError {
 mod tests {
     use super::{
         ANTHROPIC_FALLBACK_MAX_TOKENS, GeminiFinishReason, OLLAMA_BASE_URL, OPENROUTER_BASE_URL,
-        ProviderModel, complete, completion_request, gemini_finish_reason,
-        openai_compatible_base_url, required_key,
+        ProviderModel, completion_request, gemini_finish_reason, openai_compatible_base_url,
+        required_key,
     };
     use whispernow_core::llm::{
-        LlmDecoding, LlmError, LlmFinishReason, LlmProvider, LlmProviderConfig, LlmRequest,
-        build_cleanup_prompt,
+        LlmError, LlmFinishReason, LlmPrompt, LlmRemoteConfig, build_cleanup_prompt,
     };
-    use whispernow_domain::{ApiKey, ProviderEndpoint};
+    use whispernow_domain::{ApiKey, ProviderEndpoint, RemoteCleanupTarget, RemoteProvider};
 
-    fn request(provider: LlmProvider, model: &str) -> LlmRequest {
-        LlmRequest {
-            config: LlmProviderConfig {
-                provider,
-                model: model.to_owned(),
+    fn request(provider: RemoteProvider, model: &str) -> (LlmRemoteConfig, LlmPrompt) {
+        (
+            LlmRemoteConfig {
+                target: RemoteCleanupTarget {
+                    provider,
+                    model: model.to_owned(),
+                },
                 api_key: ApiKey::new("token").ok(),
-                endpoint: None,
             },
-            prompt: build_cleanup_prompt("  um so can you send me the report by friday \n"),
-            decoding: LlmDecoding::default(),
-        }
+            build_cleanup_prompt("  um so can you send me the report by friday \n"),
+        )
     }
 
     #[test]
@@ -261,50 +267,36 @@ mod tests {
     }
 
     #[test]
-    fn openai_compatible_providers_share_one_base_url_rule() {
+    fn openai_compatible_providers_use_the_override_or_their_default() {
         assert_eq!(
-            openai_compatible_base_url(LlmProvider::OpenRouter, None),
-            Ok(OPENROUTER_BASE_URL.to_owned())
+            openai_compatible_base_url(None, OPENROUTER_BASE_URL),
+            OPENROUTER_BASE_URL
         );
         assert_eq!(
-            openai_compatible_base_url(LlmProvider::Ollama, None),
-            Ok(OLLAMA_BASE_URL.to_owned())
+            openai_compatible_base_url(None, OLLAMA_BASE_URL),
+            OLLAMA_BASE_URL
         );
+        let endpoint = ProviderEndpoint::parse("http://127.0.0.1:11434/v1").expect("endpoint");
         assert_eq!(
-            openai_compatible_base_url(
-                LlmProvider::Ollama,
-                Some(
-                    &ProviderEndpoint::parse("http://127.0.0.1:11434/").expect("loopback endpoint")
-                )
-            ),
-            Ok("http://127.0.0.1:11434/v1".to_owned())
+            openai_compatible_base_url(Some(&endpoint), OPENROUTER_BASE_URL),
+            endpoint.expose_url()
         );
-        assert_eq!(
-            openai_compatible_base_url(
-                LlmProvider::Ollama,
-                Some(
-                    &ProviderEndpoint::parse("http://127.0.0.1:11434/v1")
-                        .expect("loopback endpoint")
-                )
-            ),
-            Ok("http://127.0.0.1:11434/v1".to_owned())
-        );
-        assert_eq!(
-            openai_compatible_base_url(LlmProvider::Custom, None),
-            Err(LlmError::InvalidRequest)
-        );
+        let (config, _) = request(RemoteProvider::Custom(endpoint), "custom");
+        assert!(matches!(
+            ProviderModel::connect(&config),
+            Ok(ProviderModel::OpenAiCompatible(_))
+        ));
     }
 
     #[test]
     fn an_api_request_sends_no_temperature_or_output_limit() {
-        let request = request(LlmProvider::Ollama, "local");
-        let Ok(ProviderModel::OpenAiCompatible(model)) = ProviderModel::connect(&request.config)
-        else {
+        let (config, prompt) = request(RemoteProvider::Ollama(None), "local");
+        let Ok(ProviderModel::OpenAiCompatible(model)) = ProviderModel::connect(&config) else {
             panic!("Ollama speaks the OpenAI protocol");
         };
         let body = rig_core::providers::openai::completion::CompletionRequest::try_from((
             "local".to_owned(),
-            completion_request(&model, &request),
+            completion_request(&model, &prompt),
         ))
         .expect("an OpenAI request");
         let body = serde_json::to_value(body).expect("serializable");
@@ -331,21 +323,12 @@ mod tests {
             ("claude-opus-4-7", 128_000),
             ("claude-opus-5-5", ANTHROPIC_FALLBACK_MAX_TOKENS),
         ] {
-            let request = request(LlmProvider::Anthropic, model_id);
-            let Ok(ProviderModel::Anthropic(model)) = ProviderModel::connect(&request.config)
-            else {
+            let (config, prompt) = request(RemoteProvider::Anthropic(None), model_id);
+            let Ok(ProviderModel::Anthropic(model)) = ProviderModel::connect(&config) else {
                 panic!("an Anthropic model");
             };
             assert_eq!(model.default_max_tokens, Some(maximum), "{model_id}");
-            assert_eq!(completion_request(&model, &request).max_tokens, None);
+            assert_eq!(completion_request(&model, &prompt).max_tokens, None);
         }
-    }
-
-    #[tokio::test]
-    async fn the_local_cleanup_model_is_rejected_by_the_remote_call() {
-        assert!(matches!(
-            complete(request(LlmProvider::LocalCleanup, "cleanup")).await,
-            Err(LlmError::InvalidRequest)
-        ));
     }
 }

@@ -10,19 +10,15 @@ use serde_json::Value;
 use super::{RecordingBar, meter_bars};
 use crate::client::fake;
 use crate::overlay::format_elapsed;
-use crate::test_support::{Page, Probe, focused, snapshot, tag, text};
-use crate::{AppShell, ManagementState, SettingKey, UiState};
+use crate::test_support::{Page, Probe, snapshot, tag};
+use crate::{ManagementState, SettingKey, UiState};
 
 #[component]
-fn Surface(initial_state: UiState, settings: bool, probe: Probe) -> Element {
+fn Surface(initial_state: UiState, probe: Probe) -> Element {
     let state = use_signal(move || initial_state);
     let management = use_signal(ManagementState::default);
     probe.provide(state, management);
-    if settings {
-        rsx! { AppShell {} }
-    } else {
-        rsx! { RecordingBar {} }
-    }
+    rsx! { RecordingBar {} }
 }
 
 fn phase_event(phase: Phase) -> EventPayload {
@@ -77,7 +73,7 @@ fn state_in(phase: Phase) -> UiState {
 
 fn render(state: UiState) -> String {
     dioxus_ssr::render_element(rsx! {
-        Surface { initial_state: state, settings: false, probe: Probe::default() }
+        Surface { initial_state: state, probe: Probe::default() }
     })
 }
 
@@ -358,7 +354,6 @@ fn mount_bar(state: UiState) -> Page {
             Surface,
             SurfaceProps {
                 initial_state: state,
-                settings: false,
                 probe,
             },
         )
@@ -388,24 +383,6 @@ fn last_request(command: &str) -> Value {
 }
 
 #[test]
-fn a_cleanup_failure_in_the_overlay_opens_ai_cleanup_settings() {
-    let phase = Phase::Error {
-        error: AppError::new(
-            ErrorCategory::Cleanup,
-            "cleanup_failed",
-            "AI cleanup was unavailable, so the transcript was kept as recognized",
-        ),
-    };
-    let mut bar = mount_bar(state_in(phase));
-    bar.click("overlay-action");
-    assert_eq!(fake::commands(), ["open_main_window"]);
-    assert_eq!(
-        last_request("open_main_window"),
-        serde_json::json!("ai_cleanup")
-    );
-}
-
-#[test]
 fn a_pending_settings_save_leaves_recording_cancellation_available() {
     let mut bar = mount_bar(state_in(Phase::Idle));
     bar.act(|mut actions| {
@@ -416,7 +393,7 @@ fn a_pending_settings_save_leaves_recording_cancellation_available() {
                 &crate::test_support::editable_settings(),
             ));
         actions.change_setting(SettingKey::Theme, |settings| {
-            settings.theme = whispernow_domain::ThemePreference::Dark
+            settings.theme = whispernow_domain::ThemePreference::Dark;
         });
     });
     show(&mut bar, phase_event(listening(RecordingMode::Toggle)));
@@ -471,6 +448,12 @@ fn controls_send_the_overlay_commands_and_wait_for_them() {
             "overlay-action",
             "open_main_window",
             open(MainWindowSection::Settings),
+        ),
+        (
+            failed(ErrorCategory::Cleanup),
+            "overlay-action",
+            "open_main_window",
+            open(MainWindowSection::AiCleanup),
         ),
     ];
     for (phase, target, command, request) in cases {
@@ -570,60 +553,4 @@ fn a_failed_overlay_action_is_announced_until_the_next_phase() {
 
     show(&mut bar, phase_event(listening(RecordingMode::Toggle)));
     assert_eq!(announced(&bar), "Starting…");
-}
-
-#[test]
-fn an_overlay_navigation_request_opens_its_route_and_moves_focus() {
-    let mut idle = UiState::default();
-    idle.hydrate(snapshot(Phase::Idle));
-    let mut page = Page::new(|probe| {
-        VirtualDom::new_with_props(
-            Surface,
-            SurfaceProps {
-                initial_state: idle,
-                settings: true,
-                probe,
-            },
-        )
-    });
-    page.mount("page-heading");
-    let selected = |page: &Page, id: &str| {
-        let html = page.html();
-        tag(&html, &format!("nav-{id}"))
-            .expect("navigation item")
-            .contains("aria-current=\"page\"")
-    };
-    assert!(selected(&page, "home"));
-    assert_eq!(focused(), None);
-
-    for (section, id, title) in [
-        (MainWindowSection::History, "history", "History"),
-        (
-            MainWindowSection::Settings,
-            "settings-general",
-            "General &#38; Shortcuts",
-        ),
-        (MainWindowSection::Audio, "settings-audio", "Audio"),
-        (
-            MainWindowSection::SpeechModels,
-            "settings-models",
-            "Speech models",
-        ),
-        (
-            MainWindowSection::AiCleanup,
-            "settings-ai-cleanup",
-            "AI cleanup",
-        ),
-        (MainWindowSection::History, "history", "History"),
-    ] {
-        page.publish(EventPayload::NavigationRequested { section });
-        assert!(selected(&page, id), "{section:?}");
-        let html = page.html();
-        assert_eq!(text(&html, "page-heading"), title, "{section:?}");
-        assert_eq!(
-            focused().as_deref(),
-            Some("page-heading"),
-            "{section:?}: each followed request moves focus to the heading"
-        );
-    }
 }

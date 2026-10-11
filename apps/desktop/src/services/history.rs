@@ -5,9 +5,7 @@ use std::{
 use whispernow_domain::AppError;
 
 use whispernow_domain::ErrorCategory;
-use whispernow_domain::{
-    EntryId, HistoryEntry, HistoryLimit, HistoryPage, HistoryPageRequest, NewHistoryEntry,
-};
+use whispernow_domain::{EntryId, HistoryLimit, HistoryPage, HistoryPageRequest, NewHistoryEntry};
 use whispernow_platform::{AppPaths, SqliteHistoryRepository};
 
 struct HistoryState {
@@ -60,7 +58,7 @@ impl HistoryStore {
         audio: &[f32],
         keep_audio: bool,
         limit: HistoryLimit,
-    ) -> Result<HistoryEntry, AppError> {
+    ) -> Result<EntryId, AppError> {
         let mut state = self.lock();
         self.repository(&mut state)?
             .insert(entry, audio, keep_audio, limit)
@@ -217,12 +215,13 @@ mod tests {
         let saved = store
             .insert(entry("before"), &[0.25; 160], true, HistoryLimit::Last20)
             .expect("insert");
-        let audio = store.audio(saved.id).expect("retained audio");
+        let audio = store.audio(saved).expect("retained audio");
         store.with_repository_closed(|| ()).expect("closed");
         let page = store
             .list(&HistoryPageRequest::first_page(HistoryFilter::default()))
             .expect("reopened");
-        assert_eq!(page.entries, [saved]);
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].id, saved);
         assert_eq!(
             store.audio(page.entries[0].id).expect("audio reopened"),
             audio

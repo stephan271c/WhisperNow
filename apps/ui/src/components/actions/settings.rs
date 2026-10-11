@@ -22,9 +22,6 @@ impl UiContext {
     }
 
     pub(crate) fn set_credential(self, provider: LlmProvider, key: ApiKey) {
-        if self.management.peek().settings_pending() {
-            return;
-        }
         let request = SetApiKeyRequest { provider, key };
         self.run(
             UiOperation::CredentialMutation,
@@ -37,9 +34,6 @@ impl UiContext {
     }
 
     pub(crate) fn clear_credential(self, provider: LlmProvider) {
-        if self.management.peek().settings_pending() {
-            return;
-        }
         self.run(
             UiOperation::CredentialMutation,
             async move { client::invoke("clear_api_key", Some(&provider)).await },

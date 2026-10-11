@@ -43,7 +43,7 @@ impl Gateway {
     /// only logged.
     pub(crate) async fn cancel_dictation(&self) {
         if let Err(error) = self
-            .run_command("cancel_dictation", Failure::Local, |services, _| {
+            .run_command("cancel_dictation", Failure::Local, |services| {
                 services.dictation.cancel()
             })
             .await
@@ -56,7 +56,7 @@ impl Gateway {
     /// failure, so a failed copy is only logged.
     pub(crate) async fn copy_last_transcript_from_tray(&self) {
         if let Err(error) = self
-            .run_command("copy_last_transcript", Failure::Local, |services, _| {
+            .run_command("copy_last_transcript", Failure::Local, |services| {
                 services.copy_last_transcript()
             })
             .await

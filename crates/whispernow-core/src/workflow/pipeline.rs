@@ -1,43 +1,12 @@
 use std::time::Instant;
 
-use crate::CancellationToken;
-use crate::asr::AsrEngine;
-use whispernow_domain::{UtcMillis, VocabularyReplacement};
+use whispernow_domain::VocabularyReplacement;
 
 use super::{PipelineFailureKind, PreparedTranscription, join_segment_texts};
-
-/// Blank text is not a failure here: a segment may hold only noise, and the joined transcript
-/// decides whether the recording produced text.
-pub fn recognize_segment(
-    samples: &[f32],
-    asr: &mut dyn AsrEngine,
-    cancellation: &CancellationToken,
-) -> Result<String, PipelineFailureKind> {
-    if cancellation.is_cancelled() {
-        return Err(PipelineFailureKind::Cancelled);
-    }
-    let asr_started = Instant::now();
-    let result = asr
-        .transcribe(samples)
-        .map_err(|_| PipelineFailureKind::RecognitionFailed);
-    tracing::info!(
-        stage = "segment_asr",
-        duration_ms = asr_started.elapsed().as_secs_f64() * 1_000.0,
-        sample_count = samples.len(),
-        outcome = if result.is_ok() {
-            "completed"
-        } else {
-            "failed"
-        },
-        "batch pipeline stage completed"
-    );
-    result
-}
 
 /// Joins the decoded segment texts and applies the vocabulary once to the whole transcript.
 /// A recording without segments contained no speech.
 pub fn prepare_segmented(
-    timestamp: UtcMillis,
     segments: &[String],
     vocabulary: &[VocabularyReplacement],
 ) -> Result<PreparedTranscription, PipelineFailureKind> {
@@ -60,7 +29,6 @@ pub fn prepare_segmented(
         "batch pipeline stage completed"
     );
     Ok(PreparedTranscription {
-        timestamp,
         raw_text,
         final_text: deterministic_text.clone(),
         deterministic_text,

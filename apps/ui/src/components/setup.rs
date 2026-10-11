@@ -7,7 +7,7 @@ use whispernow_domain::ipc::{
     ModelSummary, Permission, PermissionKind, PermissionStatus, SetupTestResult,
 };
 use whispernow_domain::{
-    ModelAvailability, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
+    ModelAvailability, ModelId, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
 };
 
 use super::actions::DisabledReason;
@@ -15,6 +15,7 @@ use super::configuration::{RECORDING_MODES, choice_value, chosen};
 use super::home::percent;
 use super::labels::{self, format_bytes};
 use super::models::{DownloadProgress, ModelLanguages};
+use super::ui::focus::take_focus;
 use super::ui::{Banner, Button, ButtonVariant, Icon, IconName, Segmented, ShortcutLabel, Tone};
 use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture};
 use crate::{BlockedReason, NoticeScope, Route, SettingsRoute, SetupTest, UiContext, UiOperation};
@@ -56,7 +57,8 @@ const fn step_title(step: Option<SetupStep>) -> &'static str {
 
 #[component]
 pub(super) fn SetupScreen() -> Element {
-    let management = use_context::<UiContext>().management;
+    let context = use_context::<UiContext>();
+    let management = context.management;
     let setup = management.read().setup.clone();
     let step = setup
         .as_ref()
@@ -70,11 +72,7 @@ pub(super) fn SetupScreen() -> Element {
             return;
         }
         focused_step.set(step);
-        if let Some(heading) = heading.peek().clone() {
-            spawn(async move {
-                let _ = heading.set_focus(true).await;
-            });
-        }
+        take_focus(heading);
     }));
     let Some(setup) = setup else {
         return rsx! { p { role: "status", "Loading setup…" } };
@@ -131,20 +129,20 @@ fn SetupStepper(step: SetupStep) -> Element {
 
 #[component]
 fn SetupFooter(step: SetupStep) -> Element {
-    let actions = use_context::<UiContext>();
-    let navigator = use_context::<UiContext>().navigator;
-    let management = use_context::<UiContext>().management;
+    let context = use_context::<UiContext>();
+    let navigator = context.navigator;
+    let management = context.management;
     let model_downloading = management
         .read()
         .setup_checkpoint()
-        .is_some_and(|checkpoint| actions.download(&checkpoint.model_id).is_some());
+        .is_some_and(|checkpoint| context.download(&checkpoint.model_id).is_some());
     let ready = management.read().setup_step_ready(model_downloading);
-    let save_blocked = actions
+    let save_blocked = context
         .blocked(UiOperation::SaveSetup)
-        .or(actions.settings_pending());
-    let complete_blocked = actions
+        .or(context.settings_pending());
+    let complete_blocked = context
         .blocked(UiOperation::CompleteSetup)
-        .or(actions.settings_blocked());
+        .or(context.settings_blocked());
     let finishing = step == SetupStep::TryIt;
     let primary_blocked = if finishing {
         complete_blocked
@@ -165,7 +163,7 @@ fn SetupFooter(step: SetupStep) -> Element {
             Button {
                 id: "setup-back",
                 disabled: step == SetupStep::Welcome || save_blocked.is_some(),
-                onclick: move |_| actions.move_setup(previous_step(step)),
+                onclick: move |_| context.move_setup(previous_step(step)),
                 "Back"
             }
             Button {
@@ -173,7 +171,7 @@ fn SetupFooter(step: SetupStep) -> Element {
                 variant: ButtonVariant::Ghost,
                 disabled: save_blocked.is_some(),
                 onclick: move |_| {
-                    actions.finish_setup_later();
+                    context.finish_setup_later();
                     navigator.go(Route::Home);
                 },
                 "Finish later"
@@ -185,9 +183,9 @@ fn SetupFooter(step: SetupStep) -> Element {
                 aria_describedby: describedby,
                 onclick: move |_| {
                     if finishing {
-                        actions.complete_setup();
+                        context.complete_setup();
                     } else {
-                        actions.move_setup(next_step(step));
+                        context.move_setup(next_step(step));
                     }
                 },
                 match step {
@@ -225,11 +223,11 @@ fn WelcomeStep() -> Element {
 /// One card per permission this platform needs. Leaving the step stops the polling.
 #[component]
 fn PermissionsStep() -> Element {
-    let actions = use_context::<UiContext>();
-    let management = use_context::<UiContext>().management;
-    use_effect(move || actions.load_permissions());
+    let context = use_context::<UiContext>();
+    let management = context.management;
+    use_effect(move || context.load_permissions());
     let permissions = management.read().permissions.clone();
-    let reason = actions
+    let reason = context
         .state
         .read()
         .snapshot
@@ -259,11 +257,11 @@ fn PermissionsStep() -> Element {
 
 #[component]
 fn PermissionCard(permission: Permission, blocked: bool) -> Element {
-    let actions = use_context::<UiContext>();
+    let context = use_context::<UiContext>();
     let kind = permission.kind;
     let slug = permission_slug(kind);
     let (title, purpose) = permission_text(kind);
-    let asking = actions.permission_requested(kind);
+    let asking = context.management.read().requested_permission == Some(kind);
     let granted = permission.status == PermissionStatus::Granted;
     let (state, icon) = match permission.status {
         PermissionStatus::Granted => ("Granted", IconName::CheckCircle),
@@ -291,7 +289,7 @@ fn PermissionCard(permission: Permission, blocked: bool) -> Element {
                     aria_label: "Grant {title}",
                     disabled: blocked || asking,
                     aria_describedby: blocked.then_some("permission-disabled-reason"),
-                    onclick: move |_| actions.request_permission(kind),
+                    onclick: move |_| context.request_permission(kind),
                     if permission.status == PermissionStatus::Denied { "Ask again" } else { "Grant" }
                 }
             }
@@ -299,7 +297,7 @@ fn PermissionCard(permission: Permission, blocked: bool) -> Element {
                 Button {
                     id: "permission-{slug}-settings",
                     aria_label: "Open Settings for {title}",
-                    onclick: move |_| actions.open_permission_settings(kind),
+                    onclick: move |_| context.open_permission_settings(kind),
                     "Open Settings"
                 }
             }
@@ -380,10 +378,11 @@ const fn permission_help(kind: PermissionKind, status: PermissionStatus) -> Opti
 }
 
 #[component]
-fn ModelStep(selected: String) -> Element {
-    let management = use_context::<UiContext>().management;
+fn ModelStep(selected: ModelId) -> Element {
+    let context = use_context::<UiContext>();
+    let management = context.management;
     let mut show_all = use_signal(|| false);
-    let download_blocked = use_context::<UiContext>().blocked(UiOperation::DownloadModel);
+    let download_blocked = context.blocked(UiOperation::DownloadModel);
     let models = management
         .read()
         .speech_models()
@@ -393,7 +392,7 @@ fn ModelStep(selected: String) -> Element {
     // The recommended model and the saved choice; the others wait behind "Show all".
     let (featured, others): (Vec<_>, Vec<_>) = models
         .into_iter()
-        .partition(|model| model.recommended || model.id.as_str() == selected);
+        .partition(|model| model.recommended || model.id == selected);
     let hidden = others.len();
     rsx! { div { class: "setup-content",
         p { class: "field-help", "Models run on this computer. The download continues in the background, so you can go on to the next step." }
@@ -403,12 +402,12 @@ fn ModelStep(selected: String) -> Element {
         fieldset { class: "setup-models",
             legend { "Speech model" }
             for model in featured {
-                ModelChoice { key: "{model.id.as_str()}", checked: model.id.as_str() == selected, model }
+                ModelChoice { key: "{model.id.as_str()}", checked: model.id == selected, model, download_blocked }
             }
             if show_all() {
                 div { id: "setup-more-models",
                     for model in others {
-                        ModelChoice { key: "{model.id.as_str()}", checked: model.id.as_str() == selected, model }
+                        ModelChoice { key: "{model.id.as_str()}", checked: model.id == selected, model, download_blocked }
                     }
                 }
             }
@@ -428,14 +427,17 @@ fn ModelStep(selected: String) -> Element {
 }
 
 #[component]
-fn ModelChoice(model: ModelSummary, checked: bool) -> Element {
-    let actions = use_context::<UiContext>();
-    let mut management = use_context::<UiContext>().management;
+fn ModelChoice(
+    model: ModelSummary,
+    checked: bool,
+    download_blocked: Option<BlockedReason>,
+) -> Element {
+    let context = use_context::<UiContext>();
+    let mut management = context.management;
     let id = model.id.clone();
     let slug = id.as_str().replace('.', "-");
     let name = model.display_name.clone();
-    let download = actions.download(&id);
-    let download_blocked = actions.blocked(UiOperation::DownloadModel);
+    let download = context.download(&id);
     rsx! { div { class: "choice-row setup-model",
         label { class: "setup-model-choice",
             input { r#type: "radio", name: "setup-model", value: model.id.as_str(), checked,
@@ -462,7 +464,7 @@ fn ModelChoice(model: ModelSummary, checked: bool) -> Element {
                     aria_describedby: download_blocked.map(|_| "setup-models-disabled-reason"),
                     onclick: move |_| {
                         management.write().edit_setup(|setup| setup.model_id = id.clone());
-                        actions.download_model(id.clone());
+                        context.download_model(id.clone());
                     },
                     "Download"
                 }
@@ -494,7 +496,8 @@ fn shortcut_conflict(shortcut: &Shortcut) -> Option<&'static str> {
 
 #[component]
 fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
-    let mut management = use_context::<UiContext>().management;
+    let context = use_context::<UiContext>();
+    let mut management = context.management;
     let conflict = shortcut_conflict(&checkpoint.recording_shortcut);
     rsx! { div { class: "setup-content",
         p { class: "field-help", "Hold records while you hold the keys; toggle starts on one press and stops on the next." }
@@ -527,23 +530,22 @@ fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
 #[component]
 fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
     let context = use_context::<UiContext>();
-    let actions = context;
     let management = context.management;
     let model_name = management
         .read()
         .model_display_name(checkpoint.model_id.as_str());
     let model_ready = management.read().setup_model_ready();
-    let download = actions.download(&checkpoint.model_id);
+    let download = context.download(&checkpoint.model_id);
     let devices = management.read().devices.clone();
     let test = management.read().setup_test.clone();
     let running = matches!(test, Some(SetupTest::Running { .. }));
     let level = percent(context.state.read().audio_rms);
-    let start_blocked = actions
+    let start_blocked = context
         .blocked(UiOperation::StartSetupTest)
-        .or(actions.phase_blocked());
-    let stop_blocked = actions.blocked(UiOperation::StopSetupTest);
+        .or(context.phase_blocked());
+    let stop_blocked = context.blocked(UiOperation::StopSetupTest);
     let selected = checkpoint.input_device.clone().unwrap_or_default();
-    let settings_pending = actions.settings_pending().is_some();
+    let settings_pending = context.settings_pending().is_some();
     rsx! { div { class: "setup-content",
         p { class: "field-help", "Say a sentence to check that everything works. The test shows the text here; nothing is pasted or saved." }
         dl { id: "setup-summary", class: "setup-summary",
@@ -557,7 +559,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
             select { id: "setup-microphone", value: "{selected}", disabled: running || settings_pending,
                 onchange: move |event| {
                     let value = event.value();
-                    actions.save_setup_edit(|setup| setup.input_device = (!value.is_empty()).then_some(value));
+                    context.save_setup_edit(|setup| setup.input_device = (!value.is_empty()).then_some(value));
                 },
                 option { value: "", "System default" }
                 for device in devices { option { value: "{device.id}", "{device.display_name}" } }
@@ -577,7 +579,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
                     p { class: "field-help", role: "status", "Listening… speak now, then press Stop." }
                     Button { id: "setup-test-stop", variant: ButtonVariant::Primary,
                         disabled: stop_blocked.is_some(),
-                        onclick: move |_| actions.stop_setup_test(),
+                        onclick: move |_| context.stop_setup_test(),
                         Icon { name: IconName::Stop }
                         "Stop"
                     }
@@ -585,7 +587,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
                     Button { id: "setup-test-start", variant: ButtonVariant::Primary,
                         disabled: start_blocked.is_some(),
                         aria_describedby: start_blocked.map(|_| "setup-test-disabled-reason"),
-                        onclick: move |_| actions.start_setup_test(),
+                        onclick: move |_| context.start_setup_test(),
                         Icon { name: IconName::Mic }
                         if test.is_some() { "Test again" } else { "Start test" }
                     }
@@ -652,8 +654,9 @@ fn setup_fix(category: whispernow_domain::ErrorCategory) -> &'static str {
 
 #[component]
 fn DoneStep() -> Element {
-    let navigator = use_context::<UiContext>().navigator;
-    let management = use_context::<UiContext>().management;
+    let context = use_context::<UiContext>();
+    let navigator = context.navigator;
+    let management = context.management;
     // The saved settings, or the checkpoint setup finished with until they load.
     let shortcut = {
         let management = management.read();

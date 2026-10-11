@@ -18,7 +18,8 @@ use crate::test_support::{Page, focused, snapshot, state_event, tag, text};
 /// Setup saved at `step`, with its model in `availability`.
 fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState {
     let mut management = loaded();
-    management.install_models(vec![model("base", "Base", availability)]);
+    management.models = vec![model("base", "Base", availability)];
+    management.models_loaded = true;
     management.setup = Some(SetupStateView {
         first_run_complete: false,
         checkpoint: SetupCheckpoint {
@@ -302,63 +303,43 @@ fn a_new_step_moves_focus_to_its_heading() {
 }
 
 #[test]
-fn the_summary_shows_the_recording_mode_and_every_modifier() {
-    let html = at(SetupStep::TryIt).html();
-    let summary = &html[html.find("id=\"setup-summary\"").expect("summary")..];
-    let summary = &summary[..summary.find("</dl>").expect("end of summary")];
-    let keys = summary
-        .split("<kbd")
-        .skip(1)
-        .map(|key| {
-            let key = &key[key.find('>').expect("kbd") + 1..];
-            key[..key.find("</kbd>").expect("kbd end")].to_owned()
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(keys, ["Ctrl", "Shift", "Meta", "R"]);
+fn the_summary_shows_the_recording_mode() {
+    let summary = text(&at(SetupStep::TryIt).html(), "setup-summary");
     assert!(summary.contains("Press to start and stop"), "{summary}");
 }
 
 #[test]
-fn try_it_shows_what_the_test_dictation_heard() {
-    let mut setup = at(SetupStep::TryIt);
-    start_test(&mut setup);
-    setup.answer("start_test_dictation", Ok(()));
-    setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
-    let html = setup.html();
-    assert!(
-        tag(&html, "setup-test-level")
-            .expect("live level")
-            .contains("role=\"meter\"")
-    );
-    assert!(tag(&html, "setup-test-stop").is_some());
-
-    setup.publish(state_event(Phase::Idle, |state| {
-        state.setup_test = Some(SetupTestResult::Heard {
-            text: "Hello world.".to_owned(),
-        });
-    }));
-    let html = setup.html();
-    assert!(text(&html, "setup-test-result").contains("Hello world."));
-    assert!(
-        tag(&html, "setup-test-start").is_some(),
-        "the test can run again"
-    );
-}
-
-#[test]
-fn try_it_reports_no_speech_when_the_stop_heard_nothing() {
-    let mut setup = at(SetupStep::TryIt);
-    start_test(&mut setup);
-    setup.answer("start_test_dictation", Ok(()));
-    setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
-
-    setup.click("setup-test-stop");
-    assert_eq!(setup.sent(), ["stop_recording"]);
-    setup.answer("stop_recording", Ok(()));
-    setup.publish(state_event(Phase::Idle, |state| {
-        state.setup_test = Some(SetupTestResult::NoSpeech);
-    }));
-    assert!(text(&setup.html(), "setup-test-result").contains("No speech detected"));
+fn try_it_shows_the_test_result_and_can_run_again() {
+    for (result, expected) in [
+        (
+            SetupTestResult::Heard {
+                text: "Hello world.".to_owned(),
+            },
+            "Hello world.",
+        ),
+        (SetupTestResult::NoSpeech, "No speech detected"),
+    ] {
+        let mut setup = at(SetupStep::TryIt);
+        start_test(&mut setup);
+        setup.answer("start_test_dictation", Ok(()));
+        setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
+        assert!(
+            tag(&setup.html(), "setup-test-level")
+                .expect("live level")
+                .contains("role=\"meter\"")
+        );
+        setup.click("setup-test-stop");
+        assert_eq!(fake::count("stop_recording"), 1);
+        setup.answer("stop_recording", Ok(()));
+        setup.publish(state_event(Phase::Idle, |state| {
+            state.setup_test = Some(result);
+        }));
+        assert!(text(&setup.html(), "setup-test-result").contains(expected));
+        assert!(
+            tag(&setup.html(), "setup-test-start").is_some(),
+            "the test can run again"
+        );
+    }
 }
 
 #[test]

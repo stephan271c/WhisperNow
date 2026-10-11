@@ -77,26 +77,25 @@ fn state_changed_event_carries_the_whole_snapshot() {
 #[test]
 fn update_changed_event_round_trips() {
     let state = UpdateState {
-        phase: UpdatePhase::Downloading,
-        available_version: Some("2.4.0".to_owned()),
-        release_notes: Some("Fixes and improvements".to_owned()),
-        progress: Some(UpdateProgress {
-            downloaded_bytes: 512,
-            total_bytes: Some(1_024),
-        }),
-        error: None,
+        phase: UpdatePhase::Downloading {
+            version: "2.4.0".to_owned(),
+            release_notes: Some("Fixes and improvements".to_owned()),
+            progress: UpdateProgress {
+                downloaded_bytes: 512,
+                total_bytes: Some(1_024),
+            },
+        },
         notification_dismissed: false,
         restart_deferred: false,
-        manual_package: None,
     };
     let event = EventPayload::UpdateChanged { state };
     assert_eq!(event.event_name(), super::UPDATE_CHANGED_EVENT);
 
     let value = to_value(&event).expect("serialize update event");
     assert_eq!(value["type"], "update_changed");
-    assert_eq!(value["payload"]["state"]["phase"], "downloading");
+    assert_eq!(value["payload"]["state"]["phase"]["phase"], "downloading");
     assert_eq!(
-        value["payload"]["state"]["progress"],
+        value["payload"]["state"]["phase"]["progress"],
         json!({"downloadedBytes": 512, "totalBytes": 1024})
     );
     assert_eq!(value["payload"]["state"]["restartDeferred"], false);

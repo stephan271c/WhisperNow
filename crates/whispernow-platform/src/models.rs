@@ -17,7 +17,7 @@ use whispernow_domain::{
     ArchiveFormat, DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelRegistry,
 };
 
-use crate::AppPaths;
+use crate::{AppPaths, atomic_file::sync_directory, clear_data::remove_path};
 
 mod cuda_pack;
 
@@ -91,14 +91,10 @@ impl Default for DownloadTimeouts {
 pub struct ModelStore {
     registry: ModelRegistry,
     paths: AppPaths,
-    http: ModelHttp,
-    mutation: Mutex<()>,
-    cuda_pack: &'static [CudaPackArchive],
-}
-
-struct ModelHttp {
     runtime: tokio::runtime::Runtime,
     client: reqwest::Client,
+    mutation: Mutex<()>,
+    cuda_pack: &'static [CudaPackArchive],
 }
 
 impl ModelStore {
@@ -131,7 +127,8 @@ impl ModelStore {
         Self {
             registry,
             paths,
-            http: ModelHttp { runtime, client },
+            runtime,
+            client,
             mutation: Mutex::new(()),
             cuda_pack: cuda_pack::CUDA_PACK,
         }
@@ -227,7 +224,7 @@ impl ModelStore {
             remove_path(&destination).map_err(|_| filesystem("replace installed model"))?;
         }
         fs::rename(staged_root, &destination).map_err(|_| filesystem("install staged model"))?;
-        sync_directory(&models_dir)?;
+        sync_directory(&models_dir).map_err(|_| filesystem("sync models directory"))?;
         Ok(destination)
     }
 }
@@ -374,8 +371,8 @@ impl ModelStore {
             .suffix(".part")
             .tempfile_in(self.paths.models_dir())
             .map_err(|_| filesystem("create download staging file"))?;
-        self.http.runtime.block_on(download_file(
-            &self.http.client,
+        self.runtime.block_on(download_file(
+            &self.client,
             &PinnedFile {
                 url: &definition.source.url,
                 size_bytes: definition.source.archive_size_bytes,
@@ -472,15 +469,6 @@ fn validate_artifact_path(root: &Path, relative: &Path) -> Result<bool, ModelSto
     Ok(!components.is_empty())
 }
 
-fn remove_path(path: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || metadata.is_file() {
-        fs::remove_file(path)
-    } else {
-        fs::remove_dir_all(path)
-    }
-}
-
 fn extract_tar(
     input: impl Read,
     into: &Path,
@@ -525,18 +513,6 @@ fn write_member(
         .write(true)
         .open(destination)
         .map_err(|_| filesystem("create staged model artifact"))?;
-    copy_entry(input, &mut output, cancellation)?;
-    output
-        .flush()
-        .and_then(|()| output.sync_all())
-        .map_err(|_| filesystem("sync staged model artifact"))
-}
-
-fn copy_entry(
-    input: &mut impl Read,
-    output: &mut impl Write,
-    cancellation: &CancellationToken,
-) -> Result<(), ModelStoreError> {
     let mut buffer = vec![0_u8; DOWNLOAD_BUFFER_BYTES];
     loop {
         check_cancelled(cancellation)?;
@@ -550,7 +526,10 @@ fn copy_entry(
             .write_all(&buffer[..count])
             .map_err(|_| filesystem("write staged model artifact"))?;
     }
-    Ok(())
+    output
+        .flush()
+        .and_then(|()| output.sync_all())
+        .map_err(|_| filesystem("sync staged model artifact"))
 }
 
 fn check_cancelled(cancellation: &CancellationToken) -> Result<(), ModelStoreError> {
@@ -597,16 +576,4 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
 
 fn filesystem(operation: &'static str) -> ModelStoreError {
     ModelStoreError::Filesystem { operation }
-}
-
-#[cfg(unix)]
-fn sync_directory(directory: &Path) -> Result<(), ModelStoreError> {
-    File::open(directory)
-        .and_then(|file| file.sync_all())
-        .map_err(|_| filesystem("sync models directory"))
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_directory: &Path) -> Result<(), ModelStoreError> {
-    Ok(())
 }

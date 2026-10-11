@@ -1,7 +1,7 @@
 use whispernow_core::{
     audio::TARGET_SAMPLE_RATE,
     llm::CleanupFallback,
-    workflow::{PipelineFailureKind, PreparedTranscription, has_microphone_audio},
+    workflow::{PipelineFailureKind, PreparedTranscription},
 };
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{ErrorCategory, Phase, SetupTestResult};
@@ -67,7 +67,7 @@ impl Worker {
                     failure,
                     warning,
                 } => {
-                    state.last_transcript = Some(transcript);
+                    state.last_transcript = (!transcript.trim().is_empty()).then_some(transcript);
                     state.last_error = failure.clone().or(warning);
                     failure.map_or(Phase::Idle, |error| Phase::Error { error })
                 }
@@ -83,7 +83,12 @@ impl Worker {
         }
     }
 
-    pub(super) fn cancelled(&self, recording: &Recording, samples: &[f32]) -> Outcome {
+    pub(super) fn cancelled(
+        &self,
+        recording: &Recording,
+        samples: &[f32],
+        has_audio: bool,
+    ) -> Outcome {
         let reason = self.parts.state.lock().cancel;
         let (status, error) = match reason {
             Some(CancelReason::User) => (EntryStatus::Cancelled, None),
@@ -97,7 +102,13 @@ impl Worker {
             ),
             None => return Outcome::Cancelled,
         };
-        self.keep_untranscribed(recording, samples, status, error.map(str::to_owned));
+        self.keep_untranscribed(
+            recording,
+            samples,
+            has_audio,
+            status,
+            error.map(str::to_owned),
+        );
         Outcome::Cancelled
     }
 
@@ -105,11 +116,13 @@ impl Worker {
         &self,
         recording: &Recording,
         samples: &[f32],
+        has_audio: bool,
         error: AppError,
     ) -> Outcome {
         self.keep_untranscribed(
             recording,
             samples,
+            has_audio,
             EntryStatus::Failed,
             Some(error.summary.clone()),
         );
@@ -120,13 +133,12 @@ impl Worker {
         &self,
         recording: &Recording,
         samples: &[f32],
+        has_audio: bool,
         kind: PipelineFailureKind,
     ) -> Outcome {
-        let Some(error) = pipeline_error(kind) else {
-            return self.cancelled(recording, samples);
-        };
+        let error = pipeline_error(kind);
         if kept_failure(kind) {
-            return self.failed_with_audio(recording, samples, error);
+            return self.failed_with_audio(recording, samples, has_audio, error);
         }
         let heard_nothing = matches!(
             kind,
@@ -144,10 +156,11 @@ impl Worker {
         &self,
         recording: &Recording,
         samples: &[f32],
+        has_audio: bool,
         status: EntryStatus,
         error: Option<String>,
     ) {
-        if recording.trigger.is_setup_test() || !has_microphone_audio(samples) {
+        if recording.trigger.is_setup_test() || !has_audio {
             return;
         }
         let saved = self.parts.history.insert(
@@ -251,10 +264,8 @@ pub(super) fn interruption_warning(interruption: CaptureInterruption) -> Option<
     }
 }
 
-/// A cancelled pipeline ends without one.
-pub(super) fn pipeline_error(kind: PipelineFailureKind) -> Option<AppError> {
-    Some(match kind {
-        PipelineFailureKind::Cancelled => return None,
+pub(super) fn pipeline_error(kind: PipelineFailureKind) -> AppError {
+    match kind {
         PipelineFailureKind::NoAudio => AppError::new(
             ErrorCategory::Audio,
             "no_microphone_audio",
@@ -272,7 +283,7 @@ pub(super) fn pipeline_error(kind: PipelineFailureKind) -> Option<AppError> {
             "transcription_failed",
             "Speech recognition failed",
         ),
-    })
+    }
 }
 
 const fn kept_failure(kind: PipelineFailureKind) -> bool {
@@ -280,8 +291,6 @@ const fn kept_failure(kind: PipelineFailureKind) -> bool {
         PipelineFailureKind::RecognitionFailed
         | PipelineFailureKind::EmptyTranscription
         | PipelineFailureKind::UnknownTokens => true,
-        PipelineFailureKind::NoAudio
-        | PipelineFailureKind::NoSpeech
-        | PipelineFailureKind::Cancelled => false,
+        PipelineFailureKind::NoAudio | PipelineFailureKind::NoSpeech => false,
     }
 }

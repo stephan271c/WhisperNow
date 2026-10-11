@@ -43,7 +43,7 @@ pub(crate) async fn set_api_key(
     state: tauri::State<'_, Gateway>,
 ) -> Result<SettingsView, AppError> {
     state
-        .run_command("set_api_key", Failure::Local, move |services, _| {
+        .run_command("set_api_key", Failure::Local, move |services| {
             services.settings.set_api_key(&request)
         })
         .await
@@ -55,7 +55,7 @@ pub(crate) async fn clear_api_key(
     state: tauri::State<'_, Gateway>,
 ) -> Result<SettingsView, AppError> {
     state
-        .run_command("clear_api_key", Failure::Local, move |services, _| {
+        .run_command("clear_api_key", Failure::Local, move |services| {
             services.settings.clear_api_key(request)
         })
         .await
@@ -66,7 +66,7 @@ pub(crate) async fn list_audio_devices(
     state: tauri::State<'_, Gateway>,
 ) -> Result<Vec<AudioDevice>, AppError> {
     state
-        .run_command("list_audio_devices", Failure::Published, |services, _| {
+        .run_command("list_audio_devices", Failure::Published, |services| {
             services.list_audio_devices()
         })
         .await
@@ -77,7 +77,7 @@ pub(crate) async fn test_microphone(
     state: tauri::State<'_, Gateway>,
 ) -> Result<MicrophoneTestResponse, AppError> {
     state
-        .run_command("test_microphone", Failure::Local, |services, _| {
+        .run_command("test_microphone", Failure::Local, |services| {
             services.test_microphone()
         })
         .await
@@ -88,7 +88,7 @@ pub(crate) async fn list_models(
     state: tauri::State<'_, Gateway>,
 ) -> Result<Vec<ModelSummary>, AppError> {
     state
-        .run_command("list_models", Failure::Published, |services, _| {
+        .run_command("list_models", Failure::Published, |services| {
             services.models.list()
         })
         .await
@@ -99,7 +99,7 @@ pub(crate) async fn get_setup_state(
     state: tauri::State<'_, Gateway>,
 ) -> Result<SetupStateView, AppError> {
     state
-        .run_command("get_setup_state", Failure::Published, |services, _| {
+        .run_command("get_setup_state", Failure::Published, |services| {
             services.settings.get_setup_state()
         })
         .await
@@ -110,7 +110,7 @@ pub(crate) async fn data_locations(
     state: tauri::State<'_, Gateway>,
 ) -> Result<Vec<DataLocation>, AppError> {
     state
-        .run_command("data_locations", Failure::Published, |services, _| {
+        .run_command("data_locations", Failure::Published, |services| {
             services.data_locations()
         })
         .await
@@ -130,7 +130,7 @@ pub(crate) async fn dismiss_recording_overlay(
 #[tauri::command]
 pub(crate) async fn copy_last_transcript(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
-        .run_command("copy_last_transcript", Failure::Published, |services, _| {
+        .run_command("copy_last_transcript", Failure::Published, |services| {
             services.copy_last_transcript()
         })
         .await?;
@@ -155,7 +155,7 @@ pub(crate) async fn open_main_window(
 #[tauri::command]
 pub(crate) async fn get_state(state: tauri::State<'_, Gateway>) -> Result<AppState, AppError> {
     state
-        .run_command("get_state", Failure::Published, |services, _| {
+        .run_command("get_state", Failure::Published, |services| {
             Ok(services.state.snapshot())
         })
         .await
@@ -167,7 +167,7 @@ pub(crate) async fn get_history(
     state: tauri::State<'_, Gateway>,
 ) -> Result<HistoryPage, AppError> {
     state
-        .run_command("get_history", Failure::Local, move |services, _| {
+        .run_command("get_history", Failure::Local, move |services| {
             services.history(&request)
         })
         .await
@@ -180,7 +180,7 @@ pub(crate) async fn get_history_audio(
     state: tauri::State<'_, Gateway>,
 ) -> Result<tauri::ipc::Response, AppError> {
     state
-        .run_command("get_history_audio", Failure::Local, move |services, _| {
+        .run_command("get_history_audio", Failure::Local, move |services| {
             services.history.audio(request)
         })
         .await
@@ -192,7 +192,7 @@ pub(crate) async fn open_recordings_folder(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("open_recordings_folder", Failure::Local, |services, _| {
+        .run_command("open_recordings_folder", Failure::Local, |services| {
             services.open_recordings_folder()
         })
         .await
@@ -207,7 +207,7 @@ pub(crate) async fn delete_history_entry(
         .run_command(
             "delete_history_entry",
             Failure::Published,
-            move |services, _| services.delete_history_entry(request),
+            move |services| services.delete_history_entry(request),
         )
         .await
 }
@@ -215,7 +215,7 @@ pub(crate) async fn delete_history_entry(
 #[tauri::command]
 pub(crate) async fn clear_history(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
-        .run_command("clear_history", Failure::Published, |services, _| {
+        .run_command("clear_history", Failure::Published, |services| {
             services.clear_history()
         })
         .await
@@ -234,12 +234,11 @@ pub(crate) async fn download_model(
     request: ModelId,
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
+    let shutdown = state.shutdown.clone();
     state
-        .run_command(
-            "download_model",
-            Failure::Published,
-            move |services, shutdown| services.models.download(&request, &shutdown),
-        )
+        .run_command("download_model", Failure::Published, move |services| {
+            services.models.download(&request, &shutdown)
+        })
         .await
 }
 
@@ -249,7 +248,7 @@ pub(crate) async fn cancel_download(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("cancel_download", Failure::Published, move |services, _| {
+        .run_command("cancel_download", Failure::Published, move |services| {
             services.models.cancel_download(&request)
         })
         .await
@@ -261,7 +260,7 @@ pub(crate) async fn select_model(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("select_model", Failure::Published, move |services, _| {
+        .run_command("select_model", Failure::Published, move |services| {
             services
                 .models
                 .select(request, &services.settings, &services.dictation)
@@ -275,7 +274,7 @@ pub(crate) async fn delete_model(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("delete_model", Failure::Published, move |services, _| {
+        .run_command("delete_model", Failure::Published, move |services| {
             services.models.delete(&request)
         })
         .await
@@ -290,7 +289,7 @@ pub(crate) async fn save_setup_checkpoint(
         .run_command(
             "save_setup_checkpoint",
             Failure::Published,
-            move |services, _| {
+            move |services| {
                 services
                     .settings
                     .save_setup_checkpoint(request, services.models.model_store())
@@ -312,7 +311,7 @@ pub(crate) async fn restart_setup(
     state: tauri::State<'_, Gateway>,
 ) -> Result<SetupStateView, AppError> {
     state
-        .run_command("restart_setup", Failure::Local, |services, _| {
+        .run_command("restart_setup", Failure::Local, |services| {
             services.settings.restart_setup()
         })
         .await
@@ -342,7 +341,7 @@ pub(crate) async fn open_permission_settings(request: PermissionKind) -> Result<
 #[tauri::command]
 pub(crate) async fn start_test_dictation(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
-        .run_command("start_test_dictation", Failure::Local, |services, _| {
+        .run_command("start_test_dictation", Failure::Local, |services| {
             services
                 .dictation
                 .start(RecordingTrigger::SetupTest)
@@ -354,7 +353,7 @@ pub(crate) async fn start_test_dictation(state: tauri::State<'_, Gateway>) -> Re
 #[tauri::command]
 pub(crate) async fn stop_recording(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
-        .run_command("stop_recording", Failure::Published, |services, _| {
+        .run_command("stop_recording", Failure::Published, |services| {
             services.dictation.stop()
         })
         .await
@@ -363,7 +362,7 @@ pub(crate) async fn stop_recording(state: tauri::State<'_, Gateway>) -> Result<(
 #[tauri::command]
 pub(crate) async fn cancel_recording(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
-        .run_command("cancel_recording", Failure::Published, |services, _| {
+        .run_command("cancel_recording", Failure::Published, |services| {
             services.dictation.cancel()
         })
         .await

@@ -70,41 +70,30 @@ pub(crate) fn convert_interleaved_to_mono(
         .collect())
 }
 
-/// Arbitrary worker-side chunks are buffered until Rubato can process a full
-/// input block. `finish` supplies the final partial block and pumps the filter
-/// delay, returning exactly `ceil(input_frames * TARGET_SAMPLE_RATE / input_rate)` samples
-/// across the complete stream. The instance cannot be reused after finish.
+/// Buffers worker-side chunks and flushes the filter delay to return exactly
+/// `ceil(input_frames * TARGET_SAMPLE_RATE / input_rate)` samples across the stream.
 #[derive(Debug)]
-pub(crate) struct StreamingResampler {
-    resampling: Resampling,
-    finished: bool,
-}
-
-#[derive(Debug)]
-enum Resampling {
+pub(crate) enum Resampling {
     Passthrough,
-    Sinc(SincResampler),
+    Sinc(Box<SincResampler>),
 }
 
-struct SincResampler {
+pub(crate) struct SincResampler {
     input_sample_rate: u32,
-    resampler: Box<dyn Resampler<f32>>,
+    resampler: Async<f32>,
     pending: Vec<f32>,
     delay_remaining: usize,
     total_input_frames: u64,
     total_output_frames: usize,
 }
 
-impl StreamingResampler {
+impl Resampling {
     pub fn new(input_sample_rate: u32) -> Result<Self, AudioProcessingError> {
         if input_sample_rate == 0 {
             return Err(AudioProcessingError::InvalidSampleRate);
         }
         if input_sample_rate == TARGET_SAMPLE_RATE {
-            return Ok(Self {
-                resampling: Resampling::Passthrough,
-                finished: false,
-            });
+            return Ok(Self::Passthrough);
         }
 
         let parameters = SincInterpolationParameters::new(128, WindowFunction::Blackman2)
@@ -121,37 +110,25 @@ impl StreamingResampler {
         .map_err(|_| AudioProcessingError::ResamplerConstruction)?;
         let delay_remaining = resampler.output_delay();
 
-        Ok(Self {
-            resampling: Resampling::Sinc(SincResampler {
-                input_sample_rate,
-                resampler: Box::new(resampler),
-                pending: Vec::with_capacity(RESAMPLER_CHUNK_FRAMES * 2),
-                delay_remaining,
-                total_input_frames: 0,
-                total_output_frames: 0,
-            }),
-            finished: false,
-        })
+        Ok(Self::Sinc(Box::new(SincResampler {
+            input_sample_rate,
+            resampler,
+            pending: Vec::with_capacity(RESAMPLER_CHUNK_FRAMES * 2),
+            delay_remaining,
+            total_input_frames: 0,
+            total_output_frames: 0,
+        })))
     }
 
     pub fn push(&mut self, input: &[f32]) -> Result<AudioBlock, AudioProcessingError> {
-        if self.finished {
-            return Err(AudioProcessingError::AlreadyFinished);
-        }
-        match &mut self.resampling {
+        match self {
             Resampling::Passthrough => Ok(AudioBlock::new(input.to_vec())),
             Resampling::Sinc(resampler) => resampler.push(input),
         }
     }
 
-    /// Flushes the final partial chunk and filter delay. Calling it twice is an
-    /// error, preventing accidental duplicate tail delivery.
     pub fn finish(&mut self) -> Result<AudioBlock, AudioProcessingError> {
-        if self.finished {
-            return Err(AudioProcessingError::AlreadyFinished);
-        }
-        self.finished = true;
-        match &mut self.resampling {
+        match self {
             Resampling::Passthrough => Ok(AudioBlock::default()),
             Resampling::Sinc(resampler) => resampler.finish(),
         }
@@ -251,8 +228,6 @@ pub enum AudioProcessingError {
     ResamplerConstruction,
     #[error("audio resampling failed")]
     Resampling,
-    #[error("audio stream has already been finished")]
-    AlreadyFinished,
 }
 
 fn normalize_float(sample: f32) -> f32 {
@@ -293,7 +268,7 @@ mod tests {
         let input: Vec<f32> = (0..input_len)
             .map(|index| ((index as f32) * 0.01).sin() * 0.5)
             .collect();
-        let mut resampler = StreamingResampler::new(rate).expect("construct resampler");
+        let mut resampler = Resampling::new(rate).expect("construct resampler");
         let mut output = Vec::new();
         let mut offset = 0;
         let mut size_index = 0;
@@ -329,20 +304,12 @@ mod tests {
     }
 
     #[test]
-    fn identity_rate_is_stateful_and_finish_is_one_shot() {
-        let mut resampler = StreamingResampler::new(TARGET_SAMPLE_RATE).expect("identity");
+    fn identity_rate_preserves_samples_and_has_no_tail() {
+        let mut resampler = Resampling::new(TARGET_SAMPLE_RATE).expect("identity");
         assert_eq!(
             resampler.push(&[0.25, -0.25]).expect("push").samples(),
             &[0.25, -0.25]
         );
         assert!(resampler.finish().expect("finish").is_empty());
-        assert_eq!(
-            resampler.finish(),
-            Err(AudioProcessingError::AlreadyFinished)
-        );
-        assert_eq!(
-            resampler.push(&[0.0]),
-            Err(AudioProcessingError::AlreadyFinished)
-        );
     }
 }

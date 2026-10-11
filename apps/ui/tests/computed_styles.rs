@@ -21,23 +21,37 @@ try {
   const view = frame.contentWindow;
   const doc = frame.contentDocument;
   doc.documentElement.dataset.theme = theme;
-  for (const css of [...JSON.parse(stylesheets), extra]) {
+  for (const css of JSON.parse(stylesheets)) {
     const style = doc.createElement("style");
     style.textContent = css;
     doc.head.append(style);
   }
 
+  const selectors = [];
   let mediaRules = 0;
-  for (const sheet of doc.styleSheets) {
-    for (const rule of sheet.cssRules) {
+  const collectRules = rules => {
+    for (const rule of rules) {
+      if (rule.selectorText) {
+        selectors.push({
+          text: rule.selectorText,
+          classes: [...rule.selectorText.matchAll(/\.([-_a-zA-Z][-_a-zA-Z0-9]*)/g)].map(match => match[1])
+        });
+      }
       if (rule instanceof view.CSSMediaRule && rule.conditionText === "(prefers-reduced-motion: reduce)") {
         // WebDriver has no cross-browser media emulation API; change only the parsed condition.
         rule.media.mediaText = reduced ? "all" : "not all";
         mediaRules++;
       }
+      if (rule.cssRules) collectRules(rule.cssRules);
     }
+  };
+  for (const sheet of doc.styleSheets) {
+    collectRules(sheet.cssRules);
   }
   if (mediaRules === 0) throw new Error("production reduced-motion media rules are missing");
+  const override = doc.createElement("style");
+  override.textContent = extra;
+  doc.head.append(override);
 
   doc.body.innerHTML = `
     <main class="settings-content">
@@ -74,6 +88,19 @@ try {
       <section class="overlay-pill overlay-starting"><svg class="overlay-bars overlay-bars-arming" viewBox="0 0 60 20"></svg></section>
       <section class="overlay-pill overlay-transcribing"><span class="overlay-indicator"><span id="spinner" class="overlay-spinner" data-motion="animation"></span></span></section>
     </main>`;
+
+  for (const element of doc.querySelectorAll("[data-text]")) {
+    const owner = element.closest("[class]");
+    if (!owner || owner.classList.length === 0) {
+      throw new Error(`text fixture ${element.id} has no styled class`);
+    }
+    for (const name of owner.classList) {
+      if (!selectors.some(rule => rule.classes.includes(name) &&
+          (owner.matches(rule.text) || element.matches(rule.text)))) {
+        throw new Error(`text fixture ${element.id} uses unstyled class .${name}`);
+      }
+    }
+  }
 
   for (const bars of doc.querySelectorAll(".overlay-bars")) {
     const arming = bars.classList.contains("overlay-bars-arming");
@@ -205,17 +232,33 @@ fn motion_check_detects_later_longhands_that_restore_motion() {
 fn font_tokens_and_representative_text_render_at_least_twelve_pixels() {
     for theme in ["light", "dark"] {
         let styles = computed_styles(theme, false, "");
-        for token in ["xs", "sm", "md", "lg", "xl", "2xl"] {
-            assert!(
-                styles
-                    .iter()
-                    .any(|style| style.element == format!("--font-size-{token}")),
-                "the {theme} theme defines --font-size-{token}"
-            );
-        }
         let small = small_text(&styles);
         assert!(small.is_empty(), "{theme} text below 12px: {small:#?}");
     }
+}
+
+#[wasm_bindgen_test]
+fn style_probe_rejects_a_renamed_text_fixture_class() {
+    let probe = STYLE_PROBE.replace(
+        "class=\"field-description\"",
+        "class=\"obsolete-field-description\"",
+    );
+    let stylesheets =
+        serde_json::to_string(&STYLESHEETS).expect("serialize production stylesheets");
+    let error = js_sys::Function::new_with_args("stylesheets, theme, reduced, extra", &probe)
+        .call4(
+            &JsValue::NULL,
+            &JsValue::from_str(&stylesheets),
+            &JsValue::from_str("light"),
+            &JsValue::FALSE,
+            &JsValue::from_str(""),
+        )
+        .expect_err("a renamed text fixture class must be rejected");
+    let message = js_sys::Reflect::get(&error, &JsValue::from_str("message"))
+        .expect("probe error message")
+        .as_string()
+        .expect("error text");
+    assert!(message.contains("unstyled class .obsolete-field-description"));
 }
 
 #[wasm_bindgen_test]

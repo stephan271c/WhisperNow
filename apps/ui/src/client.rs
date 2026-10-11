@@ -80,6 +80,12 @@ mod wasm {
 
     use super::{Answer, AppError, connection_error};
 
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_namespace = console, js_name = error)]
+        fn console_error(message: &str);
+    }
+
     #[wasm_bindgen(module = "/public/tauri_bridge.js")]
     extern "C" {
         #[wasm_bindgen(catch, js_name = invokeTyped)]
@@ -182,8 +188,9 @@ mod wasm {
     ) -> Result<ListenerOwner, AppError> {
         let mut callback = callback;
         let closure = Closure::wrap(Box::new(move |value: JsValue| {
-            if let Ok(event) = serde_wasm_bindgen::from_value::<EventPayload>(value) {
-                callback(event);
+            match serde_wasm_bindgen::from_value::<EventPayload>(value) {
+                Ok(event) => callback(event),
+                Err(error) => console_error(&format!("Desktop event contract failed: {error}")),
             }
         }) as Box<dyn FnMut(JsValue)>);
         let mut owner = ListenerOwner::new(closure);

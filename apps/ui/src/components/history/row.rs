@@ -24,7 +24,7 @@ pub(super) fn HistoryRow(
     delete_blocked: bool,
     clock: LocalClock,
 ) -> Element {
-    let actions = use_context::<UiContext>();
+    let context = use_context::<UiContext>();
     let id = entry.id;
     let rid = id.0;
     let text = entry.text().map(str::to_owned);
@@ -63,7 +63,7 @@ pub(super) fn HistoryRow(
                     variant: ButtonVariant::Secondary,
                     aria_label: "{copy_label} {target}",
                     disabled: text.is_none(),
-                    onclick: move |_| actions.copy_history_entry(id),
+                    onclick: move |_| context.copy_history_entry(id),
                     Icon { name: if copy_label == "Copied" { IconName::CheckCircle } else { IconName::Copy } }
                     "{copy_label}"
                 }
@@ -71,7 +71,7 @@ pub(super) fn HistoryRow(
                     label: "Delete", confirm_label: "Delete this dictation",
                     target: target.clone(),
                     disabled: delete_blocked,
-                    onconfirm: move |()| actions.delete_history_entry(id),
+                    onconfirm: move |()| context.delete_history_entry(id),
                 }
             }
         }

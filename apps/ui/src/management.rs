@@ -10,7 +10,7 @@ use whispernow_domain::ipc::{
     AudioDevice, ClearDataResult, DataLocation, MicrophoneTestResponse, ModelSummary,
     PermissionKind, PermissionsResponse, SettingsView, SetupStateView,
 };
-use whispernow_domain::{HistoryCursor, HistoryEntry, HistoryFilter, Settings};
+use whispernow_domain::{HistoryEntry, HistoryFilter, Settings};
 
 use crate::components::ui::Tone;
 use crate::{Notice, NoticeScope, UiOperation};
@@ -33,7 +33,7 @@ pub(crate) struct ManagementState {
     pub models_loaded: bool,
     pub history: Vec<HistoryEntry>,
     pub history_unavailable: Option<String>,
-    pub history_next_cursor: Option<HistoryCursor>,
+    pub history_has_more: bool,
     /// The search and failed filter the latest window request reads with.
     pub history_filter: HistoryFilter,
     /// The filter the rows in `history` were read with; `None` until a window is installed
@@ -56,6 +56,7 @@ pub(crate) struct ManagementState {
     pub(crate) busy: Vec<UiOperation>,
     pub(crate) requested_permission: Option<PermissionKind>,
     pub notice: Option<Notice>,
+    cleanup_warning_notice: Option<u64>,
     next_notice: u64,
     pub microphone_test: Option<MicrophoneTestResponse>,
     pub permissions: Option<PermissionsResponse>,
@@ -75,7 +76,12 @@ impl ManagementState {
         });
     }
 
-    pub(crate) fn notify_saved(&mut self, scope: NoticeScope, saved: &str, warnings: &[String]) {
+    pub(crate) fn notify_saved(
+        &mut self,
+        scope: NoticeScope,
+        saved: &str,
+        warnings: &[String],
+    ) -> u64 {
         self.notify(
             Tone::Warning,
             scope,
@@ -84,6 +90,7 @@ impl ManagementState {
                 warnings.join(" ")
             ),
         );
+        self.next_notice
     }
 
     /// Dismisses the notice with `id`; a newer notice stays.
@@ -103,8 +110,12 @@ impl ManagementState {
         }
     }
 
-    pub(crate) fn begin_busy(&mut self, operation: UiOperation) {
+    pub(crate) fn begin_busy(&mut self, operation: UiOperation) -> bool {
+        if operation.changes_settings() && !self.begin_settings_change() {
+            return false;
+        }
         self.busy.push(operation);
+        true
     }
 
     pub(crate) fn end_busy(&mut self, operation: UiOperation) {

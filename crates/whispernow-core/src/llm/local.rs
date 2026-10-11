@@ -201,31 +201,26 @@ pub fn decode<C: DecodeContext>(
         return Err(LocalDecodeError::PromptTooLong);
     }
     let prompt_tokens = prompt.len();
-    let mut sampler = Sampler::new(
-        context.vocabulary_size(),
-        REPEAT_PENALTY,
-        REPEAT_LAST_N,
-        &context.suppressed_tokens(),
-    );
+    let mut sampler = Sampler::new(context.vocabulary_size(), &context.suppressed_tokens());
     for &token in &prompt {
         sampler.accept(token);
     }
 
-    let user_turn = if context.checkpoints_prompt() {
+    let batching = if context.checkpoints_prompt() {
         let turn_start = context.tokenize(TURN_START.as_bytes(), true)?;
-        Some(
-            prompt
+        PromptBatching::Checkpointed {
+            user_turn: prompt
                 .windows(turn_start.len().max(1))
                 .position(|window| window == turn_start.as_slice()),
-        )
+        }
     } else {
-        None
+        PromptBatching::Plain
     };
     let chunks = prompt_chunks(
         prompt.len(),
         context.batch_size(),
         context.micro_batch_size(),
-        user_turn,
+        batching,
     );
     let last_chunk = chunks.len() - 1;
     let mut last_length = 0;
@@ -461,7 +456,13 @@ pub fn ngram_draft(cached: &[Token], sampled: Token) -> Vec<Token> {
     cached[start + NGRAM_SIZE..start + NGRAM_SIZE + copy].to_vec()
 }
 
-/// The server's prompt batches: at most `n_batch` tokens each, and with `user_turn` set
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PromptBatching {
+    Plain,
+    Checkpointed { user_turn: Option<usize> },
+}
+
+/// The server's prompt batches: at most `n_batch` tokens each, and with checkpointing
 /// (memory that is checkpointed), broken after the token before the user turn's start and
 /// 4 + `n_ubatch` and 4 tokens before the end, each capped at `n_batch`.
 #[must_use]
@@ -469,7 +470,7 @@ pub fn prompt_chunks(
     length: usize,
     batch_size: usize,
     micro_batch_size: usize,
-    user_turn: Option<Option<usize>>,
+    batching: PromptBatching,
 ) -> Vec<Range<usize>> {
     let n_batch = batch_size.max(1);
     let offsets = [
@@ -482,9 +483,12 @@ pub fn prompt_chunks(
     while end < length {
         end += 1;
         let full = end - start >= n_batch;
-        let breaks = user_turn.is_some_and(|user_turn| {
-            user_turn == Some(end) || offsets.iter().any(|&offset| length == end + offset)
-        });
+        let breaks = match batching {
+            PromptBatching::Plain => false,
+            PromptBatching::Checkpointed { user_turn } => {
+                user_turn == Some(end) || offsets.iter().any(|&offset| length == end + offset)
+            }
+        };
         if full || breaks || end == length {
             chunks.push(start..end);
             start = end;
@@ -494,18 +498,16 @@ pub fn prompt_chunks(
 }
 
 /// llama.cpp's repeat penalty followed by greedy choice. The window holds the last
-/// `last_n` accepted tokens; a token in it has its logit divided by the penalty when
+/// `REPEAT_LAST_N` accepted tokens; a token in it has its logit divided by the penalty when
 /// positive and multiplied by it otherwise.
 struct Sampler {
-    penalty: f32,
-    last_n: usize,
     window: std::collections::VecDeque<Token>,
     counts: Vec<u32>,
     suppressed: Vec<usize>,
 }
 
 impl Sampler {
-    fn new(vocabulary: usize, penalty: f32, last_n: usize, suppressed: &[Token]) -> Self {
+    fn new(vocabulary: usize, suppressed: &[Token]) -> Self {
         let mut suppressed: Vec<usize> = suppressed
             .iter()
             .filter_map(|&token| index(token))
@@ -514,22 +516,17 @@ impl Sampler {
         suppressed.sort_unstable();
         suppressed.dedup();
         Self {
-            penalty,
-            last_n,
-            window: std::collections::VecDeque::with_capacity(last_n),
+            window: std::collections::VecDeque::with_capacity(REPEAT_LAST_N),
             counts: vec![0; vocabulary],
             suppressed,
         }
     }
 
     fn accept(&mut self, token: Token) {
-        if self.last_n == 0 {
-            return;
-        }
         if let Some(count) = index(token).and_then(|token| self.counts.get_mut(token)) {
             *count += 1;
         }
-        if self.window.len() >= self.last_n
+        if self.window.len() >= REPEAT_LAST_N
             && let Some(oldest) = self.window.pop_front()
             && let Some(count) = index(oldest).and_then(|token| self.counts.get_mut(token))
         {
@@ -542,9 +539,9 @@ impl Sampler {
         if self.counts.get(token).is_none_or(|&count| count == 0) {
             logit
         } else if logit <= 0.0 {
-            logit * self.penalty
+            logit * REPEAT_PENALTY
         } else {
-            logit / self.penalty
+            logit / REPEAT_PENALTY
         }
     }
 

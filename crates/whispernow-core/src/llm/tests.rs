@@ -2,13 +2,48 @@ use std::{collections::VecDeque, sync::Mutex};
 
 use super::prompt::CLEANUP_SYSTEM_CONTRACT;
 use super::*;
+use whispernow_domain::{RemoteProvider, Settings};
 
-fn config() -> LlmProviderConfig {
-    LlmProviderConfig {
-        provider: LlmProvider::Ollama,
+fn config() -> CleanupTarget {
+    CleanupTarget::Remote(RemoteCleanupTarget {
+        provider: RemoteProvider::Ollama(None),
         model: "local-model".to_owned(),
-        api_key: None,
-        endpoint: None,
+    })
+}
+
+#[test]
+fn request_debug_keeps_captured_text_credentials_models_and_endpoints_private() {
+    let transcript = "private dictated words";
+    let requests = [
+        LlmRequest::Local {
+            model: ModelId::new("private-model").expect("model ID"),
+            prompt: build_local_cleanup_prompt(transcript),
+            max_output_tokens: 64,
+            draft: DraftText::from_transcript(transcript),
+        },
+        LlmRequest::Remote {
+            config: LlmRemoteConfig {
+                target: RemoteCleanupTarget {
+                    provider: RemoteProvider::Custom(
+                        ProviderEndpoint::parse("https://private.example/v1").expect("endpoint"),
+                    ),
+                    model: "private-model".to_owned(),
+                },
+                api_key: Some(ApiKey::new("private-key").expect("key")),
+            },
+            prompt: build_cleanup_prompt(transcript),
+        },
+    ];
+    for request in requests {
+        let debug = format!("{request:?}").to_ascii_lowercase();
+        for private in [
+            transcript,
+            "private-model",
+            "private.example",
+            "private-key",
+        ] {
+            assert!(!debug.contains(private), "{debug}");
+        }
     }
 }
 
@@ -24,7 +59,7 @@ enum Behavior {
 
 struct FakeService {
     behavior: Mutex<VecDeque<Behavior>>,
-    sent: Mutex<Vec<(LlmPrompt, LlmDecoding)>>,
+    sent: Mutex<Vec<LlmRequest>>,
 }
 
 impl FakeService {
@@ -42,10 +77,7 @@ impl FakeService {
 
 impl LlmService for FakeService {
     fn complete(&self, request: LlmRequest) -> LlmFuture<'_> {
-        self.sent
-            .lock()
-            .expect("sent lock")
-            .push((request.prompt.clone(), request.decoding.clone()));
+        self.sent.lock().expect("sent lock").push(request);
         let behavior = self
             .behavior
             .lock()
@@ -74,7 +106,7 @@ fn fake_response(text: &str, finish_reason: LlmFinishReason) -> LlmResponse {
 async fn clean_up_once(behavior: Behavior, text: &str) -> Result<String, CleanupFallback> {
     let service = FakeService::new([behavior]);
     let config = config();
-    clean_up(&service, text, &config, &CancellationToken::default()).await
+    clean_up(&service, text, &config, None, &CancellationToken::default()).await
 }
 
 #[test]
@@ -128,6 +160,7 @@ async fn a_transient_failure_is_retried() {
         &service,
         "hello world",
         &config,
+        None,
         &CancellationToken::default(),
     )
     .await;
@@ -143,6 +176,7 @@ async fn transient_failures_are_retried_at_most_twice() {
         &service,
         "hello world",
         &config,
+        None,
         &CancellationToken::default(),
     )
     .await;
@@ -165,7 +199,10 @@ async fn cancelling_during_a_call_ends_it_promptly() {
             cancellation.cancel();
         }
     };
-    let (result, ()) = tokio::join!(clean_up(&service, "hello", &config, &cancellation), cancel);
+    let (result, ()) = tokio::join!(
+        clean_up(&service, "hello", &config, None, &cancellation),
+        cancel
+    );
     assert_eq!(result, Err(CleanupFallback::Cancelled));
     assert_eq!(service.calls(), 1);
 }
@@ -211,7 +248,7 @@ async fn a_quoted_reply_is_used_as_returned() {
 }
 
 #[test]
-fn sanitize_output_strips_think_blocks() {
+fn responses_strip_think_blocks() {
     for (raw, expected) in [
         ("<think>plan</think>Hello there.", "Hello there."),
         ("reasoning without an opening tag</think>\nHello.", "Hello."),
@@ -219,15 +256,21 @@ fn sanitize_output_strips_think_blocks() {
         ("<think>never closed", ""),
         ("  plain text  ", "plain text"),
     ] {
-        assert_eq!(sanitize_output(raw), expected, "{raw:?}");
+        let result = accept_response(&fake_response(raw, LlmFinishReason::Completed));
+        let expected = if expected.is_empty() {
+            Err(CleanupFallback::EmptyOutput)
+        } else {
+            Ok(expected.to_owned())
+        };
+        assert_eq!(result, expected, "{raw:?}");
     }
 }
 
 /// The prompt fixture the training side renders its chat template from.
 const LOCAL_CLEANUP_GOLDEN: &str = include_str!("../../../../training/serving/prompt_golden.json");
 
-#[test]
-fn local_cleanup_request_matches_the_training_golden_fixture() {
+#[tokio::test]
+async fn local_cleanup_request_matches_the_training_golden_fixture() {
     let golden: serde_json::Value =
         serde_json::from_str(LOCAL_CLEANUP_GOLDEN).expect("golden fixture is JSON");
     let cases = golden["cases"].as_array().expect("golden cases");
@@ -247,23 +290,34 @@ fn local_cleanup_request_matches_the_training_golden_fixture() {
             "{name}"
         );
 
-        let LlmDecoding::LocalCleanup {
+        let service = FakeService::new([Behavior::Text("Cleaned.")]);
+        let target = CleanupTarget::Local {
+            model: Settings::default().cleanup_model_id(),
+        };
+        clean_up(
+            &service,
+            transcript,
+            &target,
+            None,
+            &CancellationToken::default(),
+        )
+        .await
+        .expect("local request");
+        let sent = service.sent.lock().expect("sent lock");
+        let LlmRequest::Local {
             max_output_tokens,
             draft,
-        } = LlmDecoding::local_cleanup(transcript)
+            ..
+        } = &sent[0]
         else {
-            panic!("local decoding parameters");
+            panic!("local request");
         };
         assert_eq!(
-            Some(max_output_tokens),
-            case["max_tokens"].as_u64(),
+            serde_json::json!(max_output_tokens),
+            case["max_tokens"],
             "{name}"
         );
-        assert_eq!(
-            draft.as_ref().map(DraftText::as_str),
-            case["draft_text"].as_str(),
-            "{name}"
-        );
+        assert_eq!(Some(draft.as_str()), case["draft_text"].as_str(), "{name}");
     }
     let decoding = &golden["decoding"];
     assert_eq!(decoding["temperature"], 0.0);
@@ -280,10 +334,8 @@ fn local_cleanup_request_matches_the_training_golden_fixture() {
 #[tokio::test]
 async fn the_local_cleanup_model_gets_only_the_transcript_and_its_own_decoding() {
     let service = FakeService::new([Behavior::Text("Hello world."), Behavior::Text("Hi.")]);
-    let local = LlmProviderConfig {
-        provider: LlmProvider::LocalCleanup,
-        model: "cleanup".to_owned(),
-        ..config()
+    let local = CleanupTarget::Local {
+        model: ModelId::new("cleanup").expect("model ID"),
     };
     let hosted = config();
     for config in [&local, &hosted] {
@@ -291,23 +343,29 @@ async fn the_local_cleanup_model_gets_only_the_transcript_and_its_own_decoding()
             &service,
             " hello world ",
             config,
+            None,
             &CancellationToken::default(),
         )
         .await;
         assert!(result.is_ok());
     }
     let sent = service.sent.lock().expect("sent lock");
-    let (local_prompt, local_decoding) = &sent[0];
-    assert_eq!(local_prompt.system(), "");
-    assert_eq!(local_prompt.user(), "hello world");
-    assert_eq!(
-        *local_decoding,
-        LlmDecoding::LocalCleanup {
-            max_output_tokens: 64,
-            draft: Some(DraftText("Hello world".to_owned())),
-        }
-    );
-    let (hosted_prompt, hosted_decoding) = &sent[1];
-    assert_eq!(hosted_prompt.system(), CLEANUP_SYSTEM_CONTRACT);
-    assert_eq!(*hosted_decoding, LlmDecoding::default());
+    let LlmRequest::Local {
+        model,
+        prompt,
+        max_output_tokens,
+        draft,
+    } = &sent[0]
+    else {
+        panic!("local request");
+    };
+    assert_eq!(model.as_str(), "cleanup");
+    assert_eq!(prompt.system(), "");
+    assert_eq!(prompt.user(), "hello world");
+    assert_eq!(*max_output_tokens, 64);
+    assert_eq!(draft.as_str(), "Hello world");
+    let LlmRequest::Remote { prompt, .. } = &sent[1] else {
+        panic!("remote request");
+    };
+    assert_eq!(prompt.system(), CLEANUP_SYSTEM_CONTRACT);
 }

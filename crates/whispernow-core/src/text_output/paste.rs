@@ -113,12 +113,6 @@ impl<P: PastePlatform> PasteQueue<P> {
     }
 }
 
-enum Previous<S> {
-    /// Unreadable, or nothing capturable: the transcript is left in place.
-    NotCaptured,
-    Contents(S),
-}
-
 /// Snapshots the clipboard, writes and pastes `text`, waits, then restores the
 /// snapshot only if the clipboard still holds `text`.
 ///
@@ -137,11 +131,10 @@ fn paste_and_restore<P: PastePlatform>(
         return PasteOutcome::Cancelled;
     }
     let previous = match platform.snapshot_clipboard() {
-        Ok(Some(snapshot)) => Previous::Contents(snapshot),
-        Ok(None) => Previous::NotCaptured,
+        Ok(snapshot) => snapshot,
         Err(error) => {
             tracing::warn!(?error, "clipboard snapshot failed; pasting without restore");
-            Previous::NotCaptured
+            None
         }
     };
 
@@ -156,7 +149,7 @@ fn paste_and_restore<P: PastePlatform>(
     }
     let failure = match platform.send_paste_shortcut() {
         KeystrokeOutcome::Sent => {
-            sent(matches!(previous, Previous::Contents(_)));
+            sent(previous.is_some());
             None
         }
         KeystrokeOutcome::Uncertain(error) => Some(error),
@@ -173,9 +166,9 @@ fn paste_and_restore<P: PastePlatform>(
 fn restore_if_transcript<P: PastePlatform>(
     platform: &mut P,
     transcript: &str,
-    previous: Previous<P::Snapshot>,
+    previous: Option<P::Snapshot>,
 ) -> PasteOutcome<P::Error> {
-    let Previous::Contents(snapshot) = previous else {
+    let Some(snapshot) = previous else {
         return PasteOutcome::PastedWithoutRestore;
     };
     match platform.clipboard_holds(transcript) {

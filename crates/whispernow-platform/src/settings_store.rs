@@ -1,11 +1,6 @@
 //! `settings.json`, with every API key kept in the OS credential store instead.
 
-use std::{
-    fs,
-    io::ErrorKind,
-    path::PathBuf,
-    sync::{Arc, Mutex, PoisonError},
-};
+use std::{fs, io::ErrorKind, path::PathBuf, sync::Arc};
 use whispernow_domain::AppError;
 
 use serde::Serialize;
@@ -44,7 +39,6 @@ pub enum SettingsNotice {
 pub struct SettingsStore {
     paths: AppPaths,
     keys: Arc<dyn CredentialStore>,
-    notice: Mutex<Option<SettingsNotice>>,
 }
 
 impl SettingsStore {
@@ -55,21 +49,19 @@ impl SettingsStore {
 
     #[must_use]
     pub fn with_store(paths: AppPaths, keys: Arc<dyn CredentialStore>) -> Self {
-        Self {
-            paths,
-            keys,
-            notice: Mutex::default(),
-        }
+        Self { paths, keys }
     }
 
     /// Loads the saved settings; without a file they are the defaults. The Python
     /// release's file is imported and replaced. A file that cannot be read is renamed to
-    /// `settings.json.bad-<timestamp>` and the defaults are loaded; see [`Self::take_notice`].
-    pub fn load(&self) -> Result<Settings, AppError> {
+    /// `settings.json.bad-<timestamp>` and the defaults are loaded with a notice.
+    pub fn load(&self) -> Result<(Settings, Option<SettingsNotice>), AppError> {
         let path = self.paths.settings_file();
         let document = match fs::read(&path) {
             Ok(document) => document,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Settings::default()),
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Ok((Settings::default(), None));
+            }
             Err(_) => return Err(redacted("settings_read", "could not read settings")),
         };
         match serde_json::from_slice::<Value>(&document) {
@@ -78,7 +70,7 @@ impl SettingsStore {
             }
             Ok(value) => {
                 if let Ok(settings) = serde_json::from_value(value) {
-                    return Ok(settings);
+                    return Ok((settings, None));
                 }
             }
             Err(_) => {}
@@ -94,8 +86,10 @@ impl SettingsStore {
             code = "settings_unreadable",
             "unreadable settings were moved aside and the defaults loaded"
         );
-        self.tell(SettingsNotice::Unreadable { path: bad });
-        Ok(Settings::default())
+        Ok((
+            Settings::default(),
+            Some(SettingsNotice::Unreadable { path: bad }),
+        ))
     }
 
     pub fn save(&self, settings: &Settings) -> Result<(), AppError> {
@@ -106,14 +100,6 @@ impl SettingsStore {
         .map_err(|_| redacted("settings_encode", "could not encode settings"))?;
         write_atomically(&self.paths.settings_file(), &document)
             .map_err(|_| redacted("settings_write", "could not save settings"))
-    }
-
-    /// What happened to the file since the previous call, so each event is told once.
-    pub fn take_notice(&self) -> Option<SettingsNotice> {
-        self.notice
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
     }
 
     /// The API key of `provider` in the credential store. Callers ask only when
@@ -145,7 +131,11 @@ impl SettingsStore {
     /// Imports the Python release's settings: its API keys move into the credential
     /// store, the file is kept as `settings.json.python`, and the imported settings
     /// replace it.
-    fn import_python(&self, document: &Value, original: &[u8]) -> Result<Settings, AppError> {
+    fn import_python(
+        &self,
+        document: &Value,
+        original: &[u8],
+    ) -> Result<(Settings, Option<SettingsNotice>), AppError> {
         let PythonSettings {
             mut settings,
             api_keys,
@@ -170,14 +160,8 @@ impl SettingsStore {
             keys = settings.api_keys.len(),
             "imported the earlier version's settings"
         );
-        if refused {
-            self.tell(SettingsNotice::ApiKeysNotImported { path: kept });
-        }
-        Ok(settings)
-    }
-
-    fn tell(&self, notice: SettingsNotice) {
-        *self.notice.lock().unwrap_or_else(PoisonError::into_inner) = Some(notice);
+        let notice = refused.then_some(SettingsNotice::ApiKeysNotImported { path: kept });
+        Ok((settings, notice))
     }
 }
 

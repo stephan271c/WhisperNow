@@ -8,7 +8,7 @@ use whispernow_domain::{ClearDataCategory, HistoryLimit, NewHistoryEntry, UtcMil
 const WAIT: Duration = Duration::from_secs(10);
 
 fn retained_entry(services: &NativeServices) -> (HistoryEntry, Vec<u8>) {
-    let entry = services
+    let id = services
         .history
         .insert(
             NewHistoryEntry {
@@ -26,7 +26,14 @@ fn retained_entry(services: &NativeServices) -> (HistoryEntry, Vec<u8>) {
             HistoryLimit::Unlimited,
         )
         .expect("retained dictation");
-    let audio = services.history.audio(entry.id).expect("retained audio");
+    let entry = services
+        .history(&HistoryPageRequest::first_page(HistoryFilter::default()))
+        .expect("history")
+        .entries
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .expect("retained dictation");
+    let audio = services.history.audio(id).expect("retained audio");
     (entry, audio)
 }
 

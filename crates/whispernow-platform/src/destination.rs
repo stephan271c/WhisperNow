@@ -7,15 +7,12 @@ use std::process;
 
 use crate::{PasteKeys, paste_delivery::NativePasteError};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NativeWindow {
-    #[cfg(target_os = "windows")]
-    Windows(usize),
-    #[cfg(target_os = "linux")]
-    X11(u32),
-    #[cfg(target_os = "macos")]
-    MacOs(u64),
-}
+#[cfg(target_os = "windows")]
+type NativeWindow = usize;
+#[cfg(target_os = "linux")]
+type NativeWindow = u32;
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+type NativeWindow = u64;
 
 /// Opaque identity held only for the duration of one output operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,7 +92,7 @@ fn capture_system_destination() -> Result<Option<NativeDestination>, NativePaste
     let window = copy_ax_identity(&application_element, "AXFocusedWindow")?;
     let focused_element = copy_ax_identity(&application_element, "AXFocusedUIElement")?;
     Ok(Some(NativeDestination {
-        window: NativeWindow::MacOs(window),
+        window,
         process_id,
         focused_element,
         keys: PasteKeys::ControlV,
@@ -177,7 +174,7 @@ fn capture_system_destination() -> Result<Option<NativeDestination>, NativePaste
         PasteKeys::ControlV
     };
     Ok(Some(NativeDestination {
-        window: NativeWindow::Windows(window as usize),
+        window: window as usize,
         process_id,
         focused_element: gui.hwndFocus as usize as u64,
         keys,
@@ -232,7 +229,7 @@ fn capture_system_destination() -> Result<Option<NativeDestination>, NativePaste
         return Err(NativePasteError::Unavailable);
     }
     Ok(Some(NativeDestination {
-        window: NativeWindow::X11(window),
+        window,
         process_id,
         focused_element: u64::from(focus),
         keys: x11_paste_keys(&connection, window).unwrap_or(PasteKeys::ControlV),
@@ -313,12 +310,7 @@ mod tests {
 
     fn destination(process_id: u32) -> NativeDestination {
         NativeDestination {
-            #[cfg(target_os = "linux")]
-            window: NativeWindow::X11(10),
-            #[cfg(target_os = "macos")]
-            window: NativeWindow::MacOs(10),
-            #[cfg(target_os = "windows")]
-            window: NativeWindow::Windows(10),
+            window: 10,
             process_id,
             focused_element: 30,
             keys: PasteKeys::ControlV,

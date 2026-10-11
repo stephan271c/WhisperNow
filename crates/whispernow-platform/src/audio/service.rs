@@ -151,7 +151,7 @@ impl Worker {
                 let stream_result = self.stream.stop();
                 let processing_result =
                     self.drain_queued_chunks(&mut processor, chunks, &mut first_samples);
-                let finish_result = self.finish_processor(&mut processor);
+                let finish_result = self.finish_processor(processor);
                 if finish_result.is_err() {
                     self.sink.event(AudioEvent::StreamError);
                 }
@@ -163,7 +163,7 @@ impl Worker {
                 let _stream_was_stopped = self.stream.stop().is_ok();
                 // Audio the device delivered before the fault is still the user's speech.
                 let drained = self.drain_queued_chunks(&mut processor, chunks, &mut first_samples);
-                let finished = self.finish_processor(&mut processor);
+                let finished = self.finish_processor(processor);
                 let event =
                     if fault == StreamFault::DeviceLost && drained.is_ok() && finished.is_ok() {
                         AudioEvent::DeviceLost
@@ -264,12 +264,11 @@ impl Worker {
         Ok(())
     }
 
-    fn finish_processor(&self, processor: &mut AudioProcessor) -> Result<(), AudioInputError> {
-        let output = processor
+    fn finish_processor(&self, processor: AudioProcessor) -> Result<(), AudioInputError> {
+        let (output, summary) = processor
             .finish()
             .map_err(|_| backend("flush audio processor"))?;
         self.emit_processor_output(output)?;
-        let summary = processor.take_level_summary();
         if summary.sample_count > 0 {
             self.sink.observe(AudioObservation::Level { summary });
         }
