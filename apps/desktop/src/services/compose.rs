@@ -9,7 +9,7 @@ use whispernow_core::{
     llm::{LlmFuture, LlmProvider, LlmRequest, LlmService},
 };
 use whispernow_domain::ipc::ErrorCategory;
-use whispernow_domain::{CLEANUP_MODEL_FILE, CLEANUP_MODEL_IDS, ModelId};
+use whispernow_domain::{ModelId, ModelLayout};
 use whispernow_platform::{
     AppPaths, CleanupModelLocator, CpalAudioInput, CudaPackLocator, LocalCleanupService,
     ModelStore, SettingsStore, SherpaAsrEngine, silero_vad_model_path, silero_voice_activity,
@@ -139,12 +139,12 @@ fn llama_dir(resource_dir: &Path) -> PathBuf {
 /// An installed cleanup model's GGUF, looked up by id when it is needed.
 fn installed_cleanup_model(store: Arc<ModelStore>) -> CleanupModelLocator {
     Arc::new(move |model_id| {
-        if !CLEANUP_MODEL_IDS.contains(&model_id) {
-            return None;
-        }
         let id = ModelId::new(model_id).ok()?;
         let model = store.resolve(&id).ok().flatten()?;
-        Some(model.root.join(CLEANUP_MODEL_FILE))
+        match &model.definition.layout {
+            ModelLayout::Gguf { model: artifact } => Some(model.root.join(artifact)),
+            _ => None,
+        }
     })
 }
 

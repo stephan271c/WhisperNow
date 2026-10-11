@@ -162,17 +162,19 @@ fn inserting_beyond_the_limit_deletes_the_oldest_entries_with_their_audio() {
 fn listing_pages_newest_first_and_filters_by_text_and_failure() {
     let fixture = Fixture::new();
     let history = fixture.open();
+    let mut notes = Vec::new();
     for index in 0..5 {
-        history
+        let note = history
             .insert(
-                entry(index, EntryStatus::Ok, &format!("note {index} 100%")),
+                entry(index.min(1), EntryStatus::Ok, &format!("note {index} 100%")),
                 &[],
                 false,
                 HistoryLimit::Unlimited,
             )
             .expect("insert");
+        notes.push(note.id);
     }
-    history
+    let failed = history
         .insert(
             entry(9, EntryStatus::Failed, ""),
             &[],
@@ -188,7 +190,14 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
             filter: HistoryFilter::default(),
         })
         .expect("first page");
-    assert_eq!(first.entries.len(), 4);
+    assert_eq!(
+        first
+            .entries
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        [failed.id, notes[4], notes[3], notes[2]]
+    );
     let second = history
         .list(&HistoryPageRequest {
             before: first.next_cursor,
@@ -196,7 +205,14 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
             filter: HistoryFilter::default(),
         })
         .expect("second page");
-    assert_eq!(second.entries.len(), 2);
+    assert_eq!(
+        second
+            .entries
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        [notes[1], notes[0]]
+    );
     assert_eq!(second.next_cursor, None);
 
     let search = |query: &str, failed_only| {

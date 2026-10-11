@@ -14,17 +14,20 @@ pub struct HistoryCopied {
 }
 
 impl ManagementState {
-    pub(crate) fn history_request(&self) -> HistoryPageRequest {
-        HistoryPageRequest {
+    pub(crate) fn history_request(&mut self) -> (u64, HistoryPageRequest) {
+        // Reads with the same filter can finish out of order after Load more or deletion.
+        self.history_request_id += 1;
+        let request = HistoryPageRequest {
             limit: self
                 .history_window_pages()
                 .saturating_mul(HistoryPageRequest::DEFAULT_PAGE_SIZE),
             ..HistoryPageRequest::first_page(self.history_filter.clone())
-        }
+        };
+        (self.history_request_id, request)
     }
 
     /// Grows the window by one page and returns the read for it.
-    pub(crate) fn older_history_request(&mut self) -> HistoryPageRequest {
+    pub(crate) fn older_history_request(&mut self) -> (u64, HistoryPageRequest) {
         self.history_pages = self.history_window_pages().saturating_add(1);
         self.history_request()
     }
@@ -39,28 +42,19 @@ impl ManagementState {
         self.history_pages.max(1)
     }
 
-    /// Installs a window of `pages` pages read with `filter`, unless the filter has changed
-    /// since: a read for the current filter is then on its way.
-    pub fn finish_history_refresh(
-        &mut self,
-        pages: u32,
-        filter: &HistoryFilter,
-        page: HistoryPage,
-    ) {
-        if *filter != self.history_filter {
+    pub fn finish_history_refresh(&mut self, request_id: u64, page: HistoryPage) {
+        if request_id != self.history_request_id {
             return;
         }
-        self.history_pages = self.history_pages.max(pages);
         self.history_unavailable = None;
         self.history_search_failed = None;
-        self.history_rows_filter = Some(filter.clone());
+        self.history_rows_filter = Some(self.history_filter.clone());
         self.history = page.entries;
         self.history_next_cursor = page.next_cursor;
     }
 
-    /// Reports a failed window read made with `filter`, unless the filter has changed since.
-    pub fn fail_history_refresh(&mut self, filter: &HistoryFilter, error: &AppError) {
-        if *filter != self.history_filter {
+    pub fn fail_history_refresh(&mut self, request_id: u64, error: &AppError) {
+        if request_id != self.history_request_id {
             return;
         }
         let summary = error.summary.clone();

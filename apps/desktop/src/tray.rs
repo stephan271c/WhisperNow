@@ -145,7 +145,7 @@ pub(crate) fn tray_desired(snapshot: &AppState, copy_capable: bool) -> TrayDesir
         } else {
             "Pause"
         },
-        pause_enabled: snapshot.phase != Phase::Updating,
+        pause_enabled: !matches!(snapshot.phase, Phase::ClearingData | Phase::Updating),
         copy_last: copy_capable
             && snapshot
                 .last_transcript
@@ -439,6 +439,7 @@ mod tests {
             ),
             (Phase::Paused, false, TrayState::Paused),
             (Phase::Updating, false, TrayState::Idle),
+            (Phase::ClearingData, false, TrayState::Idle),
             (failed(), false, TrayState::Error),
             (Phase::Idle, true, TrayState::Error),
             (recording(), true, TrayState::RecordingError),
@@ -473,6 +474,7 @@ mod tests {
             (updating.pause_text, updating.pause_enabled),
             ("Pause", false)
         );
+        assert!(!tray_desired(&snapshot(Phase::ClearingData), true).pause_enabled);
         assert!(!tray_desired(&snapshot(failed()), true).cancel);
     }
 

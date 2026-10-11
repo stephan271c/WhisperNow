@@ -325,6 +325,7 @@ pub enum Phase {
         cleaning_up: bool,
     },
     Paused,
+    ClearingData,
     /// An update is being installed and the application will restart.
     Updating,
     /// The latest dictation failed or was not delivered. Stays until dismissed or the next
@@ -342,10 +343,9 @@ impl Phase {
 
     #[must_use]
     pub const fn shortcuts_enabled(&self) -> bool {
-        !matches!(self, Self::Paused | Self::Updating)
+        !matches!(self, Self::Paused | Self::ClearingData | Self::Updating)
     }
 
-    /// Refuses work that needs the desktop idle: nothing dictating, paused or updating.
     pub fn require_idle(&self) -> Result<(), AppError> {
         match self {
             Self::Idle | Self::Error { .. } => Ok(()),
@@ -358,6 +358,10 @@ impl Phase {
                 "Wait for the current transcription to finish",
             )),
             Self::Paused => Err(conflict("application_paused", "Resume WhisperNow first")),
+            Self::ClearingData => Err(conflict(
+                "application_data_clearing",
+                "Wait for application data to finish clearing",
+            )),
             Self::Updating => Err(conflict(
                 "update_installing",
                 "An application update is being installed",

@@ -49,8 +49,20 @@ impl UiContext {
             Some(phase) if phase.is_busy() => Some(BlockedReason::Dictating),
             Some(Phase::Paused) => Some(BlockedReason::Paused),
             Some(Phase::Updating) => Some(BlockedReason::UpdateInstalling),
+            Some(Phase::ClearingData) => Some(BlockedReason::ClearingData),
             Some(_) => None,
         }
+    }
+
+    pub(crate) fn settings_pending(self) -> Option<BlockedReason> {
+        self.management
+            .read()
+            .settings_pending()
+            .then_some(BlockedReason::CommandPending)
+    }
+
+    pub(crate) fn settings_blocked(self) -> Option<BlockedReason> {
+        self.phase_blocked().or(self.settings_pending())
     }
 
     pub(crate) fn download(
@@ -107,12 +119,14 @@ impl UiContext {
                 Err(error) => self.state.write().report_client_error(error),
             }
         });
-        spawn_forever(async move {
-            match client::call("get_settings").await {
-                Ok(settings) => self.management.write().install_settings(settings),
-                Err(error) => self.load_failed("Settings", &error),
-            }
-        });
+        self.run(
+            UiOperation::LoadSettings,
+            client::call("get_settings"),
+            |mut actions, answer| match answer {
+                Ok(settings) => actions.management.write().install_settings(settings),
+                Err(error) => actions.load_failed("Settings", &error),
+            },
+        );
         spawn_forever(async move {
             match client::call("get_setup_state").await {
                 Ok(setup) => {
@@ -205,6 +219,9 @@ impl UiContext {
 
     /// Removes every kind of application data, then reads everything again.
     pub(crate) fn clear_data(self) {
+        if self.management.peek().settings_pending() {
+            return;
+        }
         let operation = UiOperation::ClearData;
         let request = ClearDataCategory::ALL.to_vec();
         self.run(

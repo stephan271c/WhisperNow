@@ -14,7 +14,7 @@ pub(super) fn ClearDataCard() -> Element {
     let review_blocked = actions.blocked(UiOperation::ListDataLocations);
     let clear_blocked = actions
         .blocked(UiOperation::ClearData)
-        .or(actions.phase_blocked());
+        .or(actions.settings_blocked());
     rsx! {
         Section { id: "clear-data", title: "Application data",
             description: "Settings, history, downloaded models and logs.",

@@ -6,6 +6,7 @@ pub enum BlockedReason {
     Dictating,
     Paused,
     UpdateInstalling,
+    ClearingData,
     /// A change this window sent is still in flight.
     CommandPending,
 }
@@ -18,6 +19,7 @@ impl BlockedReason {
             Self::Dictating => "Wait for the current dictation to finish",
             Self::Paused => "Resume WhisperNow first",
             Self::UpdateInstalling => "Wait for the current update to finish installing",
+            Self::ClearingData => "Wait for application data to finish clearing",
             Self::CommandPending => "Wait for the current change to finish",
         }
     }

@@ -11,7 +11,7 @@ use super::{RecordingBar, meter_bars};
 use crate::client::fake;
 use crate::overlay::format_elapsed;
 use crate::test_support::{Page, Probe, focused, snapshot, tag, text};
-use crate::{AppShell, ManagementState, UiState};
+use crate::{AppShell, ManagementState, SettingKey, UiState};
 
 #[component]
 fn Surface(initial_state: UiState, settings: bool, probe: Probe) -> Element {
@@ -403,6 +403,27 @@ fn a_cleanup_failure_in_the_overlay_opens_ai_cleanup_settings() {
         last_request("open_main_window"),
         serde_json::json!("ai_cleanup")
     );
+}
+
+#[test]
+fn a_pending_settings_save_leaves_recording_cancellation_available() {
+    let mut bar = mount_bar(state_in(Phase::Idle));
+    bar.act(|mut actions| {
+        actions
+            .management
+            .write()
+            .install_settings(whispernow_domain::ipc::SettingsView::new(
+                &crate::test_support::editable_settings(),
+            ));
+        actions.change_setting(SettingKey::Theme, |settings| {
+            settings.theme = whispernow_domain::ThemePreference::Dark
+        });
+    });
+    show(&mut bar, phase_event(listening(RecordingMode::Toggle)));
+    assert!(bar.context().management.read().settings_pending());
+    assert!(enabled(&bar, "overlay-close"));
+    bar.click("overlay-close");
+    assert_eq!(fake::count("cancel_recording"), 1);
 }
 
 #[test]

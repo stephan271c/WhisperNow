@@ -1,15 +1,13 @@
-//! Every control saves its own edit. The edit shows at once in the window's copy of the
-//! settings, which goes to the desktop whole; edits made while it is there go together once
-//! it answers. A refused edit drops out again while its control shows why.
+//! One control saves at a time; its edit is shown until the desktop confirms or refuses it.
 
 use whispernow_domain::ipc::{SaveSettingsResponse, SettingsView};
 use whispernow_domain::{Settings, ThemePreference};
 
 use super::ManagementState;
-use crate::NoticeScope;
 use crate::components::ui::Tone;
+use crate::{NoticeScope, UiOperation};
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SettingKey {
     InputDevice,
     /// The recording shortcut's keys and mode.
@@ -46,8 +44,6 @@ impl ManagementState {
         self.settings = Some(settings);
     }
 
-    /// The settings as the controls show them: the saved settings with every edit the desktop
-    /// has not saved yet.
     #[must_use]
     pub fn shown_settings(&self) -> Option<&Settings> {
         self.edited
@@ -73,51 +69,66 @@ impl ManagementState {
         }
     }
 
-    pub fn change_setting(&mut self, key: SettingKey, edit: impl FnOnce(&mut Settings)) {
+    #[must_use]
+    pub fn settings_pending(&self) -> bool {
+        self.saving.is_some()
+            || self.busy.iter().any(|operation| {
+                matches!(
+                    operation,
+                    UiOperation::LoadSettings
+                        | UiOperation::CredentialMutation
+                        | UiOperation::ModelSwitch
+                        | UiOperation::SaveSetup
+                        | UiOperation::CompleteSetup
+                        | UiOperation::RestartSetup
+                        | UiOperation::ClearData
+                )
+            })
+    }
+
+    pub fn begin_settings_update(
+        &mut self,
+        key: SettingKey,
+        edit: impl FnOnce(&mut Settings),
+    ) -> Option<Settings> {
+        if self.settings_pending() {
+            return None;
+        }
         let mut settings = self
             .shown_settings()
             .cloned()
             .expect("settings controls render after loading");
         edit(&mut settings);
-        self.edited = Some(settings);
+        self.edited = Some(settings.clone());
+        self.saving = Some(key);
         self.setting_errors.remove(&key);
-        self.saved_settings.clear();
-        self.unsent.push(key);
+        self.saved_setting = None;
+        Some(settings)
     }
 
     /// Shows why a value typed into a control cannot be saved; nothing is sent.
     pub fn reject_setting(&mut self, key: SettingKey, message: impl Into<String>) {
-        self.saved_settings.retain(|saved| *saved != key);
-        self.setting_errors.insert(key, message.into());
-    }
-
-    /// The shown settings, when they hold edits and no other save is with the desktop.
-    pub fn next_settings_update(&mut self) -> Option<Settings> {
-        if !self.sending.is_empty() || self.unsent.is_empty() {
-            return None;
+        if self.saved_setting == Some(key) {
+            self.saved_setting = None;
         }
-        self.sending = std::mem::take(&mut self.unsent);
-        self.edited.clone()
+        self.setting_errors.insert(key, message.into());
     }
 
     #[must_use]
     pub fn setting_status(&self, key: &SettingKey) -> SaveStatus {
         if let Some(message) = self.setting_errors.get(key) {
             SaveStatus::Failed(message.clone())
-        } else if self.sending.contains(key) || self.unsent.contains(key) {
+        } else if self.saving.as_ref() == Some(key) {
             SaveStatus::Saving
-        } else if self.saved_settings.contains(key) {
+        } else if self.saved_setting.as_ref() == Some(key) {
             SaveStatus::Saved
         } else {
             SaveStatus::Idle
         }
     }
 
-    /// Installs the desktop's answer to the save it has: the settings it saved, with the
-    /// native side effects that could not follow them as the notice, or why it refused them.
-    /// Edits made meanwhile stay shown and are sent next.
     pub fn finish_settings_update(&mut self, answer: Result<SaveSettingsResponse, String>) {
-        let sent = std::mem::take(&mut self.sending);
+        let key = self.saving.take().expect("a settings save is pending");
         match answer {
             Ok(SaveSettingsResponse { settings, warnings }) => {
                 let resolved_cleanup_warning = settings
@@ -142,19 +153,15 @@ impl ManagementState {
                     {
                         self.dismiss_notice(notice.id);
                     }
-                    self.saved_settings = sent;
+                    self.saved_setting = Some(key);
                 } else {
                     self.notify_saved(NoticeScope::Settings, "Saved", &warnings);
                 }
             }
             Err(message) => {
-                for key in sent {
-                    self.reject_setting(key, message.clone());
-                }
+                self.reject_setting(key, message);
             }
         }
-        if self.unsent.is_empty() {
-            self.edited = None;
-        }
+        self.edited = None;
     }
 }

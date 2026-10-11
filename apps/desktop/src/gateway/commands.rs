@@ -276,7 +276,7 @@ pub(crate) async fn delete_model(
 ) -> Result<(), AppError> {
     state
         .run_command("delete_model", Failure::Published, move |services, _| {
-            services.models.delete(&request, &services.settings)
+            services.models.delete(&request)
         })
         .await
 }

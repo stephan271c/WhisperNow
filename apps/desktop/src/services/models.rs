@@ -7,8 +7,8 @@ use whispernow_domain::AppError;
 
 use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::ipc::{ActiveDownload, ErrorCategory, ModelSummary};
-use whispernow_domain::{CLEANUP_MODEL_IDS, ModelFamily, ModelId, ModelProfile};
 use whispernow_domain::{DownloadPhase, ModelAvailability};
+use whispernow_domain::{ModelFamily, ModelId, ModelProfile};
 use whispernow_platform::{
     CudaPackState, DownloadProgress, Llama, LocalCleanupService, ModelStore, ModelStoreError,
 };
@@ -109,7 +109,7 @@ impl ModelCoordinator {
         if cancellation.is_cancelled() {
             return Err(shutting_down());
         }
-        self.state.refuse_while_updating()?;
+        self.state.refuse_during_maintenance()?;
         let _transition = self.transition();
         if self.state.lock().active_downloads.contains_key(model_id) {
             return Err(AppError::new(
@@ -210,9 +210,9 @@ impl ModelCoordinator {
     }
 
     /// Checks that the requested model is a downloaded, inactive model and not the last usable
-    /// one. The caller holds the model transition and the settings, so nothing changes that
+    /// one. The caller holds the model transition, so nothing changes that
     /// before the file is deleted.
-    fn require_deletable(&self, model_id: &ModelId) -> Result<(), AppError> {
+    fn require_deletable(&self, model_id: &ModelId) -> Result<ModelFamily, AppError> {
         let state = self.state.lock();
         if state.selected_model_id == *model_id {
             return Err(AppError::new(
@@ -255,23 +255,18 @@ impl ModelCoordinator {
                 "Keep at least one usable model installed",
             ));
         }
-        Ok(())
+        Ok(target.definition.family())
     }
 
-    pub(crate) fn delete(
-        &self,
-        model_id: &ModelId,
-        settings: &SettingsCoordinator,
-    ) -> Result<(), AppError> {
+    pub(crate) fn delete(&self, model_id: &ModelId) -> Result<(), AppError> {
         let _transition = self.transition();
         self.state.lock().phase.require_idle()?;
         if model_id.is_cuda_pack() {
             return self.delete_cuda_pack();
         }
-        let _transaction = settings.transaction();
-        self.require_deletable(model_id)?;
+        let family = self.require_deletable(model_id)?;
         // A cleanup model is freed, and kept from loading, until its file is gone.
-        let _unloaded = if CLEANUP_MODEL_IDS.contains(&model_id.as_str()) {
+        let _unloaded = if family == ModelFamily::Cleanup {
             Some(
                 self.local_cleanup
                     .hold_unloaded(Duration::from_secs(10))

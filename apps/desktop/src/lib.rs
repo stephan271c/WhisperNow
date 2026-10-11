@@ -421,7 +421,7 @@ fn handle_tray_action(app: &tauri::AppHandle, action: TrayAction) {
             show_settings_window(app);
         }
         TrayAction::CheckForUpdates => {
-            if let Err(error) = app.state::<Gateway>().refuse_while_updating() {
+            if let Err(error) = app.state::<Gateway>().refuse_during_maintenance() {
                 tracing::debug!(code = error.code, "update check was not admitted");
                 return;
             }

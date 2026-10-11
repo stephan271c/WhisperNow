@@ -14,7 +14,7 @@ use whispernow_domain::{
 use crate::client::fake;
 use crate::components::ui::Tone;
 use crate::test_support::{Page, focused, label_in_name_violations, snapshot, tag, text};
-use crate::{ManagementState, NoticeScope, UiState};
+use crate::{ManagementState, NoticeScope, SettingKey, UiState};
 
 pub(super) fn shell(snapshot: AppState, management: ManagementState) -> Page {
     let mut state = UiState::default();
@@ -462,16 +462,193 @@ fn settings_controls_on_each_blocked_page_are_disabled() {
             &["history-limit", "history-keep-audio"],
         ),
     ];
-    for (route, controls) in cases {
-        let mut page = shell(snapshot(crate::test_support::RECORDING), configured());
-        open(&mut page, &["nav-settings", route]);
-        let html = page.html();
-        assert!(tag(&html, "settings-disabled-reason").is_some(), "{route}");
-        for control in controls {
-            let element = tag(&html, control).unwrap_or_else(|| panic!("{route} {control}"));
-            assert!(element.contains(" disabled="), "{route} {element}");
+    for saving in [false, true] {
+        for (route, controls) in cases {
+            let phase = if saving {
+                Phase::Idle
+            } else {
+                crate::test_support::RECORDING
+            };
+            let mut page = shell(snapshot(phase), configured());
+            if saving {
+                page.act(|actions| {
+                    actions.change_setting(SettingKey::StartMinimized, |settings| {
+                        settings.start_minimized = true
+                    })
+                });
+            }
+            open(&mut page, &["nav-settings", route]);
+            let html = page.html();
+            assert!(tag(&html, "settings-disabled-reason").is_some(), "{route}");
+            for control in controls {
+                let element = tag(&html, control).unwrap_or_else(|| panic!("{route} {control}"));
+                assert!(element.contains(" disabled="), "{route} {element}");
+            }
+            if saving && route == "nav-settings-ai-cleanup" {
+                for control in [
+                    "provider-credential",
+                    "save-credential",
+                    "remove-credential",
+                ] {
+                    assert!(
+                        tag(&html, control)
+                            .expect("credential control")
+                            .contains(" disabled=")
+                    );
+                }
+            }
         }
     }
+}
+
+#[test]
+fn a_refused_shortcut_save_blocks_theme_until_it_finishes_then_theme_saves_confirmed_keys() {
+    let mut page = shell(snapshot(Phase::Idle), loaded());
+    open(&mut page, &["nav-settings"]);
+    page.act(|actions| {
+        actions.change_setting(SettingKey::RecordingShortcut, |settings| {
+            settings.recording_shortcut.key = ShortcutKey::R
+        })
+    });
+    assert_eq!(sent_settings().len(), 1);
+    assert!(text(&page.html(), "recording-shortcut-keys").contains('R'));
+    for control in [
+        "recording-shortcut",
+        "recording-mode-toggle",
+        "cancel-dictation",
+        "theme",
+        "start-minimized",
+        "start-on-login",
+        "run-setup-again",
+    ] {
+        assert!(
+            tag(&page.html(), control)
+                .expect("settings control")
+                .contains(" disabled=")
+        );
+    }
+    page.fire("theme", "change", "dark");
+    assert_eq!(
+        sent_settings().len(),
+        1,
+        "a second edit is unavailable while saving"
+    );
+    page.answer(
+        "update_settings",
+        Err::<SaveSettingsResponse, _>(AppError::new(
+            ErrorCategory::Settings,
+            "shortcut_refused",
+            "The recording shortcut is taken",
+        )),
+    );
+    assert!(text(&page.html(), "recording-shortcut-keys").contains("Space"));
+    assert!(text(&page.html(), "recording-mode-error").contains("shortcut is taken"));
+    assert!(
+        !tag(&page.html(), "theme")
+            .expect("theme")
+            .contains(" disabled=")
+    );
+    page.fire("theme", "change", "dark");
+    let requests = sent_settings();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].recording_shortcut, shortcut());
+    assert_eq!(requests[1].theme, whispernow_domain::ThemePreference::Dark);
+    page.answer(
+        "update_settings",
+        Ok(SaveSettingsResponse {
+            settings: SettingsView::new(&requests[1]),
+            warnings: Vec::new(),
+        }),
+    );
+    assert_eq!(text(&page.html(), "theme-status"), "Saved");
+    assert!(text(&page.html(), "recording-mode-error").contains("shortcut is taken"));
+}
+
+#[test]
+fn a_credential_mutation_blocks_document_saves_until_its_confirmed_settings_arrive() {
+    let mut page = shell(snapshot(Phase::Idle), configured());
+    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+    page.input("provider-credential", "sk-test")
+        .click("save-credential");
+    for control in [
+        "provider-name",
+        "provider-model",
+        "provider-endpoint",
+        "ai-cleanup-enabled",
+    ] {
+        assert!(
+            tag(&page.html(), control)
+                .expect("provider control")
+                .contains(" disabled=")
+        );
+    }
+    open(&mut page, &["nav-settings-general"]);
+    assert!(
+        tag(&page.html(), "theme")
+            .expect("theme")
+            .contains(" disabled=")
+    );
+    page.fire("theme", "change", "dark");
+    assert!(sent_settings().is_empty());
+    let mut confirmed = settings();
+    confirmed.api_keys.insert(LlmProvider::OpenAi);
+    page.answer("set_api_key", Ok(SettingsView::new(&confirmed)));
+    assert!(
+        !tag(&page.html(), "theme")
+            .expect("theme")
+            .contains(" disabled=")
+    );
+    page.fire("theme", "change", "dark");
+    assert_eq!(sent_settings().len(), 1);
+    assert!(sent_settings()[0].api_keys.contains(&LlmProvider::OpenAi));
+}
+
+#[test]
+fn a_settings_reload_blocks_edits_until_it_installs_the_desktops_confirmed_values() {
+    let mut page = shell(snapshot(Phase::Idle), loaded());
+    open(&mut page, &["nav-settings"]);
+    page.act(|actions| actions.refresh_all());
+    assert!(
+        tag(&page.html(), "theme")
+            .expect("theme")
+            .contains(" disabled=")
+    );
+    page.fire("theme", "change", "dark");
+    assert!(sent_settings().is_empty());
+    let mut confirmed = settings();
+    confirmed.recording_shortcut.key = ShortcutKey::T;
+    confirmed.theme = whispernow_domain::ThemePreference::Light;
+    page.answer("get_settings", Ok(SettingsView::new(&confirmed)));
+    assert!(
+        !tag(&page.html(), "theme")
+            .expect("theme")
+            .contains(" disabled=")
+    );
+    page.fire("theme", "change", "dark");
+    assert_eq!(sent_settings().len(), 1);
+    assert_eq!(sent_settings()[0].recording_shortcut.key, ShortcutKey::T);
+}
+
+#[test]
+fn a_pending_settings_save_disables_speech_model_selection() {
+    let mut page = shell(snapshot(Phase::Idle), configured());
+    open(
+        &mut page,
+        &["nav-settings", "start-minimized", "nav-settings-models"],
+    );
+    let choose = "model-sherpa-onnx-whisper-base-use";
+    assert!(
+        tag(&page.html(), choose)
+            .expect("model choice")
+            .contains(" disabled=")
+    );
+    page.click(choose);
+    assert_eq!(fake::count("select_model"), 0);
+    assert!(
+        !tag(&page.html(), "model-sherpa-onnx-whisper-small-download")
+            .expect("download")
+            .contains(" disabled=")
+    );
 }
 
 #[test]
@@ -996,6 +1173,14 @@ fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() 
     let sent = sent_settings();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].cleanup_model_id(), LARGE);
+    let other = "model-whispernow-cleanup-lfm2-5-350m-q8_0-use";
+    assert!(
+        tag(&page.html(), other)
+            .expect("other cleanup model")
+            .contains(" disabled=")
+    );
+    page.click(other);
+    assert_eq!(sent_settings().len(), 1);
 }
 
 #[test]
@@ -1066,6 +1251,14 @@ fn deleting_a_rule_names_it_and_moves_focus_to_its_neighbour() {
         focused().as_deref(),
         Some("vocabulary-rule-1"),
         "the remaining rule, now first, takes focus"
+    );
+
+    page.answer(
+        "update_settings",
+        Ok(SaveSettingsResponse {
+            settings: SettingsView::new(&sent[0]),
+            warnings: Vec::new(),
+        }),
     );
 
     open(&mut page, &["vocabulary-rule-1-delete"]);

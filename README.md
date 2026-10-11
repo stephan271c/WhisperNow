@@ -60,6 +60,7 @@ Setup, native prerequisites and desktop behaviour are in
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+python3 -m pip install -r scripts/tests/requirements.txt
 python3 -m unittest discover -s scripts/tests -v
 ```
 

@@ -102,6 +102,13 @@ fn each_model_has_the_artifacts_its_family_needs() {
 fn cleanup_models_start_with_the_default_and_are_not_speech_models() {
     let registry = ModelRegistry::builtin();
     assert_eq!(CLEANUP_MODEL_IDS[0], DEFAULT_CLEANUP_MODEL_ID);
+    let cleanup_ids: Vec<_> = registry
+        .models()
+        .iter()
+        .filter(|model| model.family() == ModelFamily::Cleanup)
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(cleanup_ids, CLEANUP_MODEL_IDS);
     for id in CLEANUP_MODEL_IDS {
         let model = registry.get(id).expect("the cleanup model is registered");
         assert_eq!(model.family(), ModelFamily::Cleanup);

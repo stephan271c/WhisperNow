@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use whispernow_core::{ResolvedModel, asr::AsrEngine};
-use whispernow_domain::{ModelAvailability, ModelId, ModelRegistry};
+use whispernow_domain::{ModelId, ModelRegistry};
 use whispernow_platform::SherpaAsrEngine;
 
 #[test]
@@ -34,11 +34,7 @@ fn manual_parakeet_fixture_matches_documented_text() {
 
     let mut engine = SherpaAsrEngine::new();
     engine
-        .load(&ResolvedModel {
-            definition,
-            root,
-            availability: ModelAvailability::Downloaded,
-        })
+        .load(&ResolvedModel { definition, root })
         .expect("load Parakeet");
     let text = engine
         .transcribe(wave.samples())

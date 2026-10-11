@@ -27,7 +27,6 @@ use crate::llama::CUDA_LIBRARIES;
 ))]
 use crate::llama::CUDA_PACK_LIBRARIES;
 
-const PACK_DIRECTORY: &str = "llama-cuda";
 /// Left in a pack that was removed while loaded; such a pack is deleted at the next start.
 const REMOVAL_MARKER: &str = ".whispernow-remove";
 
@@ -125,6 +124,12 @@ pub enum CudaPackState {
     Installed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CudaPackRemovalOutcome {
+    Removed,
+    Deferred,
+}
+
 impl ModelStore {
     /// The pack's archives, replaced by fixtures in tests.
     #[must_use]
@@ -139,10 +144,6 @@ impl ModelStore {
             .iter()
             .map(|archive| archive.size_bytes)
             .sum()
-    }
-
-    fn cuda_pack_root(&self) -> PathBuf {
-        self.paths.data_dir().join(PACK_DIRECTORY)
     }
 
     #[must_use]
@@ -160,7 +161,7 @@ impl ModelStore {
     /// removal.
     #[must_use]
     pub fn cuda_pack_dir(&self) -> Option<PathBuf> {
-        let root = self.cuda_pack_root();
+        let root = self.paths.cuda_pack_dir();
         (self.validate_cuda_pack(&root).is_ok() && !root.join(REMOVAL_MARKER).exists())
             .then_some(root)
     }
@@ -211,7 +212,7 @@ impl ModelStore {
         if self.cuda_pack.is_empty() {
             return Err(ModelStoreError::Unsupported);
         }
-        let root = self.cuda_pack_root();
+        let root = self.paths.cuda_pack_dir();
         let total = self.cuda_pack_size();
         let complete = |phase| DownloadProgress {
             phase,
@@ -290,18 +291,27 @@ impl ModelStore {
 
     /// Removes the pack, or, while `in_use` (loaded in this process), marks it so that it is
     /// no longer used and is deleted at the next start.
-    pub fn remove_cuda_pack(&self, in_use: bool) -> Result<(), ModelStoreError> {
+    pub fn remove_cuda_pack(
+        &self,
+        in_use: bool,
+    ) -> Result<CudaPackRemovalOutcome, ModelStoreError> {
         let _guard = self.lock_store();
-        let root = self.cuda_pack_root();
-        if fs::symlink_metadata(&root).is_err() {
-            return Err(ModelStoreError::NotInstalled);
-        }
-        if in_use {
+        let root = self.paths.cuda_pack_dir();
+        let metadata = match fs::symlink_metadata(&root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ModelStoreError::NotInstalled);
+            }
+            Err(_) => return Err(filesystem("inspect the CUDA pack")),
+        };
+        if in_use && metadata.is_dir() && !metadata.file_type().is_symlink() {
             File::create(root.join(REMOVAL_MARKER))
                 .and_then(|marker| marker.sync_all())
-                .map_err(|_| filesystem("mark the CUDA pack for removal"))
+                .map_err(|_| filesystem("mark the CUDA pack for removal"))?;
+            Ok(CudaPackRemovalOutcome::Deferred)
         } else {
-            remove_path(&root).map_err(|_| filesystem("remove the CUDA pack"))
+            remove_path(&root).map_err(|_| filesystem("remove the CUDA pack"))?;
+            Ok(CudaPackRemovalOutcome::Removed)
         }
     }
 
@@ -309,7 +319,7 @@ impl ModelStore {
     /// at startup, before anything loads the pack.
     pub fn finish_cuda_pack_removal(&self) {
         let _guard = self.lock_store();
-        let root = self.cuda_pack_root();
+        let root = self.paths.cuda_pack_dir();
         if root.join(REMOVAL_MARKER).exists()
             && let Err(error) = remove_path(&root)
         {

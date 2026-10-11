@@ -146,7 +146,7 @@ mod tests {
     use std::path::PathBuf;
 
     use whispernow_core::ResolvedModel;
-    use whispernow_domain::{ModelAvailability, ModelRegistry};
+    use whispernow_domain::ModelRegistry;
 
     use super::recognizer_config;
 
@@ -154,7 +154,6 @@ mod tests {
         ResolvedModel {
             definition: ModelRegistry::builtin().get(id).expect("model").clone(),
             root: PathBuf::from("/models").join(id),
-            availability: ModelAvailability::Downloaded,
         }
     }
 

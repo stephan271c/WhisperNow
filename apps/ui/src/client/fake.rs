@@ -100,14 +100,28 @@ pub(crate) fn reset() {
 
 /// Answers the oldest unanswered call of `command`.
 pub(crate) fn answer(command: &str, answer: Result<impl Serialize, AppError>) {
+    let index = DESKTOP.with_borrow(|desktop| {
+        desktop
+            .calls
+            .iter()
+            .filter(|call| call.command == command)
+            .position(|call| !call.slot.borrow().answered)
+            .unwrap_or_else(|| panic!("no {command} call is waiting"))
+    });
+    answer_nth(command, index, answer);
+}
+
+pub(crate) fn answer_nth(command: &str, index: usize, answer: Result<impl Serialize, AppError>) {
     let answer = reply(answer);
     let waker = DESKTOP.with_borrow(|desktop| {
         let call = desktop
             .calls
             .iter()
-            .find(|call| call.command == command && !call.slot.borrow().answered)
-            .unwrap_or_else(|| panic!("no {command} call is waiting"));
+            .filter(|call| call.command == command)
+            .nth(index)
+            .unwrap_or_else(|| panic!("no {command} call at {index}"));
         let mut slot = call.slot.borrow_mut();
+        assert!(!slot.answered, "{command} call at {index} was answered");
         slot.reply = Some(answer);
         slot.answered = true;
         slot.waker.take()

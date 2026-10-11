@@ -108,7 +108,9 @@ pub(crate) fn overlay_origin(monitor: &MonitorArea, logical_size: (f64, f64)) ->
 /// others (not native Wayland).
 pub(crate) const fn overlay_presentation(phase: &Phase, can_float: bool) -> OverlayPresentation {
     match (phase, can_float) {
-        (Phase::Idle | Phase::Paused | Phase::Updating, _) => OverlayPresentation::None,
+        (Phase::Idle | Phase::Paused | Phase::ClearingData | Phase::Updating, _) => {
+            OverlayPresentation::None
+        }
         (_, true) => OverlayPresentation::Window,
         (Phase::Error { .. }, false) => OverlayPresentation::Notification,
         (_, false) => OverlayPresentation::None,

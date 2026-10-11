@@ -56,7 +56,7 @@ const SOURCES: [(CleanupSource, &str, &str); 3] = [
 #[component]
 pub(super) fn AiCleanupPage() -> Element {
     let actions = use_context::<UiContext>();
-    let settings_blocked = actions.phase_blocked();
+    let settings_blocked = actions.settings_blocked();
     let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let Some(settings) = management.read().shown_settings().cloned() else {
@@ -120,7 +120,9 @@ pub(super) fn AiCleanupPage() -> Element {
 fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> Element {
     let actions = use_context::<UiContext>();
     let mut management = use_context::<UiContext>().management;
-    let credential_blocked = actions.blocked(UiOperation::CredentialMutation);
+    let credential_blocked = actions
+        .blocked(UiOperation::CredentialMutation)
+        .or(actions.settings_pending());
     let mut credential = use_signal(String::new);
     let mut new_model = use_signal(String::new);
     let provider_settings = settings.provider_settings(provider);
@@ -215,6 +217,7 @@ fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> El
                 description: "Stored in the system keychain.",
                 div { class: "stacked-control",
                     TextInput { r#type: "password", autocomplete: "new-password", value: "{credential}",
+                        disabled: credential_blocked.is_some(),
                         placeholder: if key_saved { "Key saved" } else { "Enter your API key" },
                         oninput: move |event: FormEvent| credential.set(event.value()),
                     }

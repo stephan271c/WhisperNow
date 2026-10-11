@@ -147,6 +147,11 @@ impl AppPaths {
     }
 
     #[must_use]
+    pub fn cuda_pack_dir(&self) -> PathBuf {
+        self.data_dir.join("llama-cuda")
+    }
+
+    #[must_use]
     pub fn logs_dir(&self) -> PathBuf {
         self.data_dir.join("logs")
     }

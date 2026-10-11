@@ -40,6 +40,9 @@ impl UiContext {
 
     /// Makes `model_id` the model in use, or loads it again after it failed to load.
     pub(crate) fn switch_model(self, model_id: ModelId) {
+        if self.management.peek().settings_pending() {
+            return;
+        }
         let operation = UiOperation::ModelSwitch;
         self.run(
             operation,

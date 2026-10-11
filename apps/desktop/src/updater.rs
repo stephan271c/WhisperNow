@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ErrorCategory};
 
 use semver::Version;
 use tauri::{AppHandle, Manager as _};
@@ -14,6 +14,8 @@ use tauri_plugin_updater::{Update, UpdaterExt as _};
 use whispernow_domain::ipc::{
     ManualUpdatePackage, UpdateError, UpdatePhase, UpdateProgress, UpdateState,
 };
+
+use crate::services::Dictation;
 
 pub(crate) const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_hours(6);
 const MAX_RELEASE_NOTES_BYTES: usize = 8 * 1024;
@@ -70,7 +72,7 @@ struct ReadyUpdate<U> {
 /// transitions are tested without the plugin.
 struct Updates<U> {
     state: UpdateState,
-    ready: Option<ReadyUpdate<U>>,
+    ready: Option<Arc<ReadyUpdate<U>>>,
     manual: Option<ManualUpdate>,
     /// Whether the user asked for the running check, which then reports its result.
     check_is_manual: bool,
@@ -168,7 +170,7 @@ impl<U> Updates<U> {
     }
 
     fn downloaded(&mut self, update: U, bytes: Vec<u8>) {
-        self.ready = Some(ReadyUpdate { update, bytes });
+        self.ready = Some(Arc::new(ReadyUpdate { update, bytes }));
         self.state.phase = UpdatePhase::ReadyToRestart;
         self.state.progress = None;
         self.state.error = None;
@@ -211,7 +213,7 @@ impl<U> Updates<U> {
 
     /// Takes the downloaded update for installing. `dictating` tells the user the restart
     /// waits for the dictation in flight.
-    fn take_ready(&mut self, dictating: bool) -> Option<ReadyUpdate<U>> {
+    fn take_ready(&mut self, dictating: bool) -> Option<Arc<ReadyUpdate<U>>> {
         if self.state.phase != UpdatePhase::ReadyToRestart {
             return None;
         }
@@ -226,11 +228,33 @@ impl<U> Updates<U> {
         self.state.restart_deferred = false;
     }
 
-    fn restore_ready(&mut self, ready: ReadyUpdate<U>, error: Option<UpdateError>) {
+    fn restore_ready(&mut self, ready: Arc<ReadyUpdate<U>>, error: Option<UpdateError>) {
         self.ready = Some(ready);
         self.state.phase = UpdatePhase::ReadyToRestart;
         self.state.error = error;
         self.state.restart_deferred = false;
+    }
+
+    fn finish_install_worker(
+        &mut self,
+        result: Result<Result<(), AppError>, tokio::task::JoinError>,
+        ready: Arc<ReadyUpdate<U>>,
+        dictation: &Dictation,
+    ) -> Result<(), AppError> {
+        result.unwrap_or_else(|error| {
+            tracing::error!(
+                panicked = error.is_panic(),
+                cancelled = error.is_cancelled(),
+                "update installer worker stopped"
+            );
+            dictation.end_update();
+            self.restore_ready(ready, Some(UpdateError::InstallFailed));
+            Err(AppError::new(
+                ErrorCategory::General,
+                "worker_stopped",
+                "The update installer stopped before installation completed",
+            ))
+        })
     }
 }
 
@@ -362,18 +386,18 @@ impl UpdateController {
             return Ok(self.snapshot());
         };
         let controller = Arc::clone(self);
-        tokio::task::spawn_blocking(move || controller.install(ready))
-            .await
-            .unwrap_or_else(|_| {
-                tracing::error!("update installer worker stopped");
-                Ok(())
-            })?;
+        let worker_ready = Arc::clone(&ready);
+        let result = tokio::task::spawn_blocking(move || controller.install(worker_ready)).await;
+        let state = self.app.state::<crate::gateway::Gateway>();
+        self.update(|updates| {
+            updates.finish_install_worker(result, ready, &state.services.dictation)
+        })?;
         Ok(self.snapshot())
     }
 
     /// Runs on a blocking worker: waiting for the dictation in flight, installing, and shutting
     /// down all block on native, filesystem, and process work.
-    fn install(&self, ready: ReadyUpdate<Update>) -> Result<(), AppError> {
+    fn install(&self, ready: Arc<ReadyUpdate<Update>>) -> Result<(), AppError> {
         let state = self.app.state::<crate::gateway::Gateway>();
         if let Err(error) = state.services.dictation.begin_update() {
             self.update(|updates| updates.restore_ready(ready, None));
@@ -492,7 +516,7 @@ pub(crate) async fn check_for_updates(
     controller: tauri::State<'_, Arc<UpdateController>>,
 ) -> Result<UpdateState, AppError> {
     app.state::<crate::gateway::Gateway>()
-        .refuse_while_updating()?;
+        .refuse_during_maintenance()?;
     Ok(controller.inner().check(true).await)
 }
 
@@ -788,12 +812,71 @@ mod tests {
         assert_eq!(updates.state.error, Some(UpdateError::InstallFailed));
         assert_eq!(
             updates.take_ready(false),
-            Some(ReadyUpdate {
+            Some(Arc::new(ReadyUpdate {
                 update: "update",
                 bytes: vec![1, 2, 3, 4]
-            }),
+            })),
             "the install can be retried"
         );
+    }
+
+    #[test]
+    fn a_failed_installer_worker_restores_the_download_and_dictation_admission() {
+        let fixture = crate::services::Fixture::new();
+        fixture.flush();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let mut updates = updates();
+        updates.begin_check(true);
+        updates.downloading("0.2.1".to_owned(), None);
+        updates.downloaded("update", vec![1, 2, 3, 4]);
+        let ready = updates.take_ready(true).expect("ready update");
+        assert!(updates.state.restart_deferred);
+        fixture.dictation.begin_update().expect("begin update");
+        updates.installing();
+        assert_eq!(
+            fixture.state.snapshot().phase,
+            crate::services::Phase::Updating
+        );
+        assert_eq!(updates.state.phase, UpdatePhase::Installing);
+        let worker_ready = Arc::clone(&ready);
+
+        let result = runtime.block_on(async move {
+            tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+                drop(worker_ready);
+                panic!("installer worker failed");
+            })
+            .await
+        });
+        assert!(result.as_ref().expect_err("worker failed").is_panic());
+        let error = updates
+            .finish_install_worker(result, ready, &fixture.dictation)
+            .expect_err("worker failure reaches the caller");
+
+        assert_eq!(error.code, "worker_stopped");
+        assert_eq!(error.category, ErrorCategory::General);
+        assert_eq!(fixture.state.snapshot().phase, crate::services::Phase::Idle);
+        assert_eq!(updates.state.phase, UpdatePhase::ReadyToRestart);
+        assert_eq!(updates.state.error, Some(UpdateError::InstallFailed));
+        assert!(!updates.state.restart_deferred);
+        assert!(!updates.begin_check(true), "the download remains ready");
+        let retry = updates.take_ready(false).expect("retry the installation");
+        assert_eq!(retry.bytes, [1, 2, 3, 4]);
+        assert_eq!(retry.update, "update");
+        assert_eq!(updates.state.error, None);
+        fixture
+            .dictation
+            .begin_update()
+            .expect("retry the update phase");
+        fixture.dictation.end_update();
+        fixture
+            .dictation
+            .start(crate::services::RecordingTrigger::Toggle)
+            .expect("dictation is admitted after recovery");
+        assert!(fixture.state.snapshot().phase.is_busy());
+        fixture.dictation.cancel().expect("cancel test dictation");
+        fixture.flush();
     }
 
     #[test]

@@ -127,15 +127,14 @@ impl HistoryStore {
         }
     }
 
-    /// Clears and closes history, then runs `operation` while still holding the lock, so the
-    /// files it deletes are not reopened meanwhile. The next use opens history again.
+    // Keep the repository closed until the filesystem operation finishes. Category-aware
+    // deletion owns the rows and audio; closing must preserve both when deletion fails.
     pub(super) fn with_repository_closed<T>(
         &self,
         operation: impl FnOnce() -> T,
     ) -> Result<T, AppError> {
         let mut state = self.lock();
         if let Some(repository) = state.repository.take() {
-            repository.clear()?;
             repository.close()?;
         }
         state.warning = None;
@@ -213,16 +212,20 @@ mod tests {
     }
 
     #[test]
-    fn history_reopens_after_a_data_clear() {
+    fn closing_and_reopening_preserves_history_and_retained_audio() {
         let (_dir, store) = store();
-        store
-            .insert(entry("before"), &[], false, HistoryLimit::Last20)
+        let saved = store
+            .insert(entry("before"), &[0.25; 160], true, HistoryLimit::Last20)
             .expect("insert");
+        let audio = store.audio(saved.id).expect("retained audio");
         store.with_repository_closed(|| ()).expect("closed");
         let page = store
             .list(&HistoryPageRequest::first_page(HistoryFilter::default()))
             .expect("reopened");
-        assert!(page.entries.is_empty());
-        assert!(store.audio(EntryId(1)).is_err());
+        assert_eq!(page.entries, [saved]);
+        assert_eq!(
+            store.audio(page.entries[0].id).expect("audio reopened"),
+            audio
+        );
     }
 }

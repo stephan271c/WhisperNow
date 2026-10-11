@@ -21,7 +21,7 @@ use crate::AppPaths;
 
 mod cuda_pack;
 
-pub use self::cuda_pack::{CudaPackArchive, CudaPackFormat, CudaPackState};
+pub use self::cuda_pack::{CudaPackArchive, CudaPackFormat, CudaPackRemovalOutcome, CudaPackState};
 
 const DOWNLOAD_BUFFER_BYTES: usize = 64 * 1024;
 
@@ -141,7 +141,7 @@ impl ModelStore {
         self.mutation.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn definition(&self, model_id: &ModelId) -> Result<&ModelDefinition, ModelStoreError> {
+    pub fn definition(&self, model_id: &ModelId) -> Result<&ModelDefinition, ModelStoreError> {
         self.registry
             .get(model_id.as_str())
             .ok_or(ModelStoreError::UnknownModel)
@@ -156,7 +156,6 @@ impl ModelStore {
             return Ok(Some(ResolvedModel {
                 definition: definition.clone(),
                 root: downloaded_root,
-                availability: ModelAvailability::Downloaded,
             }));
         }
         Ok(None)
@@ -336,7 +335,9 @@ impl ModelStore {
             .map(|definition| {
                 let availability = self
                     .resolve_unlocked(definition)?
-                    .map_or(ModelAvailability::NotInstalled, |model| model.availability);
+                    .map_or(ModelAvailability::NotInstalled, |_| {
+                        ModelAvailability::Downloaded
+                    });
                 Ok(ModelListEntry {
                     definition: definition.clone(),
                     availability,
@@ -424,11 +425,7 @@ impl ModelStore {
             downloaded_bytes: definition.source.archive_size_bytes,
             total_bytes: Some(definition.source.archive_size_bytes),
         });
-        Ok(ResolvedModel {
-            definition,
-            root,
-            availability: ModelAvailability::Downloaded,
-        })
+        Ok(ResolvedModel { definition, root })
     }
 }
 

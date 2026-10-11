@@ -4,8 +4,8 @@ use whispernow_domain::ipc::{
     Phase, SettingsView, UpdateError, UpdatePhase, UpdateProgress, UpdateState,
 };
 use whispernow_domain::{
-    ClearDataCategory, EntryId, HistoryCursor, HistoryEntry, HistoryFilter, HistoryPage,
-    HistoryPageRequest, LlmProvider, Settings, Shortcut, ShortcutKey, ShortcutModifier, UtcMillis,
+    ClearDataCategory, EntryId, HistoryCursor, HistoryEntry, HistoryPage, HistoryPageRequest,
+    LlmProvider, Settings, Shortcut, ShortcutKey, ShortcutModifier, UtcMillis,
 };
 
 use crate::components::cleanup_destination;
@@ -91,22 +91,13 @@ fn history_copy_uses_the_pasted_text_of_the_entry() {
 #[test]
 fn a_history_read_for_a_filter_no_longer_shown_is_ignored() {
     let mut management = ManagementState::default();
-    let stale = management.history_request().filter;
-    let pages = 1;
+    let (stale, _) = management.history_request();
     assert!(management.show_failed_history_only(true));
-    let latest = management.history_request().filter;
+    let (latest, _) = management.history_request();
 
-    management.finish_history_refresh(
-        pages,
-        &latest,
-        history_window(vec![history_entry(11, "newest")]),
-    );
-    management.finish_history_refresh(
-        pages,
-        &stale,
-        history_window(vec![history_entry(10, "stale")]),
-    );
-    management.fail_history_refresh(&stale, &history_unavailable_error());
+    management.finish_history_refresh(latest, history_window(vec![history_entry(11, "newest")]));
+    management.finish_history_refresh(stale, history_window(vec![history_entry(10, "stale")]));
+    management.fail_history_refresh(stale, &history_unavailable_error());
 
     assert!(management.history_loaded());
     assert!(management.history_unavailable.is_none());
@@ -117,9 +108,9 @@ fn a_history_read_for_a_filter_no_longer_shown_is_ignored() {
 #[test]
 fn loading_older_history_grows_the_window_that_later_refreshes_reread() {
     let mut management = ManagementState::default();
+    let (request_id, _) = management.history_request();
     management.finish_history_refresh(
-        1,
-        &HistoryFilter::default(),
+        request_id,
         HistoryPage {
             next_cursor: Some(HistoryCursor {
                 created_at: UtcMillis(10),
@@ -130,13 +121,10 @@ fn loading_older_history_grows_the_window_that_later_refreshes_reread() {
     );
     assert_eq!(management.history_window_pages(), 1);
 
-    let request = management.older_history_request();
+    let (request_id, request) = management.older_history_request();
     assert_eq!(request.limit, 2 * HistoryPageRequest::DEFAULT_PAGE_SIZE);
-    let pages = 2;
-    let filter = request.filter;
     management.finish_history_refresh(
-        pages,
-        &filter,
+        request_id,
         history_window(vec![
             history_entry(10, "first page"),
             history_entry(9, "second page"),
@@ -146,7 +134,7 @@ fn loading_older_history_grows_the_window_that_later_refreshes_reread() {
     assert!(management.history_next_cursor.is_none());
 
     assert_eq!(
-        management.history_request().limit,
+        management.history_request().1.limit,
         2 * HistoryPageRequest::DEFAULT_PAGE_SIZE
     );
 }
@@ -156,10 +144,8 @@ fn failed_refresh_keeps_loaded_rows_but_unavailable_storage_degrades() {
     let mut management = ManagementState::default();
     show_history(&mut management, vec![history_entry(10, "loaded")]);
 
-    management.fail_history_refresh(
-        &HistoryFilter::default(),
-        &crate::client::connection_error(),
-    );
+    let (request_id, _) = management.history_request();
+    management.fail_history_refresh(request_id, &crate::client::connection_error());
     assert_eq!(
         management.history.len(),
         1,
@@ -171,7 +157,8 @@ fn failed_refresh_keeps_loaded_rows_but_unavailable_storage_degrades() {
     );
     assert!(management.history_unavailable.is_none());
 
-    management.fail_history_refresh(&HistoryFilter::default(), &history_unavailable_error());
+    let (request_id, _) = management.history_request();
+    management.fail_history_refresh(request_id, &history_unavailable_error());
     assert!(management.history.is_empty());
     assert!(!management.history_loaded());
     assert_eq!(
@@ -183,9 +170,9 @@ fn failed_refresh_keeps_loaded_rows_but_unavailable_storage_degrades() {
 #[test]
 fn partial_clear_data_does_not_hide_history_when_database_deletion_failed() {
     let mut management = ManagementState::default();
+    let (request_id, _) = management.history_request();
     management.finish_history_refresh(
-        1,
-        &HistoryFilter::default(),
+        request_id,
         HistoryPage {
             next_cursor: Some(HistoryCursor {
                 created_at: UtcMillis(10),
@@ -226,10 +213,6 @@ fn loaded_management(settings: Settings) -> ManagementState {
     management
 }
 
-fn start_minimized(settings: &mut Settings) {
-    settings.start_minimized = true;
-}
-
 fn start_on_login(settings: &mut Settings) {
     settings.auto_start_on_login = true;
 }
@@ -243,59 +226,78 @@ fn is_failed(status: &SaveStatus) -> bool {
 }
 
 #[test]
-fn a_change_shows_at_once_and_changes_made_during_a_save_go_out_together_after_it() {
+fn a_pending_shortcut_save_blocks_another_edit_and_a_refusal_does_not_leak_into_it() {
     let mut management = loaded_management(editable_settings());
-    management.change_setting(SettingKey::StartMinimized, start_minimized);
-    let first = management.next_settings_update().expect("first change");
-    assert!(first.start_minimized);
-
-    management.change_setting(
-        SettingKey::Theme,
-        theme(whispernow_domain::ThemePreference::Dark),
-    );
-    management.change_setting(SettingKey::StartOnLogin, start_on_login);
-    let shown = management.shown_settings().expect("loaded");
-    assert!(shown.start_minimized && shown.auto_start_on_login);
-    assert_eq!(shown.theme, whispernow_domain::ThemePreference::Dark);
+    let confirmed = management
+        .shown_settings()
+        .expect("loaded")
+        .recording_shortcut
+        .clone();
+    let request = management
+        .begin_settings_update(SettingKey::RecordingShortcut, |settings| {
+            settings.recording_shortcut.key = ShortcutKey::R;
+        })
+        .expect("shortcut edit");
+    assert_eq!(request.recording_shortcut.key, ShortcutKey::R);
+    assert!(management.settings_pending());
     assert_eq!(
-        management.setting_status(&SettingKey::Theme),
-        SaveStatus::Saving
-    );
-    assert!(
-        management.next_settings_update().is_none(),
-        "the later changes wait for the first answer"
-    );
-
-    management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
-        settings: SettingsView {
-            settings: first,
-            warnings: Vec::new(),
-        },
-        warnings: Vec::new(),
-    }));
-    assert_eq!(
-        management.setting_status(&SettingKey::StartMinimized),
-        SaveStatus::Saved
-    );
-    assert!(
         management
             .shown_settings()
             .expect("loaded")
-            .auto_start_on_login,
-        "the waiting changes stay shown"
+            .recording_shortcut,
+        request.recording_shortcut
     );
-    let next = management
-        .next_settings_update()
-        .expect("the waiting changes");
-    assert!(next.start_minimized && next.auto_start_on_login);
-    assert_eq!(next.theme, whispernow_domain::ThemePreference::Dark);
+    assert!(
+        management
+            .begin_settings_update(
+                SettingKey::Theme,
+                theme(whispernow_domain::ThemePreference::Dark),
+            )
+            .is_none()
+    );
+    assert_eq!(
+        management.setting_status(&SettingKey::Theme),
+        SaveStatus::Idle
+    );
+
+    management.finish_settings_update(Err("The shortcut is taken".to_owned()));
+    assert!(!management.settings_pending());
+    assert_eq!(
+        management
+            .shown_settings()
+            .expect("loaded")
+            .recording_shortcut,
+        confirmed
+    );
+    let request = management
+        .begin_settings_update(
+            SettingKey::Theme,
+            theme(whispernow_domain::ThemePreference::Dark),
+        )
+        .expect("theme edit after refusal");
+    assert_eq!(request.recording_shortcut, confirmed);
+    assert_eq!(request.theme, whispernow_domain::ThemePreference::Dark);
+    management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
+        settings: SettingsView::new(&request),
+        warnings: Vec::new(),
+    }));
+    assert_eq!(
+        management.setting_status(&SettingKey::Theme),
+        SaveStatus::Saved
+    );
+    assert!(is_failed(
+        &management.setting_status(&SettingKey::RecordingShortcut)
+    ));
 }
 
 #[test]
 fn a_refused_change_rolls_back_and_keeps_its_error_beside_the_control() {
     let mut management = loaded_management(editable_settings());
-    management.change_setting(SettingKey::StartOnLogin, start_on_login);
-    assert!(management.next_settings_update().is_some());
+    assert!(
+        management
+            .begin_settings_update(SettingKey::StartOnLogin, start_on_login)
+            .is_some()
+    );
     management.finish_settings_update(Err("refused".to_owned()));
 
     assert!(
@@ -307,9 +309,13 @@ fn a_refused_change_rolls_back_and_keeps_its_error_beside_the_control() {
     assert!(is_failed(
         &management.setting_status(&SettingKey::StartOnLogin)
     ));
-    assert!(management.next_settings_update().is_none());
+    assert!(!management.settings_pending());
 
-    management.change_setting(SettingKey::StartOnLogin, start_on_login);
+    assert!(
+        management
+            .begin_settings_update(SettingKey::StartOnLogin, start_on_login)
+            .is_some()
+    );
     assert_eq!(
         management.setting_status(&SettingKey::StartOnLogin),
         SaveStatus::Saving,
@@ -536,6 +542,12 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
             "Installing an update",
             Some("WhisperNow will be ready after the update finishes."),
         ),
+        (
+            ui_state(Phase::ClearingData),
+            HomeStatusKind::Waiting,
+            "Clearing application data",
+            None,
+        ),
     ] {
         let status = HomeStatus::from_state(&state);
         assert_eq!(status.kind, kind, "{title}");
@@ -545,26 +557,32 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
 }
 
 #[test]
-fn a_saved_settings_warning_is_shown_beside_the_installed_settings() {
+fn a_saved_native_warning_keeps_the_desktops_substituted_shortcut() {
     let mut management = loaded_management(editable_settings());
-    management.change_setting(SettingKey::RecordingShortcut, |settings| {
-        settings.recording_shortcut = Shortcut {
-            modifiers: [ShortcutModifier::Alt].into(),
-            key: ShortcutKey::R,
-        };
-    });
+    let substituted = management
+        .shown_settings()
+        .expect("loaded")
+        .recording_shortcut
+        .clone();
     let request = management
-        .next_settings_update()
+        .begin_settings_update(SettingKey::RecordingShortcut, |settings| {
+            settings.recording_shortcut = Shortcut {
+                modifiers: [ShortcutModifier::Alt].into(),
+                key: ShortcutKey::R,
+            };
+        })
         .expect("loaded settings can be saved");
     let warning = AppError {
         category: ErrorCategory::General,
         code: "shortcut_registration_failed".to_owned(),
         summary: "The recording shortcut is taken by another app".to_owned(),
     };
+    let mut returned = request;
+    returned.recording_shortcut = substituted.clone();
 
     management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
         settings: SettingsView {
-            settings: request,
+            settings: returned,
             warnings: Vec::new(),
         },
         warnings: vec![warning.summary.clone()],
@@ -574,10 +592,18 @@ fn a_saved_settings_warning_is_shown_beside_the_installed_settings() {
         management
             .settings
             .as_ref()
-            .map(|settings| settings.settings.recording_shortcut.key),
-        Some(ShortcutKey::R),
+            .map(|settings| settings.settings.recording_shortcut.clone()),
+        Some(substituted.clone()),
         "the save committed even though a side effect failed"
     );
+    assert_eq!(
+        management
+            .shown_settings()
+            .expect("loaded")
+            .recording_shortcut,
+        substituted
+    );
+    assert!(!management.settings_pending());
     assert!(notice_message(&management).is_some_and(|notice| notice.contains(&warning.summary)));
 }
 
@@ -594,10 +620,11 @@ fn a_loaded_cleanup_warning_clears_after_provider_repair() {
     management.install_settings(SettingsView::new(&settings));
     assert!(notice_message(&management).is_some_and(|message| message.contains("needs a model")));
 
-    management.change_setting(SettingKey::ProviderModel, |settings| {
-        settings.provider_settings_mut(LlmProvider::Anthropic).model = "claude-test".to_owned();
-    });
-    let request = management.next_settings_update().expect("provider repair");
+    let request = management
+        .begin_settings_update(SettingKey::ProviderModel, |settings| {
+            settings.provider_settings_mut(LlmProvider::Anthropic).model = "claude-test".to_owned();
+        })
+        .expect("provider repair");
     management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
         settings: SettingsView::new(&request),
         warnings: Vec::new(),
@@ -608,19 +635,21 @@ fn a_loaded_cleanup_warning_clears_after_provider_repair() {
 #[test]
 fn an_unrelated_save_keeps_an_unresolved_native_settings_warning() {
     let mut management = loaded_management(editable_settings());
-    management.change_setting(SettingKey::StartOnLogin, start_on_login);
-    let request = management.next_settings_update().expect("startup edit");
+    let request = management
+        .begin_settings_update(SettingKey::StartOnLogin, start_on_login)
+        .expect("startup edit");
     management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
         settings: SettingsView::new(&request),
         warnings: vec!["The OS startup registration failed".to_owned()],
     }));
     let warning = management.notice.clone();
 
-    management.change_setting(
-        SettingKey::Theme,
-        theme(whispernow_domain::ThemePreference::Dark),
-    );
-    let request = management.next_settings_update().expect("theme edit");
+    let request = management
+        .begin_settings_update(
+            SettingKey::Theme,
+            theme(whispernow_domain::ThemePreference::Dark),
+        )
+        .expect("theme edit");
     management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
         settings: SettingsView::new(&request),
         warnings: Vec::new(),
@@ -641,19 +670,26 @@ fn theme_attribute_follows_a_theme_change_at_once_and_its_rollback() {
     });
     assert_eq!(management.theme_attribute(), Some("dark"));
 
-    management.change_setting(
-        SettingKey::Theme,
-        theme(whispernow_domain::ThemePreference::Light),
+    assert!(
+        management
+            .begin_settings_update(
+                SettingKey::Theme,
+                theme(whispernow_domain::ThemePreference::Light),
+            )
+            .is_some()
     );
     assert_eq!(management.theme_attribute(), Some("light"));
 
-    assert!(management.next_settings_update().is_some());
     management.finish_settings_update(Err("refused".to_owned()));
     assert_eq!(management.theme_attribute(), Some("dark"));
 
-    management.change_setting(
-        SettingKey::Theme,
-        theme(whispernow_domain::ThemePreference::System),
+    assert!(
+        management
+            .begin_settings_update(
+                SettingKey::Theme,
+                theme(whispernow_domain::ThemePreference::System),
+            )
+            .is_some()
     );
     assert_eq!(management.theme_attribute(), None);
 }

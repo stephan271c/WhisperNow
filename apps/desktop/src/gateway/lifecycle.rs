@@ -75,8 +75,7 @@ impl Gateway {
         }
     }
 
-    /// Registers shortcuts iff dictation is neither paused nor updating. A registrar failure
-    /// is a warning: the phase has already changed and is never rolled back for it.
+    /// A registrar failure is a warning; the phase has already changed and is not rolled back.
     pub(super) fn sync_shortcuts(&self) {
         if let Err(error) = self.shortcuts.sync_lifecycle() {
             tracing::warn!(?error, "recording shortcuts could not follow the lifecycle");
@@ -117,14 +116,12 @@ impl Gateway {
         self.shutdown_complete.load(Ordering::Acquire)
     }
 
-    /// Whether the dictation shortcuts may be registered: dictation is neither paused nor
-    /// updating, and the application is not closing.
     pub(crate) fn shortcuts_enabled(&self) -> bool {
         !self.shutdown_begun.load(Ordering::Acquire)
             && self.services.state.lock().phase.shortcuts_enabled()
     }
 
-    pub(crate) fn refuse_while_updating(&self) -> Result<(), AppError> {
-        self.services.state.refuse_while_updating()
+    pub(crate) fn refuse_during_maintenance(&self) -> Result<(), AppError> {
+        self.services.state.refuse_during_maintenance()
     }
 }

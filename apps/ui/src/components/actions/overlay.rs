@@ -7,7 +7,6 @@ use crate::UiContext;
 use crate::UiOperation;
 use crate::client;
 
-use crate::overlay::OverlayAction;
 use dioxus::prelude::*;
 
 impl UiContext {
@@ -53,17 +52,7 @@ impl UiContext {
     }
 
     /// Runs a failure's action; the desktop then dismisses the failure.
-    pub(crate) fn overlay_action(self, action: OverlayAction) {
-        let section = match action.route {
-            crate::Route::History => MainWindowSection::History,
-            crate::Route::Settings(crate::SettingsRoute::General) => MainWindowSection::Settings,
-            crate::Route::Settings(crate::SettingsRoute::Audio) => MainWindowSection::Audio,
-            crate::Route::Settings(crate::SettingsRoute::SpeechModels) => {
-                MainWindowSection::SpeechModels
-            }
-            crate::Route::Settings(crate::SettingsRoute::AiCleanup) => MainWindowSection::AiCleanup,
-            _ => unreachable!("error fix must name an available main window section"),
-        };
+    pub(crate) fn overlay_action(self, section: MainWindowSection) {
         self.overlay_command(UiOperation::OverlayAction, async move {
             client::invoke("open_main_window", Some(&section)).await
         });

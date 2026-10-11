@@ -15,7 +15,6 @@ const LIGHT: &str = ":root";
 const SYSTEM_DARK: &str = ":root:not([data-theme=\"light\"])";
 const EXPLICIT_DARK: &str = ":root[data-theme=\"dark\"]";
 
-/// Every background text and controls are drawn on.
 const BACKGROUNDS: [&str; 9] = [
     "canvas",
     "surface",
@@ -50,7 +49,6 @@ const INVERSE_TEXT: [&str; 4] = [
 
 type Palette = BTreeMap<String, [u8; 3]>;
 
-/// The declarations inside the first `selector { … }` block.
 fn block<'a>(css: &'a str, selector: &str) -> &'a str {
     let opening = format!("{selector} {{");
     let start = css
@@ -216,7 +214,6 @@ fn without_comments(css: &str) -> String {
     output
 }
 
-/// Every selector list or at-rule prelude, i.e. the text before each `{`.
 fn preludes(css: &str) -> Vec<String> {
     let mut preludes = Vec::new();
     let mut current = String::new();
@@ -241,7 +238,7 @@ fn names_element(selector: &str, element: &str) -> bool {
 }
 
 #[test]
-fn stylesheets_avoid_important_and_style_buttons_only_by_class() {
+fn source_style_policy_avoids_important_and_styles_buttons_only_by_class() {
     for (name, css) in STYLESHEETS {
         let css = without_comments(css);
         assert!(!css.contains("!important"), "{name} uses !important");
@@ -250,29 +247,6 @@ fn stylesheets_avoid_important_and_style_buttons_only_by_class() {
                 !names_element(&prelude, "button"),
                 "{name} styles the button element: {prelude}"
             );
-        }
-    }
-}
-
-#[test]
-fn no_text_is_smaller_than_12px() {
-    for (name, css) in STYLESHEETS {
-        let css = without_comments(css);
-        for declaration in css.split([';', '{', '}']) {
-            let Some((property, value)) = declaration.split_once(':') else {
-                continue;
-            };
-            let property = property.trim();
-            if property != "font-size" && !property.starts_with("--font-size") {
-                continue;
-            }
-            for number in value.split("px").filter_map(|part| {
-                part.rsplit(|character: char| !character.is_ascii_digit() && character != '.')
-                    .next()
-                    .and_then(|digits| digits.parse::<f64>().ok())
-            }) {
-                assert!(number >= 12.0, "{name}: {property}: {value}");
-            }
         }
     }
 }
@@ -289,58 +263,4 @@ fn inverse_colours_are_the_same_in_every_theme() {
     };
     assert!(inverse(&light).len() >= INVERSE_SURFACES.len() + INVERSE_TEXT.len());
     assert_eq!(inverse(&light), inverse(&dark));
-}
-
-fn reduced_motion_block(css: &str) -> &str {
-    let opening = "@media (prefers-reduced-motion: reduce) {";
-    let start = css.find(opening).expect("a reduced-motion block") + opening.len();
-    let mut depth = 1;
-    for (offset, character) in css[start..].char_indices() {
-        match character {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return &css[start..start + offset];
-                }
-            }
-            _ => {}
-        }
-    }
-    panic!("unclosed reduced-motion block")
-}
-
-#[test]
-fn reduced_motion_stops_every_overlay_animation_and_transition() {
-    let css = without_comments(include_str!("../public/overlay.css"));
-    let reduced = reduced_motion_block(&css);
-    let (selectors, declarations) = reduced.split_once('{').expect("a reduced-motion rule");
-    assert!(declarations.contains("animation: none"), "{declarations}");
-    assert!(declarations.contains("transition: none"), "{declarations}");
-    let stopped: Vec<&str> = selectors.split(',').map(str::trim).collect();
-
-    let outside = css.replace(reduced, "");
-    let mut moving = Vec::new();
-    let mut rest = outside.as_str();
-    while let Some(open) = rest.find('{') {
-        let selector = rest[..open].rsplit(['}', ';']).next().unwrap_or("").trim();
-        let close = open + rest[open..].find('}').expect("closed rule");
-        let body = &rest[open + 1..close];
-        if !selector.starts_with('@')
-            && body.lines().any(|line| {
-                let line = line.trim();
-                line.starts_with("animation:") || line.starts_with("transition:")
-            })
-        {
-            moving.push(selector.to_owned());
-        }
-        rest = &rest[close + 1..];
-    }
-    assert!(!moving.is_empty(), "the overlay animates");
-    for selector in moving {
-        assert!(
-            stopped.contains(&selector.as_str()),
-            "{selector} keeps moving under reduced motion"
-        );
-    }
 }

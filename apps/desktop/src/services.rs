@@ -19,6 +19,8 @@ use whispernow_platform::{
 };
 
 pub(crate) use dictation::Dictation;
+#[cfg(test)]
+pub(crate) use dictation::tests::Fixture;
 use history::HistoryStore;
 use models::ModelCoordinator;
 use output::OutputCoordinator;
@@ -163,7 +165,7 @@ impl NativeServices {
     /// Listens to the selected microphone for a few seconds and reports its levels. No audio
     /// is kept.
     pub(crate) fn test_microphone(&self) -> Result<MicrophoneTestResponse, AppError> {
-        let device = device_choice(self.settings.recording_settings()?.input_device.as_deref());
+        let device = self.settings.recording_settings()?.input_device;
         self.listen(device, microphone_test::TEST_DURATION)
     }
 
@@ -266,7 +268,8 @@ impl NativeServices {
             }
             state.phase.require_idle()?;
         }
-        require_connected_device(self.audio.as_ref(), checkpoint.input_device.as_deref())?;
+        let device = device_choice(checkpoint.input_device.as_deref())?;
+        require_connected_device(self.audio.as_ref(), &device)?;
         let before = self.settings.get()?.settings;
         let edited = Settings {
             input_device: checkpoint.input_device.clone(),

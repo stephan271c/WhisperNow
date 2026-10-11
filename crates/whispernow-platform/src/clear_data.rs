@@ -50,10 +50,18 @@ impl AppPaths {
         &self,
         categories: &[ClearDataCategory],
     ) -> Result<Vec<ClearDataResultEntry>, ClearDataError> {
-        let targets = self
-            .data_locations()?
-            .into_iter()
-            .filter(|location| categories.contains(&location.category));
+        self.clear_data_except(categories, None)
+    }
+
+    pub fn clear_data_except(
+        &self,
+        categories: &[ClearDataCategory],
+        excluded_target: Option<&Path>,
+    ) -> Result<Vec<ClearDataResultEntry>, ClearDataError> {
+        let targets = self.data_locations()?.into_iter().filter(|location| {
+            categories.contains(&location.category)
+                && Some(location.path.as_path()) != excluded_target
+        });
         let mut retained_audio_removed = true;
         let mut entries = Vec::new();
         for DataLocation { category, path } in targets {
@@ -108,6 +116,7 @@ impl AppPaths {
             (ClearDataCategory::History, self.history_database_wal_file()),
             (ClearDataCategory::History, self.history_database_shm_file()),
             (ClearDataCategory::Models, self.models_dir()),
+            (ClearDataCategory::Models, self.cuda_pack_dir()),
             (ClearDataCategory::Logs, self.logs_dir()),
         ]);
         Ok(targets)
@@ -173,6 +182,7 @@ mod tests {
             create_file(&self.paths.history_database_shm_file());
             create_dir(&self.paths.recordings_dir());
             create_dir(&self.paths.models_dir());
+            create_dir(&self.paths.cuda_pack_dir());
             create_dir(&self.paths.logs_dir());
         }
     }
@@ -217,13 +227,14 @@ mod tests {
             [
                 [ClearDataCategory::Settings].as_slice(),
                 &[ClearDataCategory::History; 7],
-                &[ClearDataCategory::Models, ClearDataCategory::Logs],
+                &[ClearDataCategory::Models; 2],
+                &[ClearDataCategory::Logs],
             ]
             .concat()
         );
 
         let report = paths.clear_data(&EVERYTHING).expect("clear");
-        assert_eq!(report.len(), 10);
+        assert_eq!(report.len(), 11);
         assert!(report.iter().all(|entry| entry.outcome.is_ok()));
         assert_eq!(paths.data_locations(), Ok(Vec::new()));
         assert!(config_sentinel.exists());
@@ -246,7 +257,43 @@ mod tests {
         assert!(!fixture.paths.logs_dir().exists());
         assert!(fixture.paths.settings_file().exists());
         assert!(fixture.paths.models_dir().exists());
+        assert!(fixture.paths.cuda_pack_dir().exists());
         assert!(fixture.paths.history_database_file().exists());
+    }
+
+    #[test]
+    fn inspection_failure_happens_before_any_target_is_deleted() {
+        let fixture = Fixture::separate_roots();
+        create_file(fixture.paths.config_dir());
+        for path in [
+            fixture.paths.history_database_file(),
+            fixture.paths.history_database_wal_file(),
+            fixture.paths.history_database_shm_file(),
+        ] {
+            create_file(&path);
+        }
+        create_dir(&fixture.paths.recordings_dir());
+        create_dir(&fixture.paths.models_dir());
+        create_dir(&fixture.paths.cuda_pack_dir());
+        create_dir(&fixture.paths.logs_dir());
+
+        let error = fixture
+            .paths
+            .clear_data(&EVERYTHING)
+            .expect_err("inspection failure");
+
+        assert_eq!(error.category, ClearDataCategory::Settings);
+        for path in [
+            fixture.paths.history_database_file(),
+            fixture.paths.history_database_wal_file(),
+            fixture.paths.history_database_shm_file(),
+            fixture.paths.recordings_dir().join("content"),
+            fixture.paths.models_dir().join("content"),
+            fixture.paths.cuda_pack_dir().join("content"),
+            fixture.paths.logs_dir().join("content"),
+        ] {
+            assert_eq!(fs::read(path).expect("data preserved"), b"test data");
+        }
     }
 
     #[test]
@@ -351,6 +398,7 @@ mod tests {
         create_dir(&outside);
         fs::create_dir_all(fixture.paths.data_dir()).expect("create data root");
         symlink(&outside, fixture.paths.models_dir()).expect("models symlink");
+        symlink(&outside, fixture.paths.cuda_pack_dir()).expect("CUDA pack symlink");
         create_dir(&fixture.paths.logs_dir());
         symlink(&outside, fixture.paths.logs_dir().join("outside-link")).expect("nested symlink");
         let paths = fixture.paths.clone();
@@ -360,6 +408,7 @@ mod tests {
         assert!(report.iter().all(|entry| entry.outcome.is_ok()));
         assert!(outside.join("content").exists());
         assert!(!fixture.paths.models_dir().exists());
+        assert!(!fixture.paths.cuda_pack_dir().exists());
         assert!(!fixture.paths.logs_dir().exists());
     }
 }

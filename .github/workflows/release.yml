@@ -60,6 +60,7 @@ jobs:
           cargo install cargo-deny --version 0.20.2 --locked
       - name: Test release tools and verify the bundled VAD model
         run: |
+          python3 -m pip install -r scripts/tests/requirements.txt
           python3 -m unittest discover -s scripts/tests -v
           python3 scripts/stage_model_resources.py --resource-dir resources/vad
       - name: Audit advisories, licenses, bans, and sources

@@ -35,7 +35,7 @@ pub(super) fn ModelsPage() -> Element {
     let loaded = management.read().models_loaded;
     let switch_blocked = actions
         .blocked(UiOperation::ModelSwitch)
-        .or(actions.phase_blocked());
+        .or(actions.settings_blocked());
     let download_blocked = actions.blocked(UiOperation::DownloadModel);
     let delete_blocked = actions
         .blocked(UiOperation::ModelDelete)
@@ -116,7 +116,7 @@ pub(super) fn ModelRow(
     let active = active_state.is_some();
     let switch_blocked = actions
         .blocked(UiOperation::ModelSwitch)
-        .or(actions.phase_blocked());
+        .or(actions.settings_blocked());
     let download_blocked = actions.blocked(UiOperation::DownloadModel);
     let delete_blocked = actions
         .blocked(UiOperation::ModelDelete)

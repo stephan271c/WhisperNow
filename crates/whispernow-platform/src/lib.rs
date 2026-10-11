@@ -31,8 +31,8 @@ pub use llama::{CUDA_LIBRARIES, Llama};
 pub use llm::complete;
 pub use local_cleanup::{CleanupModelLocator, CudaPackLocator, LocalCleanupService};
 pub use models::{
-    CudaPackArchive, CudaPackFormat, CudaPackState, DownloadProgress, DownloadTimeouts,
-    ModelListEntry, ModelStore, ModelStoreError,
+    CudaPackArchive, CudaPackFormat, CudaPackRemovalOutcome, CudaPackState, DownloadProgress,
+    DownloadTimeouts, ModelListEntry, ModelStore, ModelStoreError,
 };
 #[cfg(target_os = "macos")]
 pub use paste_delivery::accessibility_trusted;

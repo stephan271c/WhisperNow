@@ -116,11 +116,11 @@ fn StatusCard(status: HomeStatus) -> Element {
                     p { class: "status-detail", "{detail}" }
                 }
             }
-            if let Some((label, route)) = status.fix {
+            if let Some((label, section)) = status.fix {
                 Button {
                     id: "home-status-fix",
                     size: ButtonSize::Sm,
-                    onclick: move |_| navigator.go(route),
+                    onclick: move |_| navigator.go(Route::from_section(section)),
                     "{label}"
                 }
             }

@@ -46,7 +46,7 @@ fn matches(entry: &VocabularyReplacement, query: &str) -> bool {
 #[component]
 pub(super) fn VocabularyPage() -> Element {
     let actions = use_context::<UiContext>();
-    let settings_blocked = actions.phase_blocked();
+    let settings_blocked = actions.settings_blocked();
     let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let mut source = use_signal(String::new);

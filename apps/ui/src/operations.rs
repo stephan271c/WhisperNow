@@ -2,6 +2,7 @@ use crate::NoticeScope;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiOperation {
+    LoadSettings,
     CredentialMutation,
     DownloadModel,
     CancelDownload,
@@ -35,7 +36,7 @@ pub enum UiOperation {
 impl UiOperation {
     pub(crate) const fn notice_scope(self) -> NoticeScope {
         match self {
-            Self::CredentialMutation => NoticeScope::Settings,
+            Self::LoadSettings | Self::CredentialMutation => NoticeScope::Settings,
             Self::DownloadModel | Self::CancelDownload | Self::ModelSwitch | Self::ModelDelete => {
                 NoticeScope::Models
             }

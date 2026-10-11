@@ -1,7 +1,11 @@
+import ast
 import base64
+import copy
 import hashlib
 import importlib.util
 import json
+import os
+import re
 import shutil
 import struct
 import subprocess
@@ -13,7 +17,44 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 SCRIPTS = Path(__file__).parents[1]
+SIGNING_SECRETS = {
+    "TAURI_SIGNING_PRIVATE_KEY",
+    "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    "MACOS_CERTIFICATE",
+    "MACOS_CERTIFICATE_PASSWORD",
+    "WINDOWS_CERTIFICATE",
+    "WINDOWS_CERTIFICATE_PASSWORD",
+}
+
+
+def action_expression(value: str) -> str:
+    value = value.strip()
+    if value.startswith("${{") and value.endswith("}}"):
+        value = value[3:-2].strip()
+    while value.startswith("(") and value.endswith(")"):
+        value = value[1:-1].strip()
+    return value
+
+
+def signing_secret_references(value) -> set[str]:
+    if isinstance(value, dict):
+        return set().union(*(signing_secret_references(item) for item in value.values()))
+    if isinstance(value, list):
+        return set().union(*(signing_secret_references(item) for item in value))
+    if not isinstance(value, str):
+        return set()
+    return {
+        (attribute or subscript).upper()
+        for expression in re.findall(r"\$\{\{(.*?)\}\}", value, re.DOTALL)
+        for attribute, subscript in re.findall(
+            r"\bsecrets(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*'([^']+)'\s*\])",
+            expression,
+            re.IGNORECASE,
+        )
+    } & SIGNING_SECRETS
 
 
 def load(name: str):
@@ -448,34 +489,190 @@ class MacSignatureTests(unittest.TestCase):
 class ReleaseWorkflowTests(unittest.TestCase):
     def setUp(self):
         workflows = Path(__file__).parents[2] / ".github" / "workflows"
-        self.workflow = (workflows / "release.yml").read_text(encoding="utf-8")
+        # Actions' `on` is a string; PyYAML's YAML 1.1 boolean resolver coerces it.
+        self.workflow = yaml.load(
+            (workflows / "release.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader
+        )
 
-    def test_only_stable_tags_can_reach_signing_and_publication(self):
-        self.assertIn('tags: ["v*.*.*"]', self.workflow)
-        self.assertNotIn("pull_request:", self.workflow)
-        bundle = self.workflow.split("  bundle:\n", 1)[1].split("  macos-gatekeeper:\n", 1)[0]
-        release = self.workflow.split("  release:\n", 1)[1]
-        self.assertIn("if: github.event_name == 'push'", bundle)
-        self.assertIn("if: github.event_name == 'push'", release)
-        self.assertIn("contents: write", release)
-        self.assertNotIn("contents: write", self.workflow.split("  release:\n", 1)[0])
+    def assert_protected_push_jobs(self, workflow):
+        jobs = workflow["jobs"]
+        for job_id in ("bundle", "macos-gatekeeper", "release"):
+            condition = jobs[job_id].get("if")
+            self.assertIsInstance(condition, str, job_id)
+            self.assertRegex(
+                action_expression(condition), r"\Agithub\.event_name\s*==\s*'push'\Z",
+                f"{job_id} must only run for pushes",
+            )
+        for job_id, required in (
+            ("bundle", {"supply-chain"}),
+            ("release", {"bundle", "macos-gatekeeper"}),
+        ):
+            job = jobs[job_id]
+            environment = job.get("environment")
+            if isinstance(environment, dict):
+                environment = environment.get("name")
+            self.assertEqual(environment, "release", job_id)
+            needs = job.get("needs", [])
+            self.assertEqual({needs} if isinstance(needs, str) else set(needs), required, job_id)
 
-    def test_signing_secrets_are_step_scoped_and_actions_are_sha_pinned(self):
-        bundle = self.workflow.split("  bundle:\n", 1)[1].split("  macos-gatekeeper:\n", 1)[0]
-        job_header = bundle.split("    steps:\n", 1)[0]
-        self.assertNotIn("TAURI_SIGNING_PRIVATE_KEY", job_header)
-        for line in self.workflow.splitlines():
-            if "uses:" in line:
-                reference = line.split("uses:", 1)[1].split("#", 1)[0].strip()
-                self.assertRegex(reference, r"@[0-9a-f]{40}$")
+    def assert_step_scoped_signing_secrets(self, workflow):
+        workflow_fields = {name: value for name, value in workflow.items() if name != "jobs"}
+        self.assertFalse(
+            (set(workflow.get("env", {})) & SIGNING_SECRETS)
+            | signing_secret_references(workflow_fields),
+            "workflow environment must not receive signing secrets",
+        )
+        found = set()
+        for job_id, job in workflow["jobs"].items():
+            job_fields = {name: value for name, value in job.items() if name != "steps"}
+            self.assertFalse(
+                (set(job.get("env", {})) & SIGNING_SECRETS) | signing_secret_references(job_fields),
+                f"{job_id} job environment must not receive signing secrets",
+            )
+            for step in job["steps"]:
+                step_fields = {name: value for name, value in step.items() if name != "env"}
+                self.assertFalse(
+                    signing_secret_references(step_fields),
+                    "signing secrets must be passed through step environments",
+                )
+                env = step.get("env", {})
+                names = (set(env) & SIGNING_SECRETS) | signing_secret_references(env)
+                if not names:
+                    continue
+                self.assertEqual(job_id, "bundle")
+                for name in names:
+                    self.assertIn(name, env)
+                    self.assertRegex(
+                        action_expression(env[name]),
+                        re.compile(
+                            rf"\Asecrets(?:\.{name}|\[\s*'{name}'\s*\])\Z", re.IGNORECASE
+                        ),
+                    )
+                for prefix, platform in (
+                    ("TAURI_", None), ("MACOS_", "macOS"), ("WINDOWS_", "Windows")
+                ):
+                    pair = {name for name in SIGNING_SECRETS if name.startswith(prefix)}
+                    if names & pair:
+                        self.assertEqual(names & pair, pair)
+                        if platform:
+                            self.assertRegex(
+                                action_expression(step.get("if", "")),
+                                rf"\Arunner\.os\s*==\s*'{platform}'\Z",
+                            )
+                found.update(names)
+        self.assertEqual(found, SIGNING_SECRETS)
 
-    def test_macos_signs_with_the_pinned_certificate_and_windows_signing_is_optional(self):
-        bundle = self.workflow.split("  bundle:\n", 1)[1].split("  macos-gatekeeper:\n", 1)[0]
-        self.assertIn('"hardenedRuntime": False', bundle)
-        self.assertIn('"signingIdentity": os.environ["MACOS_SIGNING_IDENTITY"]', bundle)
-        self.assertEqual(self.workflow.count("scripts/check_macos_signature.py --certificate"), 1)
-        self.assertEqual(self.workflow.count("scripts/check_macos_signature.py \\"), 1)
-        self.assertIn('if ($env:WINDOWS_CERT_THUMBPRINT) { "Valid" } else { "NotSigned" }', bundle)
+    def test_release_triggers_allow_only_tags_and_manual_dry_runs(self):
+        self.assertEqual(set(self.workflow["on"]), {"push", "workflow_dispatch"})
+        self.assertEqual(self.workflow["on"]["push"], {"tags": ["v*.*.*"]})
+
+    def test_signing_and_publication_are_protected_push_jobs(self):
+        self.assert_protected_push_jobs(self.workflow)
+
+    def test_only_publication_can_write_repository_contents(self):
+        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
+        for job_id, job in self.workflow["jobs"].items():
+            self.assertEqual(
+                job.get("permissions", self.workflow["permissions"]),
+                {"contents": "write" if job_id == "release" else "read"},
+                job_id,
+            )
+
+    def test_signing_secrets_are_step_scoped(self):
+        self.assert_step_scoped_signing_secrets(self.workflow)
+
+    def test_remote_actions_are_sha_pinned(self):
+        references = [
+            step["uses"] for job in self.workflow["jobs"].values()
+            for step in job["steps"] if "uses" in step
+        ]
+        self.assertTrue(references)
+        for reference in references:
+            self.assertRegex(reference, r"\A[^@\s]+@[0-9a-fA-F]{40}\Z")
+
+    def test_guards_reject_allowing_manual_dispatch_to_sign_or_publish(self):
+        for job_id in ("bundle", "release"):
+            with self.subTest(job=job_id):
+                mutated = copy.deepcopy(self.workflow)
+                mutated["jobs"][job_id]["if"] = (
+                    "${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}"
+                )
+                with self.assertRaisesRegex(AssertionError, "must only run for pushes"):
+                    self.assert_protected_push_jobs(mutated)
+
+    def test_secrets_reject_promoting_a_signing_key_to_workflow_environment(self):
+        for variable in ("TAURI_SIGNING_PRIVATE_KEY", "SHARED_SIGNING_KEY"):
+            with self.subTest(variable=variable):
+                mutated = copy.deepcopy(self.workflow)
+                signing_step = next(
+                    step for step in mutated["jobs"]["bundle"]["steps"]
+                    if "TAURI_SIGNING_PRIVATE_KEY" in step.get("env", {})
+                )
+                mutated["env"][variable] = signing_step["env"].pop("TAURI_SIGNING_PRIVATE_KEY")
+                with self.assertRaisesRegex(AssertionError, "workflow environment"):
+                    self.assert_step_scoped_signing_secrets(mutated)
+
+    def test_equivalent_expression_wrappers_and_yaml_formats_are_accepted(self):
+        for flow_style in (False, True):
+            for condition in (
+                "${{ github.event_name == 'push' }}",
+                "${{ (\n github.event_name=='push'\n) }}",
+                "((github.event_name == 'push'))",
+            ):
+                with self.subTest(flow_style=flow_style, condition=condition):
+                    equivalent = copy.deepcopy(self.workflow)
+                    for job_id in ("bundle", "macos-gatekeeper", "release"):
+                        equivalent["jobs"][job_id]["if"] = condition
+                    equivalent["jobs"]["bundle"]["environment"] = {"name": "release"}
+                    equivalent["jobs"]["bundle"]["needs"] = ["supply-chain"]
+                    text = yaml.safe_dump(equivalent, default_flow_style=flow_style, indent=4)
+                    parsed = yaml.load(text, Loader=yaml.BaseLoader)
+                    self.assertEqual(parsed, equivalent)
+                    self.assert_protected_push_jobs(parsed)
+                    self.assert_step_scoped_signing_secrets(parsed)
+
+    def test_macos_generated_config_uses_the_identity_without_hardened_runtime(self):
+        build_step = next(
+            step for step in self.workflow["jobs"]["bundle"]["steps"]
+            if step.get("working-directory") == "apps/desktop"
+            and re.fullmatch(
+                r"runner\.os\s*==\s*'macOS'", action_expression(step.get("if", ""))
+            )
+        )
+        run = build_step["run"]
+        heredoc = re.search(r"(?m)^python3\s+-[^\n]*<<['\"]?(\w+)['\"]?\s*\n", run)
+        self.assertIsNotNone(heredoc, "macOS config generator must be executable Python")
+        code, remainder = run[heredoc.end():].split(f"\n{heredoc.group(1)}\n", 1)
+        self.assertTrue(remainder)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            desktop = root / "apps" / "desktop"
+            desktop.mkdir(parents=True)
+            llama = root / "release" / "llama"
+            llama.mkdir(parents=True)
+            for name in ("libllama.0.dylib", "libggml.0.dylib", "not-a-framework.txt"):
+                (llama / name).write_bytes(b"fixture")
+            config = root / "signing-config.json"
+            for program in (code, ast.unparse(ast.parse(code))):
+                with self.subTest(program=program):
+                    config.unlink(missing_ok=True)
+                    subprocess.run(
+                        [sys.executable, "-", str(config)], input=program,
+                        cwd=desktop, text=True, check=True, capture_output=True,
+                        env={
+                            **os.environ,
+                            "WHISPERNOW_UPDATER_PUBLIC_KEY": "fixture-updater-key",
+                            "MACOS_SIGNING_IDENTITY": "fixture-certificate-fingerprint",
+                        },
+                    )
+                    document = json.loads(config.read_text(encoding="utf-8"))
+                    self.assertEqual(document["plugins"]["updater"]["pubkey"], "fixture-updater-key")
+                    signing = document["bundle"]["macOS"]
+                    self.assertEqual(signing["signingIdentity"], "fixture-certificate-fingerprint")
+                    self.assertIs(signing["hardenedRuntime"], False)
+                    self.assertEqual(signing["frameworks"], [
+                        str(llama / "libggml.0.dylib"), str(llama / "libllama.0.dylib")
+                    ])
 
 
 class ModelResourceTests(unittest.TestCase):

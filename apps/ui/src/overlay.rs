@@ -13,12 +13,6 @@ const CEILING_DB: f32 = -5.0;
 const ATTACK: f32 = 0.8;
 const RELEASE: f32 = 0.6;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct OverlayAction {
-    pub label: &'static str,
-    pub route: crate::Route,
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OverlayView {
     /// Newest last; each value is in `0.0..=1.0`.

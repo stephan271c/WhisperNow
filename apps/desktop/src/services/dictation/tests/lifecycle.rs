@@ -1,3 +1,4 @@
+use super::clear_data::ReleaseOnDrop;
 use super::*;
 use crate::{
     activation::ActivationGate,
@@ -15,32 +16,69 @@ use crate::{
 };
 use whispernow_platform::LocalCleanupService;
 
-struct Registrar;
+#[derive(Default)]
+struct Registrar {
+    registered: Mutex<Vec<ShortcutBinding>>,
+    hold: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+}
 
 impl ShortcutRegistrar for Registrar {
-    fn register(&self, _: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
+    fn register(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
+        let hold = self.hold.lock().expect("registration hold").take();
+        if let Some((entered, release)) = hold {
+            entered.send(()).expect("registration observer");
+            release
+                .recv_timeout(Duration::from_secs(10))
+                .expect("registration released");
+        }
+        self.registered
+            .lock()
+            .expect("registrations")
+            .push(binding.clone());
         Ok(())
     }
 
-    fn unregister(&self, _: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
+    fn unregister(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
+        self.registered
+            .lock()
+            .expect("registrations")
+            .retain(|registered| registered.id != binding.id);
         Ok(())
     }
 }
 
-struct Autostart;
+#[derive(Default)]
+struct Autostart {
+    enabled: std::sync::atomic::AtomicBool,
+    hold: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+}
 
 impl AutostartRegistration for Autostart {
     fn is_enabled(&self) -> Result<bool, AutostartError> {
-        Ok(false)
+        Ok(self.enabled.load(Ordering::SeqCst))
     }
 
-    fn set_enabled(&self, _: bool) -> Result<(), AutostartError> {
+    fn set_enabled(&self, enabled: bool) -> Result<(), AutostartError> {
+        let hold = self.hold.lock().expect("autostart hold").take();
+        if let Some((entered, release)) = hold {
+            entered.send(()).expect("autostart observer");
+            release
+                .recv_timeout(Duration::from_secs(10))
+                .expect("autostart released");
+        }
+        self.enabled.store(enabled, Ordering::SeqCst);
         Ok(())
     }
 }
 
-fn native_services(fixture: Fixture) -> (NativeServices, tempfile::TempDir) {
+pub(super) fn native_services(fixture: Fixture) -> (NativeServices, tempfile::TempDir) {
     fixture.flush();
+    native_services_before_preload(fixture)
+}
+
+pub(super) fn native_services_before_preload(
+    fixture: Fixture,
+) -> (NativeServices, tempfile::TempDir) {
     let paths = AppPaths::from_base_dirs(
         fixture.root.path().join("config"),
         fixture.root.path().join("data"),
@@ -79,14 +117,14 @@ fn a_failed_tray_pause_does_not_leave_a_settings_warning() {
         .expect("runtime");
     let (services, _root) = native_services(Fixture::new());
     let shortcuts = Arc::new(ShortcutCoordinator::new(
-        Arc::new(Registrar),
+        Arc::new(Registrar::default()),
         recording_binding(&Settings::default()),
         Arc::new(|| true),
     ));
     let gateway = Gateway::new(
         Arc::new(services),
         shortcuts,
-        Arc::new(Autostart),
+        Arc::new(Autostart::default()),
         Arc::new(ActivationGate::default()),
         Arc::new(TrayController::default()),
     );
@@ -113,6 +151,134 @@ fn a_failed_tray_pause_does_not_leave_a_settings_warning() {
                 .all(|warning| warning != &error.summary)
         );
     }
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keeping the two native barriers and geometry save together exposes their ordering"
+)]
+fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_settings() {
+    use whispernow_domain::{Shortcut, ShortcutKey, ThemePreference, WindowGeometry};
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (services, _root) = native_services(Fixture::new());
+    let saved = services.settings.get().expect("saved settings").settings;
+    let registrar = Arc::new(Registrar::default());
+    let shortcuts = Arc::new(ShortcutCoordinator::new(
+        registrar.clone(),
+        recording_binding(&saved),
+        Arc::new(|| true),
+    ));
+    let autostart = Arc::new(Autostart::default());
+    let gateway = Arc::new(Gateway::new(
+        Arc::new(services),
+        shortcuts,
+        autostart.clone(),
+        Arc::new(ActivationGate::default()),
+        Arc::new(TrayController::default()),
+    ));
+    let (entered, registering) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    *registrar.hold.lock().expect("registration hold") = Some((entered, released));
+    let mut registration_release = ReleaseOnDrop(Some(release));
+    let (entered, applying) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    *autostart.hold.lock().expect("autostart hold") = Some((entered, released));
+    let mut autostart_release = ReleaseOnDrop(Some(release));
+    let first = Settings {
+        theme: ThemePreference::Dark,
+        recording_shortcut: Shortcut {
+            key: ShortcutKey::F1,
+            ..Shortcut::default()
+        },
+        auto_start_on_login: true,
+        ..saved.clone()
+    };
+    let second = Settings {
+        recording_shortcut: Shortcut {
+            key: ShortcutKey::F2,
+            ..Shortcut::default()
+        },
+        auto_start_on_login: false,
+        ..saved
+    };
+    let expected = second.clone();
+    let saving = Arc::clone(&gateway);
+    let first = runtime.spawn(async move { saving.update_settings(first).await });
+    registering
+        .recv_timeout(Duration::from_secs(10))
+        .expect("first shortcut registration");
+    let geometry = WindowGeometry {
+        x: 12,
+        y: 24,
+        width: 900,
+        height: 600,
+    };
+    gateway
+        .save_window_geometry(geometry)
+        .expect("independent geometry save");
+    let saving = Arc::clone(&gateway);
+    let (started, starting) = mpsc::channel();
+    let (finished, finishing) = mpsc::channel();
+    let second = runtime.spawn(async move {
+        started.send(()).expect("second-save observer");
+        let result = saving.update_settings(second).await;
+        finished.send(()).expect("second-save completion observer");
+        result
+    });
+    starting
+        .recv_timeout(Duration::from_secs(10))
+        .expect("second save started");
+    registration_release.release();
+    applying
+        .recv_timeout(Duration::from_secs(10))
+        .expect("first native effect");
+    assert!(
+        matches!(
+            finishing.recv_timeout(Duration::from_millis(250)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "second save must wait for the first saved settings' native effects"
+    );
+    autostart_release.release();
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            first.await.expect("first save task").expect("first save");
+            second
+                .await
+                .expect("second save task")
+                .expect("second save");
+        })
+        .await
+        .expect("settings saves completed");
+    });
+
+    let saved = gateway
+        .services
+        .settings
+        .get()
+        .expect("final settings")
+        .settings;
+    assert_eq!(saved.theme, expected.theme);
+    assert_eq!(saved.window_geometry, Some(geometry));
+    assert_eq!(saved.recording_shortcut, expected.recording_shortcut);
+    assert_eq!(
+        *registrar.registered.lock().expect("registrations"),
+        [recording_binding(&saved)
+            .expect("final recording shortcut")
+            .binding]
+    );
+    assert_eq!(
+        autostart.is_enabled().expect("final autostart"),
+        saved.auto_start_on_login
+    );
+    gateway.services.request_shutdown();
+    gateway.services.shutdown();
 }
 
 #[test]

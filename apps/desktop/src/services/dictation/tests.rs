@@ -31,6 +31,7 @@ use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore, SettingsS
 
 use super::{AiCleanup, Dictation, DictationParts};
 
+mod clear_data;
 mod lifecycle;
 use crate::services::{
     Events, Phase, RecordingTrigger,
@@ -52,6 +53,7 @@ struct Script {
     decodes: AtomicUsize,
     /// When set, the next decode reports that it started and waits to be released.
     hold: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    hold_load: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 struct ScriptedAsr {
@@ -65,6 +67,12 @@ impl AsrEngine for ScriptedAsr {
     }
 
     fn load(&mut self, model: &ResolvedModel) -> Result<(), AsrError> {
+        if let Some((entered, release)) = self.script.hold_load.lock().expect("load hold").take() {
+            entered.send(()).expect("test waits for model load");
+            release
+                .recv_timeout(Duration::from_secs(10))
+                .expect("test releases model load");
+        }
         self.loaded = Some(model.definition.id.clone());
         Ok(())
     }
@@ -173,21 +181,22 @@ impl LlmService for FakeProvider {
     }
 }
 
-struct Fixture {
+pub(crate) struct Fixture {
     // Declared first so the worker stops before the temporary files go.
-    dictation: Dictation,
-    state: Arc<StateCell>,
+    pub(crate) dictation: Dictation,
+    pub(crate) state: Arc<StateCell>,
     settings: Arc<SettingsCoordinator>,
     history: Arc<HistoryStore>,
     output: Arc<FakeOutput>,
     script: Arc<Script>,
     provider: Arc<FakeProvider>,
+    credentials: Arc<MemoryCredentialStore>,
     model: ResolvedModel,
     root: tempfile::TempDir,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_output(OutputNotice::PastedAndRestored)
     }
 
@@ -200,6 +209,14 @@ impl Fixture {
     }
 
     fn build(notice: OutputNotice, audio: Vec<f32>) -> Self {
+        Self::with_script(
+            notice,
+            Arc::new(FakeAudio { audio }),
+            Arc::new(Script::default()),
+        )
+    }
+
+    fn with_script(notice: OutputNotice, audio: Arc<dyn AudioInput>, script: Arc<Script>) -> Self {
         let root = tempfile::tempdir().expect("temporary root");
         let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
         let model_id = ModelId::default();
@@ -210,9 +227,10 @@ impl Fixture {
             fs::create_dir_all(path.parent().expect("artifact parent")).expect("model directory");
             fs::write(path, b"fixture").expect("model artifact");
         }
+        let credentials = Arc::new(MemoryCredentialStore::default());
         let persistence = Arc::new(SettingsStore::with_store(
             paths.clone(),
-            Arc::new(MemoryCredentialStore::default()),
+            credentials.clone(),
         ));
         let saved = Settings {
             keep_audio: true,
@@ -237,14 +255,13 @@ impl Fixture {
             notice,
             pasted: Mutex::new(Vec::new()),
         });
-        let script = Arc::new(Script::default());
         let provider = Arc::new(FakeProvider::default());
         let engine_script = Arc::clone(&script);
         let dictation = Dictation::spawn(DictationParts {
             state: Arc::clone(&state),
             settings: Arc::clone(&settings),
             history: Arc::clone(&history),
-            audio: Arc::new(FakeAudio { audio }),
+            audio,
             models,
             voice_activity: Arc::new(|| Box::new(Loudness)),
             llm: Arc::new(AiCleanup {
@@ -274,6 +291,7 @@ impl Fixture {
             output,
             script,
             provider,
+            credentials,
             model,
             root,
         }
@@ -286,7 +304,7 @@ impl Fixture {
     }
 
     /// Waits until the worker has handled every message sent before this one.
-    fn flush(&self) {
+    pub(crate) fn flush(&self) {
         let _busy_or_loaded = self.dictation.load_model(self.model.clone());
     }
 

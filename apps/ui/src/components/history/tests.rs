@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use whispernow_domain::ipc::{AppState, Phase, SettingsView};
+use whispernow_domain::ipc::{AppState, EventPayload, Phase, SettingsView};
 use whispernow_domain::{
     EntryId, EntryStatus, HistoryCursor, HistoryEntry, HistoryFilter, HistoryPage,
     HistoryPageRequest, UtcMillis,
@@ -205,6 +205,103 @@ fn search_is_debounced_and_paged_within_the_search() {
 }
 
 #[test]
+fn a_delayed_refresh_cannot_shrink_the_window_requested_by_load_more() {
+    let mut management = one_entry();
+    let cursor = HistoryCursor {
+        created_at: NOW,
+        id: EntryId(7),
+    };
+    management.history_next_cursor = Some(cursor);
+    let mut page = history_page(management);
+    page.publish(EventPayload::HistoryChanged)
+        .click("history-load-more");
+    let requests = fake::requests::<HistoryPageRequest>("get_history");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].limit, HistoryPageRequest::DEFAULT_PAGE_SIZE);
+    assert_eq!(requests[1].limit, 2 * HistoryPageRequest::DEFAULT_PAGE_SIZE);
+    let expanded = HistoryPage {
+        entries: vec![entry(7, NOW), entry(6, UtcMillis(NOW.0 - HOUR))],
+        next_cursor: Some(HistoryCursor {
+            id: EntryId(6),
+            ..cursor
+        }),
+    };
+    fake::answer_nth("get_history", 1, Ok(expanded.clone()));
+    page.settle();
+    fake::answer_nth(
+        "get_history",
+        0,
+        Ok(HistoryPage {
+            entries: vec![entry(7, NOW)],
+            next_cursor: None,
+        }),
+    );
+    page.settle();
+    let context = page.context();
+    let management = context.management.read();
+    assert_eq!(management.history, expanded.entries);
+    assert_eq!(management.history_next_cursor, expanded.next_cursor);
+    assert_eq!(management.history_window_pages(), 2);
+    drop(management);
+    assert!(tag(&page.html(), "history-entry-6").is_some());
+    page.publish(EventPayload::HistoryChanged);
+    assert_eq!(
+        fake::requests::<HistoryPageRequest>("get_history")[2].limit,
+        requests[1].limit
+    );
+}
+
+#[test]
+fn a_read_overlapping_deletion_cannot_restore_the_row_or_report_an_obsolete_failure() {
+    use whispernow_domain::{AppError, ErrorCategory};
+
+    for obsolete in [
+        Ok(HistoryPage {
+            entries: one_entry().history,
+            next_cursor: Some(HistoryCursor {
+                created_at: NOW,
+                id: EntryId(7),
+            }),
+        }),
+        Err(AppError::new(
+            ErrorCategory::HistoryUnavailable,
+            "history_unavailable",
+            "History storage is unavailable",
+        )),
+        Err(crate::client::connection_error()),
+    ] {
+        let mut page = history_page(one_entry());
+        page.publish(EventPayload::HistoryChanged)
+            .click("history-delete-7")
+            .click("history-delete-7-confirm")
+            .answer("delete_history_entry", Ok(()));
+        assert_eq!(fake::count("get_history"), 2);
+        fake::answer_nth(
+            "get_history",
+            1,
+            Ok(HistoryPage {
+                entries: Vec::new(),
+                next_cursor: None,
+            }),
+        );
+        page.settle();
+        assert!(tag(&page.html(), "history-entry-7").is_none());
+        fake::answer_nth("get_history", 0, obsolete);
+        page.settle();
+        let context = page.context();
+        let management = context.management.read();
+        assert!(management.history.is_empty());
+        assert!(management.history_next_cursor.is_none());
+        assert_eq!(management.history_window_pages(), 1);
+        assert!(management.history_loaded());
+        assert!(management.history_unavailable.is_none());
+        assert!(management.history_search_failed.is_none());
+        assert!(management.notice.is_none());
+        assert!(tag(&page.html(), "history-entry-7").is_none());
+    }
+}
+
+#[test]
 fn the_failed_filter_and_an_empty_search_offer_a_way_back() {
     let mut page = history_page(one_entry());
     assert!(
@@ -344,8 +441,9 @@ fn copy_confirms_on_the_button_that_was_pressed() {
 #[test]
 fn storage_unavailability_replaces_the_list_with_a_reload() {
     let mut management = ManagementState::default();
+    let (request_id, _) = management.history_request();
     management.fail_history_refresh(
-        &HistoryFilter::default(),
+        request_id,
         &whispernow_domain::ipc::AppError {
             category: whispernow_domain::ipc::ErrorCategory::General,
             code: "history_unavailable".to_owned(),
@@ -370,9 +468,9 @@ fn a_search_that_cannot_run_explains_itself_in_place_of_stale_rows() {
     let mut management = one_entry();
     management.history_search = "x".repeat(300);
     assert!(management.apply_history_search());
-    let filter = management.history_filter.clone();
+    let (request_id, _) = management.history_request();
     management.fail_history_refresh(
-        &filter,
+        request_id,
         &whispernow_domain::ipc::AppError {
             category: whispernow_domain::ipc::ErrorCategory::General,
             code: "text_too_large".to_owned(),
@@ -396,9 +494,9 @@ fn a_search_that_cannot_run_explains_itself_in_place_of_stale_rows() {
         "the field stops at the length a search accepts"
     );
 
+    let (request_id, _) = management.history_request();
     management.finish_history_refresh(
-        1,
-        &filter,
+        request_id,
         HistoryPage {
             entries: one_entry().history,
             next_cursor: None,

@@ -21,15 +21,11 @@ pub(crate) use setup::SetupTest;
 
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct ManagementState {
-    /// The settings the desktop last saved; controls show [`Self::shown_settings`].
     pub settings: Option<SettingsView>,
     edited: Option<Settings>,
-    sending: Vec<SettingKey>,
-    /// The controls edited since, sent together once the desktop answers.
-    unsent: Vec<SettingKey>,
+    saving: Option<SettingKey>,
     setting_errors: BTreeMap<SettingKey, String>,
-    /// The controls whose edits the desktop saved last.
-    saved_settings: Vec<SettingKey>,
+    saved_setting: Option<SettingKey>,
     pub setup: Option<SetupStateView>,
     pub devices: Vec<AudioDevice>,
     pub devices_listed: bool,
@@ -49,6 +45,7 @@ pub(crate) struct ManagementState {
     pub history_search: String,
     /// Pages in the loaded history window; "Load more" grows it by one.
     history_pages: u32,
+    history_request_id: u64,
     pub history_copied: Option<HistoryCopied>,
     /// The latest history copy, which clears its outcome after a moment.
     pub(crate) history_copy: Option<Task>,

@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use whispernow_domain::ipc::{Phase, RecordingTrigger};
 
 use super::ui::{Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
-use crate::overlay::{LEVEL_BARS, OverlayAction, format_elapsed};
+use crate::overlay::{LEVEL_BARS, format_elapsed};
 use crate::{OverlayView, UiContext, UiOperation};
 
 /// Meter geometry in SVG units; bars are attributes because the CSP forbids inline styles.
@@ -63,10 +63,11 @@ pub fn RecordingBar() -> Element {
             "overlay-failed",
             error.summary.as_str(),
             None,
-            crate::home_status::category_fix(error.category)
-                .map(|(label, route)| OverlayAction { label, route }),
+            crate::home_status::category_fix(error.category),
         ),
-        Phase::Idle | Phase::Paused | Phase::Updating => ("overlay-idle", "", None, None),
+        Phase::Idle | Phase::Paused | Phase::ClearingData | Phase::Updating => {
+            ("overlay-idle", "", None, None)
+        }
     };
     let status = view
         .action_error
@@ -135,11 +136,11 @@ pub fn RecordingBar() -> Element {
                     }
                     if visible {
                         div { class: "overlay-actions",
-                            if let Some(action) = action {
+                            if let Some((label, section)) = action {
                                 Button { id: "overlay-action", variant: ButtonVariant::Secondary,
                                     size: ButtonSize::Sm, disabled: action_blocked,
-                                    onclick: move |_| actions.overlay_action(action),
-                                    "{action.label}"
+                                    onclick: move |_| actions.overlay_action(section),
+                                    "{label}"
                                 }
                             }
                             if matches!(mode, Some(RecordingTrigger::Toggle | RecordingTrigger::SetupTest)) {

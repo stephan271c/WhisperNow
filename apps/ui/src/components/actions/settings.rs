@@ -10,12 +10,7 @@ use dioxus::prelude::*;
 
 impl UiContext {
     pub(crate) fn change_setting(mut self, key: SettingKey, edit: impl FnOnce(&mut Settings)) {
-        self.management.write().change_setting(key, edit);
-        self.send_settings_changes();
-    }
-
-    fn send_settings_changes(mut self) {
-        let Some(request) = self.management.write().next_settings_update() else {
+        let Some(request) = self.management.write().begin_settings_update(key, edit) else {
             return;
         };
         spawn_forever(async move {
@@ -23,11 +18,13 @@ impl UiContext {
             self.management
                 .write()
                 .finish_settings_update(answer.map_err(|error| error.summary.clone()));
-            self.send_settings_changes();
         });
     }
 
     pub(crate) fn set_credential(self, provider: LlmProvider, key: ApiKey) {
+        if self.management.peek().settings_pending() {
+            return;
+        }
         let request = SetApiKeyRequest { provider, key };
         self.run(
             UiOperation::CredentialMutation,
@@ -40,6 +37,9 @@ impl UiContext {
     }
 
     pub(crate) fn clear_credential(self, provider: LlmProvider) {
+        if self.management.peek().settings_pending() {
+            return;
+        }
         self.run(
             UiOperation::CredentialMutation,
             async move { client::invoke("clear_api_key", Some(&provider)).await },

@@ -1,9 +1,5 @@
 //! One worker thread owns the recognizer and audio capture and runs every dictation, model load
 //! and microphone test in the order they were asked for.
-//!
-//! Callers change the shared [`Phase`] only where no engine or capture work is involved:
-//! pausing or resuming an idle desktop, and asking the dictation in flight to end early. Every
-//! other transition happens on the worker.
 
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
@@ -36,7 +32,7 @@ use whispernow_platform::ModelStore;
 
 use super::{Phase, RecordingTrigger};
 use super::{
-    capture_start_error, device_choice,
+    capture_start_error,
     history::HistoryStore,
     microphone_test,
     models::installed,
@@ -70,7 +66,7 @@ pub(crate) struct DictationSettings {
 }
 
 pub(crate) struct RecordingSettings {
-    pub(crate) input_device: Option<String>,
+    pub(crate) input_device: AudioDeviceChoice,
     pub(crate) dictation: DictationSettings,
 }
 
@@ -132,6 +128,18 @@ pub(crate) struct Dictation {
     sender: mpsc::Sender<Message>,
     stopping: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
+}
+
+pub(super) struct DataClear<'a> {
+    state: &'a StateCell,
+    previous_phase: Phase,
+}
+
+impl Drop for DataClear<'_> {
+    fn drop(&mut self) {
+        self.state
+            .apply(|state| state.phase = self.previous_phase.clone());
+    }
 }
 
 impl Dictation {
@@ -265,7 +273,7 @@ impl Dictation {
                 "application_already_paused",
                 "The application is already paused",
             )),
-            Phase::Updating => state.phase.require_idle().map(|()| false),
+            Phase::ClearingData | Phase::Updating => state.phase.require_idle().map(|()| false),
         })?;
         if busy {
             self.send(Message::Cancel)?;
@@ -295,8 +303,20 @@ impl Dictation {
         })
     }
 
-    pub(crate) fn unload_model(&self) -> Result<(), AppError> {
-        self.ask(|reply| Message::UnloadModel { reply })
+    pub(super) fn begin_data_clear(&self) -> Result<DataClear<'_>, AppError> {
+        let previous_phase = self.state.update(|state| {
+            state.phase.require_idle()?;
+            state.require_no_downloads()?;
+            Ok(std::mem::replace(&mut state.phase, Phase::ClearingData))
+        })?;
+        let clear = DataClear {
+            state: &self.state,
+            previous_phase,
+        };
+        // Reserve admission before waiting: startup and queued starts read settings on
+        // this worker, so their settings lock must stay available until the reply.
+        self.ask(|reply| Message::UnloadModel { reply })?;
+        Ok(clear)
     }
 
     /// Listens to `device` for `duration` and reports its levels; no audio is kept.
@@ -440,15 +460,15 @@ impl Worker {
     }
 
     fn start(&mut self, trigger: RecordingTrigger) -> Result<u64, AppError> {
+        self.parts.state.lock().phase.require_idle()?;
         let RecordingSettings {
-            input_device,
+            input_device: device,
             dictation: settings,
         } = if trigger.is_setup_test() {
             self.parts.settings.setup_test_settings()?
         } else {
             self.parts.settings.recording_settings()?
         };
-        let device = device_choice(input_device.as_deref());
         let model = installed(self.parts.models.as_ref(), &settings.model_id)?;
         self.next_session += 1;
         let session = self.next_session;
@@ -460,17 +480,33 @@ impl Worker {
             MAX_RECORDING_SAMPLES,
             SpeechSegmenter::new((self.parts.voice_activity)()),
         ));
-        let capture = self
+        let previous_phase = self.parts.state.update(|state| {
+            state.phase.require_idle()?;
+            let previous_phase =
+                std::mem::replace(&mut state.phase, Phase::Recording { trigger, session });
+            state.cancel = None;
+            state.cancellation = cancellation.clone();
+            Ok(previous_phase)
+        })?;
+        let capture = match self
             .parts
             .audio
             .start(device, Arc::clone(&sink) as Arc<dyn AudioSink>)
-            .map_err(|error| capture_start_error(&error))?;
-        // A refused start drops the capture, which stops it.
-        self.parts.state.update(|state| {
-            state.phase.require_idle()?;
-            state.phase = Phase::Recording { trigger, session };
-            state.cancel = None;
-            state.cancellation = cancellation.clone();
+        {
+            Ok(capture) => capture,
+            Err(error) => {
+                self.parts.state.apply(|state| {
+                    state.phase = if state.cancel == Some(CancelReason::Pause) {
+                        Phase::Paused
+                    } else {
+                        previous_phase
+                    };
+                    state.cancel = None;
+                });
+                return Err(capture_start_error(&error));
+            }
+        };
+        self.parts.state.apply(|state| {
             state.last_error = None;
             state.download_failures = 0;
             // A setup test reports to setup alone and leaves the last transcript.
@@ -479,8 +515,7 @@ impl Worker {
             } else {
                 state.last_transcript = None;
             }
-            Ok(())
-        })?;
+        });
         self.recording = Some(Recording {
             session,
             trigger,
@@ -890,4 +925,4 @@ fn not_recording() -> AppError {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

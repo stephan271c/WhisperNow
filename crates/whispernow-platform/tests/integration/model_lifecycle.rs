@@ -171,7 +171,6 @@ fn local_streaming_download_reports_monotonic_progress_and_installs_atomically()
         })
         .expect("fixture download");
 
-    assert_eq!(resolved.availability, ModelAvailability::Downloaded);
     for artifact in ARTIFACTS {
         assert!(resolved.root.join(artifact).is_file());
     }
@@ -201,7 +200,6 @@ fn a_single_file_model_is_downloaded_verified_installed_and_removed_as_is() {
         .download(&id, &CancellationToken::default(), &|_| {})
         .expect("single-file download");
 
-    assert_eq!(resolved.availability, ModelAvailability::Downloaded);
     assert_eq!(
         fs::read(resolved.root.join("model-Q8_0.gguf")).expect("installed model"),
         gguf
@@ -292,7 +290,9 @@ fn download_succeeds_without_content_length_by_enforcing_registry_size() {
         .download(&id, &CancellationToken::default(), &|_| {})
         .expect("download without content length");
 
-    assert_eq!(resolved.availability, ModelAvailability::Downloaded);
+    for artifact in ARTIFACTS {
+        assert!(resolved.root.join(artifact).is_file());
+    }
 }
 
 #[test]
@@ -490,10 +490,8 @@ fn blocked_download_does_not_stall_resolving_listing_or_removing_other_models() 
 
     assert!(blocked.is_running());
     assert_eq!(
-        resolved
-            .expect("resolve other")
-            .map(|model| model.availability),
-        Some(ModelAvailability::Downloaded)
+        resolved.expect("resolve other").map(|model| model.root),
+        Some(blocked.other_root.clone())
     );
     let availability: Vec<_> = listed
         .expect("list models")
@@ -510,8 +508,7 @@ fn blocked_download_does_not_stall_resolving_listing_or_removing_other_models() 
     assert_eq!(removed, Ok(()));
     assert!(!blocked.other_root.exists());
 
-    let installed = blocked.finish().expect("held download completes");
-    assert_eq!(installed.availability, ModelAvailability::Downloaded);
+    blocked.finish().expect("held download completes");
     assert!(
         blocked
             .manager

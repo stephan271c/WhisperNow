@@ -1,8 +1,10 @@
+use std::time::Duration;
+
 use whispernow_domain::AppError;
 use whispernow_domain::ClearDataCategory;
 use whispernow_domain::ModelId;
 use whispernow_domain::ipc::{ClearDataItem, ClearDataResult, DataLocation, ErrorCategory};
-use whispernow_platform::ClearDataError;
+use whispernow_platform::{ClearDataError, CudaPackRemovalOutcome, Llama, ModelStoreError};
 
 use super::NativeServices;
 
@@ -19,34 +21,67 @@ impl NativeServices {
             .collect())
     }
 
-    /// Removes the chosen categories while nothing is dictating or downloading. The settings
-    /// lock is held throughout, so no settings write lands between the deletion and the state
-    /// repair that follows it.
     pub(crate) fn clear_data(
         &self,
         categories: &[ClearDataCategory],
     ) -> Result<ClearDataResult, AppError> {
         let _model_transition = self.models.transition();
-        let settings_lock = self.settings.transaction();
-        {
-            let state = self.state.lock();
-            state.phase.require_idle()?;
-            state.require_no_downloads()?;
-        }
+        let _quiescent = self.dictation.begin_data_clear()?;
+        let clears_models = categories.contains(&ClearDataCategory::Models);
+        let _cleanup_unloaded = if clears_models {
+            Some(
+                self.local_cleanup
+                    .hold_unloaded(Duration::from_secs(10))
+                    .ok_or_else(|| {
+                        AppError::new(
+                            ErrorCategory::General,
+                            "model_in_use",
+                            "The cleanup model is busy; try again when the current cleanup finishes",
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
         let clears_settings = categories.contains(&ClearDataCategory::Settings);
-        // The recognizer holds the model files open.
-        self.dictation.unload_model()?;
-        let clear_result = self
-            .history
-            .with_repository_closed(|| self.paths.clear_data(categories).map_err(inspect_error));
-        self.publish_history_changed();
-        let entries = clear_result.and_then(|result| result)?;
-        let restart_required = entries.iter().any(|entry| {
+        let settings_lock = clears_settings.then(|| self.settings.transaction());
+        let cuda_path = self.paths.cuda_pack_dir();
+        let clear_files = || {
+            self.paths
+                .clear_data_except(categories, Some(&cuda_path))
+                .map_err(inspect_error)
+        };
+        let entries = if categories.contains(&ClearDataCategory::History) {
+            let result = self.history.with_repository_closed(clear_files);
+            self.publish_history_changed();
+            result.and_then(|result| result)?
+        } else {
+            clear_files()?
+        };
+        let mut restart_required = entries.iter().any(|entry| {
             matches!(
                 entry.category,
                 ClearDataCategory::Settings | ClearDataCategory::Models
             ) && entry.outcome.is_ok()
         });
+        let cuda_item = if clears_models {
+            let removal = self
+                .models
+                .model_store()
+                .remove_cuda_pack(Llama::cuda_loaded());
+            if removal == Err(ModelStoreError::NotInstalled) {
+                None
+            } else {
+                restart_required |= removal.is_ok();
+                Some(ClearDataItem {
+                    category: ClearDataCategory::Models,
+                    path: cuda_path.to_string_lossy().into_owned(),
+                    deleted: removal == Ok(CudaPackRemovalOutcome::Removed),
+                })
+            }
+        } else {
+            None
+        };
         // Keys are deleted after the files so a slow or unavailable store never
         // holds history closed or blocks them.
         let credential_item = clears_settings.then(|| ClearDataItem {
@@ -70,6 +105,7 @@ impl NativeServices {
                 path: entry.path.to_string_lossy().into_owned(),
                 deleted: entry.outcome.is_ok(),
             })
+            .chain(cuda_item)
             .chain(credential_item)
             .collect();
         self.state.apply(|state| {

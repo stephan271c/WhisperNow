@@ -145,9 +145,9 @@ impl StateCell {
         }
     }
 
-    pub(crate) fn refuse_while_updating(&self) -> Result<(), AppError> {
+    pub(crate) fn refuse_during_maintenance(&self) -> Result<(), AppError> {
         let phase = &self.lock().phase;
-        if *phase == Phase::Updating {
+        if matches!(phase, Phase::ClearingData | Phase::Updating) {
             return phase.require_idle();
         }
         Ok(())

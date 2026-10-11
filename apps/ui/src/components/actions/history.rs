@@ -14,29 +14,23 @@ use crate::{HistoryCopied, UiOperation};
 const COPIED_MS: u32 = 2_000;
 
 impl UiContext {
-    pub(crate) fn refresh_history(self) {
-        let request = self.management.peek().history_request();
-        self.read_history(request);
+    pub(crate) fn refresh_history(mut self) {
+        let (request_id, request) = self.management.write().history_request();
+        self.read_history(request_id, request);
     }
 
     pub(crate) fn load_older_history(mut self) {
-        let request = self.management.write().older_history_request();
-        self.read_history(request);
+        let (request_id, request) = self.management.write().older_history_request();
+        self.read_history(request_id, request);
     }
 
-    fn read_history(self, request: HistoryPageRequest) {
+    fn read_history(self, request_id: u64, request: HistoryPageRequest) {
         spawn_forever(async move {
             let answer = client::invoke("get_history", Some(&request)).await;
             let mut management = self.management;
             match answer {
-                Ok(page) => management.write().finish_history_refresh(
-                    request.limit / HistoryPageRequest::DEFAULT_PAGE_SIZE,
-                    &request.filter,
-                    page,
-                ),
-                Err(error) => management
-                    .write()
-                    .fail_history_refresh(&request.filter, &error),
+                Ok(page) => management.write().finish_history_refresh(request_id, page),
+                Err(error) => management.write().fail_history_refresh(request_id, &error),
             }
         });
     }

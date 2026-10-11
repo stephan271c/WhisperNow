@@ -139,10 +139,12 @@ fn SetupFooter(step: SetupStep) -> Element {
         .setup_checkpoint()
         .is_some_and(|checkpoint| actions.download(&checkpoint.model_id).is_some());
     let ready = management.read().setup_step_ready(model_downloading);
-    let save_blocked = actions.blocked(UiOperation::SaveSetup);
+    let save_blocked = actions
+        .blocked(UiOperation::SaveSetup)
+        .or(actions.settings_pending());
     let complete_blocked = actions
         .blocked(UiOperation::CompleteSetup)
-        .or(actions.phase_blocked());
+        .or(actions.settings_blocked());
     let finishing = step == SetupStep::TryIt;
     let primary_blocked = if finishing {
         complete_blocked
@@ -541,6 +543,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
         .or(actions.phase_blocked());
     let stop_blocked = actions.blocked(UiOperation::StopSetupTest);
     let selected = checkpoint.input_device.clone().unwrap_or_default();
+    let settings_pending = actions.settings_pending().is_some();
     rsx! { div { class: "setup-content",
         p { class: "field-help", "Say a sentence to check that everything works. The test shows the text here; nothing is pasted or saved." }
         dl { id: "setup-summary", class: "setup-summary",
@@ -551,7 +554,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
         }
         div { class: "field",
             label { r#for: "setup-microphone", "Microphone" }
-            select { id: "setup-microphone", value: "{selected}", disabled: running,
+            select { id: "setup-microphone", value: "{selected}", disabled: running || settings_pending,
                 onchange: move |event| {
                     let value = event.value();
                     actions.save_setup_edit(|setup| setup.input_device = (!value.is_empty()).then_some(value));

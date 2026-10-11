@@ -1,6 +1,6 @@
-use whispernow_domain::ipc::{ModelState, Phase};
+use whispernow_domain::ipc::{MainWindowSection, ModelState, Phase};
 
-use crate::{Route, SettingsRoute, UiState};
+use crate::UiState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HomeStatusKind {
@@ -18,7 +18,7 @@ pub struct HomeStatus {
     pub kind: HomeStatusKind,
     pub title: String,
     pub detail: Option<String>,
-    pub fix: Option<(&'static str, Route)>,
+    pub fix: Option<(&'static str, MainWindowSection)>,
 }
 
 impl HomeStatus {
@@ -68,6 +68,9 @@ impl HomeStatus {
                 "Installing an update",
                 Some("WhisperNow will be ready after the update finishes."),
             ),
+            Phase::ClearingData => {
+                status(HomeStatusKind::Waiting, "Clearing application data", None)
+            }
             _ if state.is_loading_model() => {
                 status(HomeStatusKind::Waiting, "Loading speech model", None)
             }
@@ -86,7 +89,7 @@ impl HomeStatus {
     }
 }
 
-fn problem_fix(state: &UiState) -> Option<(&'static str, Route)> {
+fn problem_fix(state: &UiState) -> Option<(&'static str, MainWindowSection)> {
     if let Some(error) = &state.error {
         return category_fix(error.category);
     }
@@ -99,22 +102,18 @@ fn problem_fix(state: &UiState) -> Option<(&'static str, Route)> {
 
 pub(crate) const fn category_fix(
     category: whispernow_domain::ErrorCategory,
-) -> Option<(&'static str, Route)> {
+) -> Option<(&'static str, MainWindowSection)> {
     use whispernow_domain::ErrorCategory;
     match category {
-        ErrorCategory::Audio | ErrorCategory::Permission => Some((
-            "Check audio settings",
-            Route::Settings(SettingsRoute::Audio),
-        )),
-        ErrorCategory::Model | ErrorCategory::Recognition => Some((
-            "Open speech models",
-            Route::Settings(SettingsRoute::SpeechModels),
-        )),
-        ErrorCategory::Cleanup => {
-            Some(("Open AI cleanup", Route::Settings(SettingsRoute::AiCleanup)))
+        ErrorCategory::Audio | ErrorCategory::Permission => {
+            Some(("Check audio settings", MainWindowSection::Audio))
         }
-        ErrorCategory::Settings => Some(("Open settings", Route::Settings(SettingsRoute::General))),
-        ErrorCategory::Output => Some(("Open history", Route::History)),
+        ErrorCategory::Model | ErrorCategory::Recognition => {
+            Some(("Open speech models", MainWindowSection::SpeechModels))
+        }
+        ErrorCategory::Cleanup => Some(("Open AI cleanup", MainWindowSection::AiCleanup)),
+        ErrorCategory::Settings => Some(("Open settings", MainWindowSection::Settings)),
+        ErrorCategory::Output => Some(("Open history", MainWindowSection::History)),
         ErrorCategory::General | ErrorCategory::NotFound | ErrorCategory::HistoryUnavailable => {
             None
         }
@@ -124,21 +123,15 @@ pub(crate) const fn category_fix(
 #[cfg(test)]
 mod tests {
     use super::category_fix;
-    use crate::{Route, SettingsRoute};
     use whispernow_domain::ErrorCategory;
+    use whispernow_domain::ipc::MainWindowSection;
 
     #[test]
     fn each_error_category_has_one_fix() {
-        let audio = Some((
-            "Check audio settings",
-            Route::Settings(SettingsRoute::Audio),
-        ));
-        let model = Some((
-            "Open speech models",
-            Route::Settings(SettingsRoute::SpeechModels),
-        ));
-        let cleanup = Some(("Open AI cleanup", Route::Settings(SettingsRoute::AiCleanup)));
-        let settings = Some(("Open settings", Route::Settings(SettingsRoute::General)));
+        let audio = Some(("Check audio settings", MainWindowSection::Audio));
+        let model = Some(("Open speech models", MainWindowSection::SpeechModels));
+        let cleanup = Some(("Open AI cleanup", MainWindowSection::AiCleanup));
+        let settings = Some(("Open settings", MainWindowSection::Settings));
         for (category, fix) in [
             (ErrorCategory::General, None),
             (ErrorCategory::NotFound, None),
@@ -149,7 +142,7 @@ mod tests {
             (ErrorCategory::Cleanup, cleanup),
             (
                 ErrorCategory::Output,
-                Some(("Open history", Route::History)),
+                Some(("Open history", MainWindowSection::History)),
             ),
             (ErrorCategory::HistoryUnavailable, None),
             (ErrorCategory::Settings, settings),

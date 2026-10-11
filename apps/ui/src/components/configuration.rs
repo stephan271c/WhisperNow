@@ -79,7 +79,7 @@ pub(super) fn SettingsLoading() -> Element {
 #[component]
 pub(super) fn GeneralPage() -> Element {
     let actions = use_context::<UiContext>();
-    let settings_blocked = actions.phase_blocked();
+    let settings_blocked = actions.settings_blocked();
     let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let navigator = use_context::<UiContext>().navigator;
@@ -88,7 +88,7 @@ pub(super) fn GeneralPage() -> Element {
     };
     let restart_blocked = actions
         .blocked(UiOperation::RestartSetup)
-        .or(actions.phase_blocked());
+        .or(actions.settings_blocked());
     use_effect(move || actions.load_permissions());
     let paste_helper_setup = management
         .read()
@@ -194,7 +194,7 @@ pub(super) fn GeneralPage() -> Element {
 #[component]
 pub(super) fn AudioPage() -> Element {
     let actions = use_context::<UiContext>();
-    let settings_blocked = actions.phase_blocked();
+    let settings_blocked = actions.settings_blocked();
     let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let Some(settings) = management.read().shown_settings().cloned() else {
@@ -252,7 +252,7 @@ pub(super) fn AudioPage() -> Element {
 #[component]
 pub(super) fn PrivacyPage() -> Element {
     let actions = use_context::<UiContext>();
-    let settings_blocked = actions.phase_blocked();
+    let settings_blocked = actions.settings_blocked();
     let disabled = settings_blocked.is_some();
     let management = use_context::<UiContext>().management;
     let Some(settings) = management.read().shown_settings().cloned() else {

@@ -137,6 +137,14 @@ fn python_settings_import_picks_known_fields() {
 }
 
 #[test]
+fn python_blank_microphones_normalize_to_the_system_default() {
+    for input_device in ["", " ", "\t\n"] {
+        let imported = PythonSettings::import(&json!({ "input_device": input_device }));
+        assert_eq!(imported.settings.input_device, None);
+    }
+}
+
+#[test]
 fn python_settings_import_moves_keys_out_and_reads_the_older_layouts() {
     let secret = ["test", "-only", "-key"].concat();
     let imported = PythonSettings::import(&json!({

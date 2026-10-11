@@ -10,9 +10,7 @@ use dioxus_html::{
 use whispernow_domain::ipc::EventPayload;
 use whispernow_domain::ipc::{AppState, ModelState, Phase};
 use whispernow_domain::{HistoryEntry, ModelId};
-use whispernow_domain::{
-    HistoryFilter, HistoryLimit, HistoryPage, LlmProvider, ProviderSettings, Settings,
-};
+use whispernow_domain::{HistoryLimit, HistoryPage, LlmProvider, ProviderSettings, Settings};
 
 use crate::{UiContext, client::fake};
 
@@ -334,9 +332,9 @@ pub(crate) const RECORDING: Phase = Phase::Recording {
 pub(crate) const PROCESSING: Phase = Phase::Processing { cleaning_up: false };
 
 pub(crate) fn show_history(management: &mut crate::ManagementState, entries: Vec<HistoryEntry>) {
+    let (request_id, _) = management.history_request();
     management.finish_history_refresh(
-        1,
-        &HistoryFilter::default(),
+        request_id,
         HistoryPage {
             entries,
             next_cursor: None,

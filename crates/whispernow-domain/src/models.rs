@@ -13,7 +13,15 @@ pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-lfm2.5-350m-q8_0"
 /// The larger local cleanup model (a `MiniCPM5-1B` fine-tune): slower, but keeps more facts.
 pub const MINICPM_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-minicpm5-1b-q8_0";
 /// Every local cleanup model, the default first.
-pub const CLEANUP_MODEL_IDS: [&str; 2] = [DEFAULT_CLEANUP_MODEL_ID, MINICPM_CLEANUP_MODEL_ID];
+pub const CLEANUP_MODEL_IDS: [&str; CLEANUP_MODELS.len()] = {
+    let mut ids = [""; CLEANUP_MODELS.len()];
+    let mut index = 0;
+    while index < CLEANUP_MODELS.len() {
+        ids[index] = CLEANUP_MODELS[index].id;
+        index += 1;
+    }
+    ids
+};
 /// The CUDA pack's id among downloads: llama.cpp's CUDA backend and NVIDIA's CUDA runtime,
 /// which run the cleanup models on NVIDIA GPUs. Not a model, and not in the registry.
 pub const CUDA_PACK_ID: &str = "llama-cuda-13.4";
@@ -22,6 +30,36 @@ pub const CLEANUP_MODEL_FILE: &str = "model-Q8_0.gguf";
 /// placeholders until the models are uploaded, which waits for the user's go-ahead.
 const CLEANUP_MODEL_RELEASE: &str =
     "https://github.com/stephan271c/WhisperNow/releases/download/cleanup-model-r112";
+
+struct CleanupModel {
+    id: &'static str,
+    display_name: &'static str,
+    size_bytes: u64,
+    sha256: &'static str,
+    profile: ModelProfile,
+}
+
+const CLEANUP_MODELS: [CleanupModel; 2] = [
+    // `training/runs/r112-full-inst-1e-5-e3/gguf/model-Q8_0.gguf`: LFM2.5-350M
+    // fine-tuned for cleanup, under the
+    // LFM Open License v1.0.
+    CleanupModel {
+        id: DEFAULT_CLEANUP_MODEL_ID,
+        display_name: "Local cleanup model (LFM2.5 350M)",
+        size_bytes: 379_215_072,
+        sha256: "a46d6f79213615cd2faa960c24e8fb2ace09c28e3c1a07ef15f6e9cad974d53b",
+        profile: ModelProfile::rated(5, 3),
+    },
+    // `training/runs/r112-minicpm-full-inst-1e-5-e3/gguf/model-Q8_0.gguf`:
+    // MiniCPM5-1B fine-tuned the same way, under Apache-2.0.
+    CleanupModel {
+        id: MINICPM_CLEANUP_MODEL_ID,
+        display_name: "Local cleanup model (MiniCPM5 1B)",
+        size_bytes: 1_153_520_640,
+        sha256: "9c28d3e0c029907624ad0c2dac0adda77d485ddbcfbfebd67658aceb434e3fbb",
+        profile: ModelProfile::rated(3, 5),
+    },
+];
 
 /// A speech or cleanup model identifier, safe as one filesystem path component.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -406,7 +444,7 @@ impl ModelRegistry {
     /// `datagen asr-speed` (training/README.md).
     #[must_use]
     pub fn builtin() -> Self {
-        Self::new(vec![
+        let mut models = vec![
             transducer(
                 "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
                 "Parakeet TDT v2 0.6B (Int8)",
@@ -479,26 +517,9 @@ impl ModelRegistry {
                 WHISPER_LANGUAGES,
                 leaderboard(7.01, 4.1),
             ),
-            // `training/runs/r112-full-inst-1e-5-e3/gguf/model-Q8_0.gguf`: LFM2.5-350M
-            // fine-tuned for cleanup, under the
-            // LFM Open License v1.0.
-            local_cleanup(
-                DEFAULT_CLEANUP_MODEL_ID,
-                "Local cleanup model (LFM2.5 350M)",
-                379_215_072,
-                "a46d6f79213615cd2faa960c24e8fb2ace09c28e3c1a07ef15f6e9cad974d53b",
-                ModelProfile::rated(5, 3),
-            ),
-            // `training/runs/r112-minicpm-full-inst-1e-5-e3/gguf/model-Q8_0.gguf`:
-            // MiniCPM5-1B fine-tuned the same way, under Apache-2.0.
-            local_cleanup(
-                MINICPM_CLEANUP_MODEL_ID,
-                "Local cleanup model (MiniCPM5 1B)",
-                1_153_520_640,
-                "9c28d3e0c029907624ad0c2dac0adda77d485ddbcfbfebd67658aceb434e3fbb",
-                ModelProfile::rated(3, 5),
-            ),
-        ])
+        ];
+        models.extend(CLEANUP_MODELS.iter().map(local_cleanup));
+        Self::new(models)
     }
 
     #[must_use]
@@ -652,26 +673,21 @@ fn qwen3_asr(
     }
 }
 
-fn local_cleanup(
-    id: &str,
-    display_name: &str,
-    size_bytes: u64,
-    sha256: &str,
-    profile: ModelProfile,
-) -> ModelDefinition {
+fn local_cleanup(model: &CleanupModel) -> ModelDefinition {
+    let id = model.id;
     ModelDefinition {
         id: ModelId::new(id).expect("built-in identifiers are non-empty"),
-        display_name: display_name.to_owned(),
+        display_name: model.display_name.to_owned(),
         source: ModelSource {
             url: format!("{CLEANUP_MODEL_RELEASE}/{id}.gguf"),
             archive_format: ArchiveFormat::SingleFile,
-            archive_size_bytes: size_bytes,
-            sha256: sha256.to_owned(),
+            archive_size_bytes: model.size_bytes,
+            sha256: model.sha256.to_owned(),
         },
         layout: ModelLayout::Gguf {
             model: CLEANUP_MODEL_FILE.to_owned(),
         },
         languages: Vec::new(),
-        profile,
+        profile: model.profile,
     }
 }

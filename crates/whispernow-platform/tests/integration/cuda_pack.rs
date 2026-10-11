@@ -16,10 +16,10 @@ use flate2::{Compression, write::GzEncoder};
 use tar::{Builder as TarBuilder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
 use whispernow_core::CancellationToken;
-use whispernow_domain::DownloadPhase;
+use whispernow_domain::{ClearDataCategory, DownloadPhase};
 use whispernow_platform::{
-    AppPaths, CUDA_LIBRARIES, CudaPackArchive, CudaPackFormat, CudaPackState, DownloadProgress,
-    DownloadTimeouts, ModelStore, ModelStoreError,
+    AppPaths, CUDA_LIBRARIES, CudaPackArchive, CudaPackFormat, CudaPackRemovalOutcome,
+    CudaPackState, DownloadProgress, DownloadTimeouts, ModelStore, ModelStoreError,
 };
 use zip::write::SimpleFileOptions;
 
@@ -240,7 +240,7 @@ fn a_missing_runtime_library_reports_the_archive_member_and_installs_nothing() {
         })
     );
     assert!(fixture.manager.cuda_pack_dir().is_none());
-    assert!(!fixture.paths.data_dir().join("llama-cuda").exists());
+    assert!(!fixture.paths.cuda_pack_dir().exists());
 }
 
 #[test]
@@ -257,7 +257,7 @@ fn an_empty_backend_is_rejected_before_installation() {
             .download_cuda_pack(&CancellationToken::default(), &|_| {}),
         Err(ModelStoreError::InvalidArchive)
     );
-    assert!(!fixture.paths.data_dir().join("llama-cuda").exists());
+    assert!(!fixture.paths.cuda_pack_dir().exists());
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn a_link_cannot_supply_the_required_backend() {
                 artifacts: vec![member.clone()],
             })
         );
-        assert!(!fixture.paths.data_dir().join("llama-cuda").exists());
+        assert!(!fixture.paths.cuda_pack_dir().exists());
     }
 }
 
@@ -299,10 +299,39 @@ fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
         .expect("installed");
     let directory = manager.cuda_pack_dir().expect("installed");
 
-    manager.remove_cuda_pack(true).expect("marked");
+    assert_eq!(
+        manager.remove_cuda_pack(true),
+        Ok(CudaPackRemovalOutcome::Deferred)
+    );
     assert!(directory.exists(), "loaded files stay");
     assert_eq!(manager.cuda_pack_state(), CudaPackState::NotInstalled);
     assert!(manager.cuda_pack_dir().is_none(), "nothing loads it again");
+
+    let models = fixture.paths.models_dir();
+    fs::create_dir_all(&models).expect("models directory");
+    fs::write(models.join("weights"), b"model data").expect("model data");
+    assert!(
+        fixture
+            .paths
+            .data_locations()
+            .expect("data locations")
+            .iter()
+            .any(|location| {
+                location.category == ClearDataCategory::Models && location.path == directory
+            })
+    );
+    let cleared = fixture
+        .paths
+        .clear_data_except(&[ClearDataCategory::Models], Some(&directory))
+        .expect("clear other model data");
+    assert_eq!(cleared.len(), 1);
+    assert_eq!(cleared[0].path, models);
+    assert!(cleared[0].outcome.is_ok());
+    assert!(directory.exists(), "loaded files survive data clearing");
+    assert!(
+        manager.cuda_pack_dir().is_none(),
+        "the removal marker survives"
+    );
 
     // Downloading it again keeps the files there instead.
     let (again, observer) = recorded();
@@ -319,7 +348,10 @@ fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
         "nothing downloaded"
     );
 
-    manager.remove_cuda_pack(true).expect("marked");
+    assert_eq!(
+        manager.remove_cuda_pack(true),
+        Ok(CudaPackRemovalOutcome::Deferred)
+    );
     manager.finish_cuda_pack_removal();
     assert!(!directory.exists());
     assert_eq!(
@@ -337,7 +369,10 @@ fn a_pack_not_in_use_is_removed_at_once() {
         .download_cuda_pack(&CancellationToken::default(), &observer)
         .expect("installed");
     let directory = fixture.manager.cuda_pack_dir().expect("installed");
-    fixture.manager.remove_cuda_pack(false).expect("removed");
+    assert_eq!(
+        fixture.manager.remove_cuda_pack(false),
+        Ok(CudaPackRemovalOutcome::Removed)
+    );
     assert!(!directory.exists());
     assert_eq!(
         fixture.manager.cuda_pack_state(),

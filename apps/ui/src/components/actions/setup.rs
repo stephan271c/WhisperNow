@@ -56,6 +56,9 @@ impl UiContext {
     }
 
     pub(crate) fn save_setup_edit(mut self, edit: impl FnOnce(&mut SetupCheckpoint)) {
+        if self.management.peek().settings_pending() {
+            return;
+        }
         self.management.write().edit_setup(edit);
         let request = self
             .management
@@ -67,6 +70,9 @@ impl UiContext {
     }
 
     pub(crate) fn complete_setup(self) {
+        if self.management.peek().settings_pending() {
+            return;
+        }
         let operation = UiOperation::CompleteSetup;
         let Some(request) = self.management.peek().complete_setup_request() else {
             return;
@@ -82,6 +88,9 @@ impl UiContext {
     }
 
     pub(crate) fn restart_setup(self) {
+        if self.management.peek().settings_pending() {
+            return;
+        }
         let operation = UiOperation::RestartSetup;
         self.run(
             operation,
