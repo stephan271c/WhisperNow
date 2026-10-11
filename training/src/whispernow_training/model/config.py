@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Literal
 
 Method = Literal["full", "lora"]
-Objective = Literal["sft", "dpo"]
 
 
 @dataclass(frozen=True)
@@ -47,18 +46,6 @@ class TrainConfig:
     # Fresh speech noise per epoch: train one pass over `epochs` noisy variants of the
     # train split (`datagen epochs`), so each row is seen once per epoch, each time with new noise.
     noise_per_epoch: bool = False
-    # Train on this JSONL file (relative to `training/`) instead of the build's train split: the
-    # judged samples of rejection-sampling SFT, or the preference pairs of DPO.
-    train_file: str = ""
-    # `sft` trains on references; `dpo` on preference pairs (`chosen`, `rejected`) with TRL's
-    # DPOTrainer, sigmoid loss plus `sft_weight` × the NLL of the chosen reply (RPO), against
-    # reference log-probabilities computed once before training.
-    objective: Objective = "sft"
-    # Fact-weighted SFT: the loss on reply tokens inside fact spans (`model/facts.py`)
-    # weighs this much against 1 for the rest, rescaled to average 1 per micro-batch. 0 is plain SFT.
-    fact_weight: float = 0.0
-    beta: float = 0.1
-    sft_weight: float = 1.0
     lora: LoraSettings = field(default_factory=LoraSettings)
 
     def to_dict(self) -> dict:
@@ -90,10 +77,6 @@ def load(path: Path, overrides: list[str] = ()) -> TrainConfig:
     config = TrainConfig(**raw, lora=lora)
     if config.method not in ("full", "lora"):
         raise SystemExit(f"method must be full or lora, not {config.method!r}")
-    if config.objective not in ("sft", "dpo"):
-        raise SystemExit(f"objective must be sft or dpo, not {config.objective!r}")
-    if config.noise_per_epoch and (config.epochs != int(config.epochs) or config.train_file):
+    if config.noise_per_epoch and config.epochs != int(config.epochs):
         raise SystemExit("noise_per_epoch needs a whole number of epochs over the build's train split")
-    if config.objective == "dpo" and not config.train_file:
-        raise SystemExit("objective dpo needs a train_file of preference pairs")
     return config

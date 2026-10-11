@@ -1,4 +1,4 @@
-"""Fine-tuning with TRL: SFT (full fine-tune or LoRA, loss on the reply only), or DPO on preference pairs."""
+"""Fine-tuning with TRL: SFT with full fine-tuning or LoRA, loss on the reply only."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
-from trl import DPOConfig, DPOTrainer, SFTConfig, SFTTrainer
+from trl import SFTConfig, SFTTrainer
 
 from ..datagen import epochs
 from ..datagen.paths import BUILD, TRAINING_ROOT
-from . import prompt, weighted
+from . import prompt
 from .config import TrainConfig
 
 # Validation loss is measured on a fixed slice of the val split to keep evaluation cheap,
@@ -39,28 +39,13 @@ def load_split(split: str, limit: int | None = None) -> Dataset:
     return load_rows([BUILD / f"{split}.jsonl"], limit)
 
 
-def load_pairs(path: Path, split: str) -> Dataset:
-    """Preference pairs in TRL's conversational shape, dropping metadata such as `seed_group`."""
-    rows = load_dataset("json", data_files=str(path), split="train").filter(lambda row: row["split"] == split)
-    return rows.map(
-        lambda row: {
-            "prompt": prompt.messages(row["input"]),
-            "chosen": [{"role": "assistant", "content": row["chosen"]}],
-            "rejected": [{"role": "assistant", "content": row["rejected"]}],
-        },
-        remove_columns=rows.column_names,
-    )
-
-
 def resolve(path_or_id: str) -> str:
-    """A path under `training/` (a run's `model/`, a train file), else a Hub id as given."""
+    """A model path under `training/`, else a Hub id as given."""
     local = TRAINING_ROOT / path_or_id
     return str(local) if local.exists() else path_or_id
 
 
 def train_files(config: TrainConfig) -> list[Path]:
-    if config.train_file:
-        return [Path(resolve(config.train_file))]
     if config.noise_per_epoch:
         return epochs.materialize(int(config.epochs))
     return [BUILD / "train.jsonl"]
@@ -151,10 +136,7 @@ def train(config: TrainConfig, out: Path) -> dict:
         )
 
     files = train_files(config)
-    if config.objective == "dpo":
-        train_rows, eval_rows = load_pairs(files[0], "train"), load_pairs(files[0], "val")
-    else:
-        train_rows, eval_rows = load_rows(files), load_split("val", VAL_ROWS)
+    train_rows, eval_rows = load_rows(files), load_split("val", VAL_ROWS)
     # Noise variants are one pass over every epoch's rows; otherwise the trainer counts epochs.
     passes = 1 if config.noise_per_epoch else config.epochs
     common = dict(
@@ -173,7 +155,7 @@ def train(config: TrainConfig, out: Path) -> dict:
         optim=config.optim,
         gradient_checkpointing=config.gradient_checkpointing,
         use_liger_kernel=config.liger,
-        logging_steps=25 if config.objective == "sft" else 5,
+        logging_steps=25,
         eval_strategy="steps",
         # A short probe evaluates once, at its end; a ratio below 1 is a share of the total steps.
         eval_steps=config.max_steps or 1 / (EVALS_PER_EPOCH * math.ceil(config.epochs)),
@@ -183,53 +165,16 @@ def train(config: TrainConfig, out: Path) -> dict:
         dataloader_num_workers=2,
     )
     callbacks = [] if config.max_steps else [EpochCheckpoints(out, config.epochs, tokenizer)]
-    if config.objective == "dpo":
-        args = DPOConfig(
-            # The chunked log-prob path never holds a whole batch's logits, which the reference pass over
-            # 2,800-token pairs would otherwise need (over 10 GB at LFM2.5's 65k vocabulary).
-            **{**common, "use_liger_kernel": True},
-            precompute_ref_batch_size=config.batch_size,
-            beta=config.beta,
-            loss_type=["sigmoid", "sft"],
-            loss_weights=[1.0, config.sft_weight],
-            precompute_ref_log_probs=True,
-        )
-        trainer = DPOTrainer(
-            model=model,
-            args=args,
-            train_dataset=train_rows,
-            eval_dataset=eval_rows,
-            processing_class=tokenizer,
-            peft_config=peft_config,
-            callbacks=callbacks,
-        )
-    elif config.fact_weight:
-        if config.liger:
-            raise ValueError("fact_weight needs the logits, which Liger's fused loss never makes")
-        # Rows arrive tokenized with their `loss_weights`, which the Trainer must not drop as unused.
-        args = SFTConfig(**common, completion_only_loss=True, train_sampling_strategy="group_by_length",
-                         remove_unused_columns=False)
-        trainer = weighted.WeightedSFTTrainer(
-            model=model,
-            args=args,
-            train_dataset=weighted.tokenize(train_rows, tokenizer, config.fact_weight, config.max_length),
-            eval_dataset=eval_rows,
-            processing_class=tokenizer,
-            peft_config=peft_config,
-            callbacks=callbacks,
-        )
-        trainer.data_collator = weighted.WeightedCollator(trainer.data_collator)
-    else:
-        args = SFTConfig(**common, completion_only_loss=True, train_sampling_strategy="group_by_length")
-        trainer = SFTTrainer(
-            model=model,
-            args=args,
-            train_dataset=train_rows,
-            eval_dataset=eval_rows,
-            processing_class=tokenizer,
-            peft_config=peft_config,
-            callbacks=callbacks,
-        )
+    args = SFTConfig(**common, completion_only_loss=True, train_sampling_strategy="group_by_length")
+    trainer = SFTTrainer(
+        model=model,
+        args=args,
+        train_dataset=train_rows,
+        eval_dataset=eval_rows,
+        processing_class=tokenizer,
+        peft_config=peft_config,
+        callbacks=callbacks,
+    )
     torch.cuda.reset_peak_memory_stats()
     started = time.monotonic()
     trainer.train()

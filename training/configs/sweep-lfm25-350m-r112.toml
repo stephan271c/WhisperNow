@@ -18,8 +18,3 @@ set = ["learning_rate=1e-5", "epochs=5"]
 [[run]]
 name = "r112-full-inst-1e-5-e5-noise"
 set = ["learning_rate=1e-5", "epochs=5", "noise_per_epoch=true"]
-
-# Todo 114: fact-weighted SFT, the same recipe with 3× loss weight on fact tokens.
-[[run]]
-name = "r112-full-inst-1e-5-e3-fw3"
-set = ["learning_rate=1e-5", "epochs=3", "fact_weight=3.0"]

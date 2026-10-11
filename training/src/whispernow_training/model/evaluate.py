@@ -72,10 +72,6 @@ def load_rows(split: str, limit: int | None = None, seed: int = 109) -> list[Exa
     return rows
 
 
-def load_benchmarks() -> list[Example]:
-    return [row for path in BENCHMARKS.values() for row in read_examples(path)]
-
-
 def _progress(line: str) -> None:
     print(line, file=sys.stderr, flush=True)
 
@@ -334,7 +330,6 @@ def _summarize(entries: Sequence[tuple[RowChecks, Verdict | None]]) -> dict:
         if values:
             summary[name] = {"rate": round(100 * sum(values) / len(values), 2), "n": len(values)}
     summary["chrf"] = round(sum(checks.chrf for checks, _ in entries) / len(entries), 2)
-    # Output words over reference words, summed: the length drift a preference stage can bring.
     reference_words = sum(checks.reference_words for checks, _ in entries)
     if reference_words:
         summary["length_ratio"] = round(sum(checks.output_words for checks, _ in entries) / reference_words, 3)

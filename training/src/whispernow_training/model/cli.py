@@ -170,18 +170,6 @@ def cmd_handcheck(args: argparse.Namespace) -> None:
         print(f"## {row.id} ({len(row.input.split())} words){flags}\n\nINPUT\n{row.input}\n\nREFERENCE\n{row.output}\n\nOUTPUT\n{output['output']}\n")
 
 
-def cmd_prefer(args: argparse.Namespace) -> None:
-    from . import prefer
-
-    print(json.dumps(prefer.run(RUNS / args.run / "prefer", args.server, args.concurrency), indent=2))
-
-
-def cmd_code_pairs(args: argparse.Namespace) -> None:
-    from . import code_pairs
-
-    print(json.dumps(code_pairs.run(RUNS / args.name, args.count, args.long_share), indent=2))
-
-
 def cmd_sweep_table(args: argparse.Namespace) -> None:
     from . import report
 
@@ -273,24 +261,6 @@ def main() -> None:
     handcheck.add_argument("server", nargs="?", help="OpenAI-compatible base URL")
     handcheck.add_argument("--teacher", action="store_true", help="LLM_MODEL with the app's hosted prompt instead")
     handcheck.set_defaults(handler=cmd_handcheck)
-
-    prefer_parser = commands.add_parser(
-        "prefer", help="sample, judge and pair an SFT model's outputs for the preference stage; writes runs/<run>/prefer/"
-    )
-    prefer_parser.add_argument("run", help="the SFT run")
-    prefer_parser.add_argument("--server", help="llama-server serving the run's Q8_0, for the sampling step")
-    prefer_parser.add_argument("--concurrency", type=int, default=4)
-    prefer_parser.set_defaults(handler=cmd_prefer)
-
-    pairs_parser = commands.add_parser(
-        "code-pairs",
-        help="todo 114: DPO pairs made in code from train rows (the reference against one fact broken); "
-        "writes runs/<name>/pairs.jsonl for --set train_file",
-    )
-    pairs_parser.add_argument("name", help="output directory under runs/")
-    pairs_parser.add_argument("--count", type=int, default=8000)
-    pairs_parser.add_argument("--long-share", type=float, default=0.7, help="share of pairs from rows of 150+ words")
-    pairs_parser.set_defaults(handler=cmd_code_pairs)
 
     compare = commands.add_parser("compare", help="print scores of several evaluations side by side")
     compare.add_argument("candidates", nargs="+", metavar="LABEL=RUN/EVAL_DIR")

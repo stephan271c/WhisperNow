@@ -564,8 +564,6 @@ A small model fine-tuned on `data/build/` to do Clean Up & Format alone. It take
 | The teacher's latency on the same dictations | `cleanup bench --teacher --save runs/teacher/bench.json` | the JSON |
 | Read a server's (or the teacher's) cleanup of the dictations in `data/real/` by hand; nothing is written or scored | `cleanup handcheck http://127.0.0.1:8080/v1` / `cleanup handcheck --teacher` | stdout |
 | Fresh noise per epoch: one re-noised copy of the train split per epoch after the first (`noise_per_epoch` runs make it themselves) | `uv run datagen epochs [--epochs 5]` | `data/build/epochs/train.epoch-<n>.jsonl`, `stats.json` |
-| Preference stage: sample an SFT model behind llama-server, judge, restore lost facts for minimal pairs, write pairs (see [Preference stage](#preference-stage-todo-111)) | `LLM_BACKEND=codex LLM_MODEL=gpt-6.1-sol LLM_REASONING=high LLM_JUDGE_BACKEND=codex LLM_JUDGE_MODEL=gpt-6.1-sol LLM_JUDGE_REASONING=high LLM_CODEX_CONCURRENCY=64 cleanup prefer NAME --server http://127.0.0.1:8080/v1` | `runs/NAME/prefer/` |
-| Code-made preference pairs: each reference against itself with one fact broken (see [Keeping every fact](#keeping-every-fact-todo-114)) | `cleanup code-pairs NAME [--count 8000] [--long-share 0.7]` | `runs/NAME/pairs.jsonl`, `stats.json` |
 | Evaluate an epoch checkpoint | `cleanup eval NAME --checkpoint epoch-1 --split val --limit 500` | `runs/NAME/eval-epoch-1/` |
 | Score the split's own references, as a baseline for the judge | `cleanup eval --reference --split val --limit 500 --judge` | `runs/reference/eval/` |
 | Decode with another repeat penalty, or penalty window (server only) | `cleanup eval NAME … --repeat-penalty 1.0` / `--repeat-last-n 64` | `runs/NAME/eval…-rp1/`, `…-last64/` |
@@ -582,26 +580,7 @@ A small model fine-tuned on `data/build/` to do Clean Up & Format alone. It take
 
 Todo 111's runs on todo 110's build are in `configs/sweep-lfm25-350m-long.toml` and `configs/sweep-minicpm5-1b-long.toml`. `--set noise_per_epoch=true` trains on a freshly noised copy of the train split in each epoch (`datagen/epochs.py`): injected rows get new noise in their own target, and composed and short-source rows get their recognizer style and densified share drawn again. The other rows are the same in every epoch, and val, test and the benchmarks are never re-noised. Such a run makes one pass over the epoch files, and saves its `epoch-N` checkpoints at the same steps as a plain run.
 
-### Preference stage (todo 111)
-
-`cleanup prefer NAME` runs on an SFT run and writes each step to `runs/NAME/prefer/`, skipping a step whose file exists (`model/prefer.py`):
-
-1. **Inputs:** 400 train rows from each of the 150–300, 300–600 and 600–1,000-word buckets, and 300 more with a reasoned or re-decided correction. Never a benchmark row or its seed group.
-2. **Samples:** the greedy output and 4 samples at temperature 0.8 per input, from llama-server with the app's request and penalty.
-3. **Verdicts:** each distinct output goes through the code checks (loop, fillers the reference lacks, Markdown, list markers, added layout, assistant opener, wrong `EMPTY`), then the eval judge (`prompts/judge/eval.md`) against the reference, batched as in evaluation and resumed from `verdicts.judge.jsonl`. An output fails on any dropped, changed, wrong-side or invented fault, or an answered request; an unresolved correction alone passes. The judge and the teacher must be gpt-6.1-sol at high reasoning through codex, as the scores are.
-4. **Minimal pairs:** a failing output whose only faults are lost facts (dropped, changed, wrong side) goes to the teacher with the judge's faults (`prompts/prefer/restore.md`). The repair is kept only if the code finds no other edit (only inserted words when everything lost was dropped, `only_insertions`; otherwise only the words the faults quote, `only_fact_edits`) and the judge passes it.
-5. **Pairs:** up to 2 per input. The minimal pair comes first, then failing outputs against the passing output nearest in length. An input where nothing passes pairs a failure with its gated reference. `kind` names the rejected output's first fault (loop, answered, invented, wrong_side, changed, dropped, filler, format), and 5% of inputs by id hash are a val split. `rft.jsonl` holds one passing output per train input, for the rejection-sampling baseline.
-
-DPO trains from the SFT model: `cleanup train configs/<model>.toml --name NAME-dpo --set objective='dpo' --set train_file='runs/NAME/prefer/pairs.jsonl' --set base_model='runs/NAME/model' --set epochs=1 --set learning_rate=1e-6`. It uses TRL's sigmoid loss plus an SFT term on the chosen reply (`beta` 0.1, `sft_weight` 1.0) and reference log-probs computed once before training. The baseline is plain SFT on `rft.jsonl` from the same model (`--set train_file='runs/NAME/prefer/rft.jsonl'`).
-
-### Keeping every fact (todo 114)
-
-Two ways to make a lost fact cost more than the plain SFT loss does, both from `model/facts.py`, which finds a reference's fact spans in code: values (numbers, amounts, times, dates, weekdays, colours and the protected tokens), names, hedges, negations (`not`, `no`, `never`, `nothing`, `without`, words ending in `n't` and the like), reasons (`because`, `since`, `so that`, `in case`, `otherwise` to the end of the clause), and the first word of each sentence and list item. They cover about a quarter of the reference tokens.
-
-- **Fact-weighted SFT:** `--set fact_weight=3.0` weighs the loss on reply tokens inside fact spans 3 times the rest, rescaled to average 1 per micro-batch, so the learning rate stays comparable (`model/weighted.py`). The val loss stays the plain one. It cannot run with `liger`.
-- **Code-made pairs:** `cleanup code-pairs NAME` writes DPO pairs in the preference stage's format, each a train reference against the same reference with one span broken (`model/code_pairs.py`): a sentence, list item, reason or hedge dropped, a value changed, or a correction's abandoned value put back (`wrong_side`, from rows whose input states the correction). The mix follows the eval judge's faults, 70% of the pairs come from rows of 150 words or more, and no benchmark row or its seed group is used. DPO on them runs as above with `--set train_file='runs/NAME/pairs.jsonl'`.
-
-Todo 114 ran neither of these. It ran the preference stage with DPO and rejection-sampling SFT instead, and none of those runs beat todo 113's SFT model without regressions. DPO dropped fewer facts but restated content, and the pairs whose chosen side is the train reference did the most harm.
+The preference stage and fact-weighted SFT were tried and removed.
 
 ### What evaluation reports
 
@@ -623,5 +602,5 @@ The app runs the model itself, in process, on llama.cpp b11259's C API (todo 115
 2. Choose **Clean Up & Format**. Settings refuse any other prompt with this provider.
 3. To use a `llama-server` of your own instead (`cleanup serve`), choose **Other** (OpenAI-compatible) with its URL. That path sends no `draft_text` and none of the decoding fields, so it is for trying other models, not for this one's parity.
 
-The patched server (`cleanup build-server`, `cleanup serve`) remains for training-side evaluation: `cleanup eval`, `bench` and `prefer`. The parity harness that checked the app's engine against it was removed in todo 123; git history has it.
+The patched server (`cleanup build-server`, `cleanup serve`) remains for training-side evaluation: `cleanup eval` and `bench`. The parity harness that checked the app's engine against it was removed in todo 123; git history has it.
 

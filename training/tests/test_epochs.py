@@ -93,14 +93,6 @@ def test_noise_per_epoch_needs_whole_epochs_over_the_build(tmp_path):
         config.load(path, ["noise_per_epoch=true", "epochs=2.5"])
 
 
-def test_dpo_training_requires_a_preference_train_file(tmp_path):
-    path = tmp_path / "c.toml"
-    path.write_text('base_model = "m"\nobjective = "dpo"\n')
-    with pytest.raises(SystemExit, match="dpo needs a train_file"):
-        config.load(path)
-    assert config.load(path, ["train_file='pairs.jsonl'"]).train_file == "pairs.jsonl"
-
-
 def test_a_rebuild_rewrites_the_epoch_files(tmp_path, monkeypatch):
     import os
 
