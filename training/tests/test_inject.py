@@ -54,34 +54,26 @@ def _cases(kind: str):
 
 
 @pytest.mark.parametrize("kind", inject.KINDS)
-def test_each_kind_applies_and_is_deterministic(kind):
+def test_each_kind_applies_deterministically_and_preserves_clean_content(kind):
     applied = 0
     for text, style, seed, result in _cases(kind):
-        assert result == inject.inject(text, seed, style, kinds=(kind,), level="heavy")
-        assert set(result.kinds) <= {kind}
-        applied += bool(result.kinds)
-    assert applied > 50
-    different = {inject.inject(TEXTS[1], seed, "recognizer", kinds=(kind,)).text for seed in range(10)}
-    assert len(different) > 1
-
-
-@pytest.mark.parametrize("kind", inject.KINDS)
-def test_each_kind_keeps_every_clean_word_and_protected_token(kind):
-    for text, style, seed, result in _cases(kind):
         spoken = result.text
-        assert _is_subsequence(text, spoken), (kind, seed, spoken)
+        case = (kind, style, seed, text, spoken)
+        assert result == inject.inject(text, seed, style, kinds=(kind,), level="heavy"), case
+        assert set(result.kinds) <= {kind}, case
+        applied += bool(result.kinds)
+        assert _is_subsequence(text, spoken), case
         for token in protected_tokens(text):
-            assert token in spoken, (kind, seed, token, spoken)
-
-
-@pytest.mark.parametrize("kind", [k for k in inject.KINDS if k != "correction"])
-def test_random_noise_adds_no_ambiguous_word(kind):
-    for text, _style, _seed, result in _cases(kind):
-        added = _added(text, result.text)
-        assert not set(added) & AMBIGUOUS_WORDS, (kind, result.text)
-        assert "you know" not in result.text.lower() and "i mean" not in result.text.lower()
-        new_words = set(added) - set(_words(text)) - {w.split("'")[0] for w in _words(text)}
-        assert new_words <= FILLER_WORDS, (kind, new_words, result.text)
+            assert token in spoken, (token, case)
+        if kind != "correction":
+            added = _added(text, spoken)
+            assert not set(added) & AMBIGUOUS_WORDS, case
+            assert "you know" not in spoken.lower() and "i mean" not in spoken.lower(), case
+            new_words = set(added) - set(_words(text)) - {w.split("'")[0] for w in _words(text)}
+            assert new_words <= FILLER_WORDS, (new_words, case)
+    assert applied > 50, (kind, applied)
+    different = {inject.inject(TEXTS[1], seed, "recognizer", kinds=(kind,)).text for seed in range(10)}
+    assert len(different) > 1, (kind, TEXTS[1], different)
 
 
 def test_corrections_insert_a_wrong_value_the_target_never_has():

@@ -2,9 +2,12 @@ import asyncio
 import json
 import re
 
+import pytest
+
 from conftest import judge_items
 
 from whispernow_training.datagen import gates, noise
+from whispernow_training.datagen.schema import read_jsonl
 
 
 def test_detect_sees_each_code_visible_pattern():
@@ -72,6 +75,47 @@ def test_generate_kind_keeps_rows_with_the_pattern_and_tags_them(fake_llm, tmp_p
     assert all("pattern:filler_cluster" in r.tags and "noise_bench" in r.tags for r in rows)
     rejected = [json.loads(line) for line in (tmp_path / "filler_cluster.rejected.jsonl").open()]
     assert rejected and all(r["failed"] == ["pattern"] for r in rejected)
+
+
+def test_client_type_failure_preserves_batches_and_resumes_after_repair(fake_llm, tmp_path, monkeypatch):
+    monkeypatch.setattr(noise, "OUT_DIR", tmp_path)
+    generator_requests = []
+
+    def malformed_then_valid(messages, role):
+        if role == "generator":
+            generator_requests.append(messages)
+            if len(generator_requests) == 1:
+                return "no json here"
+        return reply(messages, role)
+
+    llm = fake_llm(malformed_then_valid)
+    assert asyncio.run(noise.generate_kind(llm, "filler_cluster", 1, set(), progress=lambda _: None)) == 1
+    log_path = tmp_path / "filler_cluster.batches.jsonl"
+    log = list(read_jsonl(log_path))
+    assert len(log) == 2 and log[0]["error"].startswith("unreadable generator reply:")
+    assert log[0]["returned"] == log[0]["passed"] == 0
+    prior_files = {path: path.read_bytes() for path in tmp_path.glob("*.jsonl")}
+    prior_rows = noise.load()
+    known = {row.input for row in prior_rows}
+    failure = TypeError("invalid client configuration")
+    failed_requests = []
+
+    def unavailable(messages, role):
+        failed_requests.append(messages)
+        raise failure
+
+    llm.reply = unavailable
+    with pytest.raises(TypeError) as error:
+        asyncio.run(noise.generate_kind(llm, "filler_cluster", 2, known, progress=lambda _: None))
+    assert error.value is failure and len(failed_requests) == 1
+    assert {path: path.read_bytes() for path in tmp_path.glob("*.jsonl")} == prior_files
+
+    llm.reply = malformed_then_valid
+    assert asyncio.run(noise.generate_kind(llm, "filler_cluster", 2, known, progress=lambda _: None)) == 2
+    assert generator_requests[-1] == failed_requests[0]
+    assert noise.load()[:len(prior_rows)] == prior_rows
+    resumed_log = list(read_jsonl(log_path))
+    assert resumed_log[:-1] == log and not resumed_log[-1]["error"]
 
 
 def test_assemble_swaps_in_kept_probed_rows(fake_llm, tmp_path, monkeypatch):

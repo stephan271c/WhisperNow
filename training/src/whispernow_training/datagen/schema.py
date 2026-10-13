@@ -33,6 +33,14 @@ class BatchRecord:
     error: str = ""
 
 
+def is_missing_key_failure(record: dict) -> bool:
+    return (
+        record.get("error") == "unreadable generator reply: 'LLM_API_KEY'"
+        and all(record.get(field) == 0 for field in ("returned", "passed", "relabeled"))
+        and record.get("notes") == []
+    )
+
+
 @dataclass
 class Example:
     id: str

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import build, inject, paths
@@ -29,6 +29,12 @@ from .schema import EMPTY, Example, read_examples, write_examples
 EPOCHS = paths.BUILD / "epochs"
 # Tags a re-injection replaces.
 _INJECTION_TAGS = ("noise:", "noise_level:", "fillers_", "correction:")
+
+
+@dataclass
+class SpokenBase:
+    before: Example
+    built_tags: tuple[str, ...]
 
 
 def epoch_file(epoch: int) -> Path:
@@ -51,15 +57,11 @@ def reinjected(row: Example, epoch: int) -> Example:
     return replace(row, input=injection.text, tags=[*kept, *injection.tags])
 
 
-def respoken(row: Example, before: Example, epoch: int) -> Example:
-    """`row` with `build.spoken_variant` drawn again from `before`, its row before the variant step."""
-    built = build.spoken_variant(before, "")
-    if built.input != row.input:
-        raise ValueError(f"{row.id}: the build's variant does not come out of the rebuilt row")
+def respoken(row: Example, base: SpokenBase, epoch: int) -> Example:
     if epoch == 1:
         return row
-    fresh = build.spoken_variant(before, _salt(epoch))
-    later = [tag for tag in row.tags if tag not in built.tags]
+    fresh = build.spoken_variant(base.before, _salt(epoch))
+    later = [tag for tag in row.tags if tag not in base.built_tags]
     return replace(row, input=fresh.input, tags=[*fresh.tags, *later])
 
 
@@ -68,8 +70,7 @@ def _respoken_kind(row: Example) -> bool:
     return "composed" in row.tags or row.source in build.SHORT_DENSIFY_SOURCES
 
 
-def _before_variants(train: Sequence[Example]) -> dict[str, Example]:
-    """The train rows `spoken_variant` applies to, rebuilt before the variant step."""
+def _prepare_variants(train: Sequence[Example]) -> dict[str, SpokenBase]:
     wanted = {row.id for row in train if _respoken_kind(row)}
     gathered: dict[str, Example] = {}
     for example in build.gather_with_drops()[0]:
@@ -78,16 +79,25 @@ def _before_variants(train: Sequence[Example]) -> dict[str, Example]:
     missing = wanted - set(gathered)
     if missing:
         raise ValueError(f"{len(missing)} train rows are not in the rebuilt rows, e.g. {sorted(missing)[:3]}")
-    return {e.id: e for e in build.bare_filler_share(list(gathered.values()))}
+    before = {e.id: e for e in build.bare_filler_share(list(gathered.values()))}
+    bases = {}
+    for row in train:
+        if _respoken_kind(row):
+            original = before[row.id]
+            built = build.spoken_variant(original, "")
+            if built.input != row.input:
+                raise ValueError(f"{row.id}: the build's variant does not come out of the rebuilt row")
+            bases[row.id] = SpokenBase(original, tuple(built.tags))
+    return bases
 
 
-def epoch_rows(train: Sequence[Example], before: dict[str, Example], epoch: int) -> list[Example]:
+def epoch_rows(train: Sequence[Example], bases: dict[str, SpokenBase], epoch: int) -> list[Example]:
     out = []
     for row in train:
         if row.source == inject.SOURCE:
             out.append(reinjected(row, epoch))
         elif _respoken_kind(row):
-            out.append(respoken(row, before[row.id], epoch))
+            out.append(respoken(row, bases[row.id], epoch))
         else:
             out.append(row)
     return out
@@ -123,12 +133,12 @@ def materialize(epochs: int) -> list[Path]:
     if not any(stale(path) for path in files):
         return files
     train = read_examples(paths.BUILD / "train.jsonl")
-    before = _before_variants(train)
+    bases = _prepare_variants(train)
     stats_file = EPOCHS / "stats.json"
     stats = json.loads(stats_file.read_text(encoding="utf-8")) if stats_file.exists() else {}
     stats["1"] = _noise_counts(train, train)
     for epoch in range(2, epochs + 1):
-        rows = epoch_rows(train, before, epoch)
+        rows = epoch_rows(train, bases, epoch)
         if stale(epoch_file(epoch)):
             write_examples(epoch_file(epoch), rows)
         stats[str(epoch)] = _noise_counts(rows, train)

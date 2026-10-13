@@ -22,7 +22,6 @@ the finished requests served from the response cache.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import random
 import sys
@@ -33,8 +32,9 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from . import gates, generate, paths, rejudge
+from .concurrency import task_group
 from .llm import LlmClient, LlmError
-from .schema import BatchRecord, Example, append_jsonl, example_id, layout_of, length_bucket, read_examples, read_jsonl
+from .schema import BatchRecord, Example, append_jsonl, example_id, is_missing_key_failure, layout_of, length_bucket, read_examples, read_jsonl
 from .teacher import relabel
 
 CATEGORIES = (
@@ -158,8 +158,8 @@ async def run_batch(
     style = style_for(run, category, bucket, batch)
     record = BatchRecord(batch=batch, style=style, requested=count)
     started = time.monotonic()
+    reply = await llm.complete(generator_messages(run, category, bucket, style, count, batch, notes), role="generator")
     try:
-        reply = await llm.complete(generator_messages(run, category, bucket, style, count, batch, notes), role="generator")
         items = [item for item in generate.parse_items(reply, count) if item["input"] not in known]
     except (ValueError, KeyError, TypeError) as error:
         record.error = f"unreadable generator reply: {error}"[:300]
@@ -177,9 +177,10 @@ async def run_batch(
             candidates.append((id_, item))
     # The teacher's first references. One whose layout contradicts the generator's intent would be
     # dropped below whatever the judge said, so it is dropped before the judge's cost is paid.
-    outputs = await asyncio.gather(
-        *(relabel(llm, item["input"], reasoning=TEACHER_REASONING.get(_bucket_of(item))) for _, item in candidates)
-    )
+    async with task_group() as group:
+        tasks = [group.create_task(relabel(llm, item["input"], reasoning=TEACHER_REASONING.get(_bucket_of(item))))
+                 for _, item in candidates]
+    outputs = [task.result() for task in tasks]
     firsts = {id_: output for (id_, _), output in zip(candidates, outputs, strict=True)}
     unjudged = []
     for id_, item in candidates:
@@ -281,7 +282,7 @@ async def generate_cell(
     log_path = _log_file(run, category, bucket)
     log = list(read_jsonl(log_path)) if log_path.exists() else []
     per_request = PER_REQUEST[bucket]
-    max_batches = 3 * -(-target // per_request) + 3
+    max_batches = 3 * -(-target // per_request) + 3 + sum(is_missing_key_failure(record) for record in log)
     # A batch still running when a run stopped was never logged; its number is skipped on resume.
     next_batch = max((record["batch"] for record in log), default=-1) + 1
     stopped = False
@@ -317,7 +318,9 @@ async def generate_cell(
                 f"{' ' + record.error if record.error else ''}, {counts[(category, bucket)]}/{target}, {record.seconds}s"
             )
 
-    await asyncio.gather(*(lane() for _ in range(LANES[bucket])))
+    async with task_group() as group:
+        for _ in range(LANES[bucket]):
+            group.create_task(lane())
     return counts[(category, bucket)]
 
 
@@ -332,12 +335,14 @@ def targets(total: int, shares: dict[str, float] = SHARES, categories: Sequence[
 
 async def generate_all(llm: LlmClient, run: Run, total: int, categories: Sequence[str] = CATEGORIES) -> dict[str, int]:
     """Every category and bucket at once; the client's semaphore caps the requests in flight."""
-    known = {e.input for e in load(run)}
-    shared = counts_by_cell(run)
+    rows = load(run)
+    known = {e.input for e in rows}
+    shared = Counter((e.category, file_bucket(len(e.input.split()))) for e in rows)
     goals = targets(total, run.shares, categories)
-    counts = await asyncio.gather(
-        *(generate_cell(llm, run, category, bucket, target, known, shared) for (category, bucket), target in goals.items())
-    )
+    async with task_group() as group:
+        tasks = [group.create_task(generate_cell(llm, run, category, bucket, target, known, shared))
+                 for (category, bucket), target in goals.items()]
+    counts = [task.result() for task in tasks]
     return {stem(category, bucket): count for (category, bucket), count in zip(goals, counts, strict=True)}
 
 

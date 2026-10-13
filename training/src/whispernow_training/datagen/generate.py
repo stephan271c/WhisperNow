@@ -12,7 +12,6 @@ response cache.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import random
 import re
@@ -22,9 +21,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, replace
 
 from . import paths
+from .concurrency import task_group
 from .judge import judge_batch
 from .llm import LlmClient, LlmError, parse_json_reply
-from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, read_examples, read_jsonl
+from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, is_missing_key_failure, read_examples, read_jsonl
 from .teacher import relabel
 
 SOURCE = "teacher"
@@ -170,8 +170,8 @@ async def run_batch(
     style = STYLES[batch % len(STYLES)]
     record = BatchRecord(batch=batch, style=style, requested=count)
     started = time.monotonic()
+    reply = await llm.complete(generator_messages(category, style, count, batch, notes), role="generator")
     try:
-        reply = await llm.complete(generator_messages(category, style, count, batch, notes), role="generator")
         items = [item for item in parse_items(reply, count) if item["input"] not in known_inputs]
     except (ValueError, KeyError, TypeError) as error:
         record.error = f"unreadable generator reply: {error}"[:300]
@@ -179,7 +179,9 @@ async def run_batch(
         return record, [], []
     record.returned = len(items)
 
-    outputs = await asyncio.gather(*(relabel(llm, item["input"]) for item in items))
+    async with task_group() as group:
+        tasks = [group.create_task(relabel(llm, item["input"])) for item in items]
+    outputs = [task.result() for task in tasks]
     examples = [
         Example(
             id=example_id(SOURCE, item["input"]),
@@ -207,17 +209,12 @@ async def run_batch(
 
     instructions = (paths.PROMPTS / "judge" / "generate.md").read_text(encoding="utf-8")
     chunks = [candidates[i : i + JUDGE_BATCH_SIZE] for i in range(0, len(candidates), JUDGE_BATCH_SIZE)]
-    verdict_lists = await asyncio.gather(
-        *(
-            judge_batch(
-                llm,
-                instructions,
-                CRITERIA,
-                [(e.id, {"style": style, "transcript": e.input, "output": e.output}) for e in chunk],
-            )
-            for chunk in chunks
-        )
-    )
+    async with task_group() as group:
+        tasks = [group.create_task(judge_batch(
+            llm, instructions, CRITERIA,
+            [(e.id, {"style": style, "transcript": e.input, "output": e.output}) for e in chunk],
+        )) for chunk in chunks]
+    verdict_lists = [task.result() for task in tasks]
     passed = []
     for chunk, verdicts in zip(chunks, verdict_lists, strict=True):
         for example, verdict in zip(chunk, verdicts, strict=True):
@@ -258,7 +255,7 @@ async def generate_category(
     known = {e.input for e in kept}
     if held_out and output_file(category).exists():
         known |= {e.input for e in read_examples(output_file(category))}
-    max_batches = 3 * -(-target // batch_size) + 2
+    max_batches = 3 * -(-target // batch_size) + 2 + sum(is_missing_key_failure(record) for record in log)
     while len(kept) < target:
         if len(log) >= max_batches:
             progress(f"{category}: stopped after {len(log)} batches with {len(kept)}/{target} rows")
@@ -297,10 +294,8 @@ async def generate(
     """Runs every category's loop at once; the client's semaphore caps the requests in flight."""
     goals = TEST_TARGETS if held_out else TARGETS
     targets = {category: max(1, round(goals[category] * scale)) for category in categories}
-    counts = await asyncio.gather(
-        *(
-            generate_category(llm, category, target, batch_size=batch_size, held_out=held_out)
-            for category, target in targets.items()
-        )
-    )
+    async with task_group() as group:
+        tasks = [group.create_task(generate_category(llm, category, target, batch_size=batch_size, held_out=held_out))
+                 for category, target in targets.items()]
+    counts = [task.result() for task in tasks]
     return dict(zip(targets, counts, strict=True))

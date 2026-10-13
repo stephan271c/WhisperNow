@@ -195,12 +195,20 @@ class Judge:
 COMPLETENESS_JUDGE = Judge()
 
 
-def code_check(transcript: str, reference: str) -> tuple[list[str], str]:
+def _protected_drops(transcript: str, reference: str) -> list[tuple[str, str]]:
+    return [(token, why_dropped(token, transcript)) for token in missing_protected(transcript, reference)]
+
+
+def code_check(
+    transcript: str, reference: str, *, protected_drops: Sequence[tuple[str, str]] | None = None,
+) -> tuple[list[str], str]:
     """The failed code checks of a reference, and a note naming what failed."""
     failed, notes = [], []
     # A value a correction may have taken back, or a larger number may hold, goes to the judge as a
     # flag (`code_flags`).
-    missing = [token for token in missing_protected(transcript, reference) if not why_dropped(token, transcript)]
+    if protected_drops is None:
+        protected_drops = _protected_drops(transcript, reference)
+    missing = [token for token, why in protected_drops if not why]
     if missing:
         failed.append("protected_tokens")
         notes.append("missing protected tokens: " + ", ".join(repr(token) for token in missing[:5]))
@@ -227,15 +235,19 @@ def empty_check(transcript: str, reference: str) -> tuple[list[str], str]:
     return ["empty"], f"the transcript holds only fillers, so the edit is exactly {EMPTY}"
 
 
-def code_flags(transcript: str, reference: str) -> str:
+def code_flags(
+    transcript: str, reference: str, *, protected_drops: Sequence[tuple[str, str]] | None = None,
+) -> str:
     """What code found and the judge settles: spelled-out numbers next to a word, hedges or reasons
     the reference says less often than the transcript, dropped values a correction may have taken
     back or a larger number may hold, and kept hedges the speaker may have settled."""
+    if protected_drops is None:
+        protected_drops = _protected_drops(transcript, reference)
     flags = [f"spelled-out number {phrase!r}" for phrase in spelled_counts(reference)[:5]]
     flags += [f"the transcript says {word!r} more often than the reference" for word in dropped_kept_words(transcript, reference)]
     flags += [
         f"the reference drops {token!r}, {why}"
-        for token in missing_protected(transcript, reference)[:5] if (why := why_dropped(token, transcript))
+        for token, why in protected_drops[:5] if why
     ]
     flags += [f"the reference keeps a hedge the speaker may settle: {phrase!r}" for phrase in settled_hedges(transcript, reference)[:3]]
     return "; ".join(flags)
@@ -252,12 +264,13 @@ async def check_references(
             failed, note = empty_check(transcript, reference)
             verdicts[id_] = Verdict(id_, not failed, failed, note, "code")
             continue
-        failed, note = code_check(transcript, reference)
+        protected_drops = _protected_drops(transcript, reference)
+        failed, note = code_check(transcript, reference, protected_drops=protected_drops)
         if failed:
             verdicts[id_] = Verdict(id_, False, failed, note, "code")
         else:
             style = {"style": judge.styles[id_]} if judge.styles else {}
-            flags = code_flags(transcript, reference)
+            flags = code_flags(transcript, reference, protected_drops=protected_drops)
             judged.append((id_, {**style, "transcript": transcript, "reference": reference, **({"flags": flags} if flags else {})}))
     instructions = judge.instructions.read_text(encoding="utf-8") + (f"\n{judge.addendum}\n" if judge.addendum else "")
     judged.sort(key=lambda item: len(item[1]["transcript"]))

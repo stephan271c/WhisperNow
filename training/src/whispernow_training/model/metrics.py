@@ -230,7 +230,7 @@ def check(example: Example, output: str, *, hit_limit: bool = False) -> RowCheck
     output = output.strip()
     expected_layout, got_layout = example.layout, layout_of(output)
     wanted = protected_tokens(reference) if reference != EMPTY else []
-    kept = [token for token in wanted if token in output]
+    kept = sum((Counter(wanted) & Counter(protected_tokens(output))).values())
     reference_fillers, output_fillers = _filler_counts(reference), _filler_counts(output)
     input_repeats = _max_ngram_repeats(example.input)
     output_words, reference_words = len(_words(output)), len(_words(reference))
@@ -242,9 +242,9 @@ def check(example: Example, output: str, *, hit_limit: bool = False) -> RowCheck
         formatting_missed=(got_layout == "plain") if expected_layout != "plain" else None,
         bad_list_marker=malformed_list(output) is not None,
         markdown=has_markdown(output),
-        protected_kept=(len(kept) == len(wanted)) if wanted else None,
+        protected_kept=(kept == len(wanted)) if wanted else None,
         protected_tokens_total=len(wanted),
-        protected_tokens_kept=len(kept),
+        protected_tokens_kept=kept,
         leftover_filler=any(count > reference_fillers[filler] for filler, count in output_fillers.items()),
         passthrough_kept=(output == example.input.strip()) if reference == example.input.strip() else None,
         empty_correct=(output == EMPTY) if reference == EMPTY else None,

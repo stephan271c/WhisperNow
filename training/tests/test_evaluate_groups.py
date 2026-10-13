@@ -24,3 +24,37 @@ def test_length_ratio_uses_total_output_and_reference_words():
     outputs = {"a": {"output": "word word", "hit_limit": False},
                "b": {"output": "word word word word", "hit_limit": False}}
     assert evaluate.score(rows, outputs)["overall"]["length_ratio"] == 1.0
+
+
+def test_protected_token_rates_use_complete_reference_token_counts(tmp_path, monkeypatch):
+    ids = tmp_path / "ids.txt"
+    ids.write_text("")
+    monkeypatch.setattr(evaluate, "TEST_IDS_109", ids)
+    references = {"number": "Order 5 boxes.", "path": "Open app.py.",
+                  "kept": "Order 5 boxes via app.py.", "plain": "Hello."}
+    rows = [Example(id=id_, input=text, output=text, source="s", category="c", license="l")
+            for id_, text in references.items()]
+    outputs = {"number": {"output": "Order 15 boxes.", "hit_limit": False},
+               "path": {"output": "Open xapp.py.", "hit_limit": False},
+               "kept": {"output": references["kept"], "hit_limit": False},
+               "plain": {"output": references["plain"], "hit_limit": False}}
+    scores = evaluate.score(rows, outputs)
+    for summary in (scores["overall"], scores["category"]["c"]):
+        assert summary["rows"] == 4
+        assert summary["protected_kept"] == {"rate": 33.33, "n": 3}
+        assert summary["protected_token_recall"] == 50.0
+
+
+def test_chrf_summary_averages_unequal_reference_scores(tmp_path, monkeypatch):
+    ids = tmp_path / "ids.txt"
+    ids.write_text("")
+    monkeypatch.setattr(evaluate, "TEST_IDS_109", ids)
+    rows = [Example(id="partial", input="ab", output="ab", source="s", category="partial", license="l"),
+            Example(id="disjoint", input="xyz", output="xyz", source="s", category="disjoint", license="l")]
+    outputs = {"partial": {"output": "aab", "hit_limit": False},
+               "disjoint": {"output": "abc", "hit_limit": False}}
+    scores = evaluate.score(rows, outputs)
+    # The partial match's precisions are 2/3 and 1/2, both recalls 1; disjoint text scores 0.
+    assert scores["category"]["partial"]["chrf"] == 87.5
+    assert scores["category"]["disjoint"]["chrf"] == 0.0
+    assert scores["overall"]["chrf"] == 43.75

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections import Counter, defaultdict
 from dataclasses import replace
 
 from . import paths
+from .concurrency import task_group
 from .judge import Verdict, judge_all, load_verdicts, pair_item
 from .llm import LlmClient
 from .schema import Example, layout_of, read_examples, write_examples
@@ -68,7 +68,9 @@ def agreement_sample(examples: list[Example], n: int) -> list[Example]:
 async def teacher_agreement(llm: LlmClient, n: int, label: str) -> dict:
     """Runs the teacher on held-out inputs and has the judge compare it with the aawaaz references."""
     sample = agreement_sample(read_examples(IMPORTED), n)
-    outputs = await asyncio.gather(*(relabel(llm, example.input) for example in sample))
+    async with task_group() as group:
+        tasks = [group.create_task(relabel(llm, example.input)) for example in sample]
+    outputs = [task.result() for task in tasks]
     out_dir = paths.STAGE1 / "teacher_check"
     items = [
         (example.id, {"transcript": example.input, "reference": example.output, "candidate": output})
@@ -135,7 +137,9 @@ async def fix_flagged(llm: LlmClient) -> dict:
         e.id: [*verdicts[e.id].failed, *(register[e.id].failed if e.id in register else [])] for e in examples
     }
     flagged = [e for e in examples if failed[e.id]]
-    outputs = await asyncio.gather(*(relabel(llm, e.input) for e in flagged))
+    async with task_group() as group:
+        tasks = [group.create_task(relabel(llm, e.input)) for e in flagged]
+    outputs = [task.result() for task in tasks]
     relabeled = [
         replace(e, output=output, teacher_model=llm.settings.model, tags=[*e.tags, "relabeled"])
         for e, output in zip(flagged, outputs, strict=True)

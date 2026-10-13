@@ -2,6 +2,8 @@ import asyncio
 import json
 import re
 
+import pytest
+
 from conftest import judge_items
 
 from whispernow_training.datagen import generate, paths
@@ -83,6 +85,60 @@ def test_held_out_rows_are_pinned_to_test_and_new(fake_llm, tmp_path, monkeypatc
     first = len(list(read_jsonl(tmp_path / "mixed_message.batches.jsonl")))
     assert all(int(r.input.split()[1]) >= first for r in held_out)
     assert (tmp_path / "mixed_message.test.batches.jsonl").exists()
+
+
+def test_client_configuration_failure_preserves_batches_and_resumes_after_repair(fake_llm, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "STAGE3", tmp_path)
+    generator_requests = []
+
+    def malformed_then_valid(messages, role):
+        if role == "generator":
+            generator_requests.append(messages)
+            if len(generator_requests) == 1:
+                return '{"items": null}'
+        return reply(messages, role)
+
+    llm = fake_llm(malformed_then_valid)
+    assert asyncio.run(generate.generate_category(llm, "mixed_message", 1, batch_size=1, progress=lambda _: None)) == 1
+    log_path = tmp_path / "mixed_message.batches.jsonl"
+    log = list(read_jsonl(log_path))
+    assert len(log) == 2 and log[0]["error"].startswith("unreadable generator reply:")
+    assert log[0]["returned"] == log[0]["passed"] == 0
+    prior_files = {path: path.read_bytes() for path in tmp_path.glob("*.jsonl")}
+    prior_rows = read_examples(tmp_path / "mixed_message.jsonl")
+    failure = KeyError("LLM_API_KEY")
+    failed_requests = []
+
+    def unavailable(messages, role):
+        failed_requests.append(messages)
+        raise failure
+
+    llm.reply = unavailable
+    with pytest.raises(KeyError) as error:
+        asyncio.run(generate.generate_category(llm, "mixed_message", 2, batch_size=1, progress=lambda _: None))
+    assert error.value is failure and len(failed_requests) == 1
+    assert {path: path.read_bytes() for path in tmp_path.glob("*.jsonl")} == prior_files
+
+    llm.reply = malformed_then_valid
+    assert asyncio.run(generate.generate_category(llm, "mixed_message", 2, batch_size=1, progress=lambda _: None)) == 2
+    assert generator_requests[-1] == failed_requests[0]
+    assert read_examples(tmp_path / "mixed_message.jsonl")[:len(prior_rows)] == prior_rows
+    resumed_log = list(read_jsonl(log_path))
+    assert resumed_log[:-1] == log and not resumed_log[-1]["error"]
+
+
+def test_unreadable_model_replies_remain_bounded_completed_batches(fake_llm, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "STAGE3", tmp_path)
+    llm = fake_llm(lambda messages, role: "no json here")
+    assert asyncio.run(generate.generate_category(llm, "mixed_message", 1, batch_size=1, progress=lambda _: None)) == 0
+    log = list(read_jsonl(tmp_path / "mixed_message.batches.jsonl"))
+    assert llm.calls == len(log) == 5
+    assert all(record["error"].startswith("unreadable generator reply:") for record in log)
+    assert all(record["returned"] == record["passed"] == 0 for record in log)
+    assert not read_examples(tmp_path / "mixed_message.jsonl")
+    assert not list(read_jsonl(tmp_path / "mixed_message.rejected.jsonl"))
+    assert asyncio.run(generate.generate_category(llm, "mixed_message", 1, batch_size=1, progress=lambda _: None)) == 0
+    assert llm.calls == 5
 
 
 def test_generator_requests_are_stable_per_batch():

@@ -18,6 +18,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from urllib.parse import urlparse
 
+from ..datagen.concurrency import task_group
 from ..datagen.judge import Verdict
 from ..datagen.llm import R112_TARGET, request_key, require_r112
 from ..datagen.paths import BUILD, DATA, PROMPTS, TRAINING_ROOT
@@ -203,7 +204,9 @@ async def generate_server(
         }
 
     async with httpx.AsyncClient(timeout=600) as client:
-        return await asyncio.gather(*(one(client, row) for row in rows))
+        async with task_group() as group:
+            tasks = [group.create_task(one(client, row)) for row in rows]
+        return [task.result() for task in tasks]
 
 
 async def generate_teacher(rows: Sequence[Example]) -> list[dict]:
@@ -222,7 +225,9 @@ async def generate_teacher(rows: Sequence[Example]) -> list[dict]:
                 _progress(f"teacher {done}/{len(rows)} ({llm.calls} calls, {llm.cache_hits} cached)")
             return {"id": row.id, "output": output, "hit_limit": False, "tokens": None}
 
-        return await asyncio.gather(*(one(row) for row in rows))
+        async with task_group() as group:
+            tasks = [group.create_task(one(row)) for row in rows]
+        return [task.result() for task in tasks]
 
 
 def write_outputs(path: Path, outputs: Sequence[dict]) -> None:

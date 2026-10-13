@@ -61,21 +61,3 @@ def _relabel_records(tmp_path, monkeypatch):
 @pytest.fixture
 def fake_llm():
     return FakeLlm
-
-
-@pytest.fixture
-def seed_families():
-    from whispernow_training.datagen.inject import injected_rows
-    from whispernow_training.datagen.schema import Example
-
-    clean = " ".join(["Meet on Wednesday at 4 by the red door. Bring 12 chairs and 3 tables."] * 11)
-    families = []
-    # Hashing these example IDs put each injected derivative opposite its parent.
-    for id_, split in (("parent-13", "train"), ("parent-51", "val")):
-        parent = Example(id=id_, input=clean, output=clean, source="teacher", category="multi_topic", license="x",
-                         split="train")
-        derivative, = injected_rows([parent], count=1, seed=114)
-        assert derivative.id != parent.id and derivative.input != parent.input
-        assert derivative.output == parent.output and derivative.seed_group == parent.seed_group
-        families.append((parent, derivative, split))
-    return families

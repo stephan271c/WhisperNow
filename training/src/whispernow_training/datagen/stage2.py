@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from collections import Counter, defaultdict
 from dataclasses import replace
 
 from . import paths, sources
+from .concurrency import task_group
 from .judge import judge_all, pair_item
 from .llm import LlmClient
 from .schema import Example, write_examples
@@ -98,7 +98,9 @@ async def add_sources(llm: LlmClient, with_sotto: bool) -> dict:
         batch_size=30,
     )
     layout_only = [e for e in everything if verdicts[e.id].failed == ["layout_ok"]]
-    outputs = await asyncio.gather(*(relabel(llm, e.input) for e in layout_only))
+    async with task_group() as group:
+        tasks = [group.create_task(relabel(llm, e.input)) for e in layout_only]
+    outputs = [task.result() for task in tasks]
     relabeled = [
         replace(e, output=o, teacher_model=llm.settings.model, tags=[*e.tags, "relabeled"])
         for e, o in zip(layout_only, outputs, strict=True)

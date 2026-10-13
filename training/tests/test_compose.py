@@ -8,7 +8,7 @@ import pytest
 from conftest import judge_items
 
 from whispernow_training.datagen import compose, gates
-from whispernow_training.datagen.schema import Example
+from whispernow_training.datagen.schema import Example, read_jsonl
 
 
 def _words(n, tag):
@@ -135,6 +135,51 @@ def test_generate_cell_files_rows_by_length_rejects_short_ones_and_resumes(fake_
     calls = llm.calls
     assert asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 4, set(), counts, progress=lambda _: None)) == 4
     assert llm.calls == calls
+
+
+def test_client_request_failure_preserves_completed_cells_and_resumes_after_repair(fake_llm, tmp_path):
+    run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
+    generator_requests = []
+
+    def malformed_then_valid(messages, role):
+        if role == "generator":
+            generator_requests.append(messages)
+            if len(generator_requests) == 1:
+                return '{"wrong_key": []}'
+        return reply(messages, role)
+
+    llm = fake_llm(malformed_then_valid)
+    counts = compose.counts_by_cell(run)
+    assert asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 2, set(), counts, progress=lambda _: None)) == 2
+    log_path = tmp_path / "revised_choice.300-600.batches.jsonl"
+    log = list(read_jsonl(log_path))
+    assert len(log) == 3 and log[0]["error"].startswith("unreadable generator reply:")
+    assert log[0]["returned"] == log[0]["passed"] == 0
+    prior_files = {path: path.read_bytes() for path in tmp_path.glob("*.jsonl")}
+    prior_rows = compose.load(run)
+    known = {row.input for row in prior_rows}
+    failure = ValueError("invalid client request")
+    failed_requests = []
+
+    def unavailable(messages, role):
+        failed_requests.append(messages)
+        raise failure
+
+    llm.reply = unavailable
+    with pytest.raises(ValueError) as error:
+        asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 3, known, counts, progress=lambda _: None))
+    assert error.value is failure and len(failed_requests) == 1
+    assert counts == compose.counts_by_cell(run)
+    assert {path: path.read_bytes() for path in tmp_path.glob("*.jsonl")} == prior_files
+
+    llm.reply = malformed_then_valid
+    counts = compose.counts_by_cell(run)
+    assert asyncio.run(compose.generate_cell(llm, run, "revised_choice", "300-600", 3, known, counts, progress=lambda _: None)) == 3
+    assert generator_requests[-1] == failed_requests[0]
+    rows = {row.id: row for row in compose.load(run)}
+    assert all(rows[row.id] == row for row in prior_rows)
+    resumed_log = list(read_jsonl(log_path))
+    assert resumed_log[:-1] == log and not resumed_log[-1]["error"]
 
 
 def test_rows_over_600_words_get_their_own_judge_and_teacher_reasoning(fake_llm, tmp_path):

@@ -18,7 +18,6 @@ The requests use their own prompt (`prompts/bench/noise.md`), their own name and
 
 from __future__ import annotations
 
-import asyncio
 import json
 import random
 import re
@@ -31,8 +30,9 @@ from dataclasses import asdict, replace
 from ..text_rules import FILLER, FILLER_FORMS
 from . import gates, generate, paths, rejudge, relabel
 from .compose import BENCH_NAMES, BENCH_SETTINGS
+from .concurrency import task_group
 from .llm import LlmClient, LlmError
-from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, hash_bucket, read_examples, read_jsonl, write_examples
+from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, hash_bucket, is_missing_key_failure, read_examples, read_jsonl, write_examples
 
 PATTERNS = (
     "filler_cluster", "determiner_filler", "repeats", "restart", "short_cue", "redecision", "reasoned",
@@ -187,8 +187,8 @@ async def run_batch(
     style = style_for(kind, batch)
     record = BatchRecord(batch=batch, style=style, requested=count)
     started = time.monotonic()
+    reply = await llm.complete(generator_messages(kind, style, count, batch, notes), role="generator")
     try:
-        reply = await llm.complete(generator_messages(kind, style, count, batch, notes), role="generator")
         items = [item for item in generate.parse_items(reply, count) if item["input"] not in known]
     except (ValueError, KeyError, TypeError) as error:
         record.error = f"unreadable generator reply: {error}"[:300]
@@ -259,7 +259,7 @@ async def generate_kind(
     kept = read_examples(out) if out.exists() else []
     log_path = OUT_DIR / f"{kind}.batches.jsonl"
     log = list(read_jsonl(log_path)) if log_path.exists() else []
-    max_batches = 3 * -(-target // PER_REQUEST) + 3
+    max_batches = 3 * -(-target // PER_REQUEST) + 3 + sum(is_missing_key_failure(record) for record in log)
     while len(kept) < target:
         if len(log) >= max_batches:
             progress(f"noise {kind}: stopped after {len(log)} batches with {len(kept)}/{target}")
@@ -296,7 +296,9 @@ def load() -> list[Example]:
 
 async def generate_all(llm: LlmClient, kinds: Sequence[str] = KINDS) -> dict[str, int]:
     known = {e.input for e in load()}
-    counts = await asyncio.gather(*(generate_kind(llm, kind, TARGETS[kind], known) for kind in kinds))
+    async with task_group() as group:
+        tasks = [group.create_task(generate_kind(llm, kind, TARGETS[kind], known)) for kind in kinds]
+    counts = [task.result() for task in tasks]
     return dict(zip(kinds, counts, strict=True))
 
 

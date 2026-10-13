@@ -7,13 +7,13 @@ The teacher's draft goes in `draft`; the hand-written reference goes in `referen
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import sqlite3
 from pathlib import Path
 
 from . import paths
+from .concurrency import task_group
 from .llm import LlmClient
 from .schema import example_id, read_jsonl
 from .teacher import relabel
@@ -48,7 +48,12 @@ async def export_real(llm: LlmClient | None, history: Path, limit: int) -> int:
     existing = {row["input"]: row for row in read_jsonl(OUT)} if OUT.exists() else {}
     rows = list(existing.values())
     new = [t for t in read_history(history) if t["input"] not in existing][: max(0, limit - len(rows))]
-    drafts = await asyncio.gather(*(relabel(llm, t["input"]) for t in new)) if llm else [""] * len(new)
+    if llm:
+        async with task_group() as group:
+            tasks = [group.create_task(relabel(llm, t["input"])) for t in new]
+        drafts = [task.result() for task in tasks]
+    else:
+        drafts = [""] * len(new)
     for transcript, draft in zip(new, drafts, strict=True):
         rows.append(
             {
