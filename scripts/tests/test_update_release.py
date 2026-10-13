@@ -128,7 +128,17 @@ class UpdateReleaseTests(unittest.TestCase):
         latest_path = self.generate([self.stage(platform) for platform in PACKAGES])
         latest = json.loads(latest_path.read_text(encoding="utf-8"))
         self.assertEqual(latest["version"], VERSION)
-        self.assertEqual(set(latest["platforms"]), set(update_release.REQUIRED_TARGETS))
+        self.assertEqual(
+            set(latest["platforms"]),
+            {
+                "windows-x86_64",
+                "linux-x86_64-deb",
+                "linux-x86_64-rpm",
+                "linux-x86_64-appimage",
+                "darwin-aarch64",
+                "darwin-x86_64",
+            },
+        )
         entry = latest["platforms"]["darwin-aarch64"]
         self.assertEqual(
             entry["url"],

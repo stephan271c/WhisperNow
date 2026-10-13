@@ -93,6 +93,19 @@ mod tests {
 
     #[test]
     fn command_v_is_one_balanced_down_up_sequence() {
+        let pressed: Vec<_> = COMMAND_V
+            .iter()
+            .filter(|stroke| stroke.key_down)
+            .map(|stroke| stroke.keycode)
+            .collect();
+        assert_eq!(pressed, [55, 9], "paste must press Command then V");
+        for stroke in COMMAND_V.iter().filter(|stroke| stroke.keycode == 9) {
+            assert_eq!(
+                stroke.flags & 1_048_576,
+                1_048_576,
+                "V must carry the Command modifier on press and release"
+            );
+        }
         let mut held = HashSet::new();
         for stroke in COMMAND_V {
             assert!(if stroke.key_down {

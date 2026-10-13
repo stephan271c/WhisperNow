@@ -35,10 +35,16 @@ class BoundedProcessTests(unittest.TestCase):
         )
 
     def test_success_is_content_free(self):
-        result = self.invoke(sys.executable, "-c", "print('private transcript')")
+        result = self.invoke(
+            sys.executable,
+            "-c",
+            "import sys; print('private stdout transcript'); "
+            "print('private stderr transcript', file=sys.stderr)",
+        )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "bounded process fixture: completed\n")
-        self.assertNotIn("private transcript", result.stdout + result.stderr)
+        self.assertNotIn("private stdout transcript", result.stdout + result.stderr)
+        self.assertNotIn("private stderr transcript", result.stdout + result.stderr)
 
     def test_timeout_is_deterministic(self):
         result = self.invoke(
@@ -49,9 +55,14 @@ class BoundedProcessTests(unittest.TestCase):
 
     def test_nonzero_exit_is_reported_without_child_output(self):
         result = self.invoke(
-            sys.executable, "-c", "import sys; print('secret'); sys.exit(7)"
+            sys.executable,
+            "-c",
+            "import sys; print('private stdout failure'); "
+            "print('private stderr failure', file=sys.stderr); sys.exit(7)",
         )
         self.assertEqual(result.returncode, 7)
+        self.assertNotIn("private stdout failure", result.stdout + result.stderr)
+        self.assertNotIn("private stderr failure", result.stdout + result.stderr)
         self.assertEqual(result.stderr, "bounded process fixture: exited nonzero (7)\n")
 
     def test_missing_executable_is_deterministic(self):

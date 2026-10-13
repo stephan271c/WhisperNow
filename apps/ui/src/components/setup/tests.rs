@@ -1,9 +1,9 @@
 use dioxus::prelude::*;
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    ActiveDownload, ErrorCategory, PasteHelperSetup, Permission, PermissionKind, PermissionStatus,
-    PermissionsResponse, Phase, SaveSettingsResponse, SettingsView, SetupStateView,
-    SetupTestResult,
+    ActiveDownload, ErrorCategory, EventPayload, PasteHelperSetup, Permission, PermissionKind,
+    PermissionStatus, PermissionsResponse, Phase, SaveSettingsResponse, SettingsView,
+    SetupStateView, SetupTestResult,
 };
 use whispernow_domain::{
     DownloadPhase, ModelAvailability, ModelId, RecordingMode, SetupCheckpoint, SetupStep, Shortcut,
@@ -14,7 +14,7 @@ use super::super::actions::PERMISSION_POLLS;
 use super::super::tests::{loaded, model, shell};
 use crate::ManagementState;
 use crate::client::fake;
-use crate::test_support::{Page, focused, snapshot, state_event, tag, text};
+use crate::test_support::{Page, element, focused, snapshot, state_event, tag, text};
 
 /// Setup saved at `step`, with its model in `availability`.
 fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState {
@@ -654,10 +654,22 @@ fn try_it_shows_the_test_result_and_can_run_again() {
         start_test(&mut setup);
         setup.answer("start_test_dictation", Ok(()));
         setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
+        setup.publish(EventPayload::AudioLevel {
+            rms: 0.4,
+            peak: 0.8,
+            elapsed_ms: 1_000,
+        });
+        let html = setup.html();
+        let meter = tag(&html, "setup-test-level").expect("live level");
+        assert!(meter.contains("role=\"meter\""), "{meter}");
+        assert!(meter.contains("aria-valuenow=\"40\""), "{meter}");
+        let start = html.find(meter).expect("meter position") + meter.len();
+        let meter_content = &html[start..];
+        let graphic = &meter_content[..meter_content.find("</svg>").expect("meter graphic")];
+        let fill = element(graphic, "<rect").expect("visible level fill");
         assert!(
-            tag(&setup.html(), "setup-test-level")
-                .expect("live level")
-                .contains("role=\"meter\"")
+            fill.contains("width=\"40\""),
+            "RMS 0.4 fills forty percent of the meter: {fill}"
         );
         setup.click("setup-test-stop");
         assert_eq!(fake::count("stop_recording"), 1);

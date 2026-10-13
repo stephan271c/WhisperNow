@@ -276,7 +276,7 @@ fn read_device(mut file: File, device: u32, path: PathBuf, sender: &mpsc::Sender
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             _ => break,
         };
-        for event in buffer[..length].chunks_exact(EVENT_SIZE) {
+        for event in buffer[..length].as_chunks::<EVENT_SIZE>().0 {
             let Some(message) = message(device, event) else {
                 continue;
             };
@@ -291,13 +291,16 @@ fn read_device(mut file: File, device: u32, path: PathBuf, sender: &mpsc::Sender
     });
 }
 
-fn message(device: u32, event: &[u8]) -> Option<Message> {
-    let field = |range: std::ops::Range<usize>| event.get(range).unwrap_or_default();
-    let seconds = i64::from_ne_bytes(field(0..8).try_into().ok()?);
-    let micros = i64::from_ne_bytes(field(8..16).try_into().ok()?);
-    let kind = u16::from_ne_bytes(field(16..18).try_into().ok()?);
-    let code = u16::from_ne_bytes(field(18..20).try_into().ok()?);
-    let value = i32::from_ne_bytes(field(20..24).try_into().ok()?);
+fn message(device: u32, event: &[u8; EVENT_SIZE]) -> Option<Message> {
+    let seconds = i64::from_ne_bytes([
+        event[0], event[1], event[2], event[3], event[4], event[5], event[6], event[7],
+    ]);
+    let micros = i64::from_ne_bytes([
+        event[8], event[9], event[10], event[11], event[12], event[13], event[14], event[15],
+    ]);
+    let kind = u16::from_ne_bytes([event[16], event[17]]);
+    let code = u16::from_ne_bytes([event[18], event[19]]);
+    let value = i32::from_ne_bytes([event[20], event[21], event[22], event[23]]);
     match (kind, code) {
         (EV_KEY, _) => Some(Message::Key {
             device,
@@ -327,15 +330,14 @@ fn monotonic_millis() -> u64 {
 mod tests {
     use super::*;
 
-    fn event(seconds: i64, micros: i64, kind: u16, code: u16, value: i32) -> Vec<u8> {
-        [
-            &seconds.to_ne_bytes()[..],
-            &micros.to_ne_bytes(),
-            &kind.to_ne_bytes(),
-            &code.to_ne_bytes(),
-            &value.to_ne_bytes(),
-        ]
-        .concat()
+    fn event(seconds: i64, micros: i64, kind: u16, code: u16, value: i32) -> [u8; EVENT_SIZE] {
+        let mut event = [0; EVENT_SIZE];
+        event[..8].copy_from_slice(&seconds.to_ne_bytes());
+        event[8..16].copy_from_slice(&micros.to_ne_bytes());
+        event[16..18].copy_from_slice(&kind.to_ne_bytes());
+        event[18..20].copy_from_slice(&code.to_ne_bytes());
+        event[20..].copy_from_slice(&value.to_ne_bytes());
+        event
     }
 
     #[test]

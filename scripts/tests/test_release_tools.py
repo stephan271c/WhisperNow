@@ -149,6 +149,20 @@ class NativeStagingTests(unittest.TestCase):
             self.assertNotEqual(process.returncode, 0)
             self.assertIn("does not match the allowlist", process.stderr)
 
+    def test_valid_archive_with_matching_size_and_wrong_hash_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = self.fixture_archive(root, "linux-x86_64")
+            allowlist = self.fixture_allowlist(root, archive, "linux-x86_64")
+            document = json.loads(allowlist.read_text(encoding="utf-8"))
+            document["source_archives"]["linux-x86_64"]["sha256"] = "0" * 64
+            allowlist.write_text(json.dumps(document), encoding="utf-8")
+            output = root / "output"
+            process = self.run_stage("--archive", str(archive), "--output", str(output), "--allowlist", str(allowlist))
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn("archive size or SHA-256 does not match the allowlist", process.stderr)
+            self.assertFalse((output / archive.name.removesuffix(".tar.bz2")).exists())
+
     def test_extractor_rejects_parent_traversal(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -232,8 +246,9 @@ class LlamaLibraryTests(unittest.TestCase):
             extra = self.run_stage("--verify", str(output), "--allowlist", str(allowlist))
             self.assertIn("not the exact pinned set", extra.stderr)
             (output / "libggml-rpc.so").unlink()
-            (output / "libllama.so.0").write_bytes(b"tampered llama")
+            (output / "libllama.so.0").write_bytes(b"Fixture llama")
             tampered = self.run_stage("--verify", str(output), "--allowlist", str(allowlist))
+            self.assertNotEqual(tampered.returncode, 0)
             self.assertIn("does not match the allowlist", tampered.stderr)
 
     def test_an_archive_that_is_not_the_pinned_one_is_rejected(self):
@@ -662,7 +677,7 @@ class ModelResourceTests(unittest.TestCase):
     def test_pinned_model_and_license_are_verified(self):
         model_resources.load_and_validate(self.resources)
 
-    def test_verifier_rejects_tampered_model_license_and_extra_files(self):
+    def test_verifier_rejects_wrong_size_model_and_extra_files(self):
         with tempfile.TemporaryDirectory() as directory:
             payload = Path(directory) / "payload"
             shutil.copytree(self.resources, payload)
@@ -673,10 +688,21 @@ class ModelResourceTests(unittest.TestCase):
             (payload / "silero_vad.onnx").write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "model size"):
                 model_resources.load_and_validate(payload)
-            shutil.copy2(self.resources / "silero_vad.onnx", payload)
-            (payload / "LICENSE-MIT").write_text("not the license", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "license size"):
-                model_resources.load_and_validate(payload)
+
+    def test_verifier_rejects_same_size_model_and_license_corruption(self):
+        with tempfile.TemporaryDirectory() as directory:
+            payload = Path(directory) / "payload"
+            shutil.copytree(self.resources, payload)
+            for filename, kind in (("silero_vad.onnx", "model"), ("LICENSE-MIT", "license")):
+                with self.subTest(filename=filename):
+                    path = payload / filename
+                    original = path.read_bytes()
+                    path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+                    try:
+                        with self.assertRaisesRegex(ValueError, f"{kind} size or SHA-256"):
+                            model_resources.load_and_validate(payload)
+                    finally:
+                        path.write_bytes(original)
 
 
 if __name__ == "__main__":

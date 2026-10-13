@@ -651,29 +651,39 @@ fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
         let mut saved = transaction.load().expect("load settings");
         saved.cleanup_enabled = true;
         saved.llm_provider = LlmProvider::LocalCleanup;
+        saved.vocabulary_replacements = vec![whispernow_domain::VocabularyReplacement::new(
+            "worker",
+            "WhisperNow team",
+        )];
         transaction.save(&saved).expect("save settings");
         saved
     };
-    *fixture.provider.reply.lock().expect("reply") = Some("Hello from the worker.");
+    *fixture.provider.reply.lock().expect("reply") = Some("Hello from the WhisperNow team.");
     fixture.start();
     fixture.dictation.stop().expect("stop");
 
     assert_eq!(fixture.settled(), Phase::Idle);
-    assert_eq!(fixture.pasted(), ["Hello from the worker."]);
+    assert_eq!(fixture.pasted(), ["Hello from the WhisperNow team."]);
     let requests = fixture.provider.requests.lock().expect("requests");
-    let LlmRequest::Local { model, draft, .. } = &requests[0] else {
+    assert_eq!(requests.len(), 1);
+    let LlmRequest::Local {
+        model,
+        prompt,
+        draft,
+        ..
+    } = &requests[0]
+    else {
         panic!("local cleanup request");
     };
     assert_eq!(*model, saved.cleanup_model_id());
-    assert!(
-        !draft.as_str().is_empty(),
-        "the local model drafts from the transcript"
-    );
+    assert_eq!(prompt.user(), "hello from the WhisperNow team");
+    assert_eq!(draft.as_str(), "Hello from the WhisperNow team");
     drop(requests);
     let history = fixture.history();
+    assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
     assert_eq!(
         history[0].cleaned_text.as_deref(),
-        Some("Hello from the worker.")
+        Some("Hello from the WhisperNow team.")
     );
     assert_eq!(
         history[0].llm_model.as_deref(),

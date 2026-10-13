@@ -6,7 +6,7 @@ use std::{
 use whispernow_domain::AppError;
 
 use whispernow_core::{CancellationToken, ResolvedModel};
-use whispernow_domain::ipc::{ActiveDownload, ErrorCategory, ModelSummary};
+use whispernow_domain::ipc::{ActiveDownload, ErrorCategory, ModelSummary, Phase};
 use whispernow_domain::{DownloadPhase, ModelAvailability};
 use whispernow_domain::{ModelFamily, ModelId, ModelProfile};
 use whispernow_platform::{
@@ -101,17 +101,19 @@ impl ModelCoordinator {
     }
 
     pub(crate) fn download(&self, model_id: &ModelId) -> Result<(), AppError> {
-        self.state.refuse_during_maintenance()?;
         let _transition = self.transition();
-        if self.state.lock().active_downloads.contains_key(model_id) {
-            return Err(AppError::new(
-                ErrorCategory::General,
-                "download_already_active",
-                "This model download is already in progress",
-            ));
-        }
         let token = CancellationToken::default();
-        self.state.apply(|state| {
+        self.state.update(|state| {
+            if matches!(state.phase, Phase::ClearingData | Phase::Updating) {
+                state.phase.require_idle()?;
+            }
+            if state.active_downloads.contains_key(model_id) {
+                return Err(AppError::new(
+                    ErrorCategory::General,
+                    "download_already_active",
+                    "This model download is already in progress",
+                ));
+            }
             if state.active_downloads.is_empty() {
                 state.download_failures = 0;
             }
@@ -128,7 +130,8 @@ impl ModelCoordinator {
                     cancellation: token.clone(),
                 },
             );
-        });
+            Ok(())
+        })?;
         let store = Arc::clone(&self.store);
         let state = Arc::clone(&self.state);
         let local_cleanup = Arc::clone(&self.local_cleanup);
@@ -347,12 +350,14 @@ fn run_model_download(
             .then(|| transfer_rate(progress.downloaded_bytes, started.elapsed()))
             .flatten();
         state.apply(|current| {
-            if let Some(download) = current.active_downloads.get_mut(&model_id) {
-                download.progress.phase = phase;
-                download.progress.downloaded_bytes = progress.downloaded_bytes;
-                download.progress.total_bytes = progress.total_bytes;
-                download.progress.bytes_per_second = bytes_per_second;
-            }
+            let download = current
+                .active_downloads
+                .get_mut(&model_id)
+                .expect("download worker owns its registered progress until completion");
+            download.progress.phase = phase;
+            download.progress.downloaded_bytes = progress.downloaded_bytes;
+            download.progress.total_bytes = progress.total_bytes;
+            download.progress.bytes_per_second = bytes_per_second;
         });
     };
     let result = if model_id.is_cuda_pack() {
@@ -416,9 +421,225 @@ pub(super) fn hold_cleanup_unloaded(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        io::{self, Write},
+        net::{TcpListener, TcpStream},
+        sync::{Arc, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
 
-    use super::transfer_rate;
+    use whispernow_domain::{DEFAULT_CLEANUP_MODEL_ID, ModelId, ModelRegistry};
+    use whispernow_platform::{AppPaths, DownloadTimeouts, LocalCleanupService, ModelStore};
+
+    use crate::services::{Fixture, RecordingTrigger, state::StateCell};
+
+    use super::{ModelCoordinator, Phase, transfer_rate};
+
+    struct DownloadFixture {
+        models: Arc<ModelCoordinator>,
+        listener: TcpListener,
+        model_id: ModelId,
+        _root: tempfile::TempDir,
+    }
+
+    impl DownloadFixture {
+        fn new(state: &Arc<StateCell>) -> Self {
+            let root = tempfile::tempdir().expect("download root");
+            let listener = TcpListener::bind("127.0.0.1:0").expect("download listener");
+            listener
+                .set_nonblocking(true)
+                .expect("nonblocking listener");
+            let registry = ModelRegistry::builtin();
+            let mut definition = registry
+                .get(DEFAULT_CLEANUP_MODEL_ID)
+                .expect("cleanup model")
+                .clone();
+            definition.source.url = format!(
+                "http://{}/model.gguf",
+                listener.local_addr().expect("listener address")
+            );
+            definition.source.archive_size_bytes = 7;
+            definition.source.sha256 =
+                "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into();
+            let model_id = definition.id.clone();
+            let paths =
+                AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+            let store = Arc::new(ModelStore::with_registry_and_timeouts(
+                ModelRegistry::new(vec![definition]),
+                paths,
+                DownloadTimeouts {
+                    connect: Duration::from_secs(10),
+                    receive_body: Duration::from_secs(10),
+                    total: Duration::from_secs(10),
+                },
+            ));
+            let local_cleanup = Arc::new(LocalCleanupService::new(
+                root.path().join("llama"),
+                Arc::new(|_| None),
+                Arc::new(|| None),
+            ));
+            Self {
+                models: Arc::new(ModelCoordinator::new(
+                    store,
+                    Arc::clone(state),
+                    local_cleanup,
+                )),
+                listener,
+                model_id,
+                _root: root,
+            }
+        }
+
+        fn request(&self) -> TcpStream {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match self.listener.accept() {
+                    Ok((stream, _)) => return stream,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "download never requested its file"
+                        );
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("download request failed: {error}"),
+                }
+            }
+        }
+    }
+
+    impl Drop for DownloadFixture {
+        fn drop(&mut self) {
+            self.models.shutdown_downloads();
+        }
+    }
+
+    #[test]
+    fn update_admission_rejects_a_download_waiting_for_the_model_transition() {
+        let fixture = Fixture::new();
+        fixture.flush();
+        let download = DownloadFixture::new(&fixture.state);
+        fixture.state.lock().download_failures = 3;
+        let transition = download.models.transition();
+        let (started, starting) = mpsc::channel();
+
+        // Holding the existing transition lock orders the admissions without a runtime hook.
+        thread::scope(|scope| {
+            let downloading = scope.spawn(|| {
+                started.send(()).expect("download-start observer");
+                download.models.download(&download.model_id)
+            });
+            starting
+                .recv_timeout(Duration::from_secs(10))
+                .expect("download call started");
+            fixture
+                .dictation
+                .begin_update()
+                .expect("update admitted first");
+            drop(transition);
+            let error = downloading
+                .join()
+                .expect("download admission thread")
+                .expect_err("update blocks the waiting download");
+            assert_eq!(error.code, "update_installing");
+        });
+
+        assert_eq!(fixture.state.snapshot().phase, Phase::Updating);
+        assert!(fixture.state.lock().active_downloads.is_empty());
+        assert_eq!(fixture.state.lock().download_failures, 3);
+        assert!(super::lock(&download.models.workers).is_empty());
+    }
+
+    #[test]
+    fn registered_download_blocks_update_and_duplicate_admission_until_cancelled() {
+        let fixture = Fixture::new();
+        fixture.flush();
+        let download = DownloadFixture::new(&fixture.state);
+        fixture.state.lock().download_failures = 3;
+        download
+            .models
+            .download(&download.model_id)
+            .expect("download admitted first");
+        let mut response = download.request();
+
+        assert_eq!(fixture.state.lock().download_failures, 0);
+        assert_eq!(fixture.state.snapshot().active_downloads.len(), 1);
+        assert_eq!(
+            fixture
+                .dictation
+                .begin_update()
+                .expect_err("download blocks update")
+                .code,
+            "model_transition_busy"
+        );
+        assert_eq!(fixture.state.snapshot().phase, Phase::Idle);
+        assert_eq!(
+            download
+                .models
+                .download(&download.model_id)
+                .expect_err("duplicate download refused")
+                .code,
+            "download_already_active"
+        );
+        assert_eq!(super::lock(&download.models.workers).len(), 1);
+
+        download
+            .models
+            .cancel_download(&download.model_id)
+            .expect("cancel download");
+        response
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nfixture")
+            .expect("release the pending response");
+        download.models.shutdown_downloads();
+        assert!(fixture.state.snapshot().active_downloads.is_empty());
+        assert_eq!(fixture.state.lock().download_failures, 0);
+        assert!(fixture.state.snapshot().error.is_none());
+        fixture
+            .dictation
+            .begin_update()
+            .expect("update admitted after cancellation");
+    }
+
+    #[test]
+    fn a_download_remains_allowed_during_recording_and_completes_normally() {
+        let fixture = Fixture::new();
+        fixture.flush();
+        let download = DownloadFixture::new(&fixture.state);
+        fixture
+            .dictation
+            .start(RecordingTrigger::Toggle)
+            .expect("start recording");
+        download
+            .models
+            .download(&download.model_id)
+            .expect("download during recording");
+        let mut response = download.request();
+        response
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nfixture")
+            .expect("model response");
+        for worker in std::mem::take(&mut *super::lock(&download.models.workers)) {
+            worker.join().expect("successful download worker");
+        }
+
+        assert!(
+            download
+                .models
+                .store
+                .resolve(&download.model_id)
+                .expect("resolve model")
+                .is_some()
+        );
+        assert!(matches!(
+            fixture.state.snapshot().phase,
+            Phase::Recording { .. }
+        ));
+        assert!(fixture.state.snapshot().active_downloads.is_empty());
+        assert_eq!(fixture.state.lock().download_failures, 0);
+        assert!(fixture.state.snapshot().error.is_none());
+        fixture.dictation.cancel().expect("cancel recording");
+        fixture.flush();
+    }
 
     #[test]
     fn transfer_rate_waits_for_a_measurable_interval_then_averages() {

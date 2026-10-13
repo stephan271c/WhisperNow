@@ -107,6 +107,11 @@ export async function listenMaximized(callback) {
   const unlisten = await current.onResized(report);
   const id = nextListenerId++;
   listenerOwners.set(id, unlisten);
-  await report();
+  try {
+    await report();
+  } catch (error) {
+    unlistenTyped(id);
+    throw error;
+  }
   return id;
 }

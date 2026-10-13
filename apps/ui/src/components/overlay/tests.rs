@@ -7,7 +7,7 @@ use whispernow_domain::ipc::{
 
 use serde_json::Value;
 
-use super::{RecordingBar, meter_bars};
+use super::RecordingBar;
 use crate::client::fake;
 use crate::overlay::format_elapsed;
 use crate::test_support::{Page, Probe, snapshot, tag};
@@ -95,6 +95,70 @@ fn accessible_name(html: &str, id: &str) -> Option<String> {
     let tag = tag(html, id)?;
     let start = tag.find("aria-label=\"")? + "aria-label=\"".len();
     Some(tag[start..start + tag[start..].find('"')?].to_owned())
+}
+
+#[derive(Debug)]
+struct RenderedBar {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+fn rendered_bars(html: &str) -> Vec<RenderedBar> {
+    let attribute = |tag: &str, name: &str| {
+        tag.split(&format!(" {name}=\""))
+            .nth(1)
+            .expect("meter attribute")
+            .split('"')
+            .next()
+            .expect("attribute value")
+            .to_owned()
+    };
+    let number = |tag: &str, name: &str| {
+        attribute(tag, name)
+            .parse::<f32>()
+            .expect("numeric meter attribute")
+    };
+    let first_rect = html.find("<rect").expect("meter bars");
+    let svg_start = html[..first_rect].rfind("<svg").expect("meter SVG");
+    let svg = &html[svg_start..svg_start + html[svg_start..].find('>').expect("SVG tag")];
+    let bounds = attribute(svg, "viewBox")
+        .split_whitespace()
+        .map(|value| value.parse::<f32>().expect("SVG bound"))
+        .collect::<Vec<_>>();
+    assert_eq!(bounds.len(), 4, "{svg}");
+    let bars = html
+        .split("<rect")
+        .skip(1)
+        .map(|rest| {
+            let rect = &rest[..rest.find('>').expect("bar tag")];
+            RenderedBar {
+                x: number(rect, "x"),
+                y: number(rect, "y"),
+                width: number(rect, "width"),
+                height: number(rect, "height"),
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(bars.len(), 9, "{bars:?}");
+    for bar in &bars {
+        assert!(
+            bar.width > 0.0
+                && bar.height > 0.0
+                && bar.x >= bounds[0]
+                && bar.y >= bounds[1]
+                && bar.x + bar.width <= bounds[0] + bounds[2]
+                && bar.y + bar.height <= bounds[1] + bounds[3],
+            "bar stays inside the rendered meter: {bar:?} {bounds:?}"
+        );
+    }
+    assert!(
+        bars.windows(2)
+            .all(|pair| pair[0].x + pair[0].width <= pair[1].x),
+        "bars run from left to right without overlapping: {bars:?}"
+    );
+    bars
 }
 
 struct Expected {
@@ -230,12 +294,23 @@ fn each_phase_renders_its_status_and_only_its_own_actions() {
 #[test]
 fn meter_updates_do_not_reannounce_the_status() {
     let mut state = state_in(listening(RecordingMode::Hold));
+    state.apply_event(level(0.0, 0.0, 1_000));
     let before = render(state.clone());
     state.apply_event(level(0.3, 0.6, 1_000));
-    state.apply_event(level(0.1, 0.2, 2_000));
-    let after = render(state.clone());
+    state.apply_event(level(0.1, 0.2, 1_000));
+    let after = render(state);
     assert_eq!(announcement(&before), announcement(&after));
-    assert_ne!(before, after, "the meter and timer did update");
+    let heights = |html: &str| {
+        rendered_bars(html)
+            .iter()
+            .map(|bar| bar.height.to_bits())
+            .collect::<Vec<_>>()
+    };
+    assert_ne!(
+        heights(&before),
+        heights(&after),
+        "the rendered bars respond while elapsed time is fixed"
+    );
 }
 
 #[test]
@@ -291,7 +366,7 @@ fn ordinary_speech_scrolls_in_from_the_right_below_loud_speech() {
         for index in 0..6 {
             state.apply_event(level(rms, peak, 33 * index));
         }
-        let heights: Vec<f32> = meter_bars(&state.overlay)
+        let heights: Vec<f32> = rendered_bars(&render(state))
             .iter()
             .map(|bar| bar.height)
             .collect();

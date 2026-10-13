@@ -129,7 +129,7 @@ test("a chosen theme sets data-theme and the system theme removes it", () => {
 });
 
 function installWindow(calls, state) {
-  const resized = [];
+  const resized = new Set();
   globalThis.window = {
     __TAURI__: {
       core: {},
@@ -137,18 +137,35 @@ function installWindow(calls, state) {
       window: {
         getCurrentWindow: () => ({
           isDecorated: async () => state.decorated,
-          isMaximized: async () => state.maximized,
+          isMaximized: async () => {
+            if (state.maximizeError) {
+              throw state.maximizeError;
+            }
+            return state.maximized;
+          },
           close: async () => calls.push("close"),
           destroy: async () => calls.push("destroy"),
           onResized: async (handler) => {
-            resized.push(handler);
-            return () => calls.push("unlisten");
+            resized.add(handler);
+            return () => {
+              calls.push("unlisten");
+              resized.delete(handler);
+            };
           },
         }),
       },
     },
   };
-  return resized;
+  return {
+    get activeSubscriptions() {
+      return resized.size;
+    },
+    resize: async () => {
+      for (const handler of resized) {
+        await handler();
+      }
+    },
+  };
 }
 
 test("only an undecorated window draws its own titlebar", async () => {
@@ -170,14 +187,39 @@ test("the close button requests a close so the desktop can hide to the tray", as
 test("maximize state is reported at once and after each resize until unlistened", async () => {
   const calls = [];
   const state = { maximized: false };
-  const resized = installWindow(calls, state);
+  const current = installWindow(calls, state);
   const reports = [];
 
   const id = await listenMaximized((maximized) => reports.push(maximized));
+  assert.equal(current.activeSubscriptions, 1);
   state.maximized = true;
-  await resized[0]();
+  await current.resize();
+  unlistenTyped(id);
+  assert.equal(current.activeSubscriptions, 0);
+  state.maximized = false;
+  await current.resize();
   unlistenTyped(id);
 
   assert.deepEqual(reports, [false, true]);
   assert.deepEqual(calls, ["unlisten"]);
+});
+
+test("a failed initial maximize report detaches the abandoned resize subscription", async () => {
+  const failure = new Error("maximize state unavailable");
+  const calls = [];
+  const state = { maximizeError: failure, maximized: false };
+  const current = installWindow(calls, state);
+  const reports = [];
+
+  await assert.rejects(
+    listenMaximized((maximized) => reports.push(maximized)),
+    (error) => error === failure,
+  );
+
+  assert.equal(current.activeSubscriptions, 0);
+  assert.deepEqual(calls, ["unlisten"]);
+  delete state.maximizeError;
+  state.maximized = true;
+  await current.resize();
+  assert.deepEqual(reports, []);
 });

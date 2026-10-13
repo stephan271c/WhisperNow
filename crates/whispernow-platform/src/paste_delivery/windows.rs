@@ -362,8 +362,14 @@ mod tests {
 
     #[test]
     fn insert_events_carry_the_extended_key_flag() {
-        let down = native_input(KeyStroke::down_extended(VK_INSERT));
-        let up = native_input(KeyStroke::up_extended(VK_INSERT));
+        let insert_events: Vec<_> = shortcut_strokes(PasteKeys::ShiftInsert)
+            .iter()
+            .filter(|stroke| stroke.virtual_key == VK_INSERT)
+            .map(|stroke| native_input(*stroke))
+            .collect();
+        let [down, up] = insert_events.as_slice() else {
+            panic!("Shift+Insert must press and release Insert");
+        };
 
         // SAFETY: `native_input` initialized the active union member as `ki`.
         let down_flags = unsafe { down.Anonymous.ki.dwFlags };

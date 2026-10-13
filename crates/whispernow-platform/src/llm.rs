@@ -250,18 +250,39 @@ mod tests {
             io::{Read, Write},
             net::TcpListener,
             thread,
+            time::{Duration, Instant},
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking fixture listener");
         let endpoint = ProviderEndpoint::parse(format!(
             "http://{}/v1",
             listener.local_addr().expect("fixture address")
         ))
         .expect("fixture endpoint");
         let server = thread::spawn(move || {
-            let (mut connection, _) = listener.accept().expect("provider request");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let (mut connection, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "provider did not connect before the fixture request deadline"
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(error) => panic!("accept provider request: {error}"),
+                }
+            };
             connection
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .set_nonblocking(false)
+                .expect("blocking fixture connection");
+            connection
+                .set_read_timeout(Some(Duration::from_secs(5)))
                 .expect("request timeout");
             let mut request = Vec::new();
             let mut buffer = [0_u8; 4096];
@@ -291,8 +312,10 @@ mod tests {
             }
         });
         let (config, prompt) = request(provider(endpoint), model);
-        assert!(complete(config, prompt).await.is_err());
-        server.join().expect("fixture server")
+        let result = complete(config, prompt).await;
+        let body = server.join().expect("fixture provider request");
+        assert!(result.is_err());
+        body
     }
 
     #[tokio::test]
