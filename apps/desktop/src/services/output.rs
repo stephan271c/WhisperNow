@@ -50,7 +50,7 @@ enum OutputOperation {
     Native(PasteQueue<NativePastePlatform>),
     /// Wayland with the paste helper; preferred over the portal.
     #[cfg(target_os = "linux")]
-    Helper(Arc<PasteQueue<HelperPastePlatform>>),
+    Helper(HelperOutput<HelperPastePlatform>),
     #[cfg(target_os = "linux")]
     Wayland(WaylandOutputPortal),
 }
@@ -65,7 +65,7 @@ impl OutputCoordinator {
                     tracing::info!("the paste helper is unavailable; pasting through the portal");
                     OutputOperation::Wayland(WaylandOutputPortal::spawn(path, stopping.clone()))
                 },
-                |platform| OutputOperation::Helper(Arc::new(PasteQueue::new(platform))),
+                |platform| OutputOperation::Helper(HelperOutput::new(platform, stopping.clone())),
             )
         });
         #[cfg(not(target_os = "linux"))]
@@ -98,7 +98,7 @@ impl OutputCoordinator {
         match operation {
             OutputOperation::Native(queue) => native_notice(queue.paste(text, cancellation)),
             #[cfg(target_os = "linux")]
-            OutputOperation::Helper(queue) => helper_output(queue, text, cancellation),
+            OutputOperation::Helper(helper) => helper.output(text, cancellation),
             #[cfg(target_os = "linux")]
             OutputOperation::Wayland(portal) => portal.output(text, cancellation),
         }
@@ -119,7 +119,7 @@ impl OutputCoordinator {
         let copied = match &self.operation {
             Some(OutputOperation::Native(queue)) => queue.copy(text),
             #[cfg(target_os = "linux")]
-            Some(OutputOperation::Helper(queue)) => queue.copy(text),
+            Some(OutputOperation::Helper(helper)) => helper.queue.copy(text),
             #[cfg(target_os = "linux")]
             Some(OutputOperation::Wayland(_)) => return Err(CopyUnavailable),
             None => return Err(CopyUnavailable),
@@ -165,8 +165,10 @@ impl OutputCoordinator {
     pub(crate) fn shutdown(&self) {
         self.request_shutdown();
         #[cfg(target_os = "linux")]
-        if let Some(OutputOperation::Wayland(portal)) = &self.operation {
-            portal.shutdown();
+        match &self.operation {
+            Some(OutputOperation::Helper(helper)) => helper.shutdown(),
+            Some(OutputOperation::Wayland(portal)) => portal.shutdown(),
+            _ => {}
         }
     }
 }
@@ -188,45 +190,74 @@ const fn native_notice(outcome: PasteOutcome<NativePasteError>) -> OutputNotice 
     }
 }
 
-/// Pastes on its own thread and answers as soon as the keystroke is sent, so
-/// the dictation ends, and the next can start, while the target reads the
-/// transcript; the queue holds a later paste until the clipboard is restored.
-/// The notice assumes the restore succeeds: one skipped because the user copied
-/// something within that delay is only logged.
 #[cfg(target_os = "linux")]
-fn helper_output<P>(
-    queue: &Arc<PasteQueue<P>>,
-    text: &str,
-    cancellation: &CancellationToken,
-) -> OutputNotice
+struct HelperOutput<P> {
+    queue: Arc<PasteQueue<P>>,
+    stopping: CancellationToken,
+    workers: Mutex<Vec<thread::JoinHandle<()>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl<P> HelperOutput<P>
 where
     P: PastePlatform<Error = NativePasteError> + Send + 'static,
 {
-    enum Progress {
-        Sent,
-        Finished(PasteOutcome<NativePasteError>),
+    fn new(platform: P, stopping: CancellationToken) -> Self {
+        Self {
+            queue: Arc::new(PasteQueue::new(platform)),
+            stopping,
+            workers: Mutex::new(Vec::new()),
+        }
     }
-    let (progress, reports) = std_mpsc::channel();
-    let queue = Arc::clone(queue);
-    let text = text.to_owned();
-    let cancellation = cancellation.clone();
-    let spawned = thread::Builder::new()
-        .name("whispernow-paste".to_owned())
-        .spawn(move || {
-            let sent = progress.clone();
-            let outcome = queue.paste_reporting_keystroke(&text, &cancellation, move |_| {
-                let _ = sent.send(Progress::Sent);
-            });
-            tracing::debug!(?outcome, "paste finished");
-            let _ = progress.send(Progress::Finished(outcome));
-        });
-    if spawned.is_err() {
-        return OutputNotice::PasteFailed;
+
+    fn output(&self, text: &str, cancellation: &CancellationToken) -> OutputNotice {
+        enum Progress {
+            Sent,
+            Finished(PasteOutcome<NativePasteError>),
+        }
+        let (progress, reports) = std_mpsc::channel();
+        {
+            // Admission and worker registration share the drain lock, so a producer
+            // that passed the coordinator's earlier check cannot escape shutdown.
+            let mut workers = self.workers.lock().expect("paste workers lock poisoned");
+            if self.stopping.is_cancelled() {
+                return OutputNotice::PasteFailed;
+            }
+            workers.retain(|worker| !worker.is_finished());
+            let queue = Arc::clone(&self.queue);
+            let text = text.to_owned();
+            let cancellation = cancellation.clone();
+            let spawned = thread::Builder::new()
+                .name("whispernow-paste".to_owned())
+                .spawn(move || {
+                    let sent = progress.clone();
+                    let outcome =
+                        queue.paste_reporting_keystroke(&text, &cancellation, move |_| {
+                            let _ = sent.send(Progress::Sent);
+                        });
+                    tracing::debug!(?outcome, "paste finished");
+                    let _ = progress.send(Progress::Finished(outcome));
+                });
+            let Ok(worker) = spawned else {
+                return OutputNotice::PasteFailed;
+            };
+            workers.push(worker);
+        }
+        // Dictation ends at the keystroke; shutdown still owns the restoration.
+        match reports.recv() {
+            Ok(Progress::Sent) => OutputNotice::Pasted,
+            Ok(Progress::Finished(outcome)) => native_notice(outcome),
+            Err(_) => OutputNotice::PasteFailed,
+        }
     }
-    match reports.recv() {
-        Ok(Progress::Sent) => OutputNotice::Pasted,
-        Ok(Progress::Finished(outcome)) => native_notice(outcome),
-        Err(_) => OutputNotice::PasteFailed,
+
+    fn shutdown(&self) {
+        self.stopping.cancel();
+        let workers =
+            std::mem::take(&mut *self.workers.lock().expect("paste workers lock poisoned"));
+        for worker in workers {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -473,43 +504,46 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_helper_paste_answers_before_the_clipboard_is_restored() {
+    fn helper_shutdown_waits_for_restoration_after_the_early_paste_answer() {
         use std::{
-            sync::{Arc, mpsc},
+            sync::{Arc, Mutex, mpsc},
             thread,
             time::Duration,
         };
         use whispernow_core::{
             CancellationToken,
-            text_output::{KeystrokeOutcome, PastePlatform, PasteQueue},
+            text_output::{KeystrokeOutcome, PastePlatform},
         };
 
         struct Desktop {
+            clipboard: Arc<Mutex<String>>,
+            restore_entered: mpsc::Sender<()>,
             release_restore: mpsc::Receiver<()>,
-            restored: mpsc::Sender<()>,
         }
 
         impl PastePlatform for Desktop {
-            type Snapshot = ();
+            type Snapshot = String;
             type Error = NativePasteError;
 
-            fn snapshot_clipboard(&mut self) -> Result<Option<()>, NativePasteError> {
-                Ok(Some(()))
+            fn snapshot_clipboard(&mut self) -> Result<Option<String>, NativePasteError> {
+                Ok(Some(self.clipboard.lock().expect("clipboard").clone()))
             }
 
-            fn write_transcript(&mut self, _: &str) -> Result<(), NativePasteError> {
+            fn write_transcript(&mut self, text: &str) -> Result<(), NativePasteError> {
+                *self.clipboard.lock().expect("clipboard") = text.to_owned();
                 Ok(())
             }
 
-            fn clipboard_holds(&mut self, _: &str) -> Result<bool, NativePasteError> {
-                Ok(true)
+            fn clipboard_holds(&mut self, text: &str) -> Result<bool, NativePasteError> {
+                Ok(*self.clipboard.lock().expect("clipboard") == text)
             }
 
-            fn restore_clipboard(&mut self, (): ()) -> Result<(), NativePasteError> {
+            fn restore_clipboard(&mut self, snapshot: String) -> Result<(), NativePasteError> {
+                self.restore_entered.send(()).expect("restoration observer");
                 self.release_restore
                     .recv_timeout(Duration::from_secs(10))
                     .expect("release restore");
-                self.restored.send(()).expect("restoration observer");
+                *self.clipboard.lock().expect("clipboard") = snapshot;
                 Ok(())
             }
 
@@ -518,30 +552,66 @@ mod tests {
             }
         }
 
+        let clipboard = Arc::new(Mutex::new("previous clipboard".to_owned()));
+        let (restore_entered, restoration) = mpsc::channel();
         let (release_restore, restore_release) = mpsc::channel();
-        let (restored, restoration) = mpsc::channel();
-        let queue = Arc::new(PasteQueue::new(Desktop {
-            release_restore: restore_release,
-            restored,
-        }));
+        let stopping = CancellationToken::default();
+        let helper = Arc::new(super::HelperOutput::new(
+            Desktop {
+                clipboard: Arc::clone(&clipboard),
+                restore_entered,
+                release_restore: restore_release,
+            },
+            stopping.clone(),
+        ));
         let (answer, response) = mpsc::channel();
-        let worker = thread::spawn(move || {
-            let notice =
-                super::helper_output(&queue, "dictated words", &CancellationToken::default());
-            answer.send(notice).expect("paste response");
-        });
+        let caller = {
+            let helper = Arc::clone(&helper);
+            thread::spawn(move || {
+                let notice = helper.output("dictated words", &CancellationToken::default());
+                let _ = answer.send(notice);
+            })
+        };
         let answered_before_restore = response.recv_timeout(Duration::from_secs(5));
-        release_restore.send(()).expect("release restore");
-        worker.join().expect("paste caller");
-        restoration
-            .recv_timeout(Duration::from_secs(5))
-            .expect("clipboard restored");
+        let reached_restore = restoration.recv_timeout(Duration::from_secs(5));
+        let clipboard_during_restore = clipboard.lock().expect("clipboard").clone();
+        stopping.cancel();
+        let refused_after_shutdown = helper.output("late words", &CancellationToken::default());
+        let (started, shutdown_started) = mpsc::channel();
+        let (finished, shutdown_finished) = mpsc::channel();
+        let shutdown = {
+            let helper = Arc::clone(&helper);
+            thread::spawn(move || {
+                let _ = started.send(());
+                helper.shutdown();
+                let _ = finished.send(());
+            })
+        };
+        let shutdown_began = shutdown_started.recv_timeout(Duration::from_secs(5));
+        let finished_while_held = shutdown_finished.recv_timeout(Duration::from_millis(100));
+
+        // Release and join before asserting so a failed observation cannot strand workers.
+        let _ = release_restore.send(());
+        let caller_result = caller.join();
+        let shutdown_result = shutdown.join();
+        let finished_after_release = shutdown_finished.recv_timeout(Duration::from_secs(5));
+
         assert_eq!(answered_before_restore, Ok(OutputNotice::Pasted));
+        assert_eq!(reached_restore, Ok(()));
+        assert_eq!(clipboard_during_restore, "dictated words");
+        assert_eq!(refused_after_shutdown, OutputNotice::PasteFailed);
+        assert_eq!(shutdown_began, Ok(()));
+        assert_eq!(finished_while_held, Err(mpsc::RecvTimeoutError::Timeout));
+        caller_result.expect("paste caller");
+        shutdown_result.expect("shutdown caller");
+        assert_eq!(finished_after_release, Ok(()));
+        assert_eq!(*clipboard.lock().expect("clipboard"), "previous clipboard");
     }
 
     #[cfg(target_os = "linux")]
     mod wayland {
         use std::{
+            collections::VecDeque,
             sync::{
                 Arc, Mutex,
                 atomic::{AtomicUsize, Ordering},
@@ -558,27 +628,36 @@ mod tests {
             WaylandOutputPortal,
         };
 
-        /// A coordinator whose portal worker answers every paste with `reply`
-        /// and counts the pastes it was asked to perform.
+        enum PortalAnswer {
+            Prepare(Result<(), WaylandPortalError>),
+            Paste(PasteOutcome<WaylandPortalError>),
+        }
+
         fn scripted(
-            reply: PasteOutcome<WaylandPortalError>,
+            answers: impl IntoIterator<Item = PortalAnswer>,
         ) -> (OutputCoordinator, Arc<AtomicUsize>) {
+            let mut answers: VecDeque<_> = answers.into_iter().collect();
             let pastes = Arc::new(AtomicUsize::new(0));
+            let restore_dir = tempfile::tempdir().expect("restore token directory");
+            let restore_token_path = restore_dir.path().join("restore-token");
             let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
             let worker = {
                 let pastes = Arc::clone(&pastes);
                 thread::spawn(move || {
+                    let _restore_dir = restore_dir;
                     while let Some(command) = receiver.blocking_recv() {
                         match command {
                             WaylandOutputCommand::Paste { reply: sender, .. } => {
+                                let Some(PortalAnswer::Paste(outcome)) = answers.pop_front() else {
+                                    panic!("expected a scripted paste answer");
+                                };
                                 pastes.fetch_add(1, Ordering::SeqCst);
-                                sender.send(reply).expect("paste reply");
+                                sender.send(outcome).expect("paste reply");
                             }
                             WaylandOutputCommand::Prepare { reply: sender, .. } => {
-                                let result = match reply {
-                                    PasteOutcome::Failed(error) => Err(error),
-                                    PasteOutcome::Cancelled => Err(WaylandPortalError::Cancelled),
-                                    _ => Ok(()),
+                                let Some(PortalAnswer::Prepare(result)) = answers.pop_front()
+                                else {
+                                    panic!("expected a scripted preparation answer");
                                 };
                                 sender.send(result).expect("prepare reply");
                             }
@@ -595,9 +674,7 @@ mod tests {
                     commands,
                     available: true,
                     worker: Mutex::new(Some(worker)),
-                    restore_token: RemoteDesktopRestoreTokenStore::new(
-                        std::env::temp_dir().join("whispernow-no-restore-token"),
-                    ),
+                    restore_token: RemoteDesktopRestoreTokenStore::new(restore_token_path),
                     consent: Mutex::new(None),
                 })),
                 stopping: CancellationToken::default(),
@@ -621,7 +698,7 @@ mod tests {
                     OutputNotice::PasteFailed,
                 ),
             ] {
-                let (coordinator, pastes) = scripted(reply);
+                let (coordinator, pastes) = scripted([PortalAnswer::Paste(reply)]);
                 assert_eq!(
                     coordinator.output("transcript", &CancellationToken::default()),
                     expected,
@@ -634,7 +711,7 @@ mod tests {
 
         #[test]
         fn empty_stopping_and_cancelled_output_never_reach_the_portal() {
-            let (coordinator, pastes) = scripted(PasteOutcome::PastedAndRestored);
+            let (coordinator, pastes) = scripted([]);
             assert_eq!(
                 coordinator.output("", &CancellationToken::default()),
                 OutputNotice::PasteFailed
@@ -656,6 +733,7 @@ mod tests {
 
         #[test]
         fn a_portal_without_a_worker_reports_the_capability_unavailable() {
+            let restore_dir = tempfile::tempdir().expect("restore token directory");
             let (commands, _receiver) = tokio::sync::mpsc::unbounded_channel();
             let coordinator = OutputCoordinator {
                 operation: Some(OutputOperation::Wayland(WaylandOutputPortal {
@@ -663,7 +741,7 @@ mod tests {
                     available: false,
                     worker: Mutex::new(None),
                     restore_token: RemoteDesktopRestoreTokenStore::new(
-                        std::env::temp_dir().join("whispernow-no-restore-token"),
+                        restore_dir.path().join("restore-token"),
                     ),
                     consent: Mutex::new(None),
                 })),
@@ -685,41 +763,38 @@ mod tests {
 
         #[test]
         fn the_last_portal_answer_decides_the_paste_consent() {
-            for (reply, expected) in [
-                (PasteOutcome::PastedAndRestored, PermissionStatus::Granted),
-                (
-                    PasteOutcome::Failed(WaylandPortalError::PermissionDenied),
-                    PermissionStatus::Denied,
-                ),
-                (
-                    PasteOutcome::Failed(WaylandPortalError::PortalUnavailable),
-                    PermissionStatus::Unavailable,
-                ),
-                (
-                    PasteOutcome::Failed(WaylandPortalError::Backend),
-                    PermissionStatus::NotDetermined,
-                ),
-            ] {
-                let (coordinator, pastes) = scripted(reply);
-                assert_eq!(
-                    coordinator.remote_desktop_consent(),
-                    Some(PermissionStatus::NotDetermined),
-                    "without a restore token or an answer, consent is not known"
-                );
-                assert_eq!(
-                    coordinator.request_remote_desktop_consent(),
-                    Some(expected),
-                    "prepare {reply:?}"
-                );
-                assert_eq!(pastes.load(Ordering::SeqCst), 0, "asking never pastes");
-                coordinator.output("transcript", &CancellationToken::default());
-                assert_eq!(
-                    coordinator.remote_desktop_consent(),
-                    Some(expected),
-                    "paste {reply:?}"
-                );
-                coordinator.shutdown();
-            }
+            let (coordinator, pastes) = scripted([
+                PortalAnswer::Prepare(Ok(())),
+                PortalAnswer::Paste(PasteOutcome::Failed(WaylandPortalError::PermissionDenied)),
+                PortalAnswer::Paste(PasteOutcome::Failed(WaylandPortalError::Backend)),
+                PortalAnswer::Paste(PasteOutcome::Failed(WaylandPortalError::PortalUnavailable)),
+            ]);
+            let initial = coordinator.remote_desktop_consent();
+            let prepared = coordinator.request_remote_desktop_consent();
+            let pastes_after_preparation = pastes.load(Ordering::SeqCst);
+            let denied = coordinator.output("transcript", &CancellationToken::default());
+            let consent_after_denial = coordinator.remote_desktop_consent();
+            let backend_failed = coordinator.output("transcript", &CancellationToken::default());
+            let consent_after_backend = coordinator.remote_desktop_consent();
+            let unavailable = coordinator.output("transcript", &CancellationToken::default());
+            let consent_after_unavailable = coordinator.remote_desktop_consent();
+            coordinator.shutdown();
+
+            assert_eq!(initial, Some(PermissionStatus::NotDetermined));
+            assert_eq!(prepared, Some(PermissionStatus::Granted));
+            assert_eq!(
+                pastes_after_preparation, 0,
+                "asking for consent never pastes"
+            );
+            assert_eq!(denied, OutputNotice::PermissionDenied);
+            assert_eq!(consent_after_denial, Some(PermissionStatus::Denied));
+            assert_eq!(backend_failed, OutputNotice::PasteFailed);
+            assert_eq!(consent_after_backend, Some(PermissionStatus::Denied));
+            assert_eq!(unavailable, OutputNotice::CapabilityUnavailable);
+            assert_eq!(
+                consent_after_unavailable,
+                Some(PermissionStatus::Unavailable)
+            );
         }
     }
 }

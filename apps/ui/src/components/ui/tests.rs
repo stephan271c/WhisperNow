@@ -6,7 +6,7 @@ use super::{
     Banner, ConfirmButton, Field, IconButton, IconName, ProgressBar, SettingRow, TextInput, Toggle,
     Tone,
 };
-use crate::test_support::{click_rendered, element, focused, mount_rendered, tag};
+use crate::test_support::{click_rendered, element, focused, mount_rendered, tag, text};
 
 /// Renders `app` inside a runtime so its event handlers can be created.
 fn render(app: fn() -> Element) -> String {
@@ -105,16 +105,23 @@ fn progress_bar_always_has_a_name_and_a_clamped_value() {
 #[test]
 fn progress_bar_describes_known_and_unknown_download_sizes() {
     let known = dioxus_ssr::render_element(rsx! {
-        ProgressBar { label: "Model download", downloaded: 2_048, total: Some(4_096) }
+        div { id: "download-size",
+            ProgressBar { label: "Model download", downloaded: 2_048, total: Some(4_096) }
+        }
     });
     assert!(known.contains("aria-valuetext=\"2.0 KiB of 4.0 KiB downloaded\""));
-    assert!(known.contains("class=\"download-phase\">2.0 KiB of 4.0 KiB downloaded</p>"));
+    assert_eq!(
+        text(&known, "download-size").trim(),
+        "2.0 KiB of 4.0 KiB downloaded"
+    );
 
     let unknown = dioxus_ssr::render_element(rsx! {
-        ProgressBar { label: "Model download", downloaded: 2_048, total: None }
+        div { id: "download-size",
+            ProgressBar { label: "Model download", downloaded: 2_048, total: None }
+        }
     });
     assert!(unknown.contains("aria-valuetext=\"2.0 KiB downloaded\""));
-    assert!(unknown.contains("class=\"download-phase\">2.0 KiB downloaded</p>"));
+    assert_eq!(text(&unknown, "download-size").trim(), "2.0 KiB downloaded");
 }
 
 #[test]

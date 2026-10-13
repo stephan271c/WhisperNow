@@ -67,12 +67,12 @@ impl LocalCleanupEngine {
         between_passes: impl FnMut(&[u8]) -> ControlFlow<()>,
     ) -> Result<LocalDecodeOutput, EngineError> {
         let rendered = local::render_prompt(&self.model.bos_text(), prompt);
-        let prompt_tokens = self
+        let tokens = self
             .model
             .tokenize(rendered.as_bytes(), true)
-            .map_err(EngineError::Decode)?
-            .len();
-        let context_size = prompt_tokens
+            .map_err(EngineError::Decode)?;
+        let context_size = tokens
+            .len()
             .saturating_add(max_output_tokens)
             .saturating_add(2)
             .max(MIN_CONTEXT)
@@ -82,8 +82,8 @@ impl LocalCleanupEngine {
         let context = self.context(context_size)?;
         local::decode(
             context,
-            &LocalDecodeRequest {
-                prompt: &rendered,
+            LocalDecodeRequest {
+                prompt: tokens,
                 max_tokens: max_output_tokens,
                 draft: Some(draft.as_str()),
             },

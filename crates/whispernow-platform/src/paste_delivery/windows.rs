@@ -319,15 +319,23 @@ mod tests {
 
     #[test]
     fn fixed_shortcuts_press_and_release_each_key_in_reverse_order() {
-        for keys in [
-            PasteKeys::ControlV,
-            PasteKeys::ControlShiftV,
-            PasteKeys::ShiftInsert,
+        for (keys, expected) in [
+            (PasteKeys::ControlV, &[VK_CONTROL, VK_V][..]),
+            (PasteKeys::ControlShiftV, &[VK_CONTROL, VK_SHIFT, VK_V][..]),
+            (PasteKeys::ShiftInsert, &[VK_SHIFT, VK_INSERT][..]),
         ] {
             let strokes = shortcut_strokes(keys);
             assert!(!strokes.is_empty());
             assert_eq!(strokes.len() % 2, 0);
             let (pressed, released) = strokes.split_at(strokes.len() / 2);
+            assert_eq!(
+                pressed
+                    .iter()
+                    .map(|stroke| stroke.virtual_key)
+                    .collect::<Vec<_>>(),
+                expected,
+                "{keys:?} pressed the wrong chord"
+            );
             assert!(pressed.iter().all(|stroke| !stroke.key_up));
             assert!(released.iter().all(|stroke| stroke.key_up));
             for (down, up) in pressed.iter().zip(released.iter().rev()) {

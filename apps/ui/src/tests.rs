@@ -48,24 +48,16 @@ fn notice_message(management: &ManagementState) -> Option<&str> {
         .map(|notice| notice.message.as_str())
 }
 
-fn history_unavailable_error() -> AppError {
-    AppError {
-        category: ErrorCategory::HistoryUnavailable,
-        code: "history_unavailable".to_owned(),
-        summary: "History storage is unavailable".to_owned(),
-    }
-}
-
 #[test]
-fn failed_refresh_keeps_loaded_rows_but_unavailable_storage_degrades() {
+fn failed_refresh_keeps_loaded_rows() {
     let mut management = ManagementState::default();
     show_history(&mut management, vec![history_entry(10, "loaded")]);
 
     let (request_id, _) = management.history_request();
     management.fail_history_refresh(request_id, &crate::client::connection_error());
     assert_eq!(
-        management.history.len(),
-        1,
+        management.history,
+        [history_entry(10, "loaded")],
         "a transient failure keeps rows"
     );
     assert_eq!(
@@ -73,15 +65,7 @@ fn failed_refresh_keeps_loaded_rows_but_unavailable_storage_degrades() {
         Some("The desktop connection failed")
     );
     assert!(management.history_unavailable.is_none());
-
-    let (request_id, _) = management.history_request();
-    management.fail_history_refresh(request_id, &history_unavailable_error());
-    assert!(management.history.is_empty());
-    assert!(!management.history_loaded());
-    assert_eq!(
-        management.history_unavailable.as_deref(),
-        Some("History storage is unavailable")
-    );
+    assert!(management.history_loaded());
 }
 
 fn loaded_management(settings: Settings) -> ManagementState {
@@ -154,6 +138,7 @@ fn audio_level_is_scoped_by_the_single_recording_phase() {
         peak: 0.8,
         elapsed_ms: 0,
     });
+    assert!((state.audio_rms - 0.4).abs() < f32::EPSILON);
     state.apply_event(state_event(crate::test_support::PROCESSING, |_| {}));
     assert!(state.audio_rms.abs() < f32::EPSILON);
 }

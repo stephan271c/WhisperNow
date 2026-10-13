@@ -468,11 +468,11 @@ mod tests {
         let (chunks_tx, chunks_rx) = sync_channel(1);
         let (pool_tx, pool_rx) = sync_channel(1);
         pool_tx
-            .send(Vec::with_capacity(4))
+            .send(Vec::with_capacity(6))
             .expect("seed buffer pool");
         let dropped = AtomicUsize::new(0);
         copy_callback_samples(
-            &[i16::MIN, 0, i16::MAX, i16::MAX],
+            &[i16::MIN, -16_384, 0, 16_384, i16::MAX, 0],
             NonZeroUsize::new(2).expect("channels"),
             &chunks_tx,
             &pool_rx,
@@ -480,9 +480,15 @@ mod tests {
             &dropped,
         );
         let chunk = chunks_rx.recv().expect("callback chunk");
-        assert_eq!(chunk.len(), 4);
-        assert!((chunk[0] + 1.0).abs() < f32::EPSILON);
-        assert!(chunk[2] <= 1.0);
+        assert_eq!(chunk.len(), 6);
+        // The positive i16 maximum is one 1/32768 step below full scale.
+        let expected = [-1.0, -0.5, 0.0, 0.5, 0.999_969_5, 0.0];
+        for (index, (&actual, expected)) in chunk.iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < f32::EPSILON,
+                "sample {index}: expected {expected}, got {actual}"
+            );
+        }
         assert_eq!(dropped.load(Ordering::Relaxed), 0);
     }
 

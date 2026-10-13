@@ -71,7 +71,13 @@ pub(super) fn ShortcutCapture(
     let mut status = use_signal(|| CaptureStatus::Idle);
     // While listening, the desktop's global shortcuts are suspended so pressing
     // the current shortcut is captured instead of starting a recording.
-    use_effect(move || crate::client::request_shortcut_capture(status().is_capturing()));
+    use_effect(use_reactive!(|disabled| {
+        let capturing = status().is_capturing();
+        if disabled && capturing {
+            status.set(CaptureStatus::Idle);
+        }
+        crate::client::request_shortcut_capture(capturing && !disabled);
+    }));
     use_drop(|| crate::client::request_shortcut_capture(false));
     let parts = shortcut.as_ref().map_or_else(Vec::new, shortcut_parts);
     let help_id = format!("{id}-help");
@@ -120,7 +126,9 @@ pub(super) fn ShortcutCapture(
                 aria_pressed: capturing,
                 disabled,
                 onclick: move |_| {
-                    status.set(CaptureStatus::Listening);
+                    if !disabled {
+                        status.set(CaptureStatus::Listening);
+                    }
                 },
                 onblur: move |_| {
                     if !matches!(status(), CaptureStatus::Captured(_)) {
@@ -128,7 +136,7 @@ pub(super) fn ShortcutCapture(
                     }
                 },
                 onkeydown: move |event| {
-                    if !status().is_capturing() {
+                    if disabled || !status().is_capturing() {
                         return;
                     }
                     let modifiers = event.modifiers();

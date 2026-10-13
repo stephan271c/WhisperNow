@@ -87,9 +87,12 @@ pub fn app() -> Element {
             return;
         }
 
-        match client::call("get_update_state").await {
-            Ok(snapshot) => state.write().apply_update_state(snapshot),
-            Err(error) => state.write().report_update_command_failure(error.summary),
+        let answer = client::call("get_update_state").await;
+        if state.peek().update_snapshot.is_none() {
+            match answer {
+                Ok(snapshot) => state.write().apply_update_state(snapshot),
+                Err(error) => state.write().report_update_command_failure(error.summary),
+            }
         }
         context.refresh_all();
     });

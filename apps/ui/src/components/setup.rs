@@ -15,7 +15,9 @@ use super::labels::{self, format_bytes};
 use super::microphone_test::percent;
 use super::models::{DownloadProgress, ModelLanguages};
 use super::ui::focus::take_focus;
-use super::ui::{Banner, Button, ButtonVariant, Icon, IconName, Segmented, ShortcutLabel, Tone};
+use super::ui::{
+    Banner, Button, ButtonVariant, Field, Icon, IconName, Segmented, ShortcutLabel, Tone,
+};
 use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture};
 use crate::blocked_reason::DisabledReason;
 use crate::{BlockedReason, NoticeScope, Route, SettingsRoute, SetupTest, UiContext, UiOperation};
@@ -382,7 +384,9 @@ fn ModelStep(selected: ModelId) -> Element {
     let context = use_context::<UiContext>();
     let management = context.management;
     let mut show_all = use_signal(|| false);
-    let download_blocked = context.blocked(UiOperation::DownloadModel);
+    let download_blocked = context
+        .blocked(UiOperation::DownloadModel)
+        .or(context.settings_pending());
     let models = management
         .read()
         .speech_models()
@@ -438,10 +442,18 @@ fn ModelChoice(
     let slug = id.as_str().replace('.', "-");
     let name = model.display_name.clone();
     let download = context.active_download(&id);
+    let edit_blocked = context.settings_pending();
+    let facts_id = format!("setup-model-{slug}-facts");
+    let describedby = if edit_blocked.is_some() {
+        format!("{facts_id} setup-models-disabled-reason")
+    } else {
+        facts_id.clone()
+    };
     rsx! { div { class: "choice-row setup-model",
         label { class: "setup-model-choice",
-            input { r#type: "radio", name: "setup-model", value: model.id.as_str(), checked,
-                aria_describedby: "setup-model-{slug}-facts",
+            input { id: "setup-model-{slug}", r#type: "radio", name: "setup-model", value: model.id.as_str(), checked,
+                disabled: edit_blocked.is_some(),
+                aria_describedby: describedby,
                 onchange: { let model_id = model.id.clone(); move |_| management.write().edit_setup(|setup| setup.model_id = model_id.clone()) }
             }
             span { class: "model-name",
@@ -463,6 +475,9 @@ fn ModelChoice(
                     disabled: download_blocked.is_some(),
                     aria_describedby: download_blocked.as_ref().map(|_| "setup-models-disabled-reason"),
                     onclick: move |_| {
+                        if management.peek().settings_pending() {
+                            return;
+                        }
                         management.write().edit_setup(|setup| setup.model_id = id.clone());
                         context.download_model(id.clone());
                     },
@@ -499,23 +514,31 @@ fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
     let context = use_context::<UiContext>();
     let mut management = context.management;
     let conflict = shortcut_conflict(&checkpoint.recording_shortcut);
+    let edit_blocked = context.settings_pending();
+    let disabled = edit_blocked.is_some();
     rsx! { div { class: "setup-content",
         p { class: "field-help", "Hold records while you hold the keys; toggle starts on one press and stops on the next." }
         fieldset { class: "shortcut-settings",
+            aria_describedby: disabled.then_some("setup-shortcuts-disabled-reason"),
             legend { "Recording shortcut" }
-            Segmented { label: "Recording mode",
-                value: choice_value(&RECORDING_MODES, &checkpoint.recording_mode),
-                options: RECORDING_MODES.iter().map(|(_, value, label)| (*value, *label)).collect::<Vec<_>>(),
-                onchange: move |value: &'static str| if let Some(mode) = chosen(&RECORDING_MODES, value) {
-                    management.write().edit_setup(|setup| setup.recording_mode = mode);
-                },
+            Field { id: "setup-recording-mode", label: "Recording mode",
+                Segmented {
+                    disabled,
+                    value: choice_value(&RECORDING_MODES, &checkpoint.recording_mode),
+                    options: RECORDING_MODES.iter().map(|(_, value, label)| (*value, *label)).collect::<Vec<_>>(),
+                    onchange: move |value: &'static str| if let Some(mode) = chosen(&RECORDING_MODES, value) {
+                        management.write().edit_setup(|setup| setup.recording_mode = mode);
+                    },
+                }
             }
             ShortcutCapture { id: "setup-recording-shortcut-capture", label: "recording shortcut", shortcut: Some(checkpoint.recording_shortcut.clone()),
+                disabled,
                 oncapture: move |shortcut| management.write().edit_setup(|setup| setup.recording_shortcut = shortcut) }
             if let Some(conflict) = conflict {
                 Banner { tone: Tone::Warning, p { "{conflict}" } }
             }
         }
+        DisabledReason { id: "setup-shortcuts-disabled-reason", reason: edit_blocked }
         aside { class: "setup-tips", aria_labelledby: "setup-tips-title",
             h3 { id: "setup-tips-title", "Tips" }
             ul {

@@ -150,7 +150,17 @@ impl Page {
     }
 
     pub(crate) fn key(&mut self, id: &str, key: Key) -> &mut Self {
-        let mutations = key_rendered(&mut self.dom, &self.rendered, id, key);
+        self.key_with_code(id, key, Code::Unidentified, Modifiers::empty())
+    }
+
+    pub(crate) fn key_with_code(
+        &mut self,
+        id: &str,
+        key: Key,
+        code: Code,
+        modifiers: Modifiers,
+    ) -> &mut Self {
+        let mutations = key_rendered(&mut self.dom, &self.rendered, id, key, code, modifiers);
         self.keep(mutations);
         self.settle()
     }
@@ -402,6 +412,8 @@ pub(crate) fn key_rendered(
     rendered: &Mutations,
     target: &str,
     key: Key,
+    code: Code,
+    modifiers: Modifiers,
 ) -> Mutations {
     fire_rendered(
         dom,
@@ -410,10 +422,10 @@ pub(crate) fn key_rendered(
         "keydown",
         PlatformEventData::new(Box::new(SerializedKeyboardData::new(
             key,
-            Code::Unidentified,
+            code,
             Location::Standard,
             false,
-            Modifiers::empty(),
+            modifiers,
             false,
         ))),
     )

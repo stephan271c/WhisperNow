@@ -116,8 +116,9 @@ pub trait DecodeContext {
 }
 
 pub struct LocalDecodeRequest<'request> {
-    /// The rendered prompt (`render_prompt`).
-    pub prompt: &'request str,
+    /// Rendered prompt tokens from the context's model, without adding BOS and with
+    /// special-token text parsed.
+    pub prompt: Vec<Token>,
     pub max_tokens: usize,
     /// `Some` decodes speculatively with this text as the transcript draft, which may be
     /// empty; `None` decodes one token at a time.
@@ -128,7 +129,7 @@ impl fmt::Debug for LocalDecodeRequest<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("LocalDecodeRequest")
-            .field("prompt_byte_count", &self.prompt.len())
+            .field("prompt_token_count", &self.prompt.len())
             .field("max_tokens", &self.max_tokens)
             .field("draft_byte_count", &self.draft.map(str::len))
             .finish()
@@ -159,7 +160,8 @@ pub struct LocalDecodeOutput {
     pub accepted: usize,
     /// Batches decoded after the prompt.
     pub passes: usize,
-    /// Prompt decoding through the first sampled token.
+    /// Prompt decoding through the first sampled token; excludes full-prompt
+    /// tokenization and context creation.
     pub prompt_time: Duration,
     /// Everything after the first sampled token.
     pub generation_time: Duration,
@@ -184,18 +186,18 @@ impl fmt::Debug for LocalDecodeOutput {
 
 /// Decodes one reply. `between_passes` sees the reply so far after the prompt and after
 /// every pass, and stops the decode by breaking.
-///
-/// # Errors
-/// When the prompt cannot be tokenized or does not fit, the model fails, or
-/// `between_passes` stops the decode.
 pub fn decode<C: DecodeContext>(
     context: &mut C,
-    request: &LocalDecodeRequest<'_>,
+    request: LocalDecodeRequest<'_>,
     mut between_passes: impl FnMut(&[u8]) -> ControlFlow<()>,
 ) -> Result<LocalDecodeOutput, LocalDecodeError> {
     let started = Instant::now();
+    let LocalDecodeRequest {
+        prompt,
+        max_tokens,
+        draft,
+    } = request;
     context.clear();
-    let prompt = context.tokenize(request.prompt.as_bytes(), true)?;
     let n_ctx = context.context_size();
     if prompt.is_empty() || prompt.len() + 1 >= n_ctx {
         return Err(LocalDecodeError::PromptTooLong);
@@ -245,8 +247,8 @@ pub fn decode<C: DecodeContext>(
         sampled: first,
         reply: Reply::default(),
     };
-    let mut finish = state.reply.push(context, first, &state.cached, request);
-    let mut aligner = request.draft.map(WordAligner::new);
+    let mut finish = state.reply.push(context, first, &state.cached, max_tokens);
+    let mut aligner = draft.map(WordAligner::new);
     let mut passes = 0;
     let finish = loop {
         if let Some(finish) = finish {
@@ -256,7 +258,7 @@ pub fn decode<C: DecodeContext>(
             return Err(LocalDecodeError::Stopped);
         }
         passes += 1;
-        finish = state.pass(context, &mut sampler, aligner.as_mut(), request)?;
+        finish = state.pass(context, &mut sampler, aligner.as_mut(), max_tokens)?;
     };
     let reply = state.reply;
     Ok(LocalDecodeOutput {
@@ -296,7 +298,7 @@ impl Reply {
         context: &C,
         token: Token,
         cached: &[Token],
-        request: &LocalDecodeRequest<'_>,
+        max_tokens: usize,
     ) -> Option<LocalFinish> {
         self.text.extend(context.piece(token));
         self.tokens.push(token);
@@ -304,7 +306,7 @@ impl Reply {
             Some(LocalFinish::EndOfTurn)
         } else if cached.len() + 1 >= context.context_size() {
             Some(LocalFinish::ContextFull)
-        } else if self.tokens.len() >= request.max_tokens {
+        } else if self.tokens.len() >= max_tokens {
             Some(LocalFinish::OutputLimit)
         } else {
             None
@@ -320,10 +322,10 @@ impl State {
         context: &mut C,
         sampler: &mut Sampler,
         aligner: Option<&mut WordAligner>,
-        request: &LocalDecodeRequest<'_>,
+        max_tokens: usize,
     ) -> Result<Option<LocalFinish>, LocalDecodeError> {
         let draft = match aligner {
-            Some(aligner) => self.draft(context, aligner, request)?,
+            Some(aligner) => self.draft(context, aligner, max_tokens)?,
             None => Vec::new(),
         };
         let position = self.cached.len();
@@ -332,7 +334,7 @@ impl State {
             self.cached.push(self.sampled);
             let next = sampler.sample(context.logits(0)?);
             self.sampled = next;
-            return Ok(self.reply.push(context, next, &self.cached, request));
+            return Ok(self.reply.push(context, next, &self.cached, max_tokens));
         }
 
         self.reply.drafted += draft.len();
@@ -361,7 +363,7 @@ impl State {
         context.remove_from(self.cached.len())?;
         self.sampled = ids[ids.len() - 1];
         for &token in &ids {
-            if let Some(finish) = self.reply.push(context, token, &self.cached, request) {
+            if let Some(finish) = self.reply.push(context, token, &self.cached, max_tokens) {
                 return Ok(Some(finish));
             }
         }
@@ -374,12 +376,12 @@ impl State {
         &self,
         context: &C,
         aligner: &mut WordAligner,
-        request: &LocalDecodeRequest<'_>,
+        max_tokens: usize,
     ) -> Result<Vec<Token>, LocalDecodeError> {
         // Room for the sampled token and one more, and the reply's last token sampled
         // after the draft.
         let room = context.context_size().saturating_sub(self.cached.len() + 2);
-        let remaining = request.max_tokens.saturating_sub(self.reply.tokens.len());
+        let remaining = max_tokens.saturating_sub(self.reply.tokens.len());
         let limit = if remaining > 0 {
             room.min(remaining - 1)
         } else {

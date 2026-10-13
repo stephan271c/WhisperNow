@@ -53,6 +53,9 @@ impl UiContext {
     }
 
     pub(crate) fn save_setup_edit(mut self, edit: impl FnOnce(&mut SetupCheckpoint)) {
+        if self.management.peek().settings_pending() {
+            return;
+        }
         let mut request = self
             .management
             .peek()

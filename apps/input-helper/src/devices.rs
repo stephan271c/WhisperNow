@@ -2,7 +2,7 @@
 //! presses paste shortcuts.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{self, BufRead as _, Read, Write},
     os::fd::AsRawFd,
@@ -14,7 +14,7 @@ use std::{
 };
 
 use crate::{
-    chord::ChordTracker,
+    chord::{ChordTracker, ChordTransition, MAX_KEY_CODE},
     virtual_keyboard::{self, PasteShortcut, VirtualKeyboard},
 };
 
@@ -27,6 +27,11 @@ const SYN_DROPPED: u16 = 3;
 const EVIOCSCLOCKID: u64 = 0x4004_45a0;
 /// `EVIOCGNAME(256)`, `_IOC(_IOC_READ, 'E', 0x06, 256)`.
 const EVIOCGNAME: u64 = 0x8100_4506;
+const KEY_STATE_BYTES: usize = (MAX_KEY_CODE as usize + 1) / 8;
+/// `EVIOCGKEY(KEY_STATE_BYTES)`, `_IOC(_IOC_READ, 'E', 0x18, KEY_STATE_BYTES)`.
+const EVIOCGKEY: u64 = 0x8060_4518;
+/// `EVIOCGBIT(EV_KEY, KEY_STATE_BYTES)`.
+const EVIOCGBIT_KEY: u64 = 0x8060_4521;
 const RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 /// Shift, Ctrl, Alt and Super, left and right. A paste waits until none is
 /// physically held, because a held one would combine with the shortcut.
@@ -53,29 +58,36 @@ enum Message {
 pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> ExitCode {
     let (sender, messages) = mpsc::channel();
     let stdin_sender = sender.clone();
-    thread::spawn(move || {
-        for line in io::stdin().lock().lines().map_while(Result::ok) {
-            if stdin_sender.send(Message::Command(line)).is_err() {
-                return;
-            }
-        }
-        let _ = stdin_sender.send(Message::InputClosed);
-    });
+    thread::spawn(move || read_commands(&stdin_sender));
 
-    let mut open = HashSet::new();
+    let mut open = HashMap::new();
     let mut next_device = 0;
-    scan(&mut open, &mut next_device, &sender);
-    if open.is_empty() && keyboard.is_none() {
-        eprintln!("no input device is readable; install this helper setgid `input`");
+    scan(&mut open, &mut next_device, &sender, &mut tracker);
+    let mut available = keyboard.is_some() || tracker.can_watch(open.values().flatten().copied());
+    if !available {
+        eprintln!(
+            "no readable input devices support the chord; install this helper setgid `input`"
+        );
         return ExitCode::from(2);
     }
     let mut next_scan = Instant::now() + RESCAN_INTERVAL;
+    let mut devices_changed = false;
     let mut pending: Option<(PasteShortcut, Instant)> = None;
     let mut stdout = io::stdout().lock();
-    if keyboard.is_some() && reply(&mut stdout, "ready").is_err() {
+    if reply_availability(&mut stdout, true, &tracker).is_err() {
         return ExitCode::SUCCESS;
     }
     loop {
+        if devices_changed && keyboard.is_none() {
+            let ready = tracker.can_watch(open.values().flatten().copied());
+            if ready != available {
+                available = ready;
+                if reply_availability(&mut stdout, ready, &tracker).is_err() {
+                    return ExitCode::SUCCESS;
+                }
+            }
+        }
+        devices_changed = false;
         if let (Some(keyboard), Some((shortcut, deadline))) = (&mut keyboard, pending) {
             let answer = if !tracker.holds_any(&MODIFIERS) {
                 Some(if keyboard.press(shortcut).is_ok() {
@@ -100,14 +112,14 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
             Ok(message) => message,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if Instant::now() >= next_scan {
-                    scan(&mut open, &mut next_device, &sender);
+                    devices_changed = scan(&mut open, &mut next_device, &sender, &mut tracker);
                     next_scan = Instant::now() + RESCAN_INTERVAL;
                 }
                 continue;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => return ExitCode::SUCCESS,
         };
-        let (released, millis) = match message {
+        let (transition, millis) = match message {
             Message::Key {
                 device,
                 code,
@@ -116,7 +128,7 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
             } => (tracker.key(device, code, value), millis),
             Message::Lost { device, path } => {
                 if let Some(path) = path {
-                    open.remove(&path);
+                    devices_changed = open.remove(&path).is_some();
                 }
                 (tracker.forget(device), monotonic_millis())
             }
@@ -135,14 +147,25 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
             }
             Message::InputClosed => return ExitCode::SUCCESS,
         };
-        if released
-            && writeln!(stdout, "{millis}")
-                .and_then(|()| stdout.flush())
-                .is_err()
-        {
-            return ExitCode::SUCCESS;
+        if let Some(transition) = transition {
+            let line = match transition {
+                ChordTransition::Pressed => format!("held {millis}"),
+                ChordTransition::Released => millis.to_string(),
+            };
+            if reply(&mut stdout, &line).is_err() {
+                return ExitCode::SUCCESS;
+            }
         }
     }
+}
+
+fn read_commands(sender: &mpsc::Sender<Message>) {
+    for line in io::stdin().lock().lines().map_while(Result::ok) {
+        if sender.send(Message::Command(line)).is_err() {
+            return;
+        }
+    }
+    let _ = sender.send(Message::InputClosed);
 }
 
 fn reply(stdout: &mut io::StdoutLock<'_>, line: &str) -> io::Result<()> {
@@ -150,28 +173,77 @@ fn reply(stdout: &mut io::StdoutLock<'_>, line: &str) -> io::Result<()> {
     stdout.flush()
 }
 
+fn reply_availability(
+    stdout: &mut io::StdoutLock<'_>,
+    available: bool,
+    tracker: &ChordTracker,
+) -> io::Result<()> {
+    reply(stdout, if available { "ready" } else { "unavailable" })?;
+    if available && tracker.chord_held() {
+        reply(stdout, &format!("held {}", monotonic_millis()))?;
+    }
+    Ok(())
+}
+
 /// Opens event devices not already being read, each on its own thread.
-fn scan(open: &mut HashSet<PathBuf>, next_device: &mut u32, sender: &mpsc::Sender<Message>) {
+fn scan(
+    open: &mut HashMap<PathBuf, HashSet<u16>>,
+    next_device: &mut u32,
+    sender: &mpsc::Sender<Message>,
+    tracker: &mut ChordTracker,
+) -> bool {
     let Ok(entries) = std::fs::read_dir("/dev/input") else {
-        return;
+        return false;
     };
+    let mut changed = false;
     for path in entries.flatten().map(|entry| entry.path()) {
         let is_event = path
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with("event"));
-        if !is_event || open.contains(&path) {
+        if !is_event || open.contains_key(&path) {
             continue;
         }
         let Some(file) = open_device(&path) else {
             continue;
         };
+        let mut supported = [0_u8; KEY_STATE_BYTES];
+        // SAFETY: EVIOCGBIT_KEY writes this device's supported key bits into
+        // `supported`, whose size is encoded in the request.
+        #[allow(
+            unsafe_code,
+            reason = "evdev key capabilities are only readable by ioctl"
+        )]
+        if unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGBIT_KEY as _, supported.as_mut_ptr()) } < 0
+        {
+            continue;
+        }
+        let mut held = [0_u8; KEY_STATE_BYTES];
+        // SAFETY: EVIOCGKEY reads this open device's key state into `held`,
+        // whose size is exactly the size encoded in the request.
+        #[allow(
+            unsafe_code,
+            reason = "evdev's initial key state is only readable by ioctl"
+        )]
+        if unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGKEY as _, held.as_mut_ptr()) } < 0 {
+            continue;
+        }
         let device = *next_device;
         *next_device += 1;
-        open.insert(path.clone());
+        for code in 1..=MAX_KEY_CODE {
+            if held[usize::from(code / 8)] & (1 << (code % 8)) != 0 {
+                tracker.key(device, code, 1);
+            }
+        }
+        let codes = (1..=MAX_KEY_CODE)
+            .filter(|code| supported[usize::from(code / 8)] & (1 << (code % 8)) != 0)
+            .collect();
+        open.insert(path.clone(), codes);
+        changed = true;
         let sender = sender.clone();
         thread::spawn(move || read_device(file, device, path, &sender));
     }
+    changed
 }
 
 /// Opens a device whose event times are `CLOCK_MONOTONIC`, the clock portal

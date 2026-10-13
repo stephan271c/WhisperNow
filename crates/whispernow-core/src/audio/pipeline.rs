@@ -144,6 +144,16 @@ mod tests {
                 .flat_map(AudioBlock::samples)
                 .all(|sample| sample.is_finite() && sample.abs() <= 1.0)
         );
+        // Exclude the 20 ms edge blocks for the sinc filter; allow 0.1% gain error.
+        for sample in output[1..output.len() - 1]
+            .iter()
+            .flat_map(AudioBlock::samples)
+        {
+            assert!(
+                (sample - 0.25).abs() < 0.000_25,
+                "interior sample should preserve +0.25, got {sample}"
+            );
+        }
         assert_eq!(levels.sample_count, u64::from(TARGET_SAMPLE_RATE));
         assert!(levels.peak <= 1.0);
     }

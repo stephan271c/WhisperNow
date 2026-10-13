@@ -21,20 +21,7 @@ pub struct ClearDataError {
 impl AppPaths {
     /// The fixed targets that currently exist.
     pub fn data_locations(&self) -> Result<Vec<DataLocation>, ClearDataError> {
-        let mut locations = Vec::new();
-        for (category, path) in self.fixed_targets()? {
-            match fs::symlink_metadata(&path) {
-                Ok(_) => locations.push(DataLocation { category, path }),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(ClearDataError {
-                        category,
-                        kind: error.kind(),
-                    });
-                }
-            }
-        }
-        Ok(locations)
+        self.inspect_targets(&ClearDataCategory::ALL)
     }
 
     /// Retained recordings are removed before the `SQLite` lifecycle database; if they cannot
@@ -44,9 +31,10 @@ impl AppPaths {
         categories: &[ClearDataCategory],
     ) -> Result<Vec<ClearDataItem>, ClearDataError> {
         let cuda_pack = self.cuda_pack_dir();
-        let targets = self.data_locations()?.into_iter().filter(|location| {
-            categories.contains(&location.category) && location.path != cuda_pack
-        });
+        let targets = self
+            .inspect_targets(categories)?
+            .into_iter()
+            .filter(|location| location.path != cuda_pack);
         let mut retained_audio_removed = true;
         let mut entries = Vec::new();
         for DataLocation { category, path } in targets {
@@ -75,33 +63,62 @@ impl AppPaths {
         .any(|database| database == path)
     }
 
-    /// Fixed [`AppPaths`] targets plus every settings file moved aside.
-    fn fixed_targets(&self) -> Result<Vec<(ClearDataCategory, PathBuf)>, ClearDataError> {
-        let backups = self
-            .settings_backup_files()
-            .map_err(|error| ClearDataError {
-                category: ClearDataCategory::Settings,
-                kind: error.kind(),
-            })?;
-        let mut targets = vec![(ClearDataCategory::Settings, self.settings_file())];
+    fn inspect_targets(
+        &self,
+        categories: &[ClearDataCategory],
+    ) -> Result<Vec<DataLocation>, ClearDataError> {
+        let mut locations = Vec::new();
+        for (category, path) in self.fixed_targets(categories)? {
+            match fs::symlink_metadata(&path) {
+                Ok(_) => locations.push(DataLocation { category, path }),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(ClearDataError {
+                        category,
+                        kind: error.kind(),
+                    });
+                }
+            }
+        }
+        Ok(locations)
+    }
+
+    fn fixed_targets(
+        &self,
+        categories: &[ClearDataCategory],
+    ) -> Result<Vec<(ClearDataCategory, PathBuf)>, ClearDataError> {
+        let mut targets = Vec::new();
+        if categories.contains(&ClearDataCategory::Settings) {
+            let backups = self
+                .settings_backup_files()
+                .map_err(|error| ClearDataError {
+                    category: ClearDataCategory::Settings,
+                    kind: error.kind(),
+                })?;
+            targets.push((ClearDataCategory::Settings, self.settings_file()));
+            targets.extend(
+                backups
+                    .into_iter()
+                    .map(|path| (ClearDataCategory::Settings, path)),
+            );
+        }
         targets.extend(
-            backups
-                .into_iter()
-                .map(|path| (ClearDataCategory::Settings, path)),
+            [
+                (ClearDataCategory::History, self.history_file()),
+                (ClearDataCategory::History, self.migrated_history_file()),
+                (ClearDataCategory::History, self.history_quarantine_dir()),
+                // Before the database, which `clear_data` keeps when the recordings cannot be removed.
+                (ClearDataCategory::History, self.recordings_dir()),
+                (ClearDataCategory::History, self.history_database_file()),
+                (ClearDataCategory::History, self.history_database_wal_file()),
+                (ClearDataCategory::History, self.history_database_shm_file()),
+                (ClearDataCategory::Models, self.models_dir()),
+                (ClearDataCategory::Models, self.cuda_pack_dir()),
+                (ClearDataCategory::Logs, self.logs_dir()),
+            ]
+            .into_iter()
+            .filter(|(category, _)| categories.contains(category)),
         );
-        targets.extend([
-            (ClearDataCategory::History, self.history_file()),
-            (ClearDataCategory::History, self.migrated_history_file()),
-            (ClearDataCategory::History, self.history_quarantine_dir()),
-            // Before the database, which `clear_data` keeps when the recordings cannot be removed.
-            (ClearDataCategory::History, self.recordings_dir()),
-            (ClearDataCategory::History, self.history_database_file()),
-            (ClearDataCategory::History, self.history_database_wal_file()),
-            (ClearDataCategory::History, self.history_database_shm_file()),
-            (ClearDataCategory::Models, self.models_dir()),
-            (ClearDataCategory::Models, self.cuda_pack_dir()),
-            (ClearDataCategory::Logs, self.logs_dir()),
-        ]);
         Ok(targets)
     }
 }
@@ -240,6 +257,45 @@ mod tests {
         assert!(fixture.paths.models_dir().exists());
         assert!(fixture.paths.cuda_pack_dir().exists());
         assert!(fixture.paths.history_database_file().exists());
+    }
+
+    #[test]
+    fn logs_clear_succeeds_when_the_unselected_config_root_is_a_file() {
+        let fixture = Fixture::separate_roots();
+        let preserved = [
+            fixture.paths.config_dir().to_path_buf(),
+            fixture.paths.history_database_file(),
+            fixture.paths.history_database_wal_file(),
+            fixture.paths.history_database_shm_file(),
+            fixture.paths.recordings_dir().join("retained.wav"),
+            fixture.paths.models_dir().join("model"),
+            fixture.paths.cuda_pack_dir().join("native-library"),
+            fixture.paths.data_dir().join("keep.txt"),
+        ];
+        for path in &preserved {
+            create_file(path);
+        }
+        create_dir(&fixture.paths.logs_dir());
+
+        let error = fixture.paths.data_locations().expect_err("full inventory");
+        assert_eq!(error.category, ClearDataCategory::Settings);
+
+        let report = fixture
+            .paths
+            .clear_data(&[ClearDataCategory::Logs])
+            .expect("clear accessible logs");
+
+        assert_eq!(report.len(), 1);
+        assert_eq!(report[0].category, ClearDataCategory::Logs);
+        assert_eq!(report[0].path, fixture.paths.logs_dir().to_string_lossy());
+        assert!(report[0].deleted);
+        assert!(!fixture.paths.logs_dir().exists());
+        for path in preserved {
+            assert_eq!(
+                fs::read(path).expect("unrelated data preserved"),
+                b"test data"
+            );
+        }
     }
 
     #[test]

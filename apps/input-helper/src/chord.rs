@@ -1,4 +1,4 @@
-//! Whether a key event releases the watched chord.
+//! Tracks a shortcut chord across keyboards.
 
 use std::collections::{HashMap, HashSet};
 
@@ -9,7 +9,7 @@ const KEY_LEFTALT: u16 = 56;
 const KEY_RIGHTALT: u16 = 100;
 const KEY_LEFTMETA: u16 = 125;
 const KEY_RIGHTMETA: u16 = 126;
-const MAX_KEY_CODE: u16 = 0x2ff;
+pub(crate) const MAX_KEY_CODE: u16 = 0x2ff;
 
 /// Ctrl, Alt and Super, left and right. A chord must hold one of these, so the
 /// helper can never report plain or shifted typing.
@@ -22,10 +22,10 @@ const COMMAND_MODIFIERS: [u16; 6] = [
     KEY_RIGHTMETA,
 ];
 const MAX_GROUPS: usize = 5;
-const MAX_ALTERNATIVES: usize = 2;
+const MAX_ALTERNATIVES: usize = 8;
 
 /// Keys held together, each group satisfied by any one of its key codes (a
-/// modifier's left or right key).
+/// modifier's left or right key, or a key's positions across keyboard layouts).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Chord {
     groups: Vec<Vec<u16>>,
@@ -71,6 +71,12 @@ pub struct ChordTracker {
     held: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChordTransition {
+    Pressed,
+    Released,
+}
+
 impl ChordTracker {
     pub fn new(chord: Option<Chord>) -> Self {
         Self {
@@ -84,25 +90,30 @@ impl ChordTracker {
         self.down.values().flatten().copied().collect()
     }
 
-    /// Applies one key event from `device` and reports whether it released the chord.
+    pub fn can_watch(&self, codes: impl Iterator<Item = u16>) -> bool {
+        self.chord
+            .as_ref()
+            .is_some_and(|chord| chord.held(&codes.collect()))
+    }
+
+    pub fn chord_held(&self) -> bool {
+        self.held
+    }
+
     /// Auto-repeat (`value` 2) changes nothing.
-    pub fn key(&mut self, device: u32, code: u16, value: i32) -> bool {
+    pub fn key(&mut self, device: u32, code: u16, value: i32) -> Option<ChordTransition> {
         match value {
             1 => {
                 self.down.entry(device).or_default().insert(code);
-                let down = self.all_down();
-                if self.chord.as_ref().is_some_and(|chord| chord.held(&down)) {
-                    self.held = true;
-                }
-                false
+                self.transition()
             }
             0 => {
                 if let Some(keys) = self.down.get_mut(&device) {
                     keys.remove(&code);
                 }
-                self.released()
+                self.transition()
             }
-            _ => false,
+            _ => None,
         }
     }
 
@@ -114,18 +125,22 @@ impl ChordTracker {
     }
 
     /// Forgets `device`'s keys: it was unplugged or its events overflowed.
-    pub fn forget(&mut self, device: u32) -> bool {
+    pub fn forget(&mut self, device: u32) -> Option<ChordTransition> {
         self.down.remove(&device);
-        self.released()
+        self.transition()
     }
 
-    fn released(&mut self) -> bool {
+    fn transition(&mut self) -> Option<ChordTransition> {
+        let chord = self.chord.as_ref()?;
         let down = self.all_down();
-        let released = self.held && !self.chord.as_ref().is_some_and(|chord| chord.held(&down));
-        if released {
-            self.held = false;
-        }
-        released
+        let held = chord.held(&down);
+        let transition = match (self.held, held) {
+            (false, true) => Some(ChordTransition::Pressed),
+            (true, false) => Some(ChordTransition::Released),
+            _ => None,
+        };
+        self.held = held;
+        transition
     }
 }
 
@@ -151,22 +166,113 @@ mod tests {
         assert!(Chord::parse("29,30+57").is_err());
         assert!(Chord::parse("29+57+30+31+32+33").is_err());
         assert!(Chord::parse("29+768").is_err());
+        assert!(Chord::parse("29+16,17,18,19,20,21,22,23,24").is_err());
         assert!(Chord::parse("zz=29+57").is_err());
+    }
+
+    #[test]
+    fn the_same_symbol_can_have_different_positions_in_several_layouts() {
+        let chord = Chord::parse("29,97+16,30,45").expect("layout alternatives");
+        for code in [16, 30, 45] {
+            let mut keys = ChordTracker::new(Some(chord.clone()));
+            keys.key(0, KEY_LEFTCTRL, 1);
+            keys.key(0, code, 1);
+            assert_eq!(keys.key(0, code, 0), Some(ChordTransition::Released));
+        }
+    }
+
+    #[test]
+    fn readable_devices_must_support_every_group_before_monitoring_is_ready() {
+        let keys = tracker();
+        assert!(!keys.can_watch([272, 273].into_iter()));
+        assert!(!keys.can_watch([KEY_LEFTCTRL].into_iter()));
+        assert!(keys.can_watch([KEY_RIGHTCTRL, SPACE].into_iter()));
+    }
+
+    #[test]
+    fn device_arrival_removal_and_reconnection_update_monitoring_and_held_state() {
+        let mut keys = tracker();
+        let mut supported = HashMap::from([(0, vec![KEY_LEFTCTRL])]);
+        assert!(!keys.can_watch(supported.values().flatten().copied()));
+        assert_eq!(keys.key(0, KEY_LEFTCTRL, 1), None);
+
+        supported.insert(1, vec![SPACE]);
+        assert_eq!(keys.key(1, SPACE, 1), Some(ChordTransition::Pressed));
+        assert!(keys.can_watch(supported.values().flatten().copied()));
+        assert!(keys.chord_held());
+        assert_eq!(keys.key(1, SPACE, 0), Some(ChordTransition::Released));
+        assert!(keys.can_watch(supported.values().flatten().copied()));
+        assert_eq!(keys.key(1, SPACE, 1), Some(ChordTransition::Pressed));
+
+        supported.remove(&1);
+        assert_eq!(keys.forget(1), Some(ChordTransition::Released));
+        assert!(!keys.can_watch(supported.values().flatten().copied()));
+        assert!(!keys.chord_held());
+        assert!(keys.holds_any(&[KEY_LEFTCTRL]));
+
+        supported.insert(2, vec![SPACE]);
+        assert_eq!(keys.key(2, SPACE, 1), Some(ChordTransition::Pressed));
+        assert!(keys.can_watch(supported.values().flatten().copied()));
+        assert!(keys.chord_held());
+        assert_eq!(keys.key(2, SPACE, 0), Some(ChordTransition::Released));
+    }
+
+    #[test]
+    fn dropped_events_clear_held_state_while_the_device_still_supports_the_chord() {
+        let mut keys = tracker();
+        let supported = [KEY_LEFTCTRL, SPACE];
+        keys.key(0, KEY_LEFTCTRL, 1);
+        assert_eq!(keys.key(0, SPACE, 1), Some(ChordTransition::Pressed));
+
+        assert_eq!(keys.forget(0), Some(ChordTransition::Released));
+        assert!(keys.can_watch(supported.into_iter()));
+        assert!(!keys.chord_held());
+        assert!(!keys.holds_any(&supported));
+        assert_eq!(keys.key(0, SPACE, 2), None);
+
+        assert_eq!(keys.key(0, KEY_LEFTCTRL, 1), None);
+        assert_eq!(keys.key(0, SPACE, 1), Some(ChordTransition::Pressed));
+        assert_eq!(keys.key(0, SPACE, 0), Some(ChordTransition::Released));
+    }
+
+    #[test]
+    fn paste_modifier_tracking_does_not_need_a_chord() {
+        let mut keys = ChordTracker::new(None);
+        assert_eq!(keys.key(0, KEY_LEFTCTRL, 1), None);
+        assert!(keys.holds_any(&[KEY_LEFTCTRL]));
+        assert!(!keys.chord_held());
+        assert_eq!(keys.key(0, KEY_LEFTCTRL, 2), None);
+        assert!(keys.holds_any(&[KEY_LEFTCTRL]));
+        assert_eq!(keys.key(1, KEY_RIGHTCTRL, 1), None);
+        assert_eq!(keys.key(0, KEY_LEFTCTRL, 0), None);
+        assert!(keys.holds_any(&[KEY_LEFTCTRL, KEY_RIGHTCTRL]));
+        assert_eq!(keys.forget(0), None);
+        assert!(!keys.holds_any(&[KEY_LEFTCTRL]));
+        assert_eq!(keys.forget(1), None);
+        assert!(!keys.holds_any(&[KEY_LEFTCTRL, KEY_RIGHTCTRL]));
+        assert_eq!(keys.key(2, KEY_LEFTCTRL, 1), None);
+        assert!(keys.holds_any(&[KEY_LEFTCTRL]));
+        assert_eq!(keys.key(2, KEY_LEFTCTRL, 0), None);
+        assert!(!keys.holds_any(&[KEY_LEFTCTRL]));
+        assert!(!keys.chord_held());
     }
 
     #[test]
     fn releasing_either_key_of_a_held_chord_reports_it_once() {
         let mut keys = tracker();
-        assert!(!keys.key(0, KEY_LEFTCTRL, 1));
-        assert!(!keys.key(0, SPACE, 1));
-        assert!(!keys.key(0, SPACE, 2));
-        assert!(keys.key(0, KEY_LEFTCTRL, 0));
-        assert!(!keys.key(0, SPACE, 0));
+        assert_eq!(keys.key(0, KEY_LEFTCTRL, 1), None);
+        assert_eq!(keys.key(0, SPACE, 1), Some(ChordTransition::Pressed));
+        assert_eq!(keys.key(0, SPACE, 2), None);
+        assert_eq!(
+            keys.key(0, KEY_LEFTCTRL, 0),
+            Some(ChordTransition::Released)
+        );
+        assert_eq!(keys.key(0, SPACE, 0), None);
 
         keys.key(0, KEY_LEFTCTRL, 1);
         keys.key(0, SPACE, 1);
-        assert!(keys.key(0, SPACE, 0));
-        assert!(!keys.key(0, KEY_LEFTCTRL, 0));
+        assert_eq!(keys.key(0, SPACE, 0), Some(ChordTransition::Released));
+        assert_eq!(keys.key(0, KEY_LEFTCTRL, 0), None);
     }
 
     #[test]
@@ -174,10 +280,10 @@ mod tests {
         let mut keys = tracker();
         keys.key(0, KEY_LEFTCTRL, 1);
         keys.key(0, A, 1);
-        assert!(!keys.key(0, A, 0));
-        assert!(!keys.key(0, KEY_LEFTCTRL, 0));
+        assert_eq!(keys.key(0, A, 0), None);
+        assert_eq!(keys.key(0, KEY_LEFTCTRL, 0), None);
         keys.key(0, SPACE, 1);
-        assert!(!keys.key(0, SPACE, 0));
+        assert_eq!(keys.key(0, SPACE, 0), None);
     }
 
     #[test]
@@ -186,7 +292,7 @@ mod tests {
         keys.key(0, KEY_LEFTCTRL, 1);
         keys.key(1, KEY_RIGHTCTRL, 1);
         keys.key(1, SPACE, 1);
-        assert!(!keys.key(0, KEY_LEFTCTRL, 0));
-        assert!(keys.forget(1));
+        assert_eq!(keys.key(0, KEY_LEFTCTRL, 0), None);
+        assert_eq!(keys.forget(1), Some(ChordTransition::Released));
     }
 }

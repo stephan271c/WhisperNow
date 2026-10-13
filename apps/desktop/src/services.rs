@@ -307,9 +307,11 @@ impl NativeServices {
     }
 
     pub(crate) fn shutdown(&self) {
-        self.output.shutdown();
         self.models.shutdown_downloads();
         self.dictation.join();
+        // Output admission is closed by request_shutdown; joining its producer
+        // before draining also covers the helper's early keystroke response.
+        self.output.shutdown();
         self.state.lock().active_downloads.clear();
         if let Err(error) = self.history.close() {
             tracing::warn!(

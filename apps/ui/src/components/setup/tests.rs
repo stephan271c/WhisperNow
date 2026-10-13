@@ -1,13 +1,13 @@
 use dioxus::prelude::*;
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    ErrorCategory, PasteHelperSetup, Permission, PermissionKind, PermissionStatus,
+    ActiveDownload, ErrorCategory, PasteHelperSetup, Permission, PermissionKind, PermissionStatus,
     PermissionsResponse, Phase, SaveSettingsResponse, SettingsView, SetupStateView,
     SetupTestResult,
 };
 use whispernow_domain::{
-    ModelAvailability, RecordingMode, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
-    ShortcutModifier,
+    DownloadPhase, ModelAvailability, ModelId, RecordingMode, SetupCheckpoint, SetupStep, Shortcut,
+    ShortcutKey, ShortcutModifier,
 };
 
 use super::super::actions::PERMISSION_POLLS;
@@ -301,6 +301,336 @@ fn a_new_step_moves_focus_to_its_heading() {
     let saved = saved_at(&setup, SetupStep::Welcome);
     setup.answer("save_setup_checkpoint", Ok(saved));
     assert_eq!(focused().as_deref(), Some("setup-step-heading"));
+}
+
+#[test]
+fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cancellation() {
+    let mut management = setup_at(SetupStep::Model, ModelAvailability::Downloaded);
+    management.models.extend([
+        model("small", "Small", ModelAvailability::Downloaded),
+        model("large", "Large", ModelAvailability::NotInstalled),
+        model("stream", "Stream", ModelAvailability::NotInstalled),
+    ]);
+    let mut setup = opened(management);
+    setup.click("setup-show-all-models");
+    setup.publish(state_event(Phase::Idle, |state| {
+        state.active_downloads.push(ActiveDownload {
+            model_id: ModelId::new("stream").expect("fixture model id"),
+            phase: DownloadPhase::Downloading,
+            downloaded_bytes: 25,
+            total_bytes: Some(100),
+            bytes_per_second: None,
+        });
+    }));
+    setup.fire("setup-model-small", "change", "small");
+    setup.click("setup-continue");
+    let submitted = fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[0].clone();
+    assert_eq!(submitted.model_id.as_str(), "small");
+    assert_eq!(submitted.step, SetupStep::Shortcuts);
+    let html = setup.html();
+    assert_eq!(current_step(&html), 3, "the old step waits for the answer");
+    for id in [
+        "setup-model-base",
+        "setup-model-small",
+        "setup-model-large-download",
+    ] {
+        assert!(
+            tag(&html, id)
+                .expect("model control")
+                .contains(" disabled="),
+            "{id}"
+        );
+    }
+    assert!(
+        tag(&html, "setup-model-base")
+            .expect("model choice")
+            .contains("setup-models-disabled-reason")
+    );
+    assert!(text(&html, "setup-models-disabled-reason").contains("Wait for the current change"));
+    assert!(html.contains("aria-valuenow=\"25\""));
+
+    setup.fire("setup-model-base", "change", "base");
+    setup.click_named("Download Large");
+    assert_eq!(fake::count("download_model"), 0);
+    assert_eq!(
+        setup
+            .context()
+            .management
+            .read()
+            .setup_checkpoint()
+            .expect("checkpoint")
+            .model_id,
+        submitted.model_id,
+    );
+    setup.click_named("Cancel download Stream");
+    assert_eq!(
+        fake::requests::<ModelId>("cancel_download"),
+        [ModelId::new("stream").expect("fixture model id")],
+    );
+    assert!(setup.context().management.read().settings_pending());
+
+    setup.answer(
+        "save_setup_checkpoint",
+        Ok(SetupStateView {
+            first_run_complete: false,
+            checkpoint: submitted.clone(),
+        }),
+    );
+    assert_eq!(current_step(&setup.html()), 4);
+    assert_eq!(
+        setup.context().management.read().setup_checkpoint(),
+        Some(&submitted),
+    );
+}
+
+#[test]
+fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
+    let mut management = setup_at(SetupStep::Model, ModelAvailability::Downloaded);
+    management
+        .models
+        .push(model("small", "Small", ModelAvailability::NotInstalled));
+    let mut setup = opened(management);
+    setup.click("setup-show-all-models");
+    setup.click("setup-continue");
+    assert!(
+        tag(&setup.html(), "setup-model-small-download")
+            .expect("download")
+            .contains(" disabled=")
+    );
+    setup.answer(
+        "save_setup_checkpoint",
+        Err::<SetupStateView, _>(error(
+            "setup_save_failed",
+            "Setup could not be saved",
+            ErrorCategory::Settings,
+        )),
+    );
+    let html = setup.html();
+    assert_eq!(current_step(&html), 3);
+    assert!(text(&html, "setup-wizard").contains("Setup could not be saved"));
+    for id in [
+        "setup-model-base",
+        "setup-model-small",
+        "setup-model-small-download",
+    ] {
+        assert!(
+            !tag(&html, id)
+                .expect("model control")
+                .contains(" disabled="),
+            "{id}"
+        );
+    }
+    setup.click("setup-model-small-download");
+    assert_eq!(
+        fake::requests::<ModelId>("download_model"),
+        [ModelId::new("small").expect("fixture model id")]
+    );
+    assert_eq!(
+        setup
+            .context()
+            .management
+            .read()
+            .setup_checkpoint()
+            .expect("checkpoint")
+            .model_id
+            .as_str(),
+        "small"
+    );
+    setup.fire("setup-model-base", "change", "base");
+    assert_eq!(
+        setup
+            .context()
+            .management
+            .read()
+            .setup_checkpoint()
+            .expect("checkpoint")
+            .model_id
+            .as_str(),
+        "base"
+    );
+}
+
+#[test]
+fn a_pending_shortcut_checkpoint_keeps_the_submitted_keys_and_mode_and_ends_capture() {
+    let mut setup = at(SetupStep::Shortcuts);
+    setup.click("setup-recording-mode-hold");
+    setup.click("setup-recording-shortcut-capture");
+    setup.key_with_code(
+        "setup-recording-shortcut-capture",
+        Key::Character("t".to_owned()),
+        Code::KeyT,
+        Modifiers::CONTROL | Modifiers::ALT,
+    );
+    setup.click("setup-recording-shortcut-capture");
+    assert!(
+        tag(&setup.html(), "setup-recording-shortcut-capture")
+            .expect("capture")
+            .contains("aria-pressed=true")
+    );
+    setup.click("setup-continue");
+    let submitted = fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[0].clone();
+    assert_eq!(submitted.recording_mode, RecordingMode::Hold);
+    assert_eq!(
+        submitted.recording_shortcut,
+        Shortcut {
+            modifiers: [ShortcutModifier::Control, ShortcutModifier::Alt].into(),
+            key: ShortcutKey::T,
+        }
+    );
+    let html = setup.html();
+    for id in [
+        "setup-recording-mode-hold",
+        "setup-recording-mode-toggle",
+        "setup-recording-shortcut-capture",
+    ] {
+        assert!(
+            tag(&html, id)
+                .expect("shortcut control")
+                .contains(" disabled="),
+            "{id}"
+        );
+    }
+    assert!(
+        tag(&html, "setup-recording-shortcut-capture")
+            .expect("capture")
+            .contains("aria-pressed=false")
+    );
+    assert!(html.contains("aria-describedby=\"setup-shortcuts-disabled-reason\""));
+    assert!(text(&html, "setup-shortcuts-disabled-reason").contains("Wait for the current change"));
+    setup.key_with_code(
+        "setup-recording-shortcut-capture",
+        Key::Character("r".to_owned()),
+        Code::KeyR,
+        Modifiers::CONTROL,
+    );
+    setup.act(|mut actions| {
+        actions.management.write().edit_setup(|checkpoint| {
+            checkpoint.recording_mode = RecordingMode::Toggle;
+        });
+    });
+    assert_eq!(
+        setup
+            .context()
+            .management
+            .read()
+            .setup_checkpoint()
+            .expect("checkpoint")
+            .recording_shortcut,
+        submitted.recording_shortcut
+    );
+    assert_eq!(
+        setup
+            .context()
+            .management
+            .read()
+            .setup_checkpoint()
+            .expect("checkpoint")
+            .recording_mode,
+        submitted.recording_mode
+    );
+    setup.answer(
+        "save_setup_checkpoint",
+        Ok(SetupStateView {
+            first_run_complete: false,
+            checkpoint: submitted.clone(),
+        }),
+    );
+    assert_eq!(current_step(&setup.html()), 5);
+    assert_eq!(
+        setup.context().management.read().setup_checkpoint(),
+        Some(&submitted)
+    );
+    assert!(text(&setup.html(), "setup-summary").contains("Hold to record"));
+}
+
+#[test]
+fn a_refused_shortcut_checkpoint_unlocks_keys_and_mode_for_the_next_save() {
+    let mut setup = at(SetupStep::Shortcuts);
+    setup.click("setup-continue");
+    setup.answer(
+        "save_setup_checkpoint",
+        Err::<SetupStateView, _>(error(
+            "setup_save_failed",
+            "Setup could not be saved",
+            ErrorCategory::Settings,
+        )),
+    );
+    let html = setup.html();
+    assert_eq!(current_step(&html), 4);
+    for id in [
+        "setup-recording-mode-hold",
+        "setup-recording-mode-toggle",
+        "setup-recording-shortcut-capture",
+    ] {
+        assert!(
+            !tag(&html, id)
+                .expect("shortcut control")
+                .contains(" disabled="),
+            "{id}"
+        );
+    }
+    setup.click("setup-recording-mode-hold");
+    setup.click("setup-recording-shortcut-capture");
+    setup.key_with_code(
+        "setup-recording-shortcut-capture",
+        Key::Character("t".to_owned()),
+        Code::KeyT,
+        Modifiers::CONTROL,
+    );
+    setup.click("setup-continue");
+    let requests = fake::requests::<SetupCheckpoint>("save_setup_checkpoint");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].recording_mode, RecordingMode::Hold);
+    assert_eq!(
+        requests[1].recording_shortcut,
+        Shortcut {
+            modifiers: [ShortcutModifier::Control].into(),
+            key: ShortcutKey::T,
+        }
+    );
+}
+
+#[test]
+fn a_pending_microphone_checkpoint_rejects_a_later_change_and_unlocks_after_success() {
+    let mut setup = at(SetupStep::TryIt);
+    setup.act(|actions| {
+        actions.save_setup_edit(|checkpoint| {
+            checkpoint.input_device = Some("usb-mic".to_owned());
+        });
+    });
+    let submitted = fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[0].clone();
+    assert_eq!(submitted.input_device.as_deref(), Some("usb-mic"));
+    assert!(
+        tag(&setup.html(), "setup-microphone")
+            .expect("microphone")
+            .contains(" disabled=")
+    );
+    setup.act(|actions| {
+        actions.save_setup_edit(|checkpoint| {
+            checkpoint.input_device = Some("headset".to_owned());
+        });
+    });
+    assert_eq!(fake::count("save_setup_checkpoint"), 1);
+    assert_eq!(
+        setup.context().management.read().setup_checkpoint(),
+        Some(&submitted)
+    );
+    setup.answer(
+        "save_setup_checkpoint",
+        Ok(SetupStateView {
+            first_run_complete: false,
+            checkpoint: submitted.clone(),
+        }),
+    );
+    assert_eq!(
+        setup.context().management.read().setup_checkpoint(),
+        Some(&submitted)
+    );
+    assert!(
+        !tag(&setup.html(), "setup-microphone")
+            .expect("microphone")
+            .contains(" disabled=")
+    );
 }
 
 #[test]

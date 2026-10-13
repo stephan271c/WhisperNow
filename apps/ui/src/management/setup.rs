@@ -33,6 +33,9 @@ fn permissions_settled(permissions: &PermissionsResponse) -> bool {
 
 impl ManagementState {
     pub fn edit_setup(&mut self, edit: impl FnOnce(&mut SetupCheckpoint)) {
+        if self.settings_pending() {
+            return;
+        }
         let setup = self
             .setup
             .as_mut()

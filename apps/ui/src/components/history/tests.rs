@@ -1,14 +1,15 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{AppState, EventPayload, Phase, SettingsView};
 use whispernow_domain::{
-    EntryId, EntryStatus, HistoryEntry, HistoryFilter, HistoryPage, HistoryPageRequest, UtcMillis,
+    AppError, EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryFilter, HistoryPage,
+    HistoryPageRequest, UtcMillis,
 };
 
 use super::format::{group_by_day, retention_summary};
 use super::{HistoryScreen, LocalClock};
 use crate::client::fake;
 use crate::test_support::{Page, Probe, show_history, snapshot, tag, text};
-use crate::{HistoryCopied, ManagementState, Route, SettingsRoute, UiState};
+use crate::{ManagementState, Route, SettingsRoute, UiState};
 
 /// 2026-09-27 10:30 UTC.
 const NOW: UtcMillis = UtcMillis(1_790_505_000_000);
@@ -240,8 +241,6 @@ fn a_delayed_refresh_cannot_shrink_the_window_requested_by_load_more() {
 
 #[test]
 fn a_read_overlapping_deletion_cannot_restore_the_row_or_report_an_obsolete_failure() {
-    use whispernow_domain::{AppError, ErrorCategory};
-
     for obsolete in [
         Ok(HistoryPage {
             entries: one_entry().history,
@@ -403,38 +402,93 @@ fn copy_confirms_on_the_button_that_was_pressed() {
         "the confirmation clears after a moment"
     );
 
-    let mut failed = one_entry();
-    failed.history_copied = Some(HistoryCopied {
-        entry: EntryId(7),
-        succeeded: false,
-    });
-    let page = history_page(failed);
-    assert_eq!(text(&page.html(), "history-copy-7").trim(), "Copy failed");
+    page.click("history-copy-8");
+    assert_eq!(
+        fake::requests::<String>("write_clipboard"),
+        ["cleaned 7", "cleaned 8"]
+    );
+    page.answer(
+        "write_clipboard",
+        Err::<(), _>(AppError::new(
+            ErrorCategory::General,
+            "clipboard_unavailable",
+            "The clipboard is unavailable",
+        )),
+    );
+    let html = page.html();
+    assert_eq!(text(&html, "history-copy-8").trim(), "Copy failed");
+    assert_eq!(text(&html, "history-copy-7").trim(), "Copy");
+    assert!(
+        page.context().management.read().notice.is_none(),
+        "copy failures stay on the pressed row"
+    );
+    page.wait();
+    assert_eq!(text(&page.html(), "history-copy-8").trim(), "Copy");
+    assert_eq!(text(&page.html(), "history-copy-7").trim(), "Copy");
 }
 
 #[test]
 fn storage_unavailability_replaces_the_list_with_a_reload() {
-    let mut management = ManagementState::default();
-    let (request_id, _) = management.history_request();
-    management.fail_history_refresh(
-        request_id,
-        &whispernow_domain::ipc::AppError {
-            category: whispernow_domain::ipc::ErrorCategory::General,
-            code: "history_unavailable".to_owned(),
-            summary: "History storage is unavailable".to_owned(),
-        },
-    );
+    let mut management = management(vec![
+        entry(7, UtcMillis(NOW.0 - HOUR)),
+        entry(8, UtcMillis(NOW.0 - 2 * HOUR)),
+    ]);
+    management.history_has_more = true;
     let mut page = history_page(management);
+    let loaded = page.html();
+    for present in [
+        "history-entry-7",
+        "history-entry-8",
+        "history-search",
+        "history-clear",
+        "history-load-more",
+    ] {
+        assert!(tag(&loaded, present).is_some(), "{present} was loaded");
+    }
+    page.publish(EventPayload::HistoryChanged);
+    let request = HistoryPageRequest::first_page(HistoryFilter::default());
+    assert_eq!(
+        fake::requests::<HistoryPageRequest>("get_history"),
+        std::slice::from_ref(&request)
+    );
+    page.answer(
+        "get_history",
+        Err::<HistoryPage, _>(AppError::new(
+            ErrorCategory::HistoryUnavailable,
+            "history_unavailable",
+            "History storage is unavailable",
+        )),
+    );
     let html = page.html();
     assert!(html.contains("History storage is unavailable") && html.contains("role=\"alert\""));
-    for absent in ["history-search", "history-clear", "history-load-more"] {
+    assert_eq!(text(&html, "history-reload").trim(), "Try again");
+    for absent in [
+        "history-entry-7",
+        "history-entry-8",
+        "history-search",
+        "history-clear",
+        "history-load-more",
+    ] {
         assert!(
             tag(&html, absent).is_none(),
             "{absent} shown while unavailable"
         );
     }
+    let context = page.context();
+    let management = context.management.read();
+    assert!(management.history.is_empty());
+    assert!(!management.history_loaded());
+    assert!(!management.history_has_more);
+    assert_eq!(
+        management.history_unavailable.as_deref(),
+        Some("History storage is unavailable")
+    );
+    drop(management);
     page.click("history-reload");
-    assert_eq!(fake::commands(), ["get_history"]);
+    assert_eq!(
+        fake::requests::<HistoryPageRequest>("get_history"),
+        [request.clone(), request]
+    );
 }
 
 #[test]
