@@ -86,27 +86,27 @@ impl AppPaths {
     /// Every existing `settings.json.bad-*` entry and the kept Python settings, sorted by
     /// path. A missing config directory has none.
     pub fn settings_backup_files(&self) -> io::Result<Vec<PathBuf>> {
-        let unreadable = format!("{SETTINGS_FILE}{UNREADABLE_SETTINGS_MARKER}");
+        let unreadable_prefix = format!("{SETTINGS_FILE}{UNREADABLE_SETTINGS_MARKER}");
         let entries = match fs::read_dir(&self.config_dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error),
         };
         let python = self.python_settings_file();
-        let mut copies = Vec::new();
+        let mut backups = Vec::new();
         for entry in entries {
             let entry = entry?;
             if entry
                 .file_name()
                 .as_encoded_bytes()
-                .starts_with(unreadable.as_bytes())
+                .starts_with(unreadable_prefix.as_bytes())
                 || entry.path() == python
             {
-                copies.push(entry.path());
+                backups.push(entry.path());
             }
         }
-        copies.sort();
-        Ok(copies)
+        backups.sort();
+        Ok(backups)
     }
 
     #[must_use]

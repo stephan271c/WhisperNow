@@ -200,17 +200,17 @@ impl SettingsCoordinator {
         Ok(SettingsView::new(&settings))
     }
 
-    pub(crate) fn clear_api_key(&self, request: LlmProvider) -> Result<SettingsView, AppError> {
+    pub(crate) fn clear_api_key(&self, provider: LlmProvider) -> Result<SettingsView, AppError> {
         let transaction = self.transaction();
         let mut settings = transaction.load()?;
-        self.persistence.delete_api_key(request).map_err(|_| {
+        self.persistence.delete_api_key(provider).map_err(|_| {
             AppError::new(
                 ErrorCategory::General,
                 "credential_store_unavailable",
                 "The OS credential store is unavailable, so the API key was not removed",
             )
         })?;
-        settings.api_keys.remove(&request);
+        settings.api_keys.remove(&provider);
         transaction.save(&settings)?;
         Ok(SettingsView::new(&settings))
     }

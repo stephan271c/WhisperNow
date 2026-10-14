@@ -277,7 +277,7 @@ fn a_read_overlapping_deletion_cannot_restore_the_row_or_report_an_obsolete_fail
         assert_eq!(management.history_window_pages(), 1);
         assert!(management.history_loaded());
         assert!(management.history_unavailable.is_none());
-        assert!(management.history_search_failed.is_none());
+        assert!(management.history_search_error.is_none());
         assert!(management.notice.is_none());
         assert!(tag(&page.html(), "history-entry-7").is_none());
     }

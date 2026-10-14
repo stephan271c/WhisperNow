@@ -147,7 +147,7 @@ fn paste_and_restore<P: PastePlatform>(
         restore_if_transcript(platform, text, previous);
         return PasteOutcome::Cancelled;
     }
-    let failure = match platform.send_paste_shortcut() {
+    let paste_error = match platform.send_paste_shortcut() {
         KeystrokeOutcome::Sent => {
             sent(previous.is_some());
             None
@@ -158,9 +158,9 @@ fn paste_and_restore<P: PastePlatform>(
             return PasteOutcome::Failed(error);
         }
     };
-    let _elapsed = platform.wait(PASTE_RESTORE_DELAY, &CancellationToken::default());
-    let restored = restore_if_transcript(platform, text, previous);
-    failure.map_or(restored, PasteOutcome::Failed)
+    let _wait_completed = platform.wait(PASTE_RESTORE_DELAY, &CancellationToken::default());
+    let restore_outcome = restore_if_transcript(platform, text, previous);
+    paste_error.map_or(restore_outcome, PasteOutcome::Failed)
 }
 
 fn restore_if_transcript<P: PastePlatform>(

@@ -53,11 +53,11 @@ pub(super) fn inject_if_current(destination: NativeDestination) -> NativePasteIn
 fn modifier_held() -> bool {
     use objc2_core_graphics::{CGEventFlags, CGEventSource, CGEventSourceStateID};
 
-    let held = CGEventFlags::MaskCommand
+    let modifier_mask = CGEventFlags::MaskCommand
         | CGEventFlags::MaskControl
         | CGEventFlags::MaskAlternate
         | CGEventFlags::MaskShift;
-    CGEventSource::flags_state(CGEventSourceStateID::HIDSystemState).intersects(held)
+    CGEventSource::flags_state(CGEventSourceStateID::HIDSystemState).intersects(modifier_mask)
 }
 
 #[cfg(target_os = "macos")]

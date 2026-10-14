@@ -184,7 +184,7 @@ impl Gateway {
     pub(crate) async fn set_shortcut_capture(&self, capturing: bool) -> Result<(), AppError> {
         let _native_settings = self.native_settings.lock().await;
         let shortcuts = Arc::clone(&self.shortcuts);
-        let changed = run_blocking(move || {
+        let capture_result = run_blocking(move || {
             if capturing {
                 shortcuts.suspend_for_capture()
             } else {
@@ -192,7 +192,7 @@ impl Gateway {
             }
         })
         .await?;
-        if let Err(error) = changed {
+        if let Err(error) = capture_result {
             // Shortcuts that cannot come back after a capture stay off.
             if !capturing {
                 self.publish_error(&shortcut_error(error));

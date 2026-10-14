@@ -112,34 +112,31 @@ fn definition(url: String, archive: &[u8]) -> ModelDefinition {
     }
 }
 
-fn make_manager(
-    server: &FixtureServer,
-    archive: &[u8],
-) -> (tempfile::TempDir, ModelStore, ModelId) {
-    make_manager_for_url(&server.url(MODEL_PATH), archive)
+fn make_store(server: &FixtureServer, archive: &[u8]) -> (tempfile::TempDir, ModelStore, ModelId) {
+    make_store_for_url(&server.url(MODEL_PATH), archive)
 }
 
-fn make_manager_for_url(url: &str, archive: &[u8]) -> (tempfile::TempDir, ModelStore, ModelId) {
-    make_manager_for_definition(definition(url.to_owned(), archive))
+fn make_store_for_url(url: &str, archive: &[u8]) -> (tempfile::TempDir, ModelStore, ModelId) {
+    make_store_for_definition(definition(url.to_owned(), archive))
 }
 
-/// A manager for one model downloaded as a single GGUF file, like the cleanup model.
-fn make_single_file_manager(url: &str, file: &[u8]) -> (tempfile::TempDir, ModelStore, ModelId) {
+/// A store for one model downloaded as a single GGUF file, like the cleanup model.
+fn make_single_file_store(url: &str, file: &[u8]) -> (tempfile::TempDir, ModelStore, ModelId) {
     let mut definition = definition(url.to_owned(), file);
     definition.layout = ModelLayout::Gguf {
         model: "model-Q8_0.gguf".to_owned(),
     };
-    make_manager_for_definition(definition)
+    make_store_for_definition(definition)
 }
 
-fn make_manager_for_definition(
+fn make_store_for_definition(
     definition: ModelDefinition,
 ) -> (tempfile::TempDir, ModelStore, ModelId) {
     let root = tempdir().expect("temporary root");
     let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
     let id = definition.id.clone();
     let registry = ModelRegistry::new(vec![definition]);
-    let manager = ModelStore::with_registry_and_timeouts(
+    let store = ModelStore::with_registry_and_timeouts(
         registry,
         paths,
         DownloadTimeouts {
@@ -148,7 +145,7 @@ fn make_manager_for_definition(
             total: Duration::from_secs(5),
         },
     );
-    (root, manager, id)
+    (root, store, id)
 }
 
 #[test]
@@ -159,11 +156,11 @@ fn local_streaming_download_reports_monotonic_progress_and_installs_atomically()
         archive.len() / 2,
         Resume::After(Duration::from_millis(30)),
     ));
-    let (_root, manager, id) = make_manager(&server, &archive);
+    let (_root, store, id) = make_store(&server, &archive);
     let progress = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&progress);
 
-    let resolved = manager
+    let resolved = store
         .download(&id, &CancellationToken::default(), &move |event| {
             observed.lock().expect("progress lock").push(event);
         })
@@ -184,7 +181,7 @@ fn local_streaming_download_reports_monotonic_progress_and_installs_atomically()
         .collect();
     assert!(byte_events.windows(2).all(|pair| pair[0] <= pair[1]));
     assert_eq!(byte_events.last().copied(), Some(archive.len() as u64));
-    let entries = manager.list().expect("model list");
+    let entries = store.list().expect("model list");
     assert_eq!(entries[0].availability, ModelAvailability::Downloaded);
 }
 
@@ -192,9 +189,9 @@ fn local_streaming_download_reports_monotonic_progress_and_installs_atomically()
 fn a_single_file_model_is_downloaded_verified_installed_and_removed_as_is() {
     let gguf = b"GGUF fixture weights".repeat(64);
     let server = serve(Response::ok(gguf.clone()));
-    let (_root, manager, id) = make_single_file_manager(&server.url(MODEL_PATH), &gguf);
+    let (_root, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
 
-    let resolved = manager
+    let resolved = store
         .download(&id, &CancellationToken::default(), &|_| {})
         .expect("single-file download");
 
@@ -203,10 +200,10 @@ fn a_single_file_model_is_downloaded_verified_installed_and_removed_as_is() {
         gguf
     );
     assert_eq!(
-        manager.list().expect("model list")[0].availability,
+        store.list().expect("model list")[0].availability,
         ModelAvailability::Downloaded
     );
-    manager.remove(&id).expect("remove the model");
+    store.remove(&id).expect("remove the model");
     assert!(!resolved.root.exists());
 }
 
@@ -225,8 +222,8 @@ fn archive_directory_prefixes_and_case_do_not_change_the_installed_model_id() {
             ],
         );
         let server = FixtureServer::start([(path, Response::ok(archive.clone()))]);
-        let (_root, manager, id) = make_manager_for_url(&server.url(path), &archive);
-        let resolved = manager
+        let (_root, store, id) = make_store_for_url(&server.url(path), &archive);
+        let resolved = store
             .download(&id, &CancellationToken::default(), &|_| {})
             .expect("fixture download");
         assert!(resolved.root.ends_with(MODEL_ID), "{directory}");
@@ -245,15 +242,15 @@ fn a_single_file_model_with_the_wrong_digest_is_not_installed() {
     let mut tampered = gguf.clone();
     tampered[0] ^= 1;
     let server = serve(Response::ok(tampered));
-    let (_root, manager, id) = make_single_file_manager(&server.url(MODEL_PATH), &gguf);
+    let (_root, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
 
     assert!(
-        manager
+        store
             .download(&id, &CancellationToken::default(), &|_| {})
             .is_err()
     );
     assert_eq!(
-        manager.list().expect("model list")[0].availability,
+        store.list().expect("model list")[0].availability,
         ModelAvailability::NotInstalled
     );
 }
@@ -265,9 +262,9 @@ fn download_succeeds_without_content_length_by_enforcing_registry_size() {
         declared_length: None,
         ..Response::ok(archive.clone())
     });
-    let (_root, manager, id) = make_manager(&server, &archive);
+    let (_root, store, id) = make_store(&server, &archive);
 
-    let resolved = manager
+    let resolved = store
         .download(&id, &CancellationToken::default(), &|_| {})
         .expect("download without content length");
 
@@ -284,11 +281,11 @@ fn cancellation_cleans_staging_and_does_not_install() {
         1,
         Resume::After(Duration::from_millis(30)),
     ));
-    let (root, manager, id) = make_manager(&server, &archive);
+    let (root, store, id) = make_store(&server, &archive);
     let cancellation = CancellationToken::default();
     let cancel_from_observer = cancellation.clone();
 
-    let error = manager
+    let error = store
         .download(&id, &cancellation, &move |event: DownloadProgress| {
             if event.downloaded_bytes > 0 {
                 cancel_from_observer.cancel();
@@ -297,7 +294,7 @@ fn cancellation_cleans_staging_and_does_not_install() {
         .expect_err("cancelled download");
 
     assert_eq!(error, ModelStoreError::Cancelled);
-    assert!(manager.resolve(&id).expect("resolve").is_none());
+    assert!(store.resolve(&id).expect("resolve").is_none());
     let models_dir = root.path().join("data/WhisperNow/models");
     let leftovers = fs::read_dir(models_dir)
         .expect("models directory")
@@ -347,8 +344,8 @@ fn failed_downloads_report_why() {
         ),
     ] {
         let server = serve(response);
-        let (_root, manager, id) = make_manager(&server, &archive);
-        let error = manager
+        let (_root, store, id) = make_store(&server, &archive);
+        let error = store
             .download(
                 &id,
                 &CancellationToken::default(),
@@ -366,7 +363,7 @@ fn failed_downloads_report_why() {
 /// A download of [`MODEL_ID`] held mid-transfer beside an installed
 /// [`OTHER_MODEL_ID`].
 struct BlockedDownload {
-    manager: Arc<ModelStore>,
+    store: Arc<ModelStore>,
     downloading: ModelId,
     other: ModelId,
     other_root: std::path::PathBuf,
@@ -398,7 +395,7 @@ impl BlockedDownload {
         let downloading_id = downloading.id.clone();
         let other_id = other.id.clone();
         let registry = ModelRegistry::new(vec![downloading, other]);
-        let manager = Arc::new(ModelStore::with_registry_and_timeouts(
+        let store = Arc::new(ModelStore::with_registry_and_timeouts(
             registry,
             paths,
             DownloadTimeouts {
@@ -409,7 +406,7 @@ impl BlockedDownload {
         ));
 
         let (mid_transfer, reached_mid_transfer) = mpsc::channel();
-        let downloader = Arc::clone(&manager);
+        let downloader = Arc::clone(&store);
         let id = downloading_id.clone();
         let worker = thread::spawn(move || {
             downloader.download(
@@ -426,7 +423,7 @@ impl BlockedDownload {
             .recv_timeout(PROMPT)
             .expect("download reached mid-transfer");
         Self {
-            manager,
+            store,
             downloading: downloading_id,
             other: other_id,
             other_root,
@@ -455,7 +452,7 @@ impl BlockedDownload {
 #[test]
 fn blocked_download_does_not_stall_resolving_listing_or_removing_other_models() {
     let mut blocked = BlockedDownload::start();
-    let store = Arc::clone(&blocked.manager);
+    let store = Arc::clone(&blocked.store);
     let other = blocked.other.clone();
     let (done, completed) = mpsc::channel();
     let _operations = thread::spawn(move || {
@@ -492,7 +489,7 @@ fn blocked_download_does_not_stall_resolving_listing_or_removing_other_models() 
     blocked.finish().expect("held download completes");
     assert!(
         blocked
-            .manager
+            .store
             .resolve(&blocked.downloading)
             .expect("resolve downloaded")
             .is_some()
@@ -520,8 +517,8 @@ fn invalid_archives_missing_artifacts_and_links_are_rejected() {
         (archive_with_hardlink(), missing_all),
     ] {
         let server = serve(Response::ok(archive.clone()));
-        let (_root, manager, id) = make_manager(&server, &archive);
-        let error = manager
+        let (_root, store, id) = make_store(&server, &archive);
+        let error = store
             .download(&id, &CancellationToken::default(), &|_| {})
             .expect_err("invalid archive");
         assert_eq!(error, expected);
@@ -533,7 +530,7 @@ fn interrupted_upgrade_preserves_existing_valid_model() {
     let valid = valid_archive();
     let bad = b"checksum does not match".to_vec();
     let server = serve(Response::ok(bad.clone()));
-    let (root, manager, id) = make_manager(&server, &valid);
+    let (root, store, id) = make_store(&server, &valid);
     let installed = root
         .path()
         .join(format!("data/WhisperNow/models/{MODEL_ID}"));
@@ -542,7 +539,7 @@ fn interrupted_upgrade_preserves_existing_valid_model() {
         fs::write(installed.join(artifact), format!("old-{artifact}")).expect("existing artifact");
     }
 
-    let error = manager
+    let error = store
         .download(&id, &CancellationToken::default(), &|_| {})
         .expect_err("interrupted upgrade");
 
@@ -550,7 +547,7 @@ fn interrupted_upgrade_preserves_existing_valid_model() {
         error,
         ModelStoreError::ResponseLength { .. } | ModelStoreError::ChecksumMismatch
     ));
-    let resolved = manager
+    let resolved = store
         .resolve(&id)
         .expect("resolve existing")
         .expect("existing remains valid");
@@ -568,7 +565,7 @@ fn successful_download_replaces_an_existing_installation() {
         (ARTIFACTS[2], b"new-tokens"),
     ]);
     let server = serve(Response::ok(archive.clone()));
-    let (root, manager, id) = make_manager(&server, &archive);
+    let (root, store, id) = make_store(&server, &archive);
     let installed = root
         .path()
         .join(format!("data/WhisperNow/models/{MODEL_ID}"));
@@ -577,7 +574,7 @@ fn successful_download_replaces_an_existing_installation() {
         fs::write(installed.join(artifact), format!("old-{artifact}")).expect("existing artifact");
     }
 
-    let resolved = manager
+    let resolved = store
         .download(&id, &CancellationToken::default(), &|_| {})
         .expect("successful upgrade");
 
@@ -603,7 +600,7 @@ fn resolver_rejects_intermediate_directory_symlinks_in_nested_artifacts() {
     };
     let id = definition.id.clone();
     let registry = ModelRegistry::new(vec![definition]);
-    let manager =
+    let store =
         ModelStore::with_registry_and_timeouts(registry, paths, DownloadTimeouts::default());
     let outside = root.path().join("outside");
     fs::create_dir_all(&outside).expect("outside root");
@@ -616,7 +613,7 @@ fn resolver_rejects_intermediate_directory_symlinks_in_nested_artifacts() {
     fs::create_dir_all(&installed).expect("model root");
     symlink(&outside, installed.join("files")).expect("intermediate symlink");
 
-    assert!(manager.resolve(&id).expect("resolve safely").is_none());
+    assert!(store.resolve(&id).expect("resolve safely").is_none());
 }
 
 #[test]
@@ -633,31 +630,26 @@ fn remove_only_affects_the_downloaded_model_inside_the_data_directory() {
     let id = definition.id.clone();
     let registry = ModelRegistry::new(vec![definition]);
     let downloaded_model = paths.models_dir().join(MODEL_ID);
-    let manager =
+    let store =
         ModelStore::with_registry_and_timeouts(registry, paths, DownloadTimeouts::default());
 
-    assert!(manager.resolve(&id).expect("resolve").is_none());
-    assert_eq!(manager.remove(&id), Err(ModelStoreError::NotInstalled));
+    assert!(store.resolve(&id).expect("resolve").is_none());
+    assert_eq!(store.remove(&id), Err(ModelStoreError::NotInstalled));
     fs::create_dir_all(&downloaded_model).expect("downloaded model root");
     for artifact in ARTIFACTS {
         fs::write(downloaded_model.join(artifact), artifact).expect("downloaded artifact");
     }
     assert_eq!(
-        manager
+        store
             .resolve(&id)
             .expect("resolve")
             .expect("downloaded model")
             .root,
         downloaded_model
     );
-    manager.remove(&id).expect("remove downloaded model");
+    store.remove(&id).expect("remove downloaded model");
     assert!(!downloaded_model.exists());
-    assert!(
-        manager
-            .resolve(&id)
-            .expect("resolve after removal")
-            .is_none()
-    );
+    assert!(store.resolve(&id).expect("resolve after removal").is_none());
     for artifact in ARTIFACTS {
         assert_eq!(
             fs::read_to_string(outside_model.join(artifact)).expect("outside artifact remains"),

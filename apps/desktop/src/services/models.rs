@@ -561,7 +561,7 @@ mod tests {
             .models
             .download(&download.model_id)
             .expect("download admitted first");
-        let mut response = download.request();
+        let mut connection = download.request();
 
         assert_eq!(fixture.state.lock().download_failures, 0);
         assert_eq!(fixture.state.snapshot().active_downloads.len(), 1);
@@ -588,7 +588,7 @@ mod tests {
             .models
             .cancel_download(&download.model_id)
             .expect("cancel download");
-        response
+        connection
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nfixture")
             .expect("release the pending response");
         download.models.shutdown_downloads();
@@ -614,8 +614,8 @@ mod tests {
             .models
             .download(&download.model_id)
             .expect("download during recording");
-        let mut response = download.request();
-        response
+        let mut connection = download.request();
+        connection
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nfixture")
             .expect("model response");
         for worker in std::mem::take(&mut *super::lock(&download.models.workers)) {

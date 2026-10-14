@@ -57,17 +57,17 @@ pub(crate) fn preclean(transcript: &str) -> String {
     let mut index = 0;
     while index < words.len() {
         let word = lower[index].as_str();
-        let two = lower
+        let two_word_mark = lower
             .get(index + 1)
             .and_then(|next| spoken(&format!("{word} {next}")));
-        if let Some(mark) = two.or_else(|| spoken(word)) {
+        if let Some(mark) = two_word_mark.or_else(|| spoken(word)) {
             if let Some(last) = out.last_mut() {
                 last.push_str(mark);
             }
-            index += if two.is_some() { 2 } else { 1 };
-        } else if let Some((digits, used)) = number(&lower, index) {
+            index += if two_word_mark.is_some() { 2 } else { 1 };
+        } else if let Some((digits, word_count)) = number(&lower, index) {
             out.push(digits);
-            index += used;
+            index += word_count;
         } else if is_letter(word)
             && word != "a"
             && word != "i"
@@ -75,13 +75,13 @@ pub(crate) fn preclean(transcript: &str) -> String {
                 .get(index + 1)
                 .is_some_and(|next| next.chars().count() == 1)
         {
-            let run = words[index..]
+            let letter_count = words[index..]
                 .iter()
                 .take_while(|word| is_letter(word))
                 .count()
                 .max(1);
-            out.push(words[index..index + run].concat().to_uppercase());
-            index += run;
+            out.push(words[index..index + letter_count].concat().to_uppercase());
+            index += letter_count;
         } else {
             out.push(if word == "i" {
                 "I".to_owned()
@@ -113,13 +113,13 @@ fn number(words: &[String], start: usize) -> Option<(String, usize)> {
         return None;
     }
     // A run of single digits ("zero four seven nine") is read digit by digit.
-    let run: String = words[start..]
+    let digit_run: String = words[start..]
         .iter()
         .map_while(|word| digit(word))
         .collect();
-    if run.len() >= 3 || (run.len() >= 2 && first == "zero") {
-        let used = run.len();
-        return Some((run, used));
+    if digit_run.len() >= 3 || (digit_run.len() >= 2 && first == "zero") {
+        let word_count = digit_run.len();
+        return Some((digit_run, word_count));
     }
     let (mut total, mut current, mut end) = (0_u64, 0_u64, start);
     while let Some(word) = words.get(end) {

@@ -40,7 +40,7 @@ pub(crate) struct ManagementState {
     /// and once it can no longer be read.
     pub(crate) history_rows_filter: Option<HistoryFilter>,
     /// Why the rows for the current search could not be read; shown in place of the list.
-    pub history_search_failed: Option<String>,
+    pub history_search_error: Option<String>,
     /// The search text as typed, applied once typing pauses.
     pub history_search: String,
     /// Pages in the loaded history window; "Load more" grows it by one.
@@ -48,7 +48,7 @@ pub(crate) struct ManagementState {
     history_request_id: u64,
     pub history_copied: Option<HistoryCopied>,
     /// The latest history copy, which clears its outcome after a moment.
-    pub(crate) history_copy: Option<Task>,
+    pub(crate) history_copy_task: Option<Task>,
     /// The application data a clear would remove, once the user asked to review it.
     pub data_locations: Option<Vec<DataLocation>>,
     pub clear_result: Option<ClearDataResult>,

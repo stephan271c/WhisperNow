@@ -48,7 +48,7 @@ pub fn RecordingBar() -> Element {
         .snapshot
         .as_ref()
         .map_or(&Phase::Idle, |snapshot| &snapshot.phase);
-    let (phase_class, label, mode, action) = match phase {
+    let (phase_class, label, trigger, action) = match phase {
         Phase::Recording { trigger, .. } if view.levels_seen => {
             ("overlay-listening", "Listening", Some(*trigger), None)
         }
@@ -80,7 +80,7 @@ pub fn RecordingBar() -> Element {
     } else {
         "overlay-bars-arming"
     };
-    let capturing = matches!(phase, Phase::Recording { .. });
+    let recording = matches!(phase, Phase::Recording { .. });
     let in_flight = phase.is_busy();
     let failed = matches!(phase, Phase::Error { .. });
     let visible = in_flight || failed;
@@ -105,7 +105,7 @@ pub fn RecordingBar() -> Element {
             section { class: "overlay-pill {phase_class}", aria_label: "Dictation",
                 div { class: "overlay-row",
                     span { class: "overlay-indicator", aria_hidden: "true",
-                        if capturing {
+                        if recording {
                             span { class: "overlay-dot" }
                         } else if in_flight {
                             span { class: "overlay-spinner" }
@@ -118,7 +118,7 @@ pub fn RecordingBar() -> Element {
                     p { id: "overlay-status", class: "overlay-status", role: "status",
                         aria_live: "polite", aria_atomic: "true", "{status}"
                     }
-                    if capturing {
+                    if recording {
                         svg { class: "overlay-bars {arming}", view_box: "0 0 {METER_WIDTH} {METER_HEIGHT}",
                             "aria-hidden": "true",
                             for MeterBar { x, y, height } in bars.iter().copied() {
@@ -128,7 +128,7 @@ pub fn RecordingBar() -> Element {
                             }
                         }
                     }
-                    if mode.is_some() {
+                    if trigger.is_some() {
                         span { class: "overlay-elapsed", role: "timer", aria_label: "Elapsed time",
                             "{elapsed}"
                         }
@@ -142,7 +142,7 @@ pub fn RecordingBar() -> Element {
                                     "{label}"
                                 }
                             }
-                            if matches!(mode, Some(RecordingTrigger::Toggle | RecordingTrigger::SetupTest)) {
+                            if matches!(trigger, Some(RecordingTrigger::Toggle | RecordingTrigger::SetupTest)) {
                                 IconButton { id: "overlay-stop", icon: IconName::Stop,
                                     label: "Stop and transcribe", size: ButtonSize::Sm,
                                     disabled: stop_blocked,

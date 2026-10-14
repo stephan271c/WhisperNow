@@ -40,8 +40,8 @@ pub struct DraftText(String);
 
 impl DraftText {
     #[must_use]
-    pub fn from_transcript(text: &str) -> Self {
-        Self(draft::preclean(text))
+    pub fn from_transcript(transcript: &str) -> Self {
+        Self(draft::preclean(transcript))
     }
 
     #[must_use]
@@ -214,20 +214,20 @@ pub enum CleanupFallback {
 /// provider takes; cancellation drops the call in flight.
 pub async fn clean_up(
     service: &dyn LlmService,
-    deterministic_text: &str,
+    transcript: &str,
     target: &CleanupTarget,
     api_key: Option<ApiKey>,
     cancellation: &CancellationToken,
 ) -> Result<String, CleanupFallback> {
     let request = match target {
         CleanupTarget::Local { model } => {
-            let words = deterministic_text.split_whitespace().count();
+            let word_count = transcript.split_whitespace().count();
             LlmRequest::Local {
                 model: model.clone(),
-                prompt: build_local_cleanup_prompt(deterministic_text),
+                prompt: build_local_cleanup_prompt(transcript),
                 // Evaluation uses 2.5 tokens per input word, with a minimum of 64.
-                max_output_tokens: words.saturating_mul(5).div_ceil(2).max(64),
-                draft: DraftText::from_transcript(deterministic_text),
+                max_output_tokens: word_count.saturating_mul(5).div_ceil(2).max(64),
+                draft: DraftText::from_transcript(transcript),
             }
         }
         CleanupTarget::Remote(target) => LlmRequest::Remote {
@@ -235,7 +235,7 @@ pub async fn clean_up(
                 target: target.clone(),
                 api_key,
             },
-            prompt: build_cleanup_prompt(deterministic_text),
+            prompt: build_cleanup_prompt(transcript),
         },
     };
     let result = tokio::select! {

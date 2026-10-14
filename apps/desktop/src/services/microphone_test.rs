@@ -24,7 +24,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 struct ProbeState {
     levels: Vec<f32>,
     peak: f32,
-    lost: bool,
+    capture_failed: bool,
 }
 
 const MAX_LEVELS: usize = 64;
@@ -52,7 +52,7 @@ impl AudioSink for LevelProbe {
 
     fn event(&self, event: AudioEvent) {
         if matches!(event, AudioEvent::DeviceLost | AudioEvent::StreamError) {
-            self.with(|state| state.lost = true);
+            self.with(|state| state.capture_failed = true);
         }
     }
 }
@@ -78,12 +78,13 @@ pub(super) fn run(
         .start(device, probe.clone())
         .map_err(|error| capture_start_error(&error))?;
     let started = Instant::now();
-    while started.elapsed() < duration && !cancelled() && !probe.with(|state| state.lost) {
+    while started.elapsed() < duration && !cancelled() && !probe.with(|state| state.capture_failed)
+    {
         thread::sleep(POLL_INTERVAL.min(duration.saturating_sub(started.elapsed())));
     }
     let _stopped = capture.stop().is_ok();
     let state = probe.with(std::mem::take);
-    if state.lost {
+    if state.capture_failed {
         return Err(AppError::new(
             ErrorCategory::Audio,
             "microphone_lost",

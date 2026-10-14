@@ -76,7 +76,7 @@ pub(crate) struct DictationParts {
     pub(crate) audio: Arc<dyn AudioInput>,
     pub(crate) models: Arc<ModelStore>,
     pub(crate) voice_activity: Arc<dyn Fn() -> Box<dyn VoiceActivity> + Send + Sync>,
-    pub(crate) llm: Arc<AiCleanup>,
+    pub(crate) cleanup: Arc<AiCleanup>,
     pub(crate) output: Arc<dyn TranscriptOutput>,
     /// Builds the recognizer, and a fresh one after a native panic.
     pub(crate) engine: Box<dyn Fn() -> Box<dyn AsrEngine> + Send>,
@@ -656,12 +656,12 @@ impl Worker {
             Ok(prepared) => prepared,
             Err(kind) => return self.pipeline_failure(recording, &samples, has_audio, kind),
         };
-        let llm_model = if let Some(plan) = &settings.cleanup {
+        let cleanup_model = if let Some(plan) = &settings.cleanup {
             self.parts.state.apply(|state| {
                 state.phase = Phase::Processing { cleaning_up: true };
             });
             self.parts
-                .llm
+                .cleanup
                 .apply(&mut prepared, plan, &recording.cancellation)
         } else {
             None
@@ -672,7 +672,7 @@ impl Worker {
         if recording.trigger.is_setup_test() {
             return Outcome::Heard(prepared.final_text);
         }
-        self.deliver(recording, &samples, prepared, llm_model)
+        self.deliver(recording, &samples, prepared, cleanup_model)
     }
 
     /// Saves the transcript to history, pastes it, and records whether the paste worked.
@@ -681,7 +681,7 @@ impl Worker {
         recording: &Recording,
         samples: &[f32],
         prepared: PreparedTranscription,
-        llm_model: Option<String>,
+        cleanup_model: Option<String>,
     ) -> Outcome {
         let history = self.parts.history.insert(
             NewHistoryEntry {
@@ -693,7 +693,7 @@ impl Worker {
                 status: EntryStatus::Ok,
                 error: None,
                 asr_model_id: Some(recording.settings.model_id.clone()),
-                llm_model,
+                llm_model: cleanup_model,
             },
             samples,
             recording.settings.keep_audio,

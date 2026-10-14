@@ -60,10 +60,11 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
     let stdin_sender = sender.clone();
     thread::spawn(move || read_commands(&stdin_sender));
 
-    let mut open = HashMap::new();
+    let mut devices = HashMap::new();
     let mut next_device = 0;
-    scan(&mut open, &mut next_device, &sender, &mut tracker);
-    let mut available = keyboard.is_some() || tracker.can_watch(open.values().flatten().copied());
+    scan(&mut devices, &mut next_device, &sender, &mut tracker);
+    let mut available =
+        keyboard.is_some() || tracker.can_watch(devices.values().flatten().copied());
     if !available {
         eprintln!(
             "no readable input devices support the chord; install this helper setgid `input`"
@@ -72,14 +73,14 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
     }
     let mut next_scan = Instant::now() + RESCAN_INTERVAL;
     let mut devices_changed = false;
-    let mut pending: Option<(PasteShortcut, Instant)> = None;
+    let mut pending_paste: Option<(PasteShortcut, Instant)> = None;
     let mut stdout = io::stdout().lock();
     if reply_availability(&mut stdout, true, &tracker).is_err() {
         return ExitCode::SUCCESS;
     }
     loop {
         if devices_changed && keyboard.is_none() {
-            let ready = tracker.can_watch(open.values().flatten().copied());
+            let ready = tracker.can_watch(devices.values().flatten().copied());
             if ready != available {
                 available = ready;
                 if reply_availability(&mut stdout, ready, &tracker).is_err() {
@@ -88,7 +89,7 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
             }
         }
         devices_changed = false;
-        if let (Some(keyboard), Some((shortcut, deadline))) = (&mut keyboard, pending) {
+        if let (Some(keyboard), Some((shortcut, deadline))) = (&mut keyboard, pending_paste) {
             let answer = if !tracker.holds_any(&MODIFIERS) {
                 Some(if keyboard.press(shortcut).is_ok() {
                     "sent"
@@ -101,18 +102,18 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
                 None
             };
             if let Some(answer) = answer {
-                pending = None;
+                pending_paste = None;
                 if reply(&mut stdout, answer).is_err() {
                     return ExitCode::SUCCESS;
                 }
             }
         }
-        let wake = pending.map_or(next_scan, |(_, deadline)| deadline.min(next_scan));
+        let wake = pending_paste.map_or(next_scan, |(_, deadline)| deadline.min(next_scan));
         let message = match messages.recv_timeout(wake.saturating_duration_since(Instant::now())) {
             Ok(message) => message,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if Instant::now() >= next_scan {
-                    devices_changed = scan(&mut open, &mut next_device, &sender, &mut tracker);
+                    devices_changed = scan(&mut devices, &mut next_device, &sender, &mut tracker);
                     next_scan = Instant::now() + RESCAN_INTERVAL;
                 }
                 continue;
@@ -128,14 +129,14 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
             } => (tracker.key(device, code, value), millis),
             Message::Lost { device, path } => {
                 if let Some(path) = path {
-                    devices_changed = open.remove(&path).is_some();
+                    devices_changed = devices.remove(&path).is_some();
                 }
                 (tracker.forget(device), monotonic_millis())
             }
             Message::Command(command) => {
                 match PasteShortcut::parse(command.trim()) {
-                    Some(shortcut) if keyboard.is_some() && pending.is_none() => {
-                        pending = Some((shortcut, Instant::now() + MODIFIER_WAIT));
+                    Some(shortcut) if keyboard.is_some() && pending_paste.is_none() => {
+                        pending_paste = Some((shortcut, Instant::now() + MODIFIER_WAIT));
                     }
                     _ => {
                         if reply(&mut stdout, "refused").is_err() {
@@ -187,7 +188,7 @@ fn reply_availability(
 
 /// Opens event devices not already being read, each on its own thread.
 fn scan(
-    open: &mut HashMap<PathBuf, HashSet<u16>>,
+    devices: &mut HashMap<PathBuf, HashSet<u16>>,
     next_device: &mut u32,
     sender: &mpsc::Sender<Message>,
     tracker: &mut ChordTracker,
@@ -201,7 +202,7 @@ fn scan(
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with("event"));
-        if !is_event || open.contains_key(&path) {
+        if !is_event || devices.contains_key(&path) {
             continue;
         }
         let Some(file) = open_device(&path) else {
@@ -238,7 +239,7 @@ fn scan(
         let codes = (1..=MAX_KEY_CODE)
             .filter(|code| supported[usize::from(code / 8)] & (1 << (code % 8)) != 0)
             .collect();
-        open.insert(path.clone(), codes);
+        devices.insert(path.clone(), codes);
         changed = true;
         let sender = sender.clone();
         thread::spawn(move || read_device(file, device, path, &sender));

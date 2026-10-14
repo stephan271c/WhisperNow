@@ -42,7 +42,7 @@ enum Command {
 }
 
 struct Job {
-    model: ModelId,
+    model_id: ModelId,
     prompt: LlmPrompt,
     max_output_tokens: usize,
     draft: DraftText,
@@ -73,8 +73,8 @@ impl LocalCleanupService {
         Self {
             shared: Arc::new(Shared {
                 library_directory,
-                model,
-                cuda,
+                model_locator: model,
+                cuda_locator: cuda,
                 shutdown: AtomicBool::new(false),
                 held: AtomicBool::new(false),
             }),
@@ -139,11 +139,11 @@ impl LocalCleanupService {
         &self,
         worker: &'worker mut Option<Worker>,
     ) -> Result<&'worker Worker, LlmError> {
-        let (commands, received) = mpsc::channel();
+        let (commands, commands_rx) = mpsc::channel();
         let shared = Arc::clone(&self.shared);
         let thread = std::thread::Builder::new()
             .name("whispernow-cleanup".to_owned())
-            .spawn(move || run(&received, &shared))
+            .spawn(move || run(&commands_rx, &shared))
             .map_err(|_| LlmError::TemporarilyUnavailable)?;
         Ok(worker.insert(Worker { commands, thread }))
     }
@@ -159,8 +159,8 @@ impl Drop for HeldUnloaded<'_> {
 
 struct Shared {
     library_directory: PathBuf,
-    model: CleanupModelLocator,
-    cuda: CudaPackLocator,
+    model_locator: CleanupModelLocator,
+    cuda_locator: CudaPackLocator,
     shutdown: AtomicBool,
     /// Prevents a model from loading while its file is being removed.
     held: AtomicBool,
@@ -187,7 +187,7 @@ impl LocalCleanupService {
         Box::pin(async move {
             let (reply, replied) = oneshot::channel();
             self.send(Command::Decode(Job {
-                model,
+                model_id: model,
                 prompt,
                 max_output_tokens,
                 draft,
@@ -233,8 +233,8 @@ fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine
     if shared.held.load(Ordering::Acquire) {
         return Err(LlamaError::NotInstalled);
     }
-    let path = (shared.model)(model_id).ok_or(LlamaError::NotInstalled)?;
-    let cuda = (shared.cuda)();
+    let path = (shared.model_locator)(model_id).ok_or(LlamaError::NotInstalled)?;
+    let cuda = (shared.cuda_locator)();
     let threads = default_threads();
     let loaded = LocalCleanupEngine::load(&shared.library_directory, cuda.as_deref(), &path, threads)
         .inspect_err(|error| {
@@ -278,7 +278,7 @@ fn run(commands: &mpsc::Receiver<Command>, shared: &Shared) {
                 if stopped() {
                     continue;
                 }
-                let result = match load(shared, &mut engine, &job.model) {
+                let result = match load(shared, &mut engine, &job.model_id) {
                     Ok(loaded) => {
                         loaded.decode(&job.prompt, job.max_output_tokens, &job.draft, |_| {
                             if stopped() {

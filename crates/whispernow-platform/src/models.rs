@@ -362,7 +362,7 @@ impl ModelStore {
         observer: &dyn Fn(DownloadProgress),
     ) -> Result<ResolvedModel, ModelStoreError> {
         let definition = self.definition(model_id)?.clone();
-        let complete = |phase| {
+        let report_phase = |phase| {
             observer(DownloadProgress {
                 phase,
                 downloaded_bytes: definition.source.archive_size_bytes,
@@ -371,7 +371,7 @@ impl ModelStore {
         };
         fs::create_dir_all(self.paths.models_dir())
             .map_err(|_| filesystem("create models directory"))?;
-        let mut archive_file = Builder::new()
+        let mut download = Builder::new()
             .prefix(".model-download-")
             .suffix(".part")
             .tempfile_in(self.paths.models_dir())
@@ -383,34 +383,29 @@ impl ModelStore {
                 size_bytes: definition.source.archive_size_bytes,
                 sha256: &definition.source.sha256,
             },
-            &mut archive_file,
+            &mut download,
             cancellation,
             observer,
         ))?;
-        complete(DownloadPhase::ValidatingArchive);
+        report_phase(DownloadPhase::ValidatingArchive);
         check_cancelled(cancellation)?;
         let staging = Builder::new()
             .prefix(".model-stage-")
             .tempdir_in(self.paths.models_dir())
             .map_err(|_| filesystem("create model staging directory"))?;
-        complete(DownloadPhase::Extracting);
+        report_phase(DownloadPhase::Extracting);
         let staged_root = match &definition.layout {
             ModelLayout::Gguf { model: artifact } => {
-                Self::stage_single_file(&definition, archive_file, staging.path(), artifact)?
+                Self::stage_single_file(&definition, download, staging.path(), artifact)?
             }
-            _ => Self::extract_archive(
-                &definition,
-                archive_file.path(),
-                staging.path(),
-                cancellation,
-            )?,
+            _ => Self::extract_archive(&definition, download.path(), staging.path(), cancellation)?,
         };
-        complete(DownloadPhase::Installing);
+        report_phase(DownloadPhase::Installing);
         let root = {
             let _guard = self.lock_store();
             self.install_staged(&definition, &staged_root, cancellation)?
         };
-        complete(DownloadPhase::Complete);
+        report_phase(DownloadPhase::Complete);
         Ok(ResolvedModel { definition, root })
     }
 }

@@ -478,7 +478,7 @@ pub(crate) struct LlamaContext {
     context: NonNull<ffi::Context>,
     memory: *mut ffi::Memory,
     batch: ffi::Batch,
-    vocabulary: usize,
+    vocab_size: usize,
     context_size: usize,
     batch_size: usize,
     micro_batch_size: usize,
@@ -516,7 +516,7 @@ impl LlamaContext {
                 .ok_or(LlamaError::Context)?
         };
         // SAFETY: the context is valid until `Drop`.
-        let (memory, context_size, batch_size, micro_batch_size, rollback, vocabulary) = unsafe {
+        let (memory, context_size, batch_size, micro_batch_size, rollback, vocab_size) = unsafe {
             (
                 (api.llama_get_memory)(context.as_ptr()),
                 (api.llama_n_ctx)(context.as_ptr()),
@@ -532,12 +532,12 @@ impl LlamaContext {
         let batch_size = batch_size as usize;
         // SAFETY: the model is loaded.
         let n_swa = unsafe { (api.llama_model_n_swa)(model.model.as_ptr()) };
-        let mut session = Self {
+        let mut context = Self {
             model,
             context,
             memory,
             batch,
-            vocabulary: usize::try_from(vocabulary).unwrap_or_default(),
+            vocab_size: usize::try_from(vocab_size).unwrap_or_default(),
             context_size: context_size as usize,
             batch_size,
             micro_batch_size: micro_batch_size as usize,
@@ -546,9 +546,9 @@ impl LlamaContext {
         if memory.is_null() {
             return Err(LlamaError::Context);
         }
-        let no_rollback = session.probe_rollback()?;
-        session.checkpoints = rollback > 0 || no_rollback || n_swa > 0;
-        Ok(session)
+        let tail_removal_failed = context.probe_rollback()?;
+        context.checkpoints = rollback > 0 || tail_removal_failed || n_swa > 0;
+        Ok(context)
     }
 
     /// Whether the memory cannot remove a sequence's tail, by trying it after two tokens
@@ -619,7 +619,7 @@ impl DecodeContext for LlamaContext {
     }
 
     fn vocabulary_size(&self) -> usize {
-        self.vocabulary
+        self.vocab_size
     }
 
     fn suppressed_tokens(&self) -> Vec<Token> {
@@ -689,7 +689,7 @@ impl DecodeContext for LlamaContext {
             if logits.is_null() {
                 Err(LocalDecodeError::Logits)
             } else {
-                Ok(std::slice::from_raw_parts(logits, self.vocabulary))
+                Ok(std::slice::from_raw_parts(logits, self.vocab_size))
             }
         }
     }

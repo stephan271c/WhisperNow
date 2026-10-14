@@ -345,13 +345,13 @@ fn plain_decoding_follows_the_model_to_its_end_of_turn() {
         .iter()
         .map(|&(start, length, outputs)| (start, length, outputs))
         .collect();
-    let prompt = output.prompt_tokens;
+    let prompt_len = output.prompt_tokens;
     assert_eq!(
         prompt_batches,
         [
             (0, 1, Outputs::None),
-            (1, prompt - 5, Outputs::None),
-            (prompt - 4, 4, Outputs::Last)
+            (1, prompt_len - 5, Outputs::None),
+            (prompt_len - 4, 4, Outputs::Last)
         ]
     );
 }

@@ -139,7 +139,7 @@ pub(crate) fn TextInput(
 enum Draft {
     /// Being typed, or refused before it was sent: shown until committed again.
     Typing(String),
-    /// Handed to `oncommit`. Shown while the frame reports that change as refused, so a
+    /// Handed to `oncommit`. Shown while the frame reports an error for that change, so a
     /// failed save keeps the typed text for another try.
     Committed(String),
 }
@@ -162,21 +162,21 @@ pub(crate) fn DraftText(
     let described_by = wiring
         .as_ref()
         .and_then(|wiring| wiring.described_by.clone());
-    let refused = wiring.as_ref().is_some_and(|wiring| wiring.invalid);
-    let invalid = refused.then_some("true");
+    let has_error = wiring.as_ref().is_some_and(|wiring| wiring.invalid);
+    let aria_invalid = has_error.then_some("true");
     let mut draft = use_signal(|| None::<Draft>);
     let saved = value.clone();
-    // Once the saved value moves on without a refusal, a committed draft is stale.
-    use_effect(use_reactive!(|(saved, refused)| {
+    // Once the saved value moves on without an error, a committed draft is stale.
+    use_effect(use_reactive!(|(saved, has_error)| {
         let stale =
-            matches!(&*draft.peek(), Some(Draft::Committed(text)) if !refused && *text != saved);
+            matches!(&*draft.peek(), Some(Draft::Committed(text)) if !has_error && *text != saved);
         if stale {
             draft.set(None);
         }
     }));
     let shown = match draft() {
         Some(Draft::Typing(text)) => text,
-        Some(Draft::Committed(text)) if refused => text,
+        Some(Draft::Committed(text)) if has_error => text,
         _ => value.clone(),
     };
     let commit = move |event: FormEvent| {
@@ -200,7 +200,7 @@ pub(crate) fn DraftText(
                 class: "text-input",
                 id,
                 aria_describedby: described_by,
-                aria_invalid: invalid,
+                aria_invalid,
                 value: shown,
                 oninput: move |event| draft.set(Some(Draft::Typing(event.value()))),
                 onchange: commit,
@@ -214,7 +214,7 @@ pub(crate) fn DraftText(
             class: "text-input",
             id,
             aria_describedby: described_by,
-            aria_invalid: invalid,
+            aria_invalid,
             value: shown,
             oninput: move |event| draft.set(Some(Draft::Typing(event.value()))),
             onchange: commit,

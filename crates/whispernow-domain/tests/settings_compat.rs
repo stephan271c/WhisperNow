@@ -212,12 +212,12 @@ fn python_settings_import_moves_keys_out_and_reads_the_older_layouts() {
             }
         )
     );
-    let hold_off_without_toggle = PythonSettings::import(&json!({
+    let invalid_toggle = PythonSettings::import(&json!({
         "hotkey_enabled": false,
         "toggle_hotkey": { "modifiers": [], "key": "r" },
     }));
     assert_eq!(
-        hold_off_without_toggle.settings.recording_mode,
+        invalid_toggle.settings.recording_mode,
         RecordingMode::Hold,
         "a bare typing key is refused, so hold stays"
     );

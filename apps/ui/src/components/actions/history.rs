@@ -64,19 +64,19 @@ impl UiContext {
         let Some(text) = self.management.peek().history_copy(entry) else {
             return;
         };
-        let copy = spawn_forever(async move {
+        let copy_task = spawn_forever(async move {
             let succeeded = client::write_clipboard(&text).await.is_ok();
             self.management.write().history_copied = Some(HistoryCopied { entry, succeeded });
             client::delay(COPIED_MS).await;
             let mut management = self.management;
             let mut management = management.write();
             management.history_copied = None;
-            management.history_copy = None;
+            management.history_copy_task = None;
         });
         let mut management = self.management;
         let mut management = management.write();
         management.history_copied = None;
-        if let Some(previous) = management.history_copy.replace(copy) {
+        if let Some(previous) = management.history_copy_task.replace(copy_task) {
             previous.cancel();
         }
     }

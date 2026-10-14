@@ -36,8 +36,8 @@ fn manual_parakeet_fixture_matches_documented_text() {
     engine
         .load(&ResolvedModel { definition, root })
         .expect("load Parakeet");
-    let text = engine
+    let transcript = engine
         .transcribe(wave.samples())
         .expect("transcribe fixture");
-    assert_eq!(text.trim(), EXPECTED);
+    assert_eq!(transcript.trim(), EXPECTED);
 }

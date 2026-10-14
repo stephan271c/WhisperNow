@@ -201,7 +201,7 @@ async fn cancelling_during_a_call_ends_it_promptly() {
 
 #[tokio::test]
 async fn each_mechanical_failure_falls_back_to_the_transcript() {
-    let dictation = "move the review to thursday";
+    let transcript = "move the review to thursday";
     for (behavior, expected) in [
         (
             Behavior::Error(LlmError::InvalidRequest),
@@ -222,7 +222,7 @@ async fn each_mechanical_failure_falls_back_to_the_transcript() {
             CleanupFallback::ContentFiltered,
         ),
     ] {
-        assert_eq!(clean_up_once(behavior, dictation).await, Err(expected));
+        assert_eq!(clean_up_once(behavior, transcript).await, Err(expected));
     }
 }
 

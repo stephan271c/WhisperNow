@@ -24,11 +24,11 @@ impl Settings {
         let mut problems = Vec::new();
         problems.extend(self.shortcut_problems());
         for (&provider, settings) in &self.llm_provider_settings {
-            let mut saved = settings.saved_models.clone();
-            saved.sort_unstable();
-            saved.dedup();
+            let mut unique_models = settings.saved_models.clone();
+            unique_models.sort_unstable();
+            unique_models.dedup();
             if settings.model.contains(['\n', '\r'])
-                || saved.len() != settings.saved_models.len()
+                || unique_models.len() != settings.saved_models.len()
                 || settings
                     .saved_models
                     .iter()

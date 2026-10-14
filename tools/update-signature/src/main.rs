@@ -4,8 +4,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use minisign_verify::{PublicKey, Signature};
 
 struct Arguments {
-    payload: PathBuf,
-    signature: PathBuf,
+    payload_path: PathBuf,
+    signature_path: PathBuf,
     public_key: String,
 }
 
@@ -21,8 +21,8 @@ fn main() -> ExitCode {
 }
 
 fn parse_arguments() -> Result<Arguments, String> {
-    let mut payload = None;
-    let mut signature = None;
+    let mut payload_path = None;
+    let mut signature_path = None;
     let mut public_key = None;
     let mut arguments = env::args().skip(1);
 
@@ -31,16 +31,16 @@ fn parse_arguments() -> Result<Arguments, String> {
             .next()
             .ok_or_else(|| format!("missing value for {argument}"))?;
         match argument.as_str() {
-            "--payload" => payload = Some(PathBuf::from(value)),
-            "--signature" => signature = Some(PathBuf::from(value)),
+            "--payload" => payload_path = Some(PathBuf::from(value)),
+            "--signature" => signature_path = Some(PathBuf::from(value)),
             "--public-key" => public_key = Some(value),
             _ => return Err(format!("unknown argument: {argument}")),
         }
     }
 
     Ok(Arguments {
-        payload: payload.ok_or_else(|| "--payload is required".to_owned())?,
-        signature: signature.ok_or_else(|| "--signature is required".to_owned())?,
+        payload_path: payload_path.ok_or_else(|| "--payload is required".to_owned())?,
+        signature_path: signature_path.ok_or_else(|| "--signature is required".to_owned())?,
         public_key: public_key.ok_or_else(|| "--public-key is required".to_owned())?,
     })
 }
@@ -53,15 +53,19 @@ fn decode_envelope(value: &str, kind: &str) -> Result<String, String> {
 }
 
 fn verify(arguments: &Arguments) -> Result<(), String> {
-    let payload =
-        fs::read(&arguments.payload).map_err(|error| format!("could not read payload: {error}"))?;
-    let signature_envelope = fs::read_to_string(&arguments.signature)
+    let payload = fs::read(&arguments.payload_path)
+        .map_err(|error| format!("could not read payload: {error}"))?;
+    let signature_envelope = fs::read_to_string(&arguments.signature_path)
         .map_err(|error| format!("could not read signature: {error}"))?;
     verify_bytes(&payload, &signature_envelope, &arguments.public_key)
 }
 
-fn verify_bytes(payload: &[u8], signature_envelope: &str, public_key: &str) -> Result<(), String> {
-    let public_key = PublicKey::decode(&decode_envelope(public_key, "public key")?)
+fn verify_bytes(
+    payload: &[u8],
+    signature_envelope: &str,
+    public_key_envelope: &str,
+) -> Result<(), String> {
+    let public_key = PublicKey::decode(&decode_envelope(public_key_envelope, "public key")?)
         .map_err(|_| "public key envelope is malformed".to_owned())?;
     let signature = Signature::decode(&decode_envelope(signature_envelope, "signature")?)
         .map_err(|_| "signature envelope is malformed".to_owned())?;

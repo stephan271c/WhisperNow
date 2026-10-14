@@ -38,7 +38,7 @@ pub enum SettingsNotice {
 
 pub struct SettingsStore {
     paths: AppPaths,
-    keys: Arc<dyn CredentialStore>,
+    credentials: Arc<dyn CredentialStore>,
 }
 
 impl SettingsStore {
@@ -48,8 +48,8 @@ impl SettingsStore {
     }
 
     #[must_use]
-    pub fn with_store(paths: AppPaths, keys: Arc<dyn CredentialStore>) -> Self {
-        Self { paths, keys }
+    pub fn with_store(paths: AppPaths, credentials: Arc<dyn CredentialStore>) -> Self {
+        Self { paths, credentials }
     }
 
     /// Loads the saved settings; without a file they are the defaults. The Python
@@ -105,7 +105,7 @@ impl SettingsStore {
     /// The API key of `provider` in the credential store. Callers ask only when
     /// [`Settings::api_keys`] says it holds one.
     pub fn api_key(&self, provider: LlmProvider) -> Result<Option<ApiKey>, AppError> {
-        self.keys.read(&account(provider)).map_err(|_| {
+        self.credentials.read(&account(provider)).map_err(|_| {
             redacted(
                 "credential_store_unavailable",
                 "The OS credential store is unavailable, so the API key cannot be used",
@@ -120,12 +120,12 @@ impl SettingsStore {
         provider: LlmProvider,
         key: &ApiKey,
     ) -> Result<(), CredentialStoreUnavailable> {
-        self.keys.write(&account(provider), key)
+        self.credentials.write(&account(provider), key)
     }
 
     /// Removes the API key of `provider` from the credential store; an absent key is removed.
     pub fn delete_api_key(&self, provider: LlmProvider) -> Result<(), CredentialStoreUnavailable> {
-        self.keys.delete(&account(provider))
+        self.credentials.delete(&account(provider))
     }
 
     /// Imports the Python release's settings: its API keys move into the credential
@@ -147,12 +147,12 @@ impl SettingsStore {
                 "The earlier version's settings could not be imported",
             )
         })?;
-        let mut refused = false;
+        let mut key_import_failed = false;
         for (provider, key) in &api_keys {
             if self.store_api_key(*provider, key).is_ok() {
                 settings.api_keys.insert(*provider);
             } else {
-                refused = true;
+                key_import_failed = true;
             }
         }
         self.save(&settings)?;
@@ -160,7 +160,7 @@ impl SettingsStore {
             keys = settings.api_keys.len(),
             "imported the earlier version's settings"
         );
-        let notice = refused.then_some(SettingsNotice::ApiKeysNotImported { path: kept });
+        let notice = key_import_failed.then_some(SettingsNotice::ApiKeysNotImported { path: kept });
         Ok((settings, notice))
     }
 }

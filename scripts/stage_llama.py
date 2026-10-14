@@ -37,8 +37,8 @@ def load_pins(path: Path, platform: str) -> tuple[dict, list[dict], list[str]]:
         raise ValueError(f"native allowlist has no llama.cpp {platform!r} entry")
     runtime = llama.get("msvc_runtime", {}).get(platform, [])
     for name in [library["name"] for library in libraries] + runtime:
-        path = PurePosixPath(name)
-        if len(path.parts) != 1 or path.name in ("", ".", ".."):
+        library_path = PurePosixPath(name)
+        if len(library_path.parts) != 1 or library_path.name in ("", ".", ".."):
             raise ValueError(f"llama.cpp library name is not a plain file name: {name}")
     return archive, libraries, runtime
 
@@ -126,16 +126,16 @@ def main() -> int:
                 else f"{args.platform} llama.cpp takes no --msvc-runtime"
             )
         with tempfile.TemporaryDirectory() as directory:
-            downloaded = Path(directory) / archive["name"]
+            archive_path = Path(directory) / archive["name"]
             if args.archive is None:
-                fetch(archive["source"], downloaded)
+                fetch(archive["source"], archive_path)
             else:
-                shutil.copyfile(args.archive, downloaded)
-            if not matches_pin(downloaded, archive):
+                shutil.copyfile(args.archive, archive_path)
+            if not matches_pin(archive_path, archive):
                 raise ValueError(
                     f"llama.cpp archive size or SHA-256 does not match the allowlist: {archive['name']}"
                 )
-            stage(downloaded, libraries, args.output, runtime, args.msvc_runtime)
+            stage(archive_path, libraries, args.output, runtime, args.msvc_runtime)
     except (OSError, ValueError, KeyError, json.JSONDecodeError, tarfile.TarError, zipfile.BadZipFile) as error:
         parser.error(str(error))
     print(args.output.resolve())

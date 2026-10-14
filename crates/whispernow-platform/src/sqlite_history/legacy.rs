@@ -15,8 +15,8 @@ struct LegacyRecord {
     timestamp: String,
     /// `[ERROR]` when recognition failed.
     raw_text: String,
-    #[serde(default)]
-    enhanced_text: Option<String>,
+    #[serde(default, rename = "enhanced_text")]
+    cleaned_text: Option<String>,
 }
 
 /// Imports `history.json` once: it is renamed to `history.json.migrated` afterwards.
@@ -74,7 +74,7 @@ fn import_record(transaction: &Transaction<'_>, record: LegacyRecord) -> Result<
             params![
                 created_at.get(),
                 raw_text,
-                record.enhanced_text.filter(|_| !failed),
+                record.cleaned_text.filter(|_| !failed),
                 status_text(status),
                 error,
             ],

@@ -59,7 +59,7 @@ fn each_model_has_the_artifacts_its_family_needs() {
     for model in ModelRegistry::builtin().models() {
         let id = model.id.as_str();
         let artifacts = model.layout.required_artifacts();
-        let has = |suffix: &str| artifacts.iter().any(|path| path.ends_with(suffix));
+        let has_artifact = |suffix: &str| artifacts.iter().any(|path| path.ends_with(suffix));
         match model.family() {
             ModelFamily::Transducer => {
                 // The id names the precision every network file is in.
@@ -68,17 +68,23 @@ fn each_model_has_the_artifacts_its_family_needs() {
                     .find(|part| ["fp16", "int8"].contains(part))
                     .expect("a precision in the id");
                 for part in ["encoder", "decoder", "joiner"] {
-                    assert!(has(&format!("{part}.{precision}.onnx")), "{id} {part}");
+                    assert!(
+                        has_artifact(&format!("{part}.{precision}.onnx")),
+                        "{id} {part}"
+                    );
                 }
-                assert!(has("tokens.txt"), "{id}");
+                assert!(has_artifact("tokens.txt"), "{id}");
             }
             ModelFamily::Whisper => {
                 for suffix in ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"] {
-                    assert!(has(suffix), "{id} {suffix}");
+                    assert!(has_artifact(suffix), "{id} {suffix}");
                 }
             }
             ModelFamily::SenseVoice => {
-                assert!(has("model.int8.onnx") && has("tokens.txt"), "{id}");
+                assert!(
+                    has_artifact("model.int8.onnx") && has_artifact("tokens.txt"),
+                    "{id}"
+                );
             }
             ModelFamily::Qwen3Asr => {
                 for suffix in [
@@ -86,7 +92,7 @@ fn each_model_has_the_artifacts_its_family_needs() {
                     "tokenizer/vocab.json",
                     "tokenizer/merges.txt",
                 ] {
-                    assert!(has(suffix), "{id} {suffix}");
+                    assert!(has_artifact(suffix), "{id} {suffix}");
                 }
             }
             ModelFamily::Cleanup => assert_eq!(artifacts, ["model-Q8_0.gguf"], "{id}"),

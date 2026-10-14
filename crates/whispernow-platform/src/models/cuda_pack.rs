@@ -173,14 +173,14 @@ impl ModelStore {
             .iter()
             .flat_map(|archive| archive.members.iter());
         let mut artifacts = Vec::new();
-        let mut invalid_archive = false;
+        let mut invalid_artifact = false;
         for &(member, name) in required {
             if validate_artifact_path(root, Path::new(name))
                 .map_err(|_| ModelStoreError::InvalidArchive)?
             {
                 continue;
             }
-            invalid_archive = true;
+            invalid_artifact = true;
             if !root.join(name).exists() {
                 artifacts.push(member.to_owned());
             }
@@ -189,7 +189,7 @@ impl ModelStore {
             artifacts.sort();
             return Err(ModelStoreError::MissingArtifacts { artifacts });
         }
-        if invalid_archive {
+        if invalid_artifact {
             return Err(ModelStoreError::InvalidArchive);
         }
         Ok(())
@@ -206,11 +206,11 @@ impl ModelStore {
             return Err(ModelStoreError::Unsupported);
         }
         let root = self.paths.cuda_pack_dir();
-        let total = self.cuda_pack_size();
-        let complete = |phase| DownloadProgress {
+        let total_bytes = self.cuda_pack_size();
+        let phase_progress = |phase| DownloadProgress {
             phase,
-            downloaded_bytes: total,
-            total_bytes: Some(total),
+            downloaded_bytes: total_bytes,
+            total_bytes: Some(total_bytes),
         };
         {
             let _guard = self.lock_store();
@@ -220,7 +220,7 @@ impl ModelStore {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(_) => return Err(filesystem("keep the CUDA pack")),
                 }
-                observer(complete(DownloadPhase::Complete));
+                observer(phase_progress(DownloadPhase::Complete));
                 return Ok(());
             }
         }
@@ -230,19 +230,19 @@ impl ModelStore {
             .prefix(".llama-cuda-stage-")
             .tempdir_in(data_dir)
             .map_err(|_| filesystem("create CUDA pack staging directory"))?;
-        let mut done = 0_u64;
+        let mut downloaded_bytes = 0_u64;
         for archive in self.cuda_pack {
-            let mut file = Builder::new()
+            let mut download = Builder::new()
                 .prefix(".llama-cuda-download-")
                 .suffix(".part")
                 .tempfile_in(data_dir)
                 .map_err(|_| filesystem("create download staging file"))?;
             // Progress over the whole pack, not this one archive.
-            let overall = |progress: DownloadProgress| {
+            let report_progress = |progress: DownloadProgress| {
                 observer(DownloadProgress {
                     phase: progress.phase,
-                    downloaded_bytes: done.saturating_add(progress.downloaded_bytes),
-                    total_bytes: Some(total),
+                    downloaded_bytes: downloaded_bytes.saturating_add(progress.downloaded_bytes),
+                    total_bytes: Some(total_bytes),
                 });
             };
             self.runtime.block_on(download_file(
@@ -252,20 +252,20 @@ impl ModelStore {
                     size_bytes: archive.size_bytes,
                     sha256: archive.sha256,
                 },
-                &mut file,
+                &mut download,
                 cancellation,
-                &overall,
+                &report_progress,
             ))?;
-            done = done.saturating_add(archive.size_bytes);
+            downloaded_bytes = downloaded_bytes.saturating_add(archive.size_bytes);
             observer(DownloadProgress {
                 phase: DownloadPhase::Extracting,
-                downloaded_bytes: done,
-                total_bytes: Some(total),
+                downloaded_bytes,
+                total_bytes: Some(total_bytes),
             });
-            extract(archive, file.path(), staging.path(), cancellation)?;
+            extract(archive, download.path(), staging.path(), cancellation)?;
         }
         self.validate_cuda_pack(staging.path())?;
-        observer(complete(DownloadPhase::Installing));
+        observer(phase_progress(DownloadPhase::Installing));
         check_cancelled(cancellation)?;
         {
             let _guard = self.lock_store();
@@ -277,7 +277,7 @@ impl ModelStore {
             let _moved = staging.keep();
             sync_directory(data_dir).map_err(|_| filesystem("sync models directory"))?;
         }
-        observer(complete(DownloadPhase::Complete));
+        observer(phase_progress(DownloadPhase::Complete));
         Ok(())
     }
 

@@ -99,18 +99,18 @@ impl VirtualKeyboard {
 
     pub fn press(&mut self, shortcut: PasteShortcut) -> io::Result<()> {
         let keys = shortcut.keys();
-        let mut pressed = 0;
+        let mut pressed_count = 0;
         let mut result = Ok(());
         for key in keys {
             result = self.key(*key, 1);
             if result.is_err() {
                 break;
             }
-            pressed += 1;
+            pressed_count += 1;
         }
         // Every pressed key is released, even after a failure, so no modifier
         // stays held.
-        for key in keys[..pressed].iter().rev() {
+        for key in keys[..pressed_count].iter().rev() {
             let released = self.key(*key, 0);
             result = result.and(released);
         }

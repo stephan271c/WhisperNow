@@ -62,12 +62,12 @@ impl PythonSettings {
         pick(document, "window_geometry", &mut settings.window_geometry);
         // A stored shortcut missing its modifiers or key takes the default's.
         if let Some(Value::Object(stored)) = document.get("hotkey") {
-            let mut shortcut = serde_json::to_value(&settings.recording_shortcut)
+            let mut shortcut_fields = serde_json::to_value(&settings.recording_shortcut)
                 .ok()
                 .and_then(|value| value.as_object().cloned())
                 .unwrap_or_default();
-            shortcut.extend(stored.clone());
-            if let Ok(shortcut) = serde_json::from_value::<Shortcut>(Value::Object(shortcut))
+            shortcut_fields.extend(stored.clone());
+            if let Ok(shortcut) = serde_json::from_value::<Shortcut>(Value::Object(shortcut_fields))
                 && shortcut.is_recording_shortcut()
             {
                 settings.recording_shortcut = shortcut;
@@ -77,10 +77,12 @@ impl PythonSettings {
         // unless it was turned off.
         let mut hold_enabled = true;
         pick(document, "hotkey_enabled", &mut hold_enabled);
-        let mut toggle = None::<Shortcut>;
-        pick(document, "toggle_hotkey", &mut toggle);
-        if !hold_enabled && let Some(toggle) = toggle.filter(Shortcut::is_recording_shortcut) {
-            settings.recording_shortcut = toggle;
+        let mut toggle_shortcut = None::<Shortcut>;
+        pick(document, "toggle_hotkey", &mut toggle_shortcut);
+        if !hold_enabled
+            && let Some(shortcut) = toggle_shortcut.filter(Shortcut::is_recording_shortcut)
+        {
+            settings.recording_shortcut = shortcut;
             settings.recording_mode = RecordingMode::Toggle;
         }
         if let Some(max_entries) = document

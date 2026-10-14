@@ -36,32 +36,38 @@ def imported_dlls(path: Path) -> list[str]:
 
     if data[:2] != b"MZ" or data[u32(0x3C) : u32(0x3C) + 4] != b"PE\0\0":
         raise ValueError(f"{path.name} is not a PE file")
-    coff = u32(0x3C) + 4
-    optional = coff + 20
-    directories = optional + {0x10B: 96, 0x20B: 112}.get(u16(optional), 0)
-    if directories == optional:
+    coff_offset = u32(0x3C) + 4
+    optional_offset = coff_offset + 20
+    directories_offset = optional_offset + {0x10B: 96, 0x20B: 112}.get(u16(optional_offset), 0)
+    if directories_offset == optional_offset:
         raise ValueError(f"{path.name} has an unknown optional header")
-    first_section = optional + u16(coff + 16)
+    first_section_offset = optional_offset + u16(coff_offset + 16)
     sections = [
-        (u32(section + 12), u32(section + 8) or u32(section + 16), u32(section + 20))
-        for section in range(first_section, first_section + 40 * u16(coff + 2), 40)
+        (
+            u32(section_offset + 12),
+            u32(section_offset + 8) or u32(section_offset + 16),
+            u32(section_offset + 20),
+        )
+        for section_offset in range(
+            first_section_offset, first_section_offset + 40 * u16(coff_offset + 2), 40
+        )
     ]
 
     def offset(rva: int) -> int:
-        for address, size, raw in sections:
+        for address, size, raw_offset in sections:
             if address <= rva < address + size:
-                return rva - address + raw
+                return rva - address + raw_offset
         raise ValueError(f"{path.name} points outside its sections")
 
     names = []
-    for index, size, name_field in IMPORT_TABLES:
-        if index >= u32(directories - 4) or u32(directories + 8 * index) == 0:
+    for index, descriptor_size, name_offset in IMPORT_TABLES:
+        if index >= u32(directories_offset - 4) or u32(directories_offset + 8 * index) == 0:
             continue
-        descriptor = offset(u32(directories + 8 * index))
-        while u32(descriptor + name_field):
-            start = offset(u32(descriptor + name_field))
+        descriptor_offset = offset(u32(directories_offset + 8 * index))
+        while u32(descriptor_offset + name_offset):
+            start = offset(u32(descriptor_offset + name_offset))
             names.append(data[start : data.index(b"\0", start)].decode("ascii"))
-            descriptor += size
+            descriptor_offset += descriptor_size
     return names
 
 

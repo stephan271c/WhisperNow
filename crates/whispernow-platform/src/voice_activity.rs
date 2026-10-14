@@ -56,13 +56,13 @@ struct SileroVoiceActivity {
 
 impl SileroVoiceActivity {
     fn new(model_path: &Path) -> Result<Self, SileroVadError> {
-        let model = model_path
+        let model_path = model_path
             .to_str()
-            .filter(|model| !model.as_bytes().contains(&0))
+            .filter(|path| !path.as_bytes().contains(&0))
             .ok_or(SileroVadError::InvalidModelPath)?;
         let config = VadModelConfig {
             silero_vad: SileroVadModelConfig {
-                model: Some(model.to_owned()),
+                model: Some(model_path.to_owned()),
                 threshold: SPEECH_THRESHOLD,
                 min_silence_duration: MIN_SILENCE_DURATION_SECONDS,
                 min_speech_duration: MIN_SPEECH_DURATION_SECONDS,

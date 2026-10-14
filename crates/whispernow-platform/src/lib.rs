@@ -56,7 +56,7 @@ pub fn init_logging() {
     for directive in ["rig=off", "rig_core=off"] {
         filter = filter.add_directive(directive.parse().expect("static logging directive"));
     }
-    let _subscriber_was_installed = tracing_subscriber::fmt()
+    let _init_result = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(true)
         .try_init();

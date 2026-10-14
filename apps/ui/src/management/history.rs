@@ -47,7 +47,7 @@ impl ManagementState {
             return;
         }
         self.history_unavailable = None;
-        self.history_search_failed = None;
+        self.history_search_error = None;
         self.history_rows_filter = Some(self.history_filter.clone());
         self.history = page.entries;
         self.history_has_more = page.has_more;
@@ -69,7 +69,7 @@ impl ManagementState {
             // The rows answer an earlier search; showing them under this one would mislead.
             self.history.clear();
             self.history_has_more = false;
-            self.history_search_failed = Some(summary);
+            self.history_search_error = Some(summary);
         } else {
             self.notify(Tone::Error, NoticeScope::History, summary);
         }

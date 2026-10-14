@@ -254,7 +254,7 @@ impl Fixture {
             audio,
             models,
             voice_activity: Arc::new(|| Box::new(Loudness)),
-            llm: Arc::new(AiCleanup {
+            cleanup: Arc::new(AiCleanup {
                 service: Arc::clone(&provider) as Arc<dyn LlmService>,
                 runtime: Arc::new(
                     tokio::runtime::Builder::new_current_thread()

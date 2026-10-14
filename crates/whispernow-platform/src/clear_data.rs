@@ -35,14 +35,14 @@ impl AppPaths {
             .inspect_targets(categories)?
             .into_iter()
             .filter(|location| location.path != cuda_pack);
-        let mut retained_audio_removed = true;
+        let mut recordings_removed = true;
         let mut entries = Vec::new();
         for DataLocation { category, path } in targets {
-            let deleted = (retained_audio_removed || !self.is_lifecycle_database(&path))
+            let deleted = (recordings_removed || !self.is_lifecycle_database(&path))
                 && remove_path(&path)
                     .map_or_else(|error| error.kind() == io::ErrorKind::NotFound, |()| true);
             if path == self.recordings_dir() && !deleted {
-                retained_audio_removed = false;
+                recordings_removed = false;
             }
             entries.push(ClearDataItem {
                 category,

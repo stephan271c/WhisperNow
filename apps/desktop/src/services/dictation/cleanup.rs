@@ -40,12 +40,12 @@ impl AiCleanup {
             },
             "batch pipeline stage completed"
         );
-        let llm_model = result.is_ok().then(|| match &plan.target {
+        let cleanup_model = result.is_ok().then(|| match &plan.target {
             CleanupTarget::Local { model } => model.as_str().to_owned(),
             CleanupTarget::Remote(target) => target.model.clone(),
         });
         prepared.apply_cleanup(result);
-        llm_model
+        cleanup_model
     }
 
     fn run(

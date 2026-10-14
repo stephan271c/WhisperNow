@@ -140,19 +140,19 @@ fn resolve_keys(
             .copied()
             .find(|keycode| *keycode != 0)
     };
-    let mut held: Vec<u8> = modifiers
+    let mut modifier_keycodes: Vec<u8> = modifiers
         .keycodes
         .iter()
         .copied()
         .filter(|keycode| *keycode != 0)
         .collect();
-    held.sort_unstable();
-    held.dedup();
+    modifier_keycodes.sort_unstable();
+    modifier_keycodes.dedup();
     Some(Keys {
         control: first_in_row(CONTROL_MODIFIER_ROW)?,
         shift: first_in_row(SHIFT_MODIFIER_ROW)?,
         v: keycode_for(XK_V_LOWER)?,
-        modifiers: held,
+        modifiers: modifier_keycodes,
     })
 }
 

@@ -35,7 +35,7 @@ pub(super) fn HistoryScreen() -> Element {
     let mut management = context.management;
     let clock = use_clock();
     // The search waiting for typing to pause; a key press restarts it.
-    let mut search = use_signal(|| None::<Task>);
+    let mut search_task = use_signal(|| None::<Task>);
     let copied = management.read().history_copied;
     let blocked = |operation| context.blocked(operation);
     let settings = management.read().shown_settings().cloned();
@@ -46,10 +46,10 @@ pub(super) fn HistoryScreen() -> Element {
     let has_more = management.read().history_has_more;
     let filter = management.read().history_filter.clone();
     let search_text = management.read().history_search.clone();
-    let search_failed = management.read().history_search_failed.clone();
+    let search_error = management.read().history_search_error.clone();
     let filtered = filter != HistoryFilter::default();
     let groups = group_by_day(clock, &entries);
-    let folder_pending = blocked(UiOperation::OpenRecordingsFolder).is_some();
+    let folder_blocked = blocked(UiOperation::OpenRecordingsFolder).is_some();
     rsx! { div { class: "history-page",
         header { class: "history-header",
             p { class: "history-retention",
@@ -63,7 +63,7 @@ pub(super) fn HistoryScreen() -> Element {
             }
             div { class: "history-header-actions",
                 Button { id: OPEN_FOLDER_ID, size: ButtonSize::Sm,
-                    disabled: folder_pending,
+                    disabled: folder_blocked,
                     onclick: move |_| context.open_recordings_folder(),
                     Icon { name: IconName::Folder }
                     "Open recordings folder"
@@ -93,16 +93,16 @@ pub(super) fn HistoryScreen() -> Element {
                 TextInput { id: SEARCH_ID, r#type: "search", value: "{search_text}",
                     placeholder: "Search transcripts",
                     maxlength: "{HistoryFilter::MAX_QUERY_BYTES}",
-                    aria_describedby: search_failed.as_ref().map(|_| SEARCH_ERROR_ID),
-                    aria_invalid: search_failed.as_ref().map(|_| "true"),
+                    aria_describedby: search_error.as_ref().map(|_| SEARCH_ERROR_ID),
+                    aria_invalid: search_error.as_ref().map(|_| "true"),
                     oninput: move |event: FormEvent| {
                         management.write().history_search = event.value();
-                        if let Some(waiting) = search.take() {
+                        if let Some(waiting) = search_task.take() {
                             waiting.cancel();
                         }
-                        search.set(Some(spawn(async move {
+                        search_task.set(Some(spawn(async move {
                             crate::client::delay(SEARCH_PAUSE_MS).await;
-                            search.set(None);
+                            search_task.set(None);
                             context.search_history();
                         })));
                     },
@@ -117,7 +117,7 @@ pub(super) fn HistoryScreen() -> Element {
             }
             if loading {
                 p { class: "history-status", role: "status", "Loading transcripts…" }
-            } else if let Some(problem) = &search_failed {
+            } else if let Some(problem) = &search_error {
                 p { class: "history-status", id: SEARCH_ERROR_ID, role: "alert", "{problem}" }
             } else if entries.is_empty() && filtered {
                 EmptyState { icon: IconName::History, title: "No matching transcripts",

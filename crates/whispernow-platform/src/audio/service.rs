@@ -148,7 +148,7 @@ impl Worker {
         mut processor: AudioProcessor,
     ) -> Result<(), AudioInputError> {
         let mut last_default_check = Instant::now();
-        let mut last_level = Instant::now();
+        let mut last_observation = Instant::now();
         loop {
             if self.stop_requested.load(Ordering::Acquire) {
                 let stream_result = self.stream.stop();
@@ -182,9 +182,9 @@ impl Worker {
                         StreamFault::StreamError.store(&self.fault);
                         continue;
                     }
-                    if last_level.elapsed() >= LEVEL_OBSERVATION_INTERVAL {
+                    if last_observation.elapsed() >= LEVEL_OBSERVATION_INTERVAL {
                         self.sink.observe(processor.take_level_summary());
-                        last_level = Instant::now();
+                        last_observation = Instant::now();
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -519,17 +519,17 @@ mod tests {
 
     #[test]
     fn device_fault_delivers_audio_queued_before_the_fault() {
-        let requested_backend = Arc::new(FakeBackend::new([vec![0.5; 96_000]]));
-        let requested_service = service(requested_backend);
-        let requested_sink = Arc::new(RecordingSink::default());
+        let reference_backend = Arc::new(FakeBackend::new([vec![0.5; 96_000]]));
+        let reference_service = service(reference_backend);
+        let reference_sink = Arc::new(RecordingSink::default());
         start(
-            &requested_service,
-            Arc::clone(&requested_sink) as Arc<dyn AudioSink>,
+            &reference_service,
+            Arc::clone(&reference_sink) as Arc<dyn AudioSink>,
         )
         .expect("start reference capture")
         .stop()
         .expect("stop reference capture");
-        let expected = requested_sink.delivered_samples();
+        let expected = reference_sink.delivered_samples();
         assert!(expected > 0);
 
         let backend = Arc::new(FakeBackend::new([vec![0.5; 96_000]]));

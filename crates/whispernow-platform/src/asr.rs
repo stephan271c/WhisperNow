@@ -118,12 +118,12 @@ fn recognizer_config(model: &ResolvedModel) -> Result<OfflineRecognizerConfig, A
             vocab,
             ..
         } => {
-            let tokenizer = Path::new(vocab).parent().ok_or(AsrError::LoadFailed)?;
+            let tokenizer_dir = Path::new(vocab).parent().ok_or(AsrError::LoadFailed)?;
             config.model_config.qwen3_asr = OfflineQwen3ASRModelConfig {
                 conv_frontend: Some(path(conv_frontend)?),
                 encoder: Some(path(encoder)?),
                 decoder: Some(path(decoder)?),
-                tokenizer: Some(artifact_path(&model.root, tokenizer)?),
+                tokenizer: Some(artifact_path(&model.root, tokenizer_dir)?),
                 max_total_len: QWEN3_ASR_MAX_TOTAL_TOKENS,
                 max_new_tokens: QWEN3_ASR_MAX_NEW_TOKENS,
                 ..OfflineQwen3ASRModelConfig::default()

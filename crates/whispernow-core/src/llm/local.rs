@@ -198,8 +198,8 @@ pub fn decode<C: DecodeContext>(
         draft,
     } = request;
     context.clear();
-    let n_ctx = context.context_size();
-    if prompt.is_empty() || prompt.len() + 1 >= n_ctx {
+    let context_size = context.context_size();
+    if prompt.is_empty() || prompt.len() + 1 >= context_size {
         return Err(LocalDecodeError::PromptTooLong);
     }
     let prompt_tokens = prompt.len();
@@ -343,11 +343,11 @@ impl State {
         batch.extend_from_slice(&draft);
         context.decode(&batch, position, Outputs::All)?;
         // The server's `common_sampler_sample_and_accept_n`.
-        let mut ids = Vec::with_capacity(draft.len() + 1);
+        let mut sampled_tokens = Vec::with_capacity(draft.len() + 1);
         let mut matched = true;
         for (index, &drafted) in draft.iter().enumerate() {
             let next = sampler.sample(context.logits(index)?);
-            ids.push(next);
+            sampled_tokens.push(next);
             // Draft tokens after an end of generation are never kept.
             if drafted != next || (context.is_end_of_generation(next) && index + 1 < draft.len()) {
                 matched = false;
@@ -355,14 +355,15 @@ impl State {
             }
         }
         if matched {
-            ids.push(sampler.sample(context.logits(draft.len())?));
+            sampled_tokens.push(sampler.sample(context.logits(draft.len())?));
         }
-        self.reply.accepted += ids.len() - 1;
+        self.reply.accepted += sampled_tokens.len() - 1;
         self.cached.push(self.sampled);
-        self.cached.extend_from_slice(&ids[..ids.len() - 1]);
+        self.cached
+            .extend_from_slice(&sampled_tokens[..sampled_tokens.len() - 1]);
         context.remove_from(self.cached.len())?;
-        self.sampled = ids[ids.len() - 1];
-        for &token in &ids {
+        self.sampled = sampled_tokens[sampled_tokens.len() - 1];
+        for &token in &sampled_tokens {
             if let Some(finish) = self.reply.push(context, token, &self.cached, max_tokens) {
                 return Ok(Some(finish));
             }
@@ -395,16 +396,16 @@ impl State {
         if aligner.is_empty() {
             return Ok(draft);
         }
-        let words = aligner.draft(&self.reply.text);
-        if words.is_empty() {
+        let draft_text = aligner.draft(&self.reply.text);
+        if draft_text.is_empty() {
             return Ok(draft);
         }
-        let mut text_draft = self.tokenize_draft(context, &words)?;
-        text_draft.truncate(limit.min(DRAFT_TOKENS));
-        Ok(if text_draft.is_empty() {
+        let mut draft_tokens = self.tokenize_draft(context, &draft_text)?;
+        draft_tokens.truncate(limit.min(DRAFT_TOKENS));
+        Ok(if draft_tokens.is_empty() {
             draft
         } else {
-            text_draft
+            draft_tokens
         })
     }
 
@@ -413,7 +414,7 @@ impl State {
     fn tokenize_draft<C: DecodeContext>(
         &self,
         context: &C,
-        words: &[u8],
+        draft_text: &[u8],
     ) -> Result<Vec<Token>, LocalDecodeError> {
         let tail_length = DRAFT_TAIL_TOKENS
             .min(self.reply.tokens.len().max(1))
@@ -424,12 +425,12 @@ impl State {
             .iter()
             .flat_map(|&token| context.piece(token))
             .collect();
-        text.extend_from_slice(words);
+        text.extend_from_slice(draft_text);
         let joined = context.tokenize(&text, false)?;
         if joined.len() > tail.len() && joined.starts_with(&tail) {
             Ok(joined[tail.len()..].to_vec())
         } else {
-            context.tokenize(words, false)
+            context.tokenize(draft_text, false)
         }
     }
 }
@@ -451,11 +452,11 @@ pub fn ngram_draft(cached: &[Token], sampled: Token) -> Vec<Token> {
     let Some(start) = found else {
         return Vec::new();
     };
-    let copy = DRAFT_TOKENS.min(length - (start + NGRAM_SIZE));
-    if copy < NGRAM_SIZE {
+    let draft_len = DRAFT_TOKENS.min(length - (start + NGRAM_SIZE));
+    if draft_len < NGRAM_SIZE {
         return Vec::new();
     }
-    cached[start + NGRAM_SIZE..start + NGRAM_SIZE + copy].to_vec()
+    cached[start + NGRAM_SIZE..start + NGRAM_SIZE + draft_len].to_vec()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

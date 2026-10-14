@@ -1,4 +1,4 @@
-const listenerOwners = new Map();
+const unlisteners = new Map();
 let nextListenerId = 1;
 
 function tauri() {
@@ -39,14 +39,14 @@ export async function writeClipboardText(text) {
 export async function listenTyped(name, callback) {
   const unlisten = await tauri().event.listen(name, (event) => callback(event.payload));
   const id = nextListenerId++;
-  listenerOwners.set(id, unlisten);
+  unlisteners.set(id, unlisten);
   return id;
 }
 
 export function unlistenTyped(listenerId) {
-  const unlisten = listenerOwners.get(listenerId);
+  const unlisten = unlisteners.get(listenerId);
   if (unlisten) {
-    listenerOwners.delete(listenerId);
+    unlisteners.delete(listenerId);
     unlisten();
   }
 }
@@ -106,7 +106,7 @@ export async function listenMaximized(callback) {
   const report = async () => callback(await current.isMaximized());
   const unlisten = await current.onResized(report);
   const id = nextListenerId++;
-  listenerOwners.set(id, unlisten);
+  unlisteners.set(id, unlisten);
   try {
     await report();
   } catch (error) {

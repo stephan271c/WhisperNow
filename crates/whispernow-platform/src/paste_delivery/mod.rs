@@ -41,10 +41,10 @@ const MODIFIER_RELEASE_TIMEOUT: Duration = Duration::from_millis(400);
 const MODIFIER_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 pub(crate) fn wait_until_modifiers_released(
-    mut is_held: impl FnMut() -> Result<bool, NativePasteError>,
+    mut poll_modifiers: impl FnMut() -> Result<bool, NativePasteError>,
 ) -> Result<(), NativePasteError> {
     let deadline = Instant::now() + MODIFIER_RELEASE_TIMEOUT;
-    while is_held()? {
+    while poll_modifiers()? {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(NativePasteError::ModifierStillHeld);
@@ -149,14 +149,11 @@ mod tests {
     #[test]
     fn a_modifier_released_in_time_lets_the_paste_go_on() {
         let polls = Cell::new(0);
-        let released_on_third_poll = || {
+        let poll_modifier = || {
             polls.set(polls.get() + 1);
             Ok(polls.get() < 3)
         };
-        assert_eq!(
-            wait_until_modifiers_released(released_on_third_poll),
-            Ok(())
-        );
+        assert_eq!(wait_until_modifiers_released(poll_modifier), Ok(()));
         assert_eq!(polls.get(), 3);
     }
 

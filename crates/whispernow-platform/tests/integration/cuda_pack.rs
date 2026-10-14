@@ -71,11 +71,11 @@ fn runtime_archive(runtime: &[&str]) -> Vec<u8> {
 
 struct Fixture {
     _root: TempDir,
-    manager: ModelStore,
+    store: ModelStore,
     paths: AppPaths,
 }
 
-/// A manager whose pack is the two fixture archives, the runtime's digest replaced when
+/// A store whose pack is the two fixture archives, the runtime's digest replaced when
 /// `runtime_sha256` is given.
 fn fixture(runtime_sha256: Option<&'static str>) -> (Fixture, FixtureServer, u64) {
     let libraries = CUDA_LIBRARIES.expect("this platform has a CUDA pack");
@@ -125,7 +125,7 @@ fn fixture_archives(
     let total = backend_size + runtime_size;
     let root = tempdir().expect("temporary root");
     let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
-    let manager = ModelStore::with_registry_and_timeouts(
+    let store = ModelStore::with_registry_and_timeouts(
         whispernow_domain::ModelRegistry::builtin(),
         paths.clone(),
         DownloadTimeouts {
@@ -138,7 +138,7 @@ fn fixture_archives(
     (
         Fixture {
             _root: root,
-            manager,
+            store,
             paths,
         },
         server,
@@ -157,16 +157,16 @@ fn recorded() -> (Arc<Mutex<Vec<DownloadProgress>>>, impl Fn(DownloadProgress)) 
 #[test]
 fn the_pack_installs_its_files_flat_from_a_tar_gz_and_a_zip_with_progress_over_both() {
     let (fixture, _server, total) = fixture(None);
-    let manager = &fixture.manager;
-    assert_eq!(manager.cuda_pack_state(), CudaPackState::NotInstalled);
-    assert_eq!(manager.cuda_pack_size(), total);
+    let store = &fixture.store;
+    assert_eq!(store.cuda_pack_state(), CudaPackState::NotInstalled);
+    assert_eq!(store.cuda_pack_size(), total);
     let (progress, observer) = recorded();
-    manager
+    store
         .download_cuda_pack(&CancellationToken::default(), &observer)
         .expect("installed");
 
-    assert_eq!(manager.cuda_pack_state(), CudaPackState::Installed);
-    let directory = manager.cuda_pack_dir().expect("installed directory");
+    assert_eq!(store.cuda_pack_state(), CudaPackState::Installed);
+    let directory = store.cuda_pack_dir().expect("installed directory");
     let libraries = CUDA_LIBRARIES.expect("pack");
     for name in libraries.files() {
         assert_eq!(
@@ -212,14 +212,11 @@ fn a_wrong_digest_installs_nothing() {
     let (fixture, _server, _) = fixture(Some(wrong));
     let (_, observer) = recorded();
     let result = fixture
-        .manager
+        .store
         .download_cuda_pack(&CancellationToken::default(), &observer);
     assert_eq!(result, Err(ModelStoreError::ChecksumMismatch));
-    assert_eq!(
-        fixture.manager.cuda_pack_state(),
-        CudaPackState::NotInstalled
-    );
-    assert!(fixture.manager.cuda_pack_dir().is_none());
+    assert_eq!(fixture.store.cuda_pack_state(), CudaPackState::NotInstalled);
+    assert!(fixture.store.cuda_pack_dir().is_none());
 }
 
 #[test]
@@ -233,13 +230,13 @@ fn a_missing_runtime_library_reports_the_archive_member_and_installs_nothing() {
     );
     assert_eq!(
         fixture
-            .manager
+            .store
             .download_cuda_pack(&CancellationToken::default(), &|_| {}),
         Err(ModelStoreError::MissingArtifacts {
             artifacts: vec![libraries.runtime[1].to_owned()],
         })
     );
-    assert!(fixture.manager.cuda_pack_dir().is_none());
+    assert!(fixture.store.cuda_pack_dir().is_none());
     assert!(!fixture.paths.cuda_pack_dir().exists());
 }
 
@@ -253,7 +250,7 @@ fn an_empty_backend_is_rejected_before_installation() {
     );
     assert_eq!(
         fixture
-            .manager
+            .store
             .download_cuda_pack(&CancellationToken::default(), &|_| {}),
         Err(ModelStoreError::InvalidArchive)
     );
@@ -279,7 +276,7 @@ fn a_link_cannot_supply_the_required_backend() {
             fixture_archives(backend, runtime_archive(&libraries.runtime), None);
         assert_eq!(
             fixture
-                .manager
+                .store
                 .download_cuda_pack(&CancellationToken::default(), &|_| {}),
             Err(ModelStoreError::MissingArtifacts {
                 artifacts: vec![member.clone()],
@@ -292,20 +289,20 @@ fn a_link_cannot_supply_the_required_backend() {
 #[test]
 fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
     let (fixture, _server, _) = fixture(None);
-    let manager = &fixture.manager;
+    let store = &fixture.store;
     let (_, observer) = recorded();
-    manager
+    store
         .download_cuda_pack(&CancellationToken::default(), &observer)
         .expect("installed");
-    let directory = manager.cuda_pack_dir().expect("installed");
+    let directory = store.cuda_pack_dir().expect("installed");
 
     assert_eq!(
-        manager.remove_cuda_pack(true),
+        store.remove_cuda_pack(true),
         Ok(CudaPackRemovalOutcome::Deferred)
     );
     assert!(directory.exists(), "loaded files stay");
-    assert_eq!(manager.cuda_pack_state(), CudaPackState::NotInstalled);
-    assert!(manager.cuda_pack_dir().is_none(), "nothing loads it again");
+    assert_eq!(store.cuda_pack_state(), CudaPackState::NotInstalled);
+    assert!(store.cuda_pack_dir().is_none(), "nothing loads it again");
 
     let models = fixture.paths.models_dir();
     fs::create_dir_all(&models).expect("models directory");
@@ -329,16 +326,16 @@ fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
     assert!(cleared[0].deleted);
     assert!(directory.exists(), "loaded files survive data clearing");
     assert!(
-        manager.cuda_pack_dir().is_none(),
+        store.cuda_pack_dir().is_none(),
         "the removal marker survives"
     );
 
     // Downloading it again keeps the files there instead.
     let (again, observer) = recorded();
-    manager
+    store
         .download_cuda_pack(&CancellationToken::default(), &observer)
         .expect("kept");
-    assert_eq!(manager.cuda_pack_state(), CudaPackState::Installed);
+    assert_eq!(store.cuda_pack_state(), CudaPackState::Installed);
     assert!(
         again
             .lock()
@@ -349,13 +346,13 @@ fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
     );
 
     assert_eq!(
-        manager.remove_cuda_pack(true),
+        store.remove_cuda_pack(true),
         Ok(CudaPackRemovalOutcome::Deferred)
     );
-    manager.finish_cuda_pack_removal();
+    store.finish_cuda_pack_removal();
     assert!(!directory.exists());
     assert_eq!(
-        manager.remove_cuda_pack(false),
+        store.remove_cuda_pack(false),
         Err(ModelStoreError::NotInstalled)
     );
 }
@@ -365,30 +362,27 @@ fn a_pack_not_in_use_is_removed_at_once() {
     let (fixture, _server, _) = fixture(None);
     let (_, observer) = recorded();
     fixture
-        .manager
+        .store
         .download_cuda_pack(&CancellationToken::default(), &observer)
         .expect("installed");
-    let directory = fixture.manager.cuda_pack_dir().expect("installed");
+    let directory = fixture.store.cuda_pack_dir().expect("installed");
     assert_eq!(
-        fixture.manager.remove_cuda_pack(false),
+        fixture.store.remove_cuda_pack(false),
         Ok(CudaPackRemovalOutcome::Removed)
     );
     assert!(!directory.exists());
-    assert_eq!(
-        fixture.manager.cuda_pack_state(),
-        CudaPackState::NotInstalled
-    );
+    assert_eq!(fixture.store.cuda_pack_state(), CudaPackState::NotInstalled);
 }
 
 #[test]
 fn without_archives_there_is_no_pack() {
     let root = tempdir().expect("temporary root");
     let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
-    let manager = ModelStore::new(paths).with_cuda_pack(&[]);
-    assert_eq!(manager.cuda_pack_state(), CudaPackState::Unsupported);
+    let store = ModelStore::new(paths).with_cuda_pack(&[]);
+    assert_eq!(store.cuda_pack_state(), CudaPackState::Unsupported);
     let (_, observer) = recorded();
     assert_eq!(
-        manager.download_cuda_pack(&CancellationToken::default(), &observer),
+        store.download_cuda_pack(&CancellationToken::default(), &observer),
         Err(ModelStoreError::Unsupported)
     );
 }

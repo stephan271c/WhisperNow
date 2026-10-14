@@ -46,7 +46,7 @@ impl NativeServices {
         let (persisted, settings_notice) = persistence.load()?;
         let history = Arc::new(HistoryStore::open(paths.clone()));
         let startup_history_warning = history.take_warning();
-        let llm_runtime = tokio::runtime::Builder::new_multi_thread()
+        let cleanup_runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("whispernow-llm")
             .enable_all()
@@ -85,11 +85,11 @@ impl NativeServices {
             Arc::clone(&state),
             Arc::clone(&local_cleanup),
         ));
-        let llm = Arc::new(AiCleanup {
+        let cleanup = Arc::new(AiCleanup {
             service: Arc::new(ProviderRouter {
                 local: Arc::clone(&local_cleanup),
             }),
-            runtime: Arc::new(llm_runtime),
+            runtime: Arc::new(cleanup_runtime),
             api_keys: settings.api_keys(),
         });
         let dictation = Dictation::spawn(DictationParts {
@@ -99,7 +99,7 @@ impl NativeServices {
             audio: Arc::clone(&audio),
             models: store,
             voice_activity: Arc::new(move || silero_voice_activity(&vad_model)),
-            llm,
+            cleanup,
             output: output.clone(),
             engine: Box::new(|| Box::new(SherpaAsrEngine::new())),
         })?;

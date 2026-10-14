@@ -143,14 +143,14 @@ impl AudioSink for RecordingSink {
         audio.segments.extend(segments);
         self.captured_samples
             .store(audio.samples.len(), Ordering::Relaxed);
-        let accepted = accepted.len();
+        let accepted_count = accepted.len();
         drop(audio);
         if segment_ended {
             let _worker_stopped = self.worker.send(Message::Segments {
                 session: self.session,
             });
         }
-        if accepted < block.samples().len() {
+        if accepted_count < block.samples().len() {
             self.interrupt(CaptureInterruption::MaximumDuration);
         }
     }
