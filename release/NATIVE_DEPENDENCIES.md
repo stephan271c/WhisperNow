@@ -1,6 +1,6 @@
 # Bundled native dependencies
 
-WhisperNow uses the official `sherpa-onnx` 1.13.6 Rust crate and its default
+WhisperNow uses the official `sherpa-onnx` 1.13.8 Rust crate and its default
 static CPU libraries. The native code is linked into the application executable;
 installers must not contain a separate sherpa-onnx or ONNX Runtime shared
 library and installed binaries must not require a development library path.

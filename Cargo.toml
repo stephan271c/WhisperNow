@@ -52,7 +52,7 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 serde-wasm-bindgen = "=0.6.5"
 sha2 = { version = "=0.11.0", features = ["zeroize"] }
-sherpa-onnx = { version = "=1.13.6", default-features = false, features = ["static"] }
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["static"] }
 tar = { version = "=0.4.46", default-features = false }
 tauri = { version = "=2.11.5", features = ["tray-icon"] }
 tauri-build = "=2.6.3"
@@ -91,10 +91,3 @@ debug = "line-tables-only"
 [profile.release]
 lto = "thin"
 strip = true
-
-[patch.crates-io]
-# Upstream 1.13.6's native result JSON already contains Whisper language and
-# segment metadata, but its safe result type discards those fields. Keep the
-# pinned wrapper source with the minimal upstreamable result-shape fix until a
-# published release exposes the complete native result.
-sherpa-onnx = { path = "vendor/sherpa-onnx" }
