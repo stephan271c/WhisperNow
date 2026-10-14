@@ -85,7 +85,7 @@ def segment(samples: np.ndarray, is_speech) -> list[tuple[int, int]]:
     segments: list[tuple[int, int]] = []
     position = 0
     emitted_end = 0
-    open_: _Open | None = None
+    active: _Open | None = None
 
     def emit(start: int, end: int, speech_samples: int) -> None:
         nonlocal emitted_end
@@ -93,8 +93,8 @@ def segment(samples: np.ndarray, is_speech) -> list[tuple[int, int]]:
         if speech_samples >= MIN_KEPT_SPEECH:
             segments.append((start, end))
 
-    def close(o: _Open) -> None:
-        emit(o.start, min(o.speech_end + PADDING, position), o.speech_samples)
+    def close(segment: _Open) -> None:
+        emit(segment.start, min(segment.speech_end + PADDING, position), segment.speech_samples)
 
     for frame_start in range(0, len(samples), FRAME):
         frame = samples[frame_start : frame_start + FRAME]
@@ -104,42 +104,42 @@ def segment(samples: np.ndarray, is_speech) -> list[tuple[int, int]]:
         start, end = position, position + length
         position = end
         speech = is_speech(frame)
-        if open_ is None:
+        if active is None:
             if not speech:
                 continue
-            open_ = _Open(start=max(start - PADDING, emitted_end, 0), speech_end=start)
+            active = _Open(start=max(start - PADDING, emitted_end, 0), speech_end=start)
         if speech:
-            open_.speech_end = end
-            open_.speech_samples += length
-            open_.held = False
-        open_.recent.append((start, length, float(np.mean(frame[:length] ** 2)), speech))
-        while open_.recent and open_.recent[0][0] < end - CUT_SEARCH:
-            open_.recent.popleft()
-        pause = end - open_.speech_end
-        if not speech and not open_.held and pause >= END_SILENCE:
-            if open_.speech_samples >= MIN_SEGMENT_SPEECH:
-                close(open_)
-                open_ = None
+            active.speech_end = end
+            active.speech_samples += length
+            active.held = False
+        active.recent.append((start, length, float(np.mean(frame[:length] ** 2)), speech))
+        while active.recent and active.recent[0][0] < end - CUT_SEARCH:
+            active.recent.popleft()
+        pause = end - active.speech_end
+        if not speech and not active.held and pause >= END_SILENCE:
+            if active.speech_samples >= MIN_SEGMENT_SPEECH:
+                close(active)
+                active = None
                 continue
-            open_.held = True
-        if open_.held and pause >= MAX_MERGE_GAP:
-            close(open_)
-            open_ = None
+            active.held = True
+        if active.held and pause >= MAX_MERGE_GAP:
+            close(active)
+            active = None
             continue
-        if end - open_.start >= MAX_SEGMENT:
-            candidates = [f for f in reversed(open_.recent) if f[0] > open_.start]
+        if end - active.start >= MAX_SEGMENT:
+            candidates = [f for f in reversed(active.recent) if f[0] > active.start]
             cut = min(candidates, key=lambda f: f[2])[0] if candidates else position
-            remainder = sum(f[1] for f in open_.recent if f[3] and f[0] >= cut)
-            emit(open_.start, cut, open_.speech_samples - remainder)
+            remaining_speech = sum(f[1] for f in active.recent if f[3] and f[0] >= cut)
+            emit(active.start, cut, active.speech_samples - remaining_speech)
             if cut < position:
-                open_.recent = deque(f for f in open_.recent if f[0] >= cut)
-                open_.start = cut
-                open_.speech_end = max(open_.speech_end, cut)
-                open_.speech_samples = remainder
+                active.recent = deque(f for f in active.recent if f[0] >= cut)
+                active.start = cut
+                active.speech_end = max(active.speech_end, cut)
+                active.speech_samples = remaining_speech
             else:
-                open_ = None
-    if open_ is not None:
-        close(open_)
+                active = None
+    if active is not None:
+        close(active)
     return segments
 
 
@@ -248,16 +248,16 @@ class Speaker:
     def __init__(self) -> None:
         import sherpa_onnx as so
 
-        d = KOKORO_DIR
+        model_dir = KOKORO_DIR
         config = so.OfflineTtsConfig(
             model=so.OfflineTtsModelConfig(
                 kokoro=so.OfflineTtsKokoroModelConfig(
-                    model=str(d / "model.int8.onnx"),
-                    voices=str(d / "voices.bin"),
-                    tokens=str(d / "tokens.txt"),
-                    data_dir=str(d / "espeak-ng-data"),
-                    dict_dir=str(d / "dict"),
-                    lexicon=str(d / "lexicon-us-en.txt"),
+                    model=str(model_dir / "model.int8.onnx"),
+                    voices=str(model_dir / "voices.bin"),
+                    tokens=str(model_dir / "tokens.txt"),
+                    data_dir=str(model_dir / "espeak-ng-data"),
+                    dict_dir=str(model_dir / "dict"),
+                    lexicon=str(model_dir / "lexicon-us-en.txt"),
                 ),
                 num_threads=THREADS,
                 provider="cpu",
@@ -397,11 +397,11 @@ def probe_texts(
     with out.open("a", encoding="utf-8") as sink:
         for id_, text in todo:
             spoken = speaker.speak(text, random.Random(f"{seed}-{id_}"))
-            heard, segments = recognizer.transcribe(spoken.samples)
+            heard, segment_texts = recognizer.transcribe(spoken.samples)
             if keep_audio:
                 _write_wav(AUDIO_DIR / f"{id_}.wav", spoken.samples)
             record = {
-                "id": id_, "spoken": text, "model": "parakeet", "heard": heard, "segments": segments,
+                "id": id_, "spoken": text, "model": "parakeet", "heard": heard, "segments": segment_texts,
                 "chunk_ends": [len(" ".join(spoken.chunks[: i + 1]).split()) for i in range(len(spoken.chunks))],
                 "pauses": spoken.pauses, "voice": spoken.voice, "speed": spoken.speed,
                 "seconds": round(len(spoken.samples) / SAMPLE_RATE, 1),
@@ -427,8 +427,8 @@ def redecode(model: str, shard: int = 0, shards: int = 1) -> int:
         for record in todo:
             with wave.open(str(AUDIO_DIR / f"{record['id']}.wav")) as audio:
                 samples = np.frombuffer(audio.readframes(audio.getnframes()), dtype=np.int16).astype(np.float32) / 32768
-            text, segments = recognizer.transcribe(samples)
-            sink.write(json.dumps(record | {"model": model, "heard": text, "segments": segments}, ensure_ascii=False) + "\n")
+            text, segment_texts = recognizer.transcribe(samples)
+            sink.write(json.dumps(record | {"model": model, "heard": text, "segments": segment_texts}, ensure_ascii=False) + "\n")
             sink.flush()
             written += 1
             print(f"{model} shard {shard}: {written}/{len(todo)} {record['id']}", flush=True)

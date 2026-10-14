@@ -14,6 +14,7 @@ from .llm import LlmClient
 from .schema import Example, write_examples
 from .teacher import relabel
 
+STAGE2_PROMPT = paths.PROMPTS / "audit" / "handy_disfl_qa.md"
 STAGE2_CRITERIA = ("content_preserved", "no_hallucination", "not_answered", "fillers_removed", "layout_ok")
 JUDGMENTS = paths.STAGE2 / "judgments.jsonl"
 RELABEL_JUDGMENTS = paths.STAGE2 / "relabel_judgments.jsonl"
@@ -59,11 +60,11 @@ def conflict(example: Example) -> str | None:
 
 
 def _switchboard() -> sources.SwitchboardIndex:
-    cached = paths.CACHE / "switchboard_texts.json"
-    if not cached.exists():
-        cached.parent.mkdir(parents=True, exist_ok=True)
-        cached.write_text(json.dumps(sources.switchboard_texts()))
-    return sources.SwitchboardIndex(json.loads(cached.read_text()))
+    cache_path = paths.CACHE / "switchboard_texts.json"
+    if not cache_path.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(sources.switchboard_texts()))
+    return sources.SwitchboardIndex(json.loads(cache_path.read_text()))
 
 
 def load_candidates(with_sotto: bool) -> tuple[dict[str, list[Example]], dict[str, Counter]]:
@@ -88,28 +89,28 @@ def load_candidates(with_sotto: bool) -> tuple[dict[str, list[Example]], dict[st
 async def add_sources(llm: LlmClient, with_sotto: bool) -> dict:
     """Audits the sampled rows with the judge. A list kept as prose is relabeled; other failures are dropped."""
     sampled, dropped = load_candidates(with_sotto)
-    everything = [row for rows in sampled.values() for row in rows]
+    candidates = [row for rows in sampled.values() for row in rows]
     verdicts = await judge_all(
         llm,
-        [pair_item(e) for e in everything],
+        [pair_item(e) for e in candidates],
         JUDGMENTS,
-        instructions_file=paths.PROMPTS / "judge" / "stage2.md",
+        instructions_file=STAGE2_PROMPT,
         criteria=STAGE2_CRITERIA,
         batch_size=30,
     )
-    layout_only = [e for e in everything if verdicts[e.id].failed == ["layout_ok"]]
+    layout_only = [e for e in candidates if verdicts[e.id].failed == ["layout_ok"]]
     async with task_group() as group:
         tasks = [group.create_task(relabel(llm, e.input)) for e in layout_only]
     outputs = [task.result() for task in tasks]
     relabeled = [
-        replace(e, output=o, teacher_model=llm.settings.model, tags=[*e.tags, "relabeled"])
-        for e, o in zip(layout_only, outputs, strict=True)
+        replace(e, output=output, teacher_model=llm.settings.model, tags=[*e.tags, "relabeled"])
+        for e, output in zip(layout_only, outputs, strict=True)
     ]
     rejudged = await judge_all(
         llm,
         [pair_item(e) for e in relabeled],
         RELABEL_JUDGMENTS,
-        instructions_file=paths.PROMPTS / "judge" / "stage2.md",
+        instructions_file=STAGE2_PROMPT,
         criteria=STAGE2_CRITERIA,
         batch_size=30,
     )

@@ -9,7 +9,6 @@ from collections import Counter
 from pathlib import Path
 
 from . import aawaaz, build, compose, epochs, generate, paths, real, stage1, stage2, teacher
-from .judge import judge_all, pair_item
 from .llm import LlmClient, LlmSettings, require_r112
 from .schema import read_examples, write_examples
 
@@ -38,9 +37,7 @@ async def _judge_aawaaz(args: argparse.Namespace) -> None:
     if args.limit:
         examples = examples[: args.limit]
     async with LlmClient(LlmSettings.from_env()) as llm:
-        verdicts = await judge_all(
-            llm, [pair_item(e) for e in examples], stage1.JUDGMENTS, batch_size=args.batch_size
-        )
+        verdicts = await stage1.judge_aawaaz(llm, examples, batch_size=args.batch_size)
     flagged = Counter(v.failed[0] for v in verdicts.values() if not v.passed)
     print(f"{len(verdicts)} judged, {sum(not v.passed for v in verdicts.values())} flagged")
     _print_counts("first failed criterion:", flagged)

@@ -204,8 +204,8 @@ def sotto_category(source_input: str, output: str) -> str | None:
     source_words, output_words = words(source_input), words(output)
     if skeleton(source_input) == skeleton(output):
         # A clean input the model must not edit. It is adversarial when it holds a filler look-alike.
-        kept = [w for w in _LOOKALIKES if re.search(rf"\b{w}\b", lowered)]
-        return "adversarial" if kept else "preserve_wording"
+        lookalikes = [w for w in _LOOKALIKES if re.search(rf"\b{w}\b", lowered)]
+        return "adversarial" if lookalikes else "preserve_wording"
     if any(FILLER.fullmatch(w) for w in source_words):
         return None
     if CORRECTION.search(lowered):

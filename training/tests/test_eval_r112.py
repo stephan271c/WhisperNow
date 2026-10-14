@@ -30,6 +30,8 @@ def test_judge_all_sends_long_rows_alone(fake_llm, tmp_path):
 
     items = [(f"s{i}", {"transcript": "short one", "output": "x"}) for i in range(4)]
     items += [(f"l{i}", {"transcript": " ".join(["word"] * 301), "output": "x"}) for i in range(2)]
-    verdicts = asyncio.run(judge_all(fake_llm(reply), items, tmp_path / "v.jsonl", criteria=("ok",), batch_size=15,
-                                     solo_over_words=300, progress=lambda line: None))
+    rules = tmp_path / "rules.md"
+    rules.write_text("rules")
+    verdicts = asyncio.run(judge_all(fake_llm(reply), items, tmp_path / "v.jsonl", instructions_file=rules, criteria=("ok",),
+                                     batch_size=15, solo_over_words=300, progress=lambda line: None))
     assert len(verdicts) == 6 and sorted(sizes) == [1, 1, 4]

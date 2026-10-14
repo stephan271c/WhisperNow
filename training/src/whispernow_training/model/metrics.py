@@ -228,23 +228,23 @@ class RowChecks:
 def check(example: Example, output: str, *, hit_limit: bool = False) -> RowChecks:
     reference = example.output.strip()
     output = output.strip()
-    expected_layout, got_layout = example.layout, layout_of(output)
-    wanted = protected_tokens(reference) if reference != EMPTY else []
-    kept = sum((Counter(wanted) & Counter(protected_tokens(output))).values())
+    expected_layout, output_layout = example.layout, layout_of(output)
+    required_tokens = protected_tokens(reference) if reference != EMPTY else []
+    kept_count = sum((Counter(required_tokens) & Counter(protected_tokens(output))).values())
     reference_fillers, output_fillers = _filler_counts(reference), _filler_counts(output)
     input_repeats = _max_ngram_repeats(example.input)
     output_words, reference_words = len(_words(output)), len(_words(reference))
     return RowChecks(
         exact=output == reference,
         chrf=chrf(output, reference),
-        layout_match=got_layout == expected_layout,
-        formatting_added=(got_layout != "plain") if expected_layout == "plain" and reference != EMPTY else None,
-        formatting_missed=(got_layout == "plain") if expected_layout != "plain" else None,
+        layout_match=output_layout == expected_layout,
+        formatting_added=(output_layout != "plain") if expected_layout == "plain" and reference != EMPTY else None,
+        formatting_missed=(output_layout == "plain") if expected_layout != "plain" else None,
         bad_list_marker=malformed_list(output) is not None,
         markdown=has_markdown(output),
-        protected_kept=(kept == len(wanted)) if wanted else None,
-        protected_tokens_total=len(wanted),
-        protected_tokens_kept=kept,
+        protected_kept=(kept_count == len(required_tokens)) if required_tokens else None,
+        protected_tokens_total=len(required_tokens),
+        protected_tokens_kept=kept_count,
         leftover_filler=any(count > reference_fillers[filler] for filler, count in output_fillers.items()),
         passthrough_kept=(output == example.input.strip()) if reference == example.input.strip() else None,
         empty_correct=(output == EMPTY) if reference == EMPTY else None,

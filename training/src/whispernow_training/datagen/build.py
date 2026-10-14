@@ -364,13 +364,13 @@ def near_duplicates(examples: Sequence[Example]) -> dict[int, int]:
     a = rng.integers(1, 1 << 32, _PERMUTATIONS, dtype=np.uint64)
     b = rng.integers(0, 1 << 32, _PERMUTATIONS, dtype=np.uint64)
     shingles = [_shingles(e.input) for e in examples]
-    rows = _PERMUTATIONS // _BANDS
+    band_size = _PERMUTATIONS // _BANDS
     buckets: dict[tuple[int, bytes], int] = {}
     duplicate_of: dict[int, int] = {}
     for index, shingle_set in enumerate(shingles):
         signature = _minhash(shingle_set, a, b)
         candidates = set()
-        keys = [(band, signature[band * rows : (band + 1) * rows].tobytes()) for band in range(_BANDS)]
+        keys = [(band, signature[band * band_size : (band + 1) * band_size].tobytes()) for band in range(_BANDS)]
         for key in keys:
             if key in buckets:
                 candidates.add(buckets[key])
@@ -404,10 +404,10 @@ def deduplicate(examples: Iterable[Example]) -> tuple[list[Example], list[tuple[
     # Filler-only EMPTY inputs share almost no words once fillers are removed, so they would all
     # match each other; only exact duplicates of them are dropped.
     candidates = [e for e in kept if e.output != EMPTY]
-    near = {id(candidates[index]) for index in near_duplicates(candidates)}
+    duplicate_ids = {id(candidates[index]) for index in near_duplicates(candidates)}
     survivors = []
     for example in kept:
-        if id(example) in near:
+        if id(example) in duplicate_ids:
             dropped.append((example, "near-duplicate input"))
         else:
             survivors.append(example)

@@ -61,8 +61,8 @@ def respoken(row: Example, base: SpokenBase, epoch: int) -> Example:
     if epoch == 1:
         return row
     fresh = build.spoken_variant(base.before, _salt(epoch))
-    later = [tag for tag in row.tags if tag not in base.built_tags]
-    return replace(row, input=fresh.input, tags=[*fresh.tags, *later])
+    added_tags = [tag for tag in row.tags if tag not in base.built_tags]
+    return replace(row, input=fresh.input, tags=[*fresh.tags, *added_tags])
 
 
 def _respoken_kind(row: Example) -> bool:
@@ -125,10 +125,10 @@ def materialize(epochs: int) -> list[Path]:
     the build's train split (a rebuild), and their noise counts to `stats.json`; returns every
     epoch's file, epoch 1 being the build's train split."""
     files = [epoch_file(epoch) for epoch in range(1, epochs + 1)]
-    built = (paths.BUILD / "train.jsonl").stat().st_mtime
+    build_mtime = (paths.BUILD / "train.jsonl").stat().st_mtime
 
     def stale(path: Path) -> bool:
-        return not path.exists() or path.stat().st_mtime < built
+        return not path.exists() or path.stat().st_mtime < build_mtime
 
     if not any(stale(path) for path in files):
         return files

@@ -205,28 +205,28 @@ async def run_process_group(command: list[str], data: bytes, cwd: Path, timeout:
         *command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         start_new_session=True, preexec_fn=_exit_with_parent,
     )
-    reader = asyncio.ensure_future(process.communicate(data))
+    io_task = asyncio.ensure_future(process.communicate(data))
     deadline = time.monotonic() + timeout
     exited_at = None
     try:
-        while not reader.done():
+        while not io_task.done():
             now = time.monotonic()
             if process.returncode is not None and exited_at is None:
                 exited_at = now
             if now >= deadline or (exited_at is not None and now - exited_at >= _ORPHAN_GRACE_SECONDS):
                 break
-            await asyncio.wait({reader}, timeout=min(1.0, max(0.01, deadline - now)))
-        timed_out = not reader.done() and process.returncode is None
+            await asyncio.wait({io_task}, timeout=min(1.0, max(0.01, deadline - now)))
+        timed_out = not io_task.done() and process.returncode is None
     finally:
         _kill_group(process.pid)
-        if not reader.done():
+        if not io_task.done():
             try:
-                await asyncio.wait_for(reader, _KILL_WAIT_SECONDS)
+                await asyncio.wait_for(io_task, _KILL_WAIT_SECONDS)
             except TimeoutError:
                 pass
     if timed_out:
         raise TimeoutError(f"{command[0]} ran over {timeout:.0f}s")
-    stderr = reader.result()[1] if reader.done() and not reader.cancelled() and not reader.exception() else b""
+    stderr = io_task.result()[1] if io_task.done() and not io_task.cancelled() and not io_task.exception() else b""
     return process.returncode if process.returncode is not None else -signal.SIGKILL, stderr
 
 
@@ -414,9 +414,9 @@ class _CodexRunner:
                 )
             content = reply.read_text(encoding="utf-8")
             log = stderr.decode(errors="replace")
-            used = _CODEX_TOKENS.findall(log)
-            if used:
-                self.tokens += int(used[-1].replace(",", ""))
+            token_counts = _CODEX_TOKENS.findall(log)
+            if token_counts:
+                self.tokens += int(token_counts[-1].replace(",", ""))
         finally:
             reply.unlink(missing_ok=True)
         if not content.strip():
@@ -539,7 +539,7 @@ class LlmClient:
         the plain request's, so a second attempt at the same request gets a new sample that a rerun reuses.
         `reasoning` overrides the role's reasoning setting for this request.
         """
-        backend, model, default = self.settings.target(role)
+        backend, model, default_reasoning = self.settings.target(role)
         payload: list[Message] | tuple[str, str] = messages
         if backend in ("opencode", "codex"):
             system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
@@ -547,13 +547,13 @@ class LlmClient:
             if len(users) != 1 or len(messages) != len(users) + (1 if system else 0):
                 raise ValueError(f"the {backend} backend sends one optional system message and one user message")
             payload = (system, users[0])
-        reasoning = default if reasoning is None else reasoning
+        reasoning = default_reasoning if reasoning is None else reasoning
         key = request_key({**self.settings.request(role), "model": model, "reasoning": reasoning, "messages": messages,
                            **({"attempt": attempt} if attempt else {})})
-        hit = self.cache.get(key) if cached else None
-        if hit is not None:
+        cached_content = self.cache.get(key) if cached else None
+        if cached_content is not None:
             self.cache_hits += 1
-            return hit
+            return cached_content
         async with self._semaphores[backend]:
             await self._connect(backend)
             failures = 0

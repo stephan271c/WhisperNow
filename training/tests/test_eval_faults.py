@@ -54,7 +54,8 @@ def test_an_unreadable_reply_is_asked_again_before_it_is_a_judge_error(fake_llm,
     )])
     llm = fake_llm(lambda messages, role: next(replies))
     verdicts = asyncio.run(judge_all(
-        llm, [("a", {"transcript": "t", "output": "o"})], tmp_path / "w.jsonl", criteria=evaluate.JUDGE_CRITERIA,
+        llm, [("a", {"transcript": "t", "output": "o"})], tmp_path / "w.jsonl",
+        instructions_file=evaluate.JUDGE_INSTRUCTIONS, criteria=evaluate.JUDGE_CRITERIA,
         fault_kinds=evaluate.FAULT_KINDS, progress=lambda line: None,
     ))
     assert verdicts["a"].failed == ["facts_kept"] and llm.attempts == [0, 1]

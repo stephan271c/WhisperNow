@@ -8,7 +8,7 @@ from dataclasses import replace
 
 from . import paths
 from .concurrency import task_group
-from .judge import Verdict, judge_all, load_verdicts, pair_item
+from .judge import BATCH_SIZE, Verdict, judge_all, load_verdicts, pair_item
 from .llm import LlmClient
 from .schema import Example, layout_of, read_examples, write_examples
 from .teacher import relabel
@@ -19,6 +19,8 @@ RELABEL_JUDGMENTS = paths.STAGE1 / "relabel_judgments.jsonl"
 RELABELED = paths.STAGE1 / "relabeled.jsonl"
 CLEAN = paths.STAGE1 / "aawaaz.clean.jsonl"
 REPORT = paths.STAGE1 / "report.json"
+STAGE1_PROMPT = paths.PROMPTS / "audit" / "aawaaz.md"
+STAGE1_CRITERIA = ("content_preserved", "no_hallucination", "lead_in_kept", "not_answered")
 AGREEMENT_CRITERIA = ("layout_agrees", "lead_in_agrees", "facts_agree")
 
 # A second pass for register: the hand review found casual stories shortened into notes and
@@ -32,9 +34,18 @@ REGISTER_CATEGORIES = (
     "meeting_notes",
 )
 REGISTER_CRITERIA = ("register_kept",)
-REGISTER_PROMPT = paths.PROMPTS / "judge" / "register.md"
+REGISTER_PROMPT = paths.PROMPTS / "audit" / "aawaaz_register.md"
 REGISTER_JUDGMENTS = paths.STAGE1 / "register_judgments.jsonl"
 RELABEL_REGISTER_JUDGMENTS = paths.STAGE1 / "relabel_register_judgments.jsonl"
+
+
+async def judge_aawaaz(
+    llm: LlmClient, examples: list[Example], out=None, batch_size: int = BATCH_SIZE,
+) -> dict[str, Verdict]:
+    return await judge_all(
+        llm, [pair_item(e) for e in examples], out or JUDGMENTS,
+        instructions_file=STAGE1_PROMPT, criteria=STAGE1_CRITERIA, batch_size=batch_size,
+    )
 
 
 def needs_register_check(example: Example) -> bool:
@@ -126,15 +137,15 @@ async def fix_flagged(llm: LlmClient) -> dict:
     """Relabels every flagged row with the teacher, re-judges it, and keeps it only if it now passes."""
     examples = read_examples(IMPORTED)
     verdicts = load_verdicts(JUDGMENTS)
-    register = load_verdicts(REGISTER_JUDGMENTS)
+    register_verdicts = load_verdicts(REGISTER_JUDGMENTS)
     missing = [e.id for e in examples if e.id not in verdicts]
     if missing:
         raise SystemExit(f"{len(missing)} rows are not judged yet; run `datagen judge-aawaaz` first")
-    unchecked = [e.id for e in examples if needs_register_check(e) and e.id not in register]
+    unchecked = [e.id for e in examples if needs_register_check(e) and e.id not in register_verdicts]
     if unchecked:
         raise SystemExit(f"{len(unchecked)} rows lack a register verdict; run `datagen judge-register` first")
     failed = {
-        e.id: [*verdicts[e.id].failed, *(register[e.id].failed if e.id in register else [])] for e in examples
+        e.id: [*verdicts[e.id].failed, *(register_verdicts[e.id].failed if e.id in register_verdicts else [])] for e in examples
     }
     flagged = [e for e in examples if failed[e.id]]
     async with task_group() as group:
@@ -145,7 +156,7 @@ async def fix_flagged(llm: LlmClient) -> dict:
         for e, output in zip(flagged, outputs, strict=True)
     ]
     write_examples(RELABELED, relabeled)
-    rejudged = await judge_all(llm, [pair_item(e) for e in relabeled], RELABEL_JUDGMENTS)
+    rejudged = await judge_aawaaz(llm, relabeled, RELABEL_JUDGMENTS)
     rejudged_register = await judge_register(llm, relabeled, RELABEL_REGISTER_JUDGMENTS)
     fixed = {
         e.id: e

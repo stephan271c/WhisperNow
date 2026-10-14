@@ -112,7 +112,10 @@ def test_failed_evaluation_joins_peer_cleanup_before_closing(source, tmp_path, m
 @pytest.mark.parametrize("source", ["teacher", "server"])
 def test_successful_evaluation_preserves_input_order_requests_limits_and_teacher_cache(source, tmp_path, monkeypatch):
     async def exercise():
-        release = asyncio.Event()
+        release_first = asyncio.Event()
+        release_second = asyncio.Event()
+        two_entered = asyncio.Event()
+        third_entered = asyncio.Event()
         events = []
         requests = []
         finished = []
@@ -130,10 +133,14 @@ def test_successful_evaluation_preserves_input_order_requests_limits_and_teacher
             name = next(name for name in ("first", "second", "third") if f"{name} transcript" in text)
             active += 1
             peak = max(peak, active)
+            if active == 2:
+                two_entered.set()
             if name == "first":
-                await release.wait()
-            if name == "second":
-                release.set()
+                await release_first.wait()
+            elif name == "second":
+                await release_second.wait()
+            else:
+                third_entered.set()
             active -= 1
             finished.append(name)
             output = f" {name} output "
@@ -146,12 +153,27 @@ def test_successful_evaluation_preserves_input_order_requests_limits_and_teacher
         clients = _local_boundary(monkeypatch, tmp_path, handle, events)
         rows = [_row(f"{name} transcript") for name in ("first", "second", "third")]
         if source == "teacher":
-            outputs = await evaluate.generate_teacher(rows)
-            assert await evaluate.generate_teacher(rows) == outputs
+            generation = asyncio.create_task(evaluate.generate_teacher(rows))
         else:
-            outputs = await evaluate.generate_server(
+            generation = asyncio.create_task(evaluate.generate_server(
                 "http://llama.local/v1/", rows, concurrency=2, repeat_penalty=1.2, repeat_last_n=1024,
-            )
+            ))
+        try:
+            await two_entered.wait()
+            scheduled = asyncio.Event()
+            asyncio.get_running_loop().call_soon(scheduled.set)
+            await scheduled.wait()
+            assert not third_entered.is_set(), "third request entered while both concurrency permits were occupied"
+            release_second.set()
+            await third_entered.wait()
+            release_first.set()
+            outputs = await generation
+        finally:
+            if not generation.done():
+                generation.cancel()
+            await asyncio.gather(generation, return_exceptions=True)
+        if source == "teacher":
+            assert await evaluate.generate_teacher(rows) == outputs
         assert [output["id"] for output in outputs] == [row.id for row in rows]
         assert [output["output"] for output in outputs] == [f"{name} output" for name in ("first", "second", "third")]
         assert finished[0] == "second" and peak == 2 and len(requests) == len(rows)

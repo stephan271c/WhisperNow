@@ -142,10 +142,10 @@ _DROPPABLE = {"so", "actually", "you", "know", "basically", "literally", "just",
 def keeps_control_words(reference: str, evidence: Sequence[str]) -> bool:
     """A control reference keeps every word of each phrase whose filler-like word carries meaning ("I'd
     like the red one", "I mean it", "it went well"), except discourse markers it may drop."""
-    target = set(_norm(reference).split())
+    reference_words = set(_norm(reference).split())
     for phrase in evidence:
         words = _norm(phrase).split()
-        if any(word not in target for word in words if word not in _DROPPABLE):
+        if any(word not in reference_words for word in words if word not in _DROPPABLE):
             return False
     return True
 
@@ -199,9 +199,9 @@ async def run_batch(
     candidates = []
     for item in items:
         id_ = example_id(generate.SOURCE, item["input"])
-        words = len(item["input"].split())
-        if words >= 150:
-            rejected.append({"id": id_, "input": item["input"], "failed": ["length"], "note": f"{words} words; keep it under 150"})
+        word_count = len(item["input"].split())
+        if word_count >= 150:
+            rejected.append({"id": id_, "input": item["input"], "failed": ["length"], "note": f"{word_count} words; keep it under 150"})
         elif not shows(kind, item["input"], item["evidence"]):
             rejected.append({"id": id_, "input": item["input"], "failed": ["pattern"], "note": f"the {kind} pattern is not in the transcript as asked", "evidence": item["evidence"]})
         else:
@@ -255,8 +255,8 @@ async def generate_kind(
     known: set[str],
     progress: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
 ) -> int:
-    out = output_file(kind)
-    kept = read_examples(out) if out.exists() else []
+    output_path = output_file(kind)
+    kept = read_examples(output_path) if output_path.exists() else []
     log_path = OUT_DIR / f"{kind}.batches.jsonl"
     log = list(read_jsonl(log_path)) if log_path.exists() else []
     max_batches = 3 * -(-target // PER_REQUEST) + 3 + sum(is_missing_key_failure(record) for record in log)
@@ -274,7 +274,7 @@ async def generate_kind(
         passed = [e for e in passed if e.input not in known][: target - len(kept)]
         known |= {e.input for e in passed}
         kept += passed
-        append_jsonl(out, [e.to_json() for e in passed])
+        append_jsonl(output_path, [e.to_json() for e in passed])
         append_jsonl(OUT_DIR / f"{kind}.rejected.jsonl", [json.dumps(row, ensure_ascii=False) for row in rejected])
         append_jsonl(log_path, [json.dumps(asdict(record), ensure_ascii=False)])
         log.append(asdict(record))
@@ -336,15 +336,15 @@ async def gate_probed(llm: LlmClient) -> dict[str, int]:
     """New references for the heard transcripts; keeps a row whose facts and pattern survived."""
     by_id = {e.id: e for e in load()}
     heard = {row["id"]: row for row in read_jsonl(PROBED)} if PROBED.exists() else {}
-    out = OUT_DIR / "probed.gated.jsonl"
-    done = {row["id"] for row in read_jsonl(out)} if out.exists() else set()
+    output_path = OUT_DIR / "probed.gated.jsonl"
+    done = {row["id"] for row in read_jsonl(output_path)} if output_path.exists() else set()
     todo = [by_id[id_] for id_ in heard if id_ in by_id and id_ not in done]
     counts: Counter = Counter()
     rows = []
     judge = gates.Judge(gates.COMPOSE, gates.COMPOSE_CRITERIA, {e.id: "recognizer" for e in todo})
     results = await gates.gate(llm, [(e.id, heard[e.id]["heard"]) for e in todo], judge=judge)
     # The new reference against the original transcript: did the recognizer change a fact?
-    same = await gates.check_references(
+    fact_verdicts = await gates.check_references(
         llm, [(e.id, e.input, results[e.id].output) for e in todo if results[e.id].passed], PROBED_JUDGE
     )
     for example in todo:
@@ -354,8 +354,8 @@ async def gate_probed(llm: LlmClient) -> dict[str, int]:
         evidence = [e for e in _evidence(example) if _norm(e) in _norm(text)]
         if not result.passed:
             reason = "gates: " + ",".join(result.failed)
-        elif not same[example.id].passed:
-            reason = "recognizer changed a fact: " + same[example.id].note
+        elif not fact_verdicts[example.id].passed:
+            reason = "recognizer changed a fact: " + fact_verdicts[example.id].note
         elif not shows(kind, text, evidence):
             reason = "pattern lost"
         elif kind == CONTROL and not keeps_control_words(result.output, evidence):
@@ -364,7 +364,7 @@ async def gate_probed(llm: LlmClient) -> dict[str, int]:
             reason = ""
         counts[reason.split(":")[0] or "kept"] += 1
         rows.append({"id": example.id, "heard": text, "output": result.output, "attempt": result.attempt, "kept": not reason, "reason": reason})
-    append_jsonl(out, [json.dumps(row, ensure_ascii=False) for row in rows])
+    append_jsonl(output_path, [json.dumps(row, ensure_ascii=False) for row in rows])
     return dict(counts)
 
 

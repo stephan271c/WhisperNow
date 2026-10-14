@@ -106,8 +106,8 @@ def server_generation(
     props = response.json()
     model = Path(props["model_path"])
     defaults = props["default_generation_settings"]
-    local = urlparse(url).hostname in ("localhost", "127.0.0.1", "::1")
-    return {"source": "server", "revision": model_revision(model) if local and model.is_absolute() and model.is_file() else None,
+    is_local = urlparse(url).hostname in ("localhost", "127.0.0.1", "::1")
+    return {"source": "server", "revision": model_revision(model) if is_local and model.is_absolute() and model.is_file() else None,
             "model_path": str(model), "chat_template": props["chat_template"], "build": props.get("build_info"),
             "defaults": defaults["params"], "n_ctx": defaults["n_ctx"], "temperature": prompt.TEMPERATURE,
             "repeat_penalty": repeat_penalty, "repeat_last_n": repeat_last_n}
@@ -131,7 +131,7 @@ def generate_hf(
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
     tokenizer.chat_template = prompt.chat_template()
     tokenizer.padding_side = "left"
-    end_of_turn = tokenizer.convert_tokens_to_ids(prompt.END_OF_TURN)
+    end_token_id = tokenizer.convert_tokens_to_ids(prompt.END_OF_TURN)
     model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16).cuda().eval()
     order = sorted(range(len(rows)), key=lambda index: -len(rows[index].input.split()))
     results: dict[int, dict] = {}
@@ -147,15 +147,15 @@ def generate_hf(
                 max_new_tokens=max(budgets),
                 do_sample=False,
                 repetition_penalty=repeat_penalty,
-                eos_token_id=end_of_turn,
+                eos_token_id=end_token_id,
                 pad_token_id=tokenizer.pad_token_id,
             )
         new_tokens = generated[:, encoded["input_ids"].shape[1] :].tolist()
         for index, budget, tokens in zip(batch, budgets, new_tokens, strict=True):
             tokens = tokens[:budget]
-            ended = end_of_turn in tokens
+            ended = end_token_id in tokens
             if ended:
-                tokens = tokens[: tokens.index(end_of_turn)]
+                tokens = tokens[: tokens.index(end_token_id)]
             results[index] = {
                 "id": rows[index].id,
                 "output": tokenizer.decode(tokens, skip_special_tokens=True).strip(),
@@ -364,7 +364,7 @@ def _test_ids_109() -> set[str]:
 def score(rows: Sequence[Example], outputs: dict[str, dict], judged: dict[str, Verdict] | None = None) -> dict:
     """Overall rates, and the same rates per category, tag, input style, source, length bucket and
     noise pattern, and for test rows, the `TEST_IDS_109` rows apart from rows added since."""
-    old_test = _test_ids_109()
+    original_test_ids = _test_ids_109()
     entries = {
         row.id: (check(row, outputs[row.id]["output"], hit_limit=outputs[row.id]["hit_limit"]), (judged or {}).get(row.id))
         for row in rows
@@ -377,7 +377,7 @@ def score(rows: Sequence[Example], outputs: dict[str, dict], judged: dict[str, V
         groups["source"][row.source].append(entry)
         groups["length"][length_bucket(len(row.input.split()))].append(entry)
         if row.split == "test":
-            groups["test_group"]["todo109" if row.id in old_test else "new"].append(entry)
+            groups["test_group"]["todo109" if row.id in original_test_ids else "new"].append(entry)
         for tag in row.tags:
             groups["tag"][tag].append(entry)
             if tag.startswith("pattern:"):
@@ -420,11 +420,11 @@ def evaluate(
         write_outputs(outputs_file, generated)
     outputs = {row.id: outputs[row.id] for row in rows}
     tag = reference_tag(rows)
-    scored = f"{stem}.{tag}" if tag else stem
+    score_stem = f"{stem}.{tag}" if tag else stem
     if with_judge:
-        scored = f"{scored}.{JUDGE_VERSION}"
+        score_stem = f"{score_stem}.{JUDGE_VERSION}"
     judged = (
-        asyncio.run(judge(rows, outputs, out_dir / f"{scored}.judge.jsonl", bool(tag)))
+        asyncio.run(judge(rows, outputs, out_dir / f"{score_stem}.judge.jsonl", bool(tag)))
         if with_judge else None
     )
     scores = score(rows, outputs, judged)
@@ -433,5 +433,5 @@ def evaluate(
         scores["judge"] = JUDGE_VERSION
     scores["references"] = tag or "before todo 112"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{scored}.scores.json").write_text(json.dumps(scores, indent=2) + "\n", encoding="utf-8")
+    (out_dir / f"{score_stem}.scores.json").write_text(json.dumps(scores, indent=2) + "\n", encoding="utf-8")
     return scores

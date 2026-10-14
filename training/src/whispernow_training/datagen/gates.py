@@ -258,7 +258,7 @@ async def check_references(
 ) -> dict[str, Verdict]:
     """(id, transcript, reference) rows, checked in code and then by the judge."""
     verdicts: dict[str, Verdict] = {}
-    judged = []
+    judge_rows = []
     for id_, transcript, reference in rows:
         if reference.strip() == EMPTY or filler_only(transcript):
             failed, note = empty_check(transcript, reference)
@@ -271,10 +271,10 @@ async def check_references(
         else:
             style = {"style": judge.styles[id_]} if judge.styles else {}
             flags = code_flags(transcript, reference, protected_drops=protected_drops)
-            judged.append((id_, {**style, "transcript": transcript, "reference": reference, **({"flags": flags} if flags else {})}))
+            judge_rows.append((id_, {**style, "transcript": transcript, "reference": reference, **({"flags": flags} if flags else {})}))
     instructions = judge.instructions.read_text(encoding="utf-8") + (f"\n{judge.addendum}\n" if judge.addendum else "")
-    judged.sort(key=lambda item: len(item[1]["transcript"]))
-    batches = size_batches(judged, judge.max_items, JUDGE_MAX_CHARS, judge.solo_over_words)
+    judge_rows.sort(key=lambda item: len(item[1]["transcript"]))
+    batches = size_batches(judge_rows, judge.max_items, JUDGE_MAX_CHARS, judge.solo_over_words)
     async with task_group() as group:
         tasks = [group.create_task(judge_batch(llm, instructions, judge.criteria, batch, judge.reasoning))
                  for batch in batches]
@@ -322,33 +322,33 @@ async def gate(
     """
     transcripts = dict(rows)
     ids = list(transcripts)
-    first = dict(references or {})
-    missing = [id_ for id_ in ids if id_ not in first]
+    first_references = dict(references or {})
+    missing_ids = [id_ for id_ in ids if id_ not in first_references]
     async with task_group() as group:
         tasks = [group.create_task(relabel(llm, transcripts[id_], first_attempt, teacher_reasoning))
-                 for id_ in missing]
-    for id_, task in zip(missing, tasks, strict=True):
-        first[id_] = task.result()
-    verdicts = await check_references(llm, [(id_, transcripts[id_], first[id_]) for id_ in ids], judge)
+                 for id_ in missing_ids]
+    for id_, task in zip(missing_ids, tasks, strict=True):
+        first_references[id_] = task.result()
+    verdicts = await check_references(llm, [(id_, transcripts[id_], first_references[id_]) for id_ in ids], judge)
     results = {
-        id_: Gated(id_, first[id_], True, first_attempt, [], "", [], "") for id_ in ids if verdicts[id_].passed
+        id_: Gated(id_, first_references[id_], True, first_attempt, [], "", [], "") for id_ in ids if verdicts[id_].passed
     }
     for id_ in ids:
         verdict = verdicts[id_]
         if not verdict.passed and set(verdict.failed) & set(INPUT_CRITERIA):
-            results[id_] = Gated(id_, first[id_], False, first_attempt, verdict.failed, verdict.note, verdict.failed, verdict.note)
-    retry = [id_ for id_ in ids if id_ not in results]
+            results[id_] = Gated(id_, first_references[id_], False, first_attempt, verdict.failed, verdict.note, verdict.failed, verdict.note)
+    retry_ids = [id_ for id_ in ids if id_ not in results]
     async with task_group() as group:
         tasks = [group.create_task(relabel(
             llm, transcripts[id_], first_attempt + 1, teacher_reasoning,
             note=_relabel_note(verdicts[id_].note, (earlier_notes or {}).get(id_, "")) if relabel_note else None,
-        )) for id_ in retry]
-    second = {id_: task.result() for id_, task in zip(retry, tasks, strict=True)}
-    rechecked = await check_references(llm, [(id_, transcripts[id_], second[id_]) for id_ in retry], judge)
-    for id_ in retry:
-        again = rechecked[id_]
+        )) for id_ in retry_ids]
+    retry_references = {id_: task.result() for id_, task in zip(retry_ids, tasks, strict=True)}
+    rechecked = await check_references(llm, [(id_, transcripts[id_], retry_references[id_]) for id_ in retry_ids], judge)
+    for id_ in retry_ids:
+        retry_verdict = rechecked[id_]
         results[id_] = Gated(
-            id_, second[id_], again.passed, first_attempt + 1, again.failed, again.note,
+            id_, retry_references[id_], retry_verdict.passed, first_attempt + 1, retry_verdict.failed, retry_verdict.note,
             verdicts[id_].failed, verdicts[id_].note,
         )
     return {id_: results[id_] for id_ in ids}

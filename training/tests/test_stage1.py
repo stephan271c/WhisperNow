@@ -4,7 +4,6 @@ import json
 from conftest import judge_items
 
 from whispernow_training.datagen import stage1
-from whispernow_training.datagen.judge import STAGE1_CRITERIA
 from whispernow_training.datagen.schema import Example, read_examples, write_examples
 
 
@@ -31,7 +30,7 @@ def _reply(messages, role):
         else:
             ok = "BAD" not in item["output"]
             results.append(
-                {"i": item["i"], **{c: ok for c in STAGE1_CRITERIA}, "note": "" if ok else "bad"}
+                {"i": item["i"], **{c: ok for c in stage1.STAGE1_CRITERIA}, "note": "" if ok else "bad"}
             )
     return json.dumps({"results": results})
 
@@ -51,7 +50,7 @@ def test_fix_flagged_combines_the_stage1_and_register_judges(tmp_path, monkeypat
     llm = fake_llm(_reply)
 
     async def run():
-        await stage1.judge_all(llm, [stage1.pair_item(e) for e in rows], stage1.JUDGMENTS)
+        await stage1.judge_aawaaz(llm, rows)
         register = await stage1.judge_register(llm, rows)
         assert set(register) == {"notes", "fine"}
         return await stage1.fix_flagged(llm)

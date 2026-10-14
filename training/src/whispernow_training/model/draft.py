@@ -68,20 +68,20 @@ def _number(words: list[str], i: int) -> tuple[str, int] | None:
 def preclean(transcript: str) -> str:
     """The transcript as code can clean it: the draft the server proposes words from."""
     words = [w for w in transcript.split() if w.lower() not in FILLERS]
-    lower = [w.lower() for w in words]
+    lower_words = [w.lower() for w in words]
     out: list[str] = []
     i = 0
     while i < len(words):
-        w = lower[i]
-        two = " ".join(lower[i : i + 2])
-        if two in SPOKEN or w in SPOKEN:
-            mark = SPOKEN.get(two) or SPOKEN[w]
+        w = lower_words[i]
+        phrase = " ".join(lower_words[i : i + 2])
+        if phrase in SPOKEN or w in SPOKEN:
+            mark = SPOKEN.get(phrase) or SPOKEN[w]
             if out:
                 out[-1] += mark
-            i += 2 if two in SPOKEN else 1
-        elif (n := _number(lower, i)) is not None:
-            out.append(n[0])
-            i += n[1]
+            i += 2 if phrase in SPOKEN else 1
+        elif (number := _number(lower_words, i)) is not None:
+            out.append(number[0])
+            i += number[1]
         elif len(w) == 1 and w.isalpha() and w not in "ai" and i + 1 < len(words) and len(words[i + 1]) == 1:
             j = i
             while j < len(words) and len(words[j]) == 1 and words[j].isalpha():

@@ -75,7 +75,7 @@ def _tokens(text: str) -> list[Token]:
     Letters and digits in one token are split ("Q3" as "q", "3"; "50k" as "50", "k"), after
     dropping an ordinal or plural ending on the digits ("16th", "70s").
     """
-    out = []
+    tokens = []
     for match in re.finditer(r"[A-Za-z0-9]+(?:['’.:,/][A-Za-z0-9]+)*['’]?|[$%½¼¾&]", text):
         token = match.group().casefold().replace("’", "'")
         token = "and" if token == "&" else re.sub(r"(?<=[a-z])[.'](?=[a-z])|'", "", token).rstrip(".")
@@ -84,8 +84,8 @@ def _tokens(text: str) -> list[Token]:
         if re.search(r"\d", token) and re.search(r"[a-z]", token):
             token = re.sub(r"(?<=\d)(st|nd|rd|th|s)$", "", token)
         parts = re.findall(r"\d[\d.:,/]*|[a-z]+", token) if re.search(r"\d", token) else [token]
-        out += [Token(part, match.start(), match.end(), len(parts) > 1) for part in parts]
-    return out
+        tokens += [Token(part, match.start(), match.end(), len(parts) > 1) for part in parts]
+    return tokens
 
 
 def _is_number(token: str) -> bool:
@@ -113,16 +113,16 @@ def _number_run_end(tokens: list[str], index: int) -> int:
 def _words(text: str) -> list[Token]:
     """The spoken words, each number run as one `#` token spanning the whole run."""
     tokens = _tokens(text)
-    plain = [t.word for t in tokens]
+    token_words = [t.word for t in tokens]
     words: list[Token] = []
     index = 0
     while index < len(tokens):
         start = index
-        if plain[index] == "a" and index + 1 < len(tokens) and plain[index + 1] in _SCALES | _FRACTIONS:
+        if token_words[index] == "a" and index + 1 < len(tokens) and token_words[index + 1] in _SCALES | _FRACTIONS:
             index += 1  # "a hundred" is written "100", "a half" "½"
-        starts_decimal = plain[index] == "point" and index + 1 < len(tokens) and _is_number(plain[index + 1])
-        if _is_number(plain[index]) or starts_decimal:
-            index = _number_run_end(plain, index)
+        starts_decimal = token_words[index] == "point" and index + 1 < len(tokens) and _is_number(token_words[index + 1])
+        if _is_number(token_words[index]) or starts_decimal:
+            index = _number_run_end(token_words, index)
             run = tokens[start:index]
             inside = any(t.inside for t in run)
             if words and words[-1].word == NUMBER:  # "June 16th, 2025": one run
@@ -146,11 +146,11 @@ def same_words(spoken: str, restyled: str) -> bool:
 
 
 def first_difference(spoken: str, restyled: str) -> str:
-    a, b = normalize_words(spoken), normalize_words(restyled)
-    for index, (x, y) in enumerate(zip(a, b)):
-        if x != y:
-            return f"word {index}: {' '.join(a[max(0, index - 3) : index + 3])!r} vs {' '.join(b[max(0, index - 3) : index + 3])!r}"
-    return f"lengths {len(a)} vs {len(b)}"
+    spoken_words, restyled_words = normalize_words(spoken), normalize_words(restyled)
+    for index, (spoken_word, restyled_word) in enumerate(zip(spoken_words, restyled_words)):
+        if spoken_word != restyled_word:
+            return f"word {index}: {' '.join(spoken_words[max(0, index - 3) : index + 3])!r} vs {' '.join(restyled_words[max(0, index - 3) : index + 3])!r}"
+    return f"lengths {len(spoken_words)} vs {len(restyled_words)}"
 
 
 def restyle_messages(texts: Sequence[str]) -> list[dict[str, str]]:
@@ -164,13 +164,13 @@ def restyle_messages(texts: Sequence[str]) -> list[dict[str, str]]:
 def _batches(rows: Sequence[Example]) -> list[list[Example]]:
     batches: list[list[Example]] = []
     current: list[Example] = []
-    size = 0
+    chars = 0
     for row in rows:
-        if current and (size + len(row.input) > BATCH_CHARS or len(current) >= MAX_BATCH):
+        if current and (chars + len(row.input) > BATCH_CHARS or len(current) >= MAX_BATCH):
             batches.append(current)
-            current, size = [], 0
+            current, chars = [], 0
         current.append(row)
-        size += len(row.input)
+        chars += len(row.input)
     if current:
         batches.append(current)
     return batches
@@ -207,11 +207,11 @@ async def _restyle_batch(llm: LlmClient, batch: Sequence[Example]) -> list[tuple
     return results
 
 
-def _write(good, bad, example: Example, text: str, why: str) -> None:
+def _write(accepted_file, rejected_file, example: Example, text: str, why: str) -> None:
     if why:
-        bad.write(json.dumps({"id": example.id, "why": why, "text": text}, ensure_ascii=False) + "\n")
+        rejected_file.write(json.dumps({"id": example.id, "why": why, "text": text}, ensure_ascii=False) + "\n")
     else:
-        good.write(json.dumps({"id": example.id, "input": text}, ensure_ascii=False) + "\n")
+        accepted_file.write(json.dumps({"id": example.id, "input": text}, ensure_ascii=False) + "\n")
 
 
 async def restyle_all(llm: LlmClient, limit: int = 0) -> dict:
@@ -226,15 +226,15 @@ async def restyle_all(llm: LlmClient, limit: int = 0) -> dict:
         rows = rows[:limit]
     batches = _batches(rows)
     passed = failed = 0
-    with OUT.open("a", encoding="utf-8") as good, REJECTED.open("a", encoding="utf-8") as bad:
+    with OUT.open("a", encoding="utf-8") as accepted_file, REJECTED.open("a", encoding="utf-8") as rejected_file:
         async def run(batch: Sequence[Example]) -> None:
             nonlocal passed, failed
             for example, text, why in await _restyle_batch(llm, batch):
-                _write(good, bad, example, text, why)
+                _write(accepted_file, rejected_file, example, text, why)
                 passed += not why
                 failed += bool(why)
-            good.flush()
-            bad.flush()
+            accepted_file.flush()
+            rejected_file.flush()
 
         for start in range(0, len(batches), 32):
             chunk = batches[start : start + 32]
@@ -252,11 +252,11 @@ def recheck() -> dict:
     rows = {e.id: e for e in read_examples(stage1.CLEAN)}
     rejected = [json.loads(line) for line in REJECTED.open(encoding="utf-8")]
     passed = failed = 0
-    with OUT.open("a", encoding="utf-8") as good, REJECTED.with_suffix(".tmp").open("w", encoding="utf-8") as bad:
+    with OUT.open("a", encoding="utf-8") as accepted_file, REJECTED.with_suffix(".tmp").open("w", encoding="utf-8") as rejected_file:
         for row in rejected:
             example, text = rows[row["id"]], row.get("text", "")
             why = _check(example, text) if text else row["why"]
-            _write(good, bad, example, text, why)
+            _write(accepted_file, rejected_file, example, text, why)
             passed += not why
             failed += bool(why)
     REJECTED.with_suffix(".tmp").replace(REJECTED)

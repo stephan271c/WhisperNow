@@ -10,10 +10,8 @@ from pathlib import Path
 
 from .concurrency import task_group
 from .llm import LlmClient, parse_json_reply, request_key
-from .paths import PROMPTS
 from .schema import Example, read_jsonl
 
-STAGE1_CRITERIA = ("content_preserved", "no_hallucination", "lead_in_kept", "not_answered")
 BATCH_SIZE = 15
 # A single item whose reply cannot be read is asked again for a new sample this many times.
 SINGLE_RETRIES = 2
@@ -83,7 +81,7 @@ async def judge_batch(
     fault of that kind fails, or None for one that is only counted), each result lists its faults,
     and a criterion some kind maps to fails exactly when the result has a fault of that kind.
     """
-    derived = set(fault_kinds.values()) - {None} if fault_kinds else set()
+    fault_criteria = set(fault_kinds.values()) - {None} if fault_kinds else set()
     model = llm.settings.judge_model
     reply = await llm.complete(_messages(instructions, pairs), role="judge", attempt=attempt, reasoning=reasoning)
     try:
@@ -95,9 +93,9 @@ async def judge_batch(
         for index, (id_, _) in enumerate(pairs):
             result = results[index]
             faults = _faults(result, fault_kinds) if fault_kinds else []
-            hit = {fault_kinds[fault["kind"]] for fault in faults} if fault_kinds else set()
+            fault_targets = {fault_kinds[fault["kind"]] for fault in faults} if fault_kinds else set()
             failed = [
-                name for name in criteria if (name in hit if name in derived else result.get(name) is not True)
+                name for name in criteria if (name in fault_targets if name in fault_criteria else result.get(name) is not True)
             ]
             note = "; ".join(filter(None, [str(result.get("note", "")), *(f"{f['kind']}: {f['fact']}" for f in faults)]))
             verdicts.append(Verdict(id_, not failed, failed, note, model, faults))
@@ -162,8 +160,8 @@ async def judge_all(
     items: Sequence[Item],
     out: Path,
     *,
-    instructions_file: Path = PROMPTS / "judge" / "stage1.md",
-    criteria: Sequence[str] = STAGE1_CRITERIA,
+    instructions_file: Path,
+    criteria: Sequence[str],
     batch_size: int = BATCH_SIZE,
     max_chars: int | None = None,
     solo_over_words: int | None = None,

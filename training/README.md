@@ -154,8 +154,8 @@ The generator writes bare fillers in the right places but about a fifth as many 
 
 Two judges on `glm-5.3` read every row:
 
-- **`judge-aawaaz`**, all 22,772 rows, on four criteria (`prompts/judge/stage1.md`): content preserved (including hedges such as "maybe"), no hallucination, lead-in kept, and not answered.
-- **`judge-register`**, the 11,866 rows of `casual_conversation`, `creative_writing`, `legal_contract`, `email_professional`, `medical_clinical` and `meeting_notes`, on register kept (`prompts/judge/register.md`): no shortening into notes or a chart summary, and no added formality. The first three categories came out of the 100-row hand review below; the last three were added after the first 50-per-layout review of the build (see [Build review](#hand-review-of-the-build)). The judge flagged casual 919, creative 6, legal 39, email 12, medical 76 and meeting notes 35.
+- **`judge-aawaaz`**, all 22,772 rows, on four criteria (`prompts/audit/aawaaz.md`): content preserved (including hedges such as "maybe"), no hallucination, lead-in kept, and not answered.
+- **`judge-register`**, the 11,866 rows of `casual_conversation`, `creative_writing`, `legal_contract`, `email_professional`, `medical_clinical` and `meeting_notes`, on register kept (`prompts/audit/aawaaz_register.md`): no shortening into notes or a chart summary, and no added formality. The first three categories came out of the 100-row hand review below; the last three were added after the first 50-per-layout review of the build (see [Build review](#hand-review-of-the-build)). The judge flagged casual 919, creative 6, legal 39, email 12, medical 76 and meeting notes 35.
 
 `fix-aawaaz` relabels every flagged row with the teacher and re-judges it on the same criteria. A relabel that passes replaces the row (tagged `relabeled`, with `teacher_model` set); one that fails is dropped.
 
@@ -230,7 +230,7 @@ The stage 1 judge and the stage 3 validator catch these in the data.
 
 ## Stage 2: handy and disfl_qa
 
-`add` loads handy's alpaca config and disfl_qa, drops what conflicts with the target rules, samples by category with a fixed seed, and has `glm-5.3` audit every sampled row (`prompts/judge/stage2.md`). Rows whose only failure is a list kept as prose are relabeled by the teacher and re-judged; other failures are dropped. sotto is off by default (see Terms).
+`add` loads handy's alpaca config and disfl_qa, drops what conflicts with the target rules, samples by category with a fixed seed, and has `glm-5.3` audit every sampled row (`prompts/audit/handy_disfl_qa.md`). Rows whose only failure is a list kept as prose are relabeled by the teacher and re-judged; other failures are dropped. sotto is off by default (see Terms).
 
 **Hand audit of 50 random rows per set** (seed 50), before the fixes below:
 

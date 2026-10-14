@@ -209,15 +209,15 @@ class _Draft:
         return " ".join(token for token in tokens if token)
 
 
-def _slot_weight(d: _Draft, i: int) -> float:
+def _slot_weight(draft: _Draft, i: int) -> float:
     """How likely a filler is before token i, from the word said before it; 0 where it never lands."""
-    word, before = _core(d.tokens[i]), _core(d.original[i - 1]) if i else ""
+    word, before = _core(draft.tokens[i]), _core(draft.original[i - 1]) if i else ""
     if word.lower() in _SPOKEN_SYMBOLS or before.lower() in _SPOKEN_SYMBOLS:
         return 0.0
     # Not inside a name such as "Bell Street Motors".
-    if i and word[:1].isupper() and before[:1].isupper() and not d.sentence_start(i):
+    if i and word[:1].isupper() and before[:1].isupper() and not draft.sentence_start(i):
         return 0.0
-    if i and d.original[i - 1].endswith((",", ";", ":")):
+    if i and draft.original[i - 1].endswith((",", ";", ":")):
         return _SLOT_WEIGHTS["clause"]
     before = before.lower()
     for kind, words in (
@@ -228,114 +228,114 @@ def _slot_weight(d: _Draft, i: int) -> float:
     return _SLOT_WEIGHTS["inside"]
 
 
-def _filler(d: _Draft, cluster: bool) -> bool:
+def _filler(draft: _Draft, cluster: bool) -> bool:
     # Only between plain words: not inside "3 PM" or next to a code token.
     slots = [
-        i for i in range(len(d.tokens))
-        if d.free(i, i - 1 if i else i) and _is_plain_word(d.tokens[i]) and (i == 0 or _is_plain_word(d.tokens[i - 1]))
+        i for i in range(len(draft.tokens))
+        if draft.free(i, i - 1 if i else i) and _is_plain_word(draft.tokens[i]) and (i == 0 or _is_plain_word(draft.tokens[i - 1]))
     ]
-    weights = [_slot_weight(d, i) for i in slots]
+    weights = [_slot_weight(draft, i) for i in slots]
     slots = [i for i, weight in zip(slots, weights, strict=True) if weight]
     if not slots:
         return False
     # Real Parakeet output puts about a third of its fillers at a sentence start ("Uh is it").
-    starts = [i for i in slots if d.sentence_start(i)]
-    if starts and d.rng.random() < 0.35:
-        i = d.rng.choice(starts)
+    starts = [i for i in slots if draft.sentence_start(i)]
+    if starts and draft.rng.random() < 0.35:
+        i = draft.rng.choice(starts)
     else:
-        i = d.rng.choices(slots, [w for w in weights if w])[0]
-    count = (3 if d.rng.random() < 0.15 else 2) if cluster else 1
-    fillers = [_pick_filler(d.rng)]
+        i = draft.rng.choices(slots, [w for w in weights if w])[0]
+    count = (3 if draft.rng.random() < 0.15 else 2) if cluster else 1
+    fillers = [_pick_filler(draft.rng)]
     while len(fillers) < count:
-        fillers.append(_pick_filler(d.rng, avoid=fillers[-1]))
-    d.insert(i, d.fillers(i, fillers))
-    d.lower_start(i)
-    d.claim(i, max(0, i - 1))
+        fillers.append(_pick_filler(draft.rng, avoid=fillers[-1]))
+    draft.insert(i, draft.fillers(i, fillers))
+    draft.lower_start(i)
+    draft.claim(i, max(0, i - 1))
     return True
 
 
-def _determiner(d: _Draft) -> bool:
+def _determiner(draft: _Draft) -> bool:
     slots = [
-        i for i in range(1, len(d.tokens) - 1)
-        if d.free(i - 1, i) and d.tokens[i] in _DETERMINERS and _is_plain_word(d.tokens[i + 1]) and not d.sentence_start(i)
+        i for i in range(1, len(draft.tokens) - 1)
+        if draft.free(i - 1, i) and draft.tokens[i] in _DETERMINERS and _is_plain_word(draft.tokens[i + 1]) and not draft.sentence_start(i)
     ]
     if not slots:
         return False
-    i = d.rng.choice(slots)
-    determiner = [d.tokens[i] + ("," if d.commas and d.style == "recognizer" else "")]
-    filler = [_pick_filler(d.rng)]
-    if d.rng.random() < 0.2:
-        filler.append(_pick_filler(d.rng, avoid=filler[0]))
-    d.insert(i, determiner + d.fillers(i, filler))
-    d.claim(i - 1, i)
+    i = draft.rng.choice(slots)
+    determiner = [draft.tokens[i] + ("," if draft.commas and draft.style == "recognizer" else "")]
+    filler = [_pick_filler(draft.rng)]
+    if draft.rng.random() < 0.2:
+        filler.append(_pick_filler(draft.rng, avoid=filler[0]))
+    draft.insert(i, determiner + draft.fillers(i, filler))
+    draft.claim(i - 1, i)
     return True
 
 
-def _repeat(d: _Draft) -> bool:
-    slots = [i for i in range(len(d.tokens)) if d.free(i) and _bare_word(d.tokens[i]) and d.tokens[i].lower() in _REPEATABLE]
+def _repeat(draft: _Draft) -> bool:
+    slots = [i for i in range(len(draft.tokens)) if draft.free(i) and _bare_word(draft.tokens[i]) and draft.tokens[i].lower() in _REPEATABLE]
     if not slots:
         return False
-    i = d.rng.choice(slots)
-    word = d.tokens[i]
-    if word.lower() in _CONJUNCTIONS and d.rng.random() < 0.5:
+    i = draft.rng.choice(slots)
+    word = draft.tokens[i]
+    if word.lower() in _CONJUNCTIONS and draft.rng.random() < 0.5:
         copy = [word, word.lower()]
-    elif word.lower() in _PRONOUNS and i + 1 < len(d.tokens) and _bare_word(d.tokens[i + 1]) and d.rng.random() < 0.4:
-        copy = [word, d.tokens[i + 1]]
+    elif word.lower() in _PRONOUNS and i + 1 < len(draft.tokens) and _bare_word(draft.tokens[i + 1]) and draft.rng.random() < 0.4:
+        copy = [word, draft.tokens[i + 1]]
     else:
         copy = [word]
-    d.insert(i, copy)
-    d.lower_start(i)
-    d.claim(i)
+    draft.insert(i, copy)
+    draft.lower_start(i)
+    draft.claim(i)
     return True
 
 
-def _clause_starts(d: _Draft) -> list[int]:
+def _clause_starts(draft: _Draft) -> list[int]:
     return [
-        i for i in range(len(d.tokens))
-        if d.sentence_start(i) or (d.original[i - 1].endswith(",") and d.tokens[i].lower() in _LOWERABLE | _PRONOUNS)
+        i for i in range(len(draft.tokens))
+        if draft.sentence_start(i) or (draft.original[i - 1].endswith(",") and draft.tokens[i].lower() in _LOWERABLE | _PRONOUNS)
     ]
 
 
-def _restart(d: _Draft) -> bool:
+def _restart(draft: _Draft) -> bool:
     """The clause's first words, or a later piece of it, said before the clause starts properly."""
     options = []
-    for s in _clause_starts(d):
+    for start in _clause_starts(draft):
         run = 0
-        while s + run < len(d.tokens) and _bare_word(d.tokens[s + run]) and d.tokens[s + run].lower() not in AMBIGUOUS:
+        while start + run < len(draft.tokens) and _bare_word(draft.tokens[start + run]) and draft.tokens[start + run].lower() not in AMBIGUOUS:
             run += 1
-        if run >= 3 and d.free(*range(max(0, s - 1), s + run)):
-            options.append((s, run))
+        if run >= 3 and draft.free(*range(max(0, start - 1), start + run)):
+            options.append((start, run))
     if not options:
         return False
-    s, run = d.rng.choice(options)
-    if d.rng.random() < 0.5:
-        copy = d.tokens[s : s + d.rng.randint(2, min(4, run))]
+    start, run = draft.rng.choice(options)
+    if draft.rng.random() < 0.5:
+        copy = draft.tokens[start : start + draft.rng.randint(2, min(4, run))]
     else:
-        start = d.rng.randint(1, run - 2)
-        copy = d.tokens[s + start : s + start + d.rng.randint(2, min(3, run - start))]
-        if d.sentence_start(s):
+        offset = draft.rng.randint(1, run - 2)
+        copy = draft.tokens[start + offset : start + offset + draft.rng.randint(2, min(3, run - offset))]
+        if draft.sentence_start(start):
             copy = [_capitalize(copy[0]), *copy[1:]]
-    d.insert(s, copy)
-    d.lower_start(s)
-    d.claim(*range(max(0, s - 1), s + run))
+    draft.insert(start, copy)
+    draft.lower_start(start)
+    draft.claim(*range(max(0, start - 1), start + run))
     return True
 
 
-def _fragment(d: _Draft) -> bool:
+def _fragment(draft: _Draft) -> bool:
     """A pronoun from the coming clause, said first and dropped."""
     options = []
-    for s in _clause_starts(d):
-        for j in range(s + 1, min(s + 6, len(d.tokens))):
-            base = _core(d.tokens[j]).split("'")[0]
-            if base.lower() in _PRONOUNS and d.free(max(0, s - 1), s):
-                options.append((s, base))
+    for start in _clause_starts(draft):
+        for index in range(start + 1, min(start + 6, len(draft.tokens))):
+            base = _core(draft.tokens[index]).split("'")[0]
+            if base.lower() in _PRONOUNS and draft.free(max(0, start - 1), start):
+                options.append((start, base))
                 break
     if not options:
         return False
-    s, base = d.rng.choice(options)
-    d.insert(s, [_capitalize(base) if d.sentence_start(s) or base == "I" else base.lower()])
-    d.lower_start(s)
-    d.claim(max(0, s - 1), s)
+    start, base = draft.rng.choice(options)
+    draft.insert(start, [_capitalize(base) if draft.sentence_start(start) or base == "I" else base.lower()])
+    draft.lower_start(start)
+    draft.claim(max(0, start - 1), start)
     return True
 
 
@@ -352,11 +352,11 @@ def _wrong_value(core: str, clean: str, rng: random.Random) -> tuple[str, str] |
     verb = ("make", "it")
     if match := _NUMBER.match(core):
         prefix, digits, suffix = match.groups()
-        n = int(digits)
-        if digits.startswith("0") and n:
+        number = int(digits)
+        if digits.startswith("0") and number:
             return None
-        steps = (1, -1, 2, -2, 5, 10) if n < 100 else (1, -1, 10, -10, 50, 100)
-        candidates = [f"{prefix}{n + step}{suffix}" for step in steps if n + step > 0]
+        steps = (1, -1, 2, -2, 5, 10) if number < 100 else (1, -1, 10, -10, 50, 100)
+        candidates = [f"{prefix}{number + step}{suffix}" for step in steps if number + step > 0]
     elif match := _CLOCK.match(core):
         hour, minutes = int(match.group(1)), match.group(2)
         candidates = [f"{h}:{minutes}" for h in (hour + 1, hour - 1, hour + 2) if 1 <= h <= 12]
@@ -374,70 +374,70 @@ def _wrong_value(core: str, clean: str, rng: random.Random) -> tuple[str, str] |
     return None
 
 
-def _correction(d: _Draft, clean: str, corrections: list[tuple[str, str, str]]) -> bool:
+def _correction(draft: _Draft, clean: str, corrections: list[tuple[str, str, str]]) -> bool:
     options = []
-    for i, token in enumerate(d.tokens):
+    for i, token in enumerate(draft.tokens):
         core = _core(token)
-        if not d.free(i - 1 if i else i, i) or token.startswith(tuple(_EDGE_PUNCTUATION)):
+        if not draft.free(i - 1 if i else i, i) or token.startswith(tuple(_EDGE_PUNCTUATION)):
             continue
-        wrong = _wrong_value(core, clean, random.Random(f"{d.rng.random()}"))
+        wrong = _wrong_value(core, clean, random.Random(f"{draft.rng.random()}"))
         if wrong and all(wrong[0] != w for w, _, _ in corrections):
             options.append((i, core, *wrong))
     if not options:
         return False
-    i, right, wrong, verb = d.rng.choice(options)
-    form = d.rng.choices(CORRECTION_FORMS, (5, 3, 2))[0]
-    punctuate = d.style == "recognizer" and (d.commas or d.rng.random() < 0.6)
+    i, right, wrong, verb = draft.rng.choice(options)
+    form = draft.rng.choices(CORRECTION_FORMS, (5, 3, 2))[0]
+    punctuate = draft.style == "recognizer" and (draft.commas or draft.rng.random() < 0.6)
     comma = "," if punctuate else ""
     if form == "short":
-        cue = list(d.rng.choice(_STACKED_CUES if d.rng.random() < 0.05 else _SHORT_CUES))
+        cue = list(draft.rng.choice(_STACKED_CUES if draft.rng.random() < 0.05 else _SHORT_CUES))
         words = [wrong + comma, *cue[:-1], cue[-1] + comma]
     elif form == "redecision":
-        middle = [_pick_filler(d.rng)] if d.rng.random() < 0.3 else []
+        middle = [_pick_filler(draft.rng)] if draft.rng.random() < 0.3 else []
         words = [wrong, "or", *middle, "actually", "no" + comma, "let's", *verb.split()]
     else:
-        reason = list(d.rng.choice(_REASONS))
+        reason = list(draft.rng.choice(_REASONS))
         words = [wrong + comma, "except", "uh", "well", *reason[:-1], reason[-1] + comma, "so", "actually", "let's", "just",
                  *verb.split()]
-        token = d.tokens[i]
+        token = draft.tokens[i]
         mark = token[len(token.rstrip(_EDGE_PUNCTUATION)) :]
-        if mark and d.free(i + 1 if i + 1 < len(d.tokens) else i):
-            d.tokens[i] = token[: len(token) - len(mark)]
-            d.after[i] = ["instead" + mark]
-    if d.sentence_start(i):
+        if mark and draft.free(i + 1 if i + 1 < len(draft.tokens) else i):
+            draft.tokens[i] = token[: len(token) - len(mark)]
+            draft.after[i] = ["instead" + mark]
+    if draft.sentence_start(i):
         words[0] = _capitalize(words[0])
-    d.insert(i, words)
-    d.claim(max(0, i - 1), i, min(i + 1, len(d.tokens) - 1))
+    draft.insert(i, words)
+    draft.claim(max(0, i - 1), i, min(i + 1, len(draft.tokens) - 1))
     corrections.append((wrong, right, form))
     return True
 
 
-def _pause(d: _Draft) -> bool:
+def _pause(draft: _Draft) -> bool:
     """A period or question mark where the speaker paused, or a "?" after a list item."""
     listed = [
-        i for i in range(1, len(d.tokens) - 1)
-        if d.free(i, i + 1) and _is_plain_word(d.tokens[i]) and d.tokens[i].endswith(",") and not d.tokens[i].endswith(",,")
-        and _is_plain_word(d.tokens[i + 1]) and d.original[i - 1].endswith(",")
+        i for i in range(1, len(draft.tokens) - 1)
+        if draft.free(i, i + 1) and _is_plain_word(draft.tokens[i]) and draft.tokens[i].endswith(",") and not draft.tokens[i].endswith(",,")
+        and _is_plain_word(draft.tokens[i + 1]) and draft.original[i - 1].endswith(",")
     ]
     mid = [
-        i for i in range(2, len(d.tokens) - 1)
-        if d.free(i, i + 1) and _bare_word(d.tokens[i]) and _bare_word(d.tokens[i + 1])
-        and not d.sentence_start(i) and not d.sentence_start(i - 1)
+        i for i in range(2, len(draft.tokens) - 1)
+        if draft.free(i, i + 1) and _bare_word(draft.tokens[i]) and _bare_word(draft.tokens[i + 1])
+        and not draft.sentence_start(i) and not draft.sentence_start(i - 1)
     ]
-    if listed and d.rng.random() < 0.3:
-        i = d.rng.choice(listed)
-        d.tokens[i] = d.tokens[i][:-1] + "?"
-        capitalize = d.rng.random() < 0.6
+    if listed and draft.rng.random() < 0.3:
+        i = draft.rng.choice(listed)
+        draft.tokens[i] = draft.tokens[i][:-1] + "?"
+        capitalize = draft.rng.random() < 0.6
     elif mid:
-        i = d.rng.choice(mid)
-        d.tokens[i] += "?" if d.rng.random() < 0.2 else "."
-        capitalize = d.rng.random() < 0.5
+        i = draft.rng.choice(mid)
+        draft.tokens[i] += "?" if draft.rng.random() < 0.2 else "."
+        capitalize = draft.rng.random() < 0.5
     else:
         return False
-    following = d.tokens[i + 1]
+    following = draft.tokens[i + 1]
     if capitalize and following[:1].islower():
-        d.tokens[i + 1] = _capitalize(following)
-    d.claim(i, i + 1)
+        draft.tokens[i + 1] = _capitalize(following)
+    draft.claim(i, i + 1)
     return True
 
 
@@ -471,11 +471,11 @@ def inject(
         return Injection(clean, level, "commas" if commas else "bare")
     edits = max(1, round(len(tokens) / LEVELS[level] * rng.uniform(0.7, 1.3)))
     max_corrections = max(1, len(tokens) // 60)
-    done: list[str] = []
+    applied_kinds: list[str] = []
     corrections: list[tuple[str, str, str]] = []
     # A kind with no place to go in this text is tried again as another kind.
     for _ in range(edits * 4):
-        if len(done) == edits:
+        if len(applied_kinds) == edits:
             break
         choices = [kind for kind in allowed if kind != "correction" or len(corrections) < max_corrections]
         if not choices:
@@ -483,9 +483,9 @@ def inject(
         kind = rng.choices(choices, [_KIND_WEIGHTS[kind] for kind in choices])[0]
         applied = _edit(kind, draft, clean, corrections)
         if applied:
-            done.append(kind)
+            applied_kinds.append(kind)
     text = draft.render()
-    return Injection(text, level, "commas" if commas else "bare", tuple(done), tuple(corrections))
+    return Injection(text, level, "commas" if commas else "bare", tuple(applied_kinds), tuple(corrections))
 
 
 _DENSIFY_KINDS = {"filler": 45, "cluster": 15, "determiner": 15, "repeat": 12, "pause": 13}
@@ -510,20 +510,20 @@ def densify(spoken: str, seed: str | int, style: str, rate: float | None = None,
     rate = rate if rate is not None else rng.uniform(*DENSIFY_RATE)
     tokens = spoken.split()
     draft = _Draft(tokens, style, False, rng, restyle=False)
-    needed = round(len(tokens) * rate / 100) - filler_count(spoken)
+    fillers_needed = round(len(tokens) * rate / 100) - filler_count(spoken)
     kinds = [kind for kind in _DENSIFY_KINDS if not (kind == "pause" and (style == "raw" or not pauses))]
-    done: list[str] = []
-    added = 0
-    for _ in range(max(0, needed) * 6):
-        if added >= needed:
+    applied_kinds: list[str] = []
+    fillers_added = 0
+    for _ in range(max(0, fillers_needed) * 6):
+        if fillers_added >= fillers_needed:
             break
         kind = rng.choices(kinds, [_DENSIFY_KINDS[kind] for kind in kinds])[0]
         applied = _edit(kind, draft, spoken, [])
         if applied:
-            done.append(kind)
-            added = sum(1 for words in draft.before.values() for word in words if FILLER_TOKEN.match(word))
-    text = draft.render() if done else spoken
-    return Injection(text, "densified", "bare", tuple(done))
+            applied_kinds.append(kind)
+            fillers_added = sum(1 for words in draft.before.values() for word in words if FILLER_TOKEN.match(word))
+    text = draft.render() if applied_kinds else spoken
+    return Injection(text, "densified", "bare", tuple(applied_kinds))
 
 
 def _raw_token(token: str) -> str:
