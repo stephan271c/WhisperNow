@@ -31,15 +31,12 @@ CREATE TABLE IF NOT EXISTS entries (
     cleaned_text TEXT,
     status TEXT NOT NULL,
     error TEXT,
-    has_audio INTEGER NOT NULL DEFAULT 0,
-    asr_model_id TEXT,
-    llm_model TEXT
+    asr_model_id TEXT
 );
 CREATE INDEX IF NOT EXISTS entries_newest_first ON entries (created_at_ms DESC, id DESC);
 ";
 
-const COLUMNS: &str = "id, created_at_ms, duration_ms, raw_text, cleaned_text, status, error, \
-                       has_audio, asr_model_id, llm_model";
+const COLUMNS: &str = "id, created_at_ms, duration_ms, raw_text, cleaned_text, status, error";
 
 /// Callers serialize its use and keep it away from latency-sensitive runtime and UI threads.
 pub struct SqliteHistoryRepository {
@@ -49,8 +46,8 @@ pub struct SqliteHistoryRepository {
 
 impl SqliteHistoryRepository {
     /// Opens the history database, imports the Python release's `history.json` when present,
-    /// and deletes audio files that no entry owns. Also returns any non-fatal diagnostic, such
-    /// as a malformed `history.json` that was quarantined rather than imported.
+    /// and removes unowned numeric WAV files and unfinished audio writes. Returns any non-fatal diagnostic, such
+    /// as a malformed `history.json` that was moved aside rather than imported.
     pub fn open(paths: &AppPaths) -> Result<(Self, Option<AppError>), AppError> {
         let open_error = |code: &str| {
             tracing::warn!(code, "transcription history did not open");
@@ -85,7 +82,7 @@ impl SqliteHistoryRepository {
     /// or was cancelled; entries beyond `limit` are then deleted with their audio. A failure to
     /// write the audio still stores the entry, without audio.
     pub fn insert(
-        &self,
+        &mut self,
         entry: NewHistoryEntry,
         audio: &[f32],
         keep_audio: bool,
@@ -99,14 +96,16 @@ impl SqliteHistoryRepository {
             status,
             error,
             asr_model_id,
-            llm_model,
         } = entry;
-        let connection = &self.connection;
-        connection
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(|_| history_error("history_insert"))?;
+        transaction
             .execute(
                 "INSERT INTO entries (created_at_ms, duration_ms, raw_text, cleaned_text, status,
-                     error, asr_model_id, llm_model)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     error, asr_model_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     created_at.get(),
                     duration_millis.map(sql_u64),
@@ -115,24 +114,54 @@ impl SqliteHistoryRepository {
                     status_text(status),
                     error,
                     asr_model_id.as_ref().map(ModelId::as_str),
-                    llm_model,
                 ],
             )
             .map_err(|_| history_error("history_insert"))?;
-        let id = EntryId(connection.last_insert_rowid());
-        if (keep_audio || status.always_keeps_audio()) && !audio.is_empty() {
+        let id = EntryId(transaction.last_insert_rowid());
+        // Cleanup of a prior rolled-back insert may have failed for this reused id.
+        let pending_audio = audio_path(&self.audio_dir, id);
+        match fs::symlink_metadata(&pending_audio) {
+            Ok(_) => fs::remove_file(&pending_audio)
+                .map_err(|_| history_error("history_audio_delete"))?,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) => {}
+            Err(_) => return Err(history_error("history_audio_delete")),
+        }
+        let wrote_audio = if (keep_audio || status.always_keeps_audio()) && !audio.is_empty() {
             if write_wav(&self.audio_dir, id, audio).is_ok() {
-                connection
-                    .execute("UPDATE entries SET has_audio = 1 WHERE id = ?1", [id.0])
-                    .map_err(|_| history_error("history_insert"))?;
+                true
             } else {
                 tracing::warn!(
                     code = "history_audio_write",
                     "a dictation's audio could not be kept"
                 );
+                false
             }
+        } else {
+            false
+        };
+        let result = prune(&transaction, limit).and_then(|pruned| {
+            transaction
+                .commit()
+                .map_err(|_| history_error("history_insert"))?;
+            Ok(pruned)
+        });
+        let pruned = match result {
+            Ok(pruned) => pruned,
+            Err(error) => {
+                // A rolled-back id can be reused by the next insert.
+                if wrote_audio {
+                    remove_audio(&self.audio_dir, id);
+                }
+                return Err(error);
+            }
+        };
+        for id in pruned {
+            remove_audio(&self.audio_dir, id);
         }
-        prune(connection, &self.audio_dir, limit)?;
         Ok(id)
     }
 
@@ -175,7 +204,9 @@ impl SqliteHistoryRepository {
             ))
             .map_err(|_| history_error("history_list"))?;
         let mut entries = statement
-            .query_map(params_from_iter(values), entry_from_row)
+            .query_map(params_from_iter(values), |row| {
+                entry_from_row(row, &self.audio_dir)
+            })
             .and_then(Iterator::collect::<Result<Vec<_>, _>>)
             .map_err(|_| history_error("history_list"))?;
         let has_more = entries.len() > limit as usize;
@@ -184,17 +215,18 @@ impl SqliteHistoryRepository {
     }
 
     pub fn get(&self, id: EntryId) -> Result<Option<HistoryEntry>, AppError> {
-        get(&self.connection, id)
+        self.connection
+            .query_row(
+                &format!("SELECT {COLUMNS} FROM entries WHERE id = ?1"),
+                [id.0],
+                |row| entry_from_row(row, &self.audio_dir),
+            )
+            .optional()
+            .map_err(|_| history_error("history_read"))
     }
 
     /// Reads an entry's audio as a playable WAV file, or `None` when it has none.
     pub fn audio(&self, id: EntryId) -> Result<Option<Vec<u8>>, AppError> {
-        let Some(entry) = self.get(id)? else {
-            return Ok(None);
-        };
-        if !entry.has_audio {
-            return Ok(None);
-        }
         match fs::read(audio_path(&self.audio_dir, id)) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -212,71 +244,55 @@ impl SqliteHistoryRepository {
         Ok(deleted > 0)
     }
 
-    /// Deletes every entry and every audio file; returns whether anything was removed.
+    /// Removes the recordings before deleting rows, preserving their owners if removal fails.
     pub fn clear(&self) -> Result<bool, AppError> {
+        let recordings_removed = match crate::clear_data::remove_path(&self.audio_dir) {
+            Ok(()) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(_) => return Err(history_error("history_clear_audio")),
+        };
         let deleted = self
             .connection
             .execute("DELETE FROM entries", [])
             .map_err(|_| history_error("history_clear"))?;
-        let removed = remove_orphan_audio(&self.connection, &self.audio_dir);
-        Ok(deleted > 0 || removed > 0)
+        self.connection
+            .execute_batch("VACUUM")
+            .map_err(|_| history_error("history_clear"))?;
+        Ok(deleted > 0 || recordings_removed)
     }
 
     /// Deletes the entries beyond `limit`, with their audio; returns how many were deleted.
     pub fn prune(&self, limit: HistoryLimit) -> Result<usize, AppError> {
-        prune(&self.connection, &self.audio_dir, limit)
-    }
-
-    /// Closes the database before its files are deleted or the application exits.
-    pub fn close(self) -> Result<(), AppError> {
-        self.connection
-            .close()
-            .map_err(|_| history_error("history_close"))
+        let pruned = prune(&self.connection, limit)?;
+        for id in &pruned {
+            remove_audio(&self.audio_dir, *id);
+        }
+        Ok(pruned.len())
     }
 }
 
-fn get(connection: &Connection, id: EntryId) -> Result<Option<HistoryEntry>, AppError> {
-    connection
-        .query_row(
-            &format!("SELECT {COLUMNS} FROM entries WHERE id = ?1"),
-            [id.0],
-            entry_from_row,
-        )
-        .optional()
-        .map_err(|_| history_error("history_read"))
-}
-
-fn prune(
-    connection: &Connection,
-    audio_dir: &Path,
-    limit: HistoryLimit,
-) -> Result<usize, AppError> {
+fn prune(connection: &Connection, limit: HistoryLimit) -> Result<Vec<EntryId>, AppError> {
     let Some(kept) = limit.max_entries() else {
-        return Ok(0);
+        return Ok(Vec::new());
     };
-    let pruned: Vec<i64> = connection
-        .prepare("SELECT id FROM entries ORDER BY created_at_ms DESC, id DESC LIMIT -1 OFFSET ?1")
+    connection
+        .prepare(
+            "DELETE FROM entries WHERE id IN (
+            SELECT id FROM entries ORDER BY created_at_ms DESC, id DESC LIMIT -1 OFFSET ?1
+        ) RETURNING id",
+        )
         .and_then(|mut statement| {
             statement
-                .query_map([i64::from(kept)], |row| row.get(0))?
+                .query_map([i64::from(kept)], |row| row.get(0).map(EntryId))?
                 .collect()
         })
-        .map_err(|_| history_error("history_prune"))?;
-    for id in &pruned {
-        connection
-            .execute("DELETE FROM entries WHERE id = ?1", [id])
-            .map_err(|_| history_error("history_prune"))?;
-        remove_audio(audio_dir, EntryId(*id));
-    }
-    Ok(pruned.len())
+        .map_err(|_| history_error("history_prune"))
 }
 
-/// Deletes files in the audio directory that no entry owns, such as one left by a crash between
-/// writing a file and its row; returns how many were deleted. Callers serialize their use of
-/// the store, so no insert is writing a file meanwhile.
+/// Removes unowned numeric WAVs and unfinished writes before the first insert.
 fn remove_orphan_audio(connection: &Connection, audio_dir: &Path) -> usize {
     let owned: Result<HashSet<i64>, _> = connection
-        .prepare("SELECT id FROM entries WHERE has_audio = 1")
+        .prepare("SELECT id FROM entries")
         .and_then(|mut statement| statement.query_map([], |row| row.get(0))?.collect());
     let (Ok(owned), Ok(files)) = (owned, fs::read_dir(audio_dir)) else {
         return 0;
@@ -284,13 +300,22 @@ fn remove_orphan_audio(connection: &Connection, audio_dir: &Path) -> usize {
     let mut removed = 0;
     for file in files.flatten() {
         let path = file.path();
-        let owned_by_entry = path.extension().is_some_and(|extension| extension == "wav")
+        let wav_id = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".wav"))
+            .filter(|stem| !stem.is_empty() && stem.bytes().all(|byte| byte.is_ascii_digit()));
+        let orphan_wav = wav_id.is_some_and(|stem| {
+            stem.parse::<i64>()
+                .ok()
+                .is_none_or(|id| !owned.contains(&id))
+        });
+        let temporary = path.extension().is_some_and(|extension| extension == "tmp")
             && path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| stem.parse::<i64>().ok())
-                .is_some_and(|id| owned.contains(&id));
-        if !owned_by_entry
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".history-audio-"));
+        if (orphan_wav || temporary)
             && file.file_type().is_ok_and(|kind| kind.is_file())
             && fs::remove_file(&path).is_ok()
         {
@@ -300,13 +325,8 @@ fn remove_orphan_audio(connection: &Connection, audio_dir: &Path) -> usize {
     removed
 }
 
-fn entry_from_row(row: &Row<'_>) -> rusqlite::Result<HistoryEntry> {
+fn entry_from_row(row: &Row<'_>, audio_dir: &Path) -> rusqlite::Result<HistoryEntry> {
     let status: String = row.get(5)?;
-    let asr_model_id = row
-        .get::<_, Option<String>>(8)?
-        .map(ModelId::new)
-        .transpose()
-        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(8, Type::Text, error.into()))?;
     Ok(HistoryEntry {
         id: EntryId(row.get(0)?),
         created_at: UtcMillis(row.get(1)?),
@@ -317,9 +337,7 @@ fn entry_from_row(row: &Row<'_>) -> rusqlite::Result<HistoryEntry> {
             rusqlite::Error::FromSqlConversionFailure(5, Type::Text, "unknown entry status".into())
         })?,
         error: row.get(6)?,
-        has_audio: row.get(7)?,
-        asr_model_id,
-        llm_model: row.get(9)?,
+        audio_kept: audio_path(audio_dir, EntryId(row.get(0)?)).is_file(),
     })
 }
 
@@ -346,7 +364,10 @@ fn parse_status(text: &str) -> Option<EntryStatus> {
 /// place so a crash never leaves a partial file under an entry's name.
 fn write_wav(audio_dir: &Path, id: EntryId, samples: &[f32]) -> io::Result<()> {
     fs::create_dir_all(audio_dir)?;
-    let temporary = tempfile::NamedTempFile::new_in(audio_dir)?;
+    let temporary = tempfile::Builder::new()
+        .prefix(".history-audio-")
+        .suffix(".tmp")
+        .tempfile_in(audio_dir)?;
     {
         let mut writer = WavWriter::new(
             io::BufWriter::new(temporary.as_file()),

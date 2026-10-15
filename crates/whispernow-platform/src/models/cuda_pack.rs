@@ -23,7 +23,7 @@ use super::{
     all(target_os = "linux", target_arch = "x86_64"),
     all(target_os = "windows", target_arch = "x86_64")
 ))]
-use crate::llama::CUDA_PACK_LIBRARIES;
+use crate::llama::{CUDA_PACK_LIBRARIES, llama_cpp_build};
 
 /// Left in a pack that was removed while loaded; such a pack is deleted at the next start.
 const REMOVAL_MARKER: &str = ".whispernow-remove";
@@ -45,50 +45,87 @@ pub enum CudaPackFormat {
     Zip,
 }
 
-/// llama.cpp b11259's CUDA 13.4 assets; the digests are the release's own.
+/// The pinned llama.cpp build's CUDA 13.4 assets; the digests are the release's own.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(super) const CUDA_PACK: &[CudaPackArchive] = &[
     CudaPackArchive {
-        url: "https://github.com/ggml-org/llama.cpp/releases/download/b11259/llama-b11259-bin-ubuntu-cuda-13.4-x64.tar.gz",
+        url: concat!(
+            "https://github.com/ggml-org/llama.cpp/releases/download/",
+            llama_cpp_build!(),
+            "/llama-",
+            llama_cpp_build!(),
+            "-bin-ubuntu-cuda-13.4-x64.tar.gz"
+        ),
         size_bytes: 152_878_063,
         sha256: "ccd87e3754b7445a45231090e509b9142e171240f9dbc20eb9358e9f7ca9dfa6",
         format: CudaPackFormat::TarGz,
-        members: &[("llama-b11259/libggml-cuda.so", CUDA_PACK_LIBRARIES.backend)],
+        members: &[(
+            concat!("llama-", llama_cpp_build!(), "/libggml-cuda.so"),
+            CUDA_PACK_LIBRARIES.backend,
+        )],
     },
     CudaPackArchive {
-        url: "https://github.com/ggml-org/llama.cpp/releases/download/b11259/cudart-llama-b11259-bin-ubuntu-cuda-13.4-x64.tar.gz",
+        url: concat!(
+            "https://github.com/ggml-org/llama.cpp/releases/download/",
+            llama_cpp_build!(),
+            "/cudart-llama-",
+            llama_cpp_build!(),
+            "-bin-ubuntu-cuda-13.4-x64.tar.gz"
+        ),
         size_bytes: 440_236_546,
         sha256: "8beb2d945a6087810029182fd9b214d2d89b3bcc360483599625209cc136b951",
         format: CudaPackFormat::TarGz,
         members: &[
             (
-                "cudart-llama-b11259-bin-ubuntu-cuda-13.4-x64/libcudart.so.13",
+                concat!(
+                    "cudart-llama-",
+                    llama_cpp_build!(),
+                    "-bin-ubuntu-cuda-13.4-x64/libcudart.so.13"
+                ),
                 CUDA_PACK_LIBRARIES.runtime[0],
             ),
             (
-                "cudart-llama-b11259-bin-ubuntu-cuda-13.4-x64/libcublasLt.so.13",
+                concat!(
+                    "cudart-llama-",
+                    llama_cpp_build!(),
+                    "-bin-ubuntu-cuda-13.4-x64/libcublasLt.so.13"
+                ),
                 CUDA_PACK_LIBRARIES.runtime[1],
             ),
             (
-                "cudart-llama-b11259-bin-ubuntu-cuda-13.4-x64/libcublas.so.13",
+                concat!(
+                    "cudart-llama-",
+                    llama_cpp_build!(),
+                    "-bin-ubuntu-cuda-13.4-x64/libcublas.so.13"
+                ),
                 CUDA_PACK_LIBRARIES.runtime[2],
             ),
         ],
     },
 ];
 
-/// llama.cpp b11259's CUDA 13.4 assets; the digests are the release's own.
+/// The pinned llama.cpp build's CUDA 13.4 assets; the digests are the release's own.
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub(super) const CUDA_PACK: &[CudaPackArchive] = &[
     CudaPackArchive {
-        url: "https://github.com/ggml-org/llama.cpp/releases/download/b11259/llama-b11259-bin-win-cuda-13.4-x64.zip",
+        url: concat!(
+            "https://github.com/ggml-org/llama.cpp/releases/download/",
+            llama_cpp_build!(),
+            "/llama-",
+            llama_cpp_build!(),
+            "-bin-win-cuda-13.4-x64.zip"
+        ),
         size_bytes: 153_546_058,
         sha256: "7e93d79ed0dfacb67a7a5448eab38b60511ec3ad623022259b08490d5cf01404",
         format: CudaPackFormat::Zip,
         members: &[(CUDA_PACK_LIBRARIES.backend, CUDA_PACK_LIBRARIES.backend)],
     },
     CudaPackArchive {
-        url: "https://github.com/ggml-org/llama.cpp/releases/download/b11259/cudart-llama-bin-win-cuda-13.4-x64.zip",
+        url: concat!(
+            "https://github.com/ggml-org/llama.cpp/releases/download/",
+            llama_cpp_build!(),
+            "/cudart-llama-bin-win-cuda-13.4-x64.zip"
+        ),
         size_bytes: 423_535_356,
         sha256: "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668",
         format: CudaPackFormat::Zip,
@@ -307,7 +344,7 @@ impl ModelStore {
         }
     }
 
-    /// Deletes a pack marked for removal, and staging left by an interrupted download. Run
+    /// Deletes outdated packs, a pack marked for removal, and interrupted downloads. Run
     /// at startup, before anything loads the pack.
     pub fn finish_cuda_pack_removal(&self) {
         let _guard = self.lock_store();
@@ -323,8 +360,15 @@ impl ModelStore {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with(".llama-cuda-stage-") || name.starts_with(".llama-cuda-download-") {
-                let _ = remove_path(&entry.path());
+            let stale_pack = name.starts_with("llama-cuda")
+                && entry.path() != root
+                && entry.file_type().is_ok_and(|kind| kind.is_dir());
+            if (stale_pack
+                || name.starts_with(".llama-cuda-stage-")
+                || name.starts_with(".llama-cuda-download-"))
+                && let Err(error) = remove_path(&entry.path())
+            {
+                tracing::warn!(%error, "CUDA pack files could not be removed");
             }
         }
     }

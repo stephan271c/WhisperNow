@@ -6,7 +6,7 @@ use whispernow_domain::{ClearDataCategory, Settings, SetupCheckpoint};
 
 use super::{Failure, Gateway, run_blocking};
 use crate::{
-    autostart::{self, AutostartError},
+    autostart::AutostartError,
     shortcuts::{
         RecordingBinding, ShortcutBinding, ShortcutRegistrationError, cancel_binding,
         recording_binding,
@@ -14,13 +14,10 @@ use crate::{
 };
 
 impl Gateway {
-    /// Reads the saved settings and adds warnings for native side effects that are not
-    /// currently in effect: an inactive recording shortcut, a cancel shortcut the last
-    /// dictation could not register, and start-on-login drift.
     pub(crate) async fn settings_view(&self) -> Result<SettingsView, AppError> {
         let mut view = self
             .run_command("get_settings", Failure::Published, |services| {
-                services.settings.get()
+                Ok(services.settings.get())
             })
             .await?;
         if self.shortcuts_enabled() && !self.shortcuts.registration_active() {
@@ -43,23 +40,10 @@ impl Gateway {
         {
             view.warnings.push("The cancel shortcut could not be activated during the last dictation; choose another key, or cancel from the recording bar or the tray".to_owned());
         }
-        match self.autostart.is_enabled() {
-            Ok(actual) if actual != view.settings.auto_start_on_login => {
-                view.warnings.push("The OS startup registration differs from the saved setting; turn the setting off and on again to repair it".to_owned());
-            }
-            Err(_) => view
-                .warnings
-                .push("The OS startup registration could not be inspected".to_owned()),
-            Ok(_) => {}
-        }
+        self.read_start_on_login(&mut view);
         Ok(view)
     }
 
-    /// Registers the edited recording shortcuts, saves the edit, then applies the other
-    /// native side effects of what changed: the cancel shortcut and the start-on-login
-    /// registration. A side effect that fails comes back as a warning next to the saved
-    /// settings. A refused shortcut leaves the previous one active, and the previous one is
-    /// saved in its place, so the saved settings name the shortcuts in effect.
     pub(crate) async fn update_settings(
         &self,
         request: Settings,
@@ -87,16 +71,14 @@ impl Gateway {
         response
             .warnings
             .extend(refused.map(|warning| warning.summary));
-        response.warnings.extend(
-            self.apply_native_settings(&response.settings.settings, Some(&before))
-                .await
-                .map(|warning| warning.summary),
-        );
+        if before.cancel_shortcut != response.settings.settings.cancel_shortcut {
+            self.apply_cancel_shortcut(cancel_binding(&response.settings.settings))
+                .await;
+        }
+        self.read_start_on_login(&mut response.settings);
         Ok(response)
     }
 
-    /// Finishes setup like a settings save: validate, register the chosen
-    /// shortcuts, persist, then apply the saved start-on-login setting.
     pub(super) async fn complete_setup(
         &self,
         mut checkpoint: SetupCheckpoint,
@@ -119,7 +101,7 @@ impl Gateway {
                 services.complete_setup(&checkpoint, &before)
             })
             .await;
-        let settings = match completing {
+        let mut settings = match completing {
             Ok(settings) => settings,
             Err(error) => {
                 if registered {
@@ -128,12 +110,8 @@ impl Gateway {
                 return Err(error);
             }
         };
-        let mut warnings: Vec<_> = refused.map(|warning| warning.summary).into_iter().collect();
-        warnings.extend(
-            self.apply_native_settings(&settings.settings, None)
-                .await
-                .map(|warning| warning.summary),
-        );
+        let warnings = refused.map(|warning| warning.summary).into_iter().collect();
+        self.read_start_on_login(&mut settings);
         Ok(SaveSettingsResponse { settings, warnings })
     }
 
@@ -142,7 +120,7 @@ impl Gateway {
         operation: &'static str,
         failure: Failure,
     ) -> Result<Settings, AppError> {
-        self.run_command(operation, failure, |services| services.settings.load())
+        self.run_command(operation, failure, |services| Ok(services.settings.load()))
             .await
     }
 
@@ -202,23 +180,6 @@ impl Gateway {
         Ok(())
     }
 
-    /// Applies the saved settings' native effects beyond recording shortcuts, which are
-    /// registered before the save. The caller holds `native_settings`; every native call runs
-    /// on a blocking worker without any state lock held. Failures are returned as warnings.
-    async fn apply_native_settings(
-        &self,
-        settings: &Settings,
-        before: Option<&Settings>,
-    ) -> Option<AppError> {
-        if before.is_some_and(|saved| saved.cancel_shortcut != settings.cancel_shortcut) {
-            self.apply_cancel_shortcut(cancel_binding(settings)).await;
-        }
-        if before.is_none_or(|saved| saved.auto_start_on_login != settings.auto_start_on_login) {
-            return self.apply_autostart(settings.auto_start_on_login).await;
-        }
-        None
-    }
-
     /// Registers `saved`'s shortcut again after a save that registered another failed.
     async fn restore_shortcuts(&self, saved: &Settings) {
         if let Some(error) = self.apply_shortcuts(recording_binding(saved)).await {
@@ -255,13 +216,32 @@ impl Gateway {
         }
     }
 
-    async fn apply_autostart(&self, desired: bool) -> Option<AppError> {
-        let registration = Arc::clone(&self.autostart);
-        match run_blocking(move || autostart::reconcile(registration.as_ref(), desired)).await {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(autostart_error(error)),
-            Err(error) => Some(error),
+    pub(super) fn read_start_on_login(&self, view: &mut SettingsView) {
+        match self.autostart.is_enabled() {
+            Ok(enabled) => view.start_on_login = enabled,
+            Err(_) => view
+                .warnings
+                .push("The OS startup registration could not be inspected".to_owned()),
         }
+    }
+
+    pub(crate) async fn set_start_on_login(
+        &self,
+        enabled: bool,
+    ) -> Result<SaveSettingsResponse, AppError> {
+        let _native_settings = self.native_settings.lock().await;
+        self.apply_autostart(enabled).await?;
+        Ok(SaveSettingsResponse {
+            settings: self.settings_view().await?,
+            warnings: Vec::new(),
+        })
+    }
+
+    async fn apply_autostart(&self, enabled: bool) -> Result<(), AppError> {
+        let registration = Arc::clone(&self.autostart);
+        run_blocking(move || registration.set_enabled(enabled))
+            .await?
+            .map_err(autostart_error)
     }
 
     /// Clears application data; clearing settings also removes the start-on-login
@@ -278,7 +258,7 @@ impl Gateway {
                 services.clear_data(&request)
             })
             .await?;
-        if clears_settings && let Some(warning) = self.apply_autostart(false).await {
+        if clears_settings && let Err(warning) = self.apply_autostart(false).await {
             self.publish_error(&warning);
         }
         Ok(result)
@@ -291,10 +271,9 @@ pub(crate) fn autostart_error(error: AutostartError) -> AppError {
         code: match error {
             AutostartError::Query => "autostart_query_failed",
             AutostartError::Update => "autostart_update_failed",
-            AutostartError::Verification => "autostart_verification_failed",
         }
         .to_owned(),
-        summary: "The start-on-login registration could not be synchronized".to_owned(),
+        summary: "The start-on-login registration could not be updated".to_owned(),
     }
 }
 

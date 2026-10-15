@@ -27,7 +27,7 @@ impl AiCleanup {
         prepared: &mut PreparedTranscription,
         plan: &CleanupPlan,
         cancellation: &CancellationToken,
-    ) -> Option<String> {
+    ) {
         let started = Instant::now();
         let result = self.run(plan, &prepared.deterministic_text, cancellation);
         tracing::info!(
@@ -40,12 +40,7 @@ impl AiCleanup {
             },
             "batch pipeline stage completed"
         );
-        let cleanup_model = result.is_ok().then(|| match &plan.target {
-            CleanupTarget::Local { model } => model.as_str().to_owned(),
-            CleanupTarget::Remote(target) => target.model.clone(),
-        });
         prepared.apply_cleanup(result);
-        cleanup_model
     }
 
     fn run(

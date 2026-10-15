@@ -21,11 +21,18 @@ pub struct ClearDataError {
 impl AppPaths {
     /// The fixed targets that currently exist.
     pub fn data_locations(&self) -> Result<Vec<DataLocation>, ClearDataError> {
-        self.inspect_targets(&ClearDataCategory::ALL)
+        self.data_locations_for(&ClearDataCategory::ALL)
     }
 
-    /// Retained recordings are removed before the `SQLite` lifecycle database; if they cannot
-    /// be removed, the database and its sidecars are kept so the recordings stay recoverable.
+    pub fn data_locations_for(
+        &self,
+        categories: &[ClearDataCategory],
+    ) -> Result<Vec<DataLocation>, ClearDataError> {
+        self.inspect_targets(categories)
+    }
+
+    /// The open history repository owns its database and recordings; only its Python
+    /// leftovers are file-deletion targets here.
     pub fn clear_data(
         &self,
         categories: &[ClearDataCategory],
@@ -34,16 +41,15 @@ impl AppPaths {
         let targets = self
             .inspect_targets(categories)?
             .into_iter()
-            .filter(|location| location.path != cuda_pack);
-        let mut recordings_removed = true;
+            .filter(|location| {
+                location.path != cuda_pack
+                    && location.path != self.history_database_file()
+                    && location.path != self.recordings_dir()
+            });
         let mut entries = Vec::new();
         for DataLocation { category, path } in targets {
-            let deleted = (recordings_removed || !self.is_lifecycle_database(&path))
-                && remove_path(&path)
-                    .map_or_else(|error| error.kind() == io::ErrorKind::NotFound, |()| true);
-            if path == self.recordings_dir() && !deleted {
-                recordings_removed = false;
-            }
+            let deleted = remove_path(&path)
+                .map_or_else(|error| error.kind() == io::ErrorKind::NotFound, |()| true);
             entries.push(ClearDataItem {
                 category,
                 path: path.to_string_lossy().into_owned(),
@@ -51,16 +57,6 @@ impl AppPaths {
             });
         }
         Ok(entries)
-    }
-
-    fn is_lifecycle_database(&self, path: &Path) -> bool {
-        [
-            self.history_database_file(),
-            self.history_database_wal_file(),
-            self.history_database_shm_file(),
-        ]
-        .iter()
-        .any(|database| database == path)
     }
 
     fn inspect_targets(
@@ -101,20 +97,28 @@ impl AppPaths {
                     .into_iter()
                     .map(|path| (ClearDataCategory::Settings, path)),
             );
+            targets.push((ClearDataCategory::Settings, self.python_logs_dir()));
+        }
+        if categories.contains(&ClearDataCategory::History) {
+            let backups = self
+                .history_backup_files()
+                .map_err(|error| ClearDataError {
+                    category: ClearDataCategory::History,
+                    kind: error.kind(),
+                })?;
+            targets.push((ClearDataCategory::History, self.history_file()));
+            targets.extend(
+                backups
+                    .into_iter()
+                    .map(|path| (ClearDataCategory::History, path)),
+            );
         }
         targets.extend(
             [
-                (ClearDataCategory::History, self.history_file()),
-                (ClearDataCategory::History, self.migrated_history_file()),
-                (ClearDataCategory::History, self.history_quarantine_dir()),
-                // Before the database, which `clear_data` keeps when the recordings cannot be removed.
                 (ClearDataCategory::History, self.recordings_dir()),
                 (ClearDataCategory::History, self.history_database_file()),
-                (ClearDataCategory::History, self.history_database_wal_file()),
-                (ClearDataCategory::History, self.history_database_shm_file()),
                 (ClearDataCategory::Models, self.models_dir()),
                 (ClearDataCategory::Models, self.cuda_pack_dir()),
-                (ClearDataCategory::Logs, self.logs_dir()),
             ]
             .into_iter()
             .filter(|(category, _)| categories.contains(category)),
@@ -142,11 +146,10 @@ mod tests {
     use super::ClearDataCategory;
     use crate::AppPaths;
 
-    const EVERYTHING: [ClearDataCategory; 4] = [
+    const EVERYTHING: [ClearDataCategory; 3] = [
         ClearDataCategory::Settings,
         ClearDataCategory::History,
         ClearDataCategory::Models,
-        ClearDataCategory::Logs,
     ];
 
     struct Fixture {
@@ -172,14 +175,12 @@ mod tests {
             create_file(&self.paths.settings_file());
             create_file(&self.paths.history_file());
             create_file(&self.paths.migrated_history_file());
-            create_dir(&self.paths.history_quarantine_dir());
+            create_file(&self.paths.unreadable_history_file("20261015T120000Z"));
             create_file(&self.paths.history_database_file());
-            create_file(&self.paths.history_database_wal_file());
-            create_file(&self.paths.history_database_shm_file());
             create_dir(&self.paths.recordings_dir());
             create_dir(&self.paths.models_dir());
             create_dir(&self.paths.cuda_pack_dir());
-            create_dir(&self.paths.logs_dir());
+            create_dir(&self.paths.python_logs_dir());
         }
     }
 
@@ -221,20 +222,33 @@ mod tests {
         assert_eq!(
             categories,
             [
-                [ClearDataCategory::Settings].as_slice(),
-                &[ClearDataCategory::History; 7],
+                [ClearDataCategory::Settings; 2].as_slice(),
+                &[ClearDataCategory::History; 5],
                 &[ClearDataCategory::Models; 2],
-                &[ClearDataCategory::Logs],
             ]
             .concat()
         );
 
         let report = paths.clear_data(&EVERYTHING).expect("clear");
-        assert_eq!(report.len(), 10);
+        assert_eq!(report.len(), 6);
         assert!(report.iter().all(|entry| entry.deleted));
         let remaining = paths.data_locations().expect("remaining targets");
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].path, paths.cuda_pack_dir());
+        assert_eq!(remaining.len(), 3);
+        assert!(
+            remaining
+                .iter()
+                .any(|item| item.path == paths.history_database_file())
+        );
+        assert!(
+            remaining
+                .iter()
+                .any(|item| item.path == paths.recordings_dir())
+        );
+        assert!(
+            remaining
+                .iter()
+                .any(|item| item.path == paths.cuda_pack_dir())
+        );
         assert!(config_sentinel.exists());
         assert!(data_sentinel.exists());
         assert!(fixture.paths.config_dir().is_dir());
@@ -248,71 +262,26 @@ mod tests {
         let paths = fixture.paths.clone();
 
         let report = paths
-            .clear_data(&[ClearDataCategory::Logs])
-            .expect("clear logs");
+            .clear_data(&[ClearDataCategory::Settings])
+            .expect("clear settings");
 
-        assert_eq!(report.len(), 1);
-        assert!(!fixture.paths.logs_dir().exists());
-        assert!(fixture.paths.settings_file().exists());
+        assert_eq!(report.len(), 2);
+        assert!(!fixture.paths.python_logs_dir().exists());
+        assert!(!fixture.paths.settings_file().exists());
         assert!(fixture.paths.models_dir().exists());
         assert!(fixture.paths.cuda_pack_dir().exists());
         assert!(fixture.paths.history_database_file().exists());
     }
 
     #[test]
-    fn logs_clear_succeeds_when_the_unselected_config_root_is_a_file() {
-        let fixture = Fixture::separate_roots();
-        let preserved = [
-            fixture.paths.config_dir().to_path_buf(),
-            fixture.paths.history_database_file(),
-            fixture.paths.history_database_wal_file(),
-            fixture.paths.history_database_shm_file(),
-            fixture.paths.recordings_dir().join("retained.wav"),
-            fixture.paths.models_dir().join("model"),
-            fixture.paths.cuda_pack_dir().join("native-library"),
-            fixture.paths.data_dir().join("keep.txt"),
-        ];
-        for path in &preserved {
-            create_file(path);
-        }
-        create_dir(&fixture.paths.logs_dir());
-
-        let error = fixture.paths.data_locations().expect_err("full inventory");
-        assert_eq!(error.category, ClearDataCategory::Settings);
-
-        let report = fixture
-            .paths
-            .clear_data(&[ClearDataCategory::Logs])
-            .expect("clear accessible logs");
-
-        assert_eq!(report.len(), 1);
-        assert_eq!(report[0].category, ClearDataCategory::Logs);
-        assert_eq!(report[0].path, fixture.paths.logs_dir().to_string_lossy());
-        assert!(report[0].deleted);
-        assert!(!fixture.paths.logs_dir().exists());
-        for path in preserved {
-            assert_eq!(
-                fs::read(path).expect("unrelated data preserved"),
-                b"test data"
-            );
-        }
-    }
-
-    #[test]
     fn inspection_failure_happens_before_any_target_is_deleted() {
         let fixture = Fixture::separate_roots();
         create_file(fixture.paths.config_dir());
-        for path in [
-            fixture.paths.history_database_file(),
-            fixture.paths.history_database_wal_file(),
-            fixture.paths.history_database_shm_file(),
-        ] {
-            create_file(&path);
-        }
+        create_file(&fixture.paths.history_database_file());
         create_dir(&fixture.paths.recordings_dir());
         create_dir(&fixture.paths.models_dir());
         create_dir(&fixture.paths.cuda_pack_dir());
-        create_dir(&fixture.paths.logs_dir());
+        create_dir(&fixture.paths.python_logs_dir());
 
         let error = fixture
             .paths
@@ -322,12 +291,10 @@ mod tests {
         assert_eq!(error.category, ClearDataCategory::Settings);
         for path in [
             fixture.paths.history_database_file(),
-            fixture.paths.history_database_wal_file(),
-            fixture.paths.history_database_shm_file(),
             fixture.paths.recordings_dir().join("content"),
             fixture.paths.models_dir().join("content"),
             fixture.paths.cuda_pack_dir().join("content"),
-            fixture.paths.logs_dir().join("content"),
+            fixture.paths.python_logs_dir().join("content"),
         ] {
             assert_eq!(fs::read(path).expect("data preserved"), b"test data");
         }
@@ -337,6 +304,7 @@ mod tests {
     fn settings_moved_aside_are_listed_and_deleted_with_settings() {
         let fixture = Fixture::separate_roots();
         create_file(&fixture.paths.settings_file());
+        create_dir(&fixture.paths.python_logs_dir());
         let later = fixture.paths.unreadable_settings_file("20260926T120000Z");
         let earlier = fixture.paths.unreadable_settings_file("20260925T120000Z");
         let python = fixture.paths.python_settings_file();
@@ -362,51 +330,58 @@ mod tests {
                 fixture.paths.settings_file(),
                 earlier.clone(),
                 later.clone(),
-                python.clone()
+                python.clone(),
+                fixture.paths.python_logs_dir(),
             ]
         );
         paths.clear_data(&EVERYTHING).expect("clear");
+        assert!(!fixture.paths.python_logs_dir().exists());
         for removed in [&earlier, &later, &python, &fixture.paths.settings_file()] {
             assert!(!removed.exists(), "{removed:?}");
         }
         assert!(unrelated.iter().all(|path| path.exists()));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn recordings_failure_preserves_lifecycle_database_and_sidecars() {
-        use std::os::unix::fs::PermissionsExt as _;
-
+    fn malformed_history_backups_are_listed_and_deleted_only_with_history() {
         let fixture = Fixture::separate_roots();
-        let recordings = fixture.paths.recordings_dir();
-        create_file(&recordings.join("retained.wav"));
-        // Without write permission its recording cannot be deleted, so neither can it.
-        fs::set_permissions(&recordings, fs::Permissions::from_mode(0o500))
-            .expect("read-only recordings");
-        for path in [
-            fixture.paths.history_database_file(),
-            fixture.paths.history_database_wal_file(),
-            fixture.paths.history_database_shm_file(),
-        ] {
-            create_file(&path);
+        let later = fixture.paths.unreadable_history_file("20261015T120001Z");
+        let earlier = fixture.paths.unreadable_history_file("20261015T120000Z");
+        let imported = fixture.paths.migrated_history_file();
+        let unrelated = fixture.paths.config_dir().join("history.json.bak");
+        for path in [&later, &earlier, &imported, &unrelated] {
+            create_file(path);
         }
-        let paths = fixture.paths.clone();
-        let report = paths.clear_data(&EVERYTHING).expect("clear");
-        fs::set_permissions(&recordings, fs::Permissions::from_mode(0o700))
-            .expect("writable recordings");
-
-        let history_failures = report
-            .iter()
-            .filter(|entry| entry.category == ClearDataCategory::History && !entry.deleted)
-            .count();
+        let locations = fixture.paths.data_locations().expect("locations");
         assert_eq!(
-            history_failures, 4,
-            "recordings plus three SQLite files fail closed"
+            locations
+                .into_iter()
+                .map(|location| location.path)
+                .collect::<Vec<_>>(),
+            vec![earlier.clone(), later.clone(), imported.clone()]
         );
-        assert!(fixture.paths.recordings_dir().exists());
-        assert!(fixture.paths.history_database_file().exists());
-        assert!(fixture.paths.history_database_wal_file().exists());
-        assert!(fixture.paths.history_database_shm_file().exists());
+
+        fixture
+            .paths
+            .clear_data(&[ClearDataCategory::Settings])
+            .expect("clear settings");
+        for path in [&later, &earlier, &imported] {
+            assert!(path.exists());
+        }
+        let report = fixture
+            .paths
+            .clear_data(&[ClearDataCategory::History])
+            .expect("clear history");
+        assert_eq!(report.len(), 3);
+        assert!(
+            report
+                .iter()
+                .all(|item| item.category == ClearDataCategory::History && item.deleted)
+        );
+        for path in [&later, &earlier, &imported] {
+            assert!(!path.exists());
+        }
+        assert!(unrelated.exists());
     }
 
     #[test]
@@ -436,8 +411,12 @@ mod tests {
         fs::create_dir_all(fixture.paths.data_dir()).expect("create data root");
         symlink(&outside, fixture.paths.models_dir()).expect("models symlink");
         symlink(&outside, fixture.paths.cuda_pack_dir()).expect("CUDA pack symlink");
-        create_dir(&fixture.paths.logs_dir());
-        symlink(&outside, fixture.paths.logs_dir().join("outside-link")).expect("nested symlink");
+        create_dir(&fixture.paths.python_logs_dir());
+        symlink(
+            &outside,
+            fixture.paths.python_logs_dir().join("outside-link"),
+        )
+        .expect("nested symlink");
         let paths = fixture.paths.clone();
 
         let report = paths.clear_data(&EVERYTHING).expect("clear");
@@ -446,6 +425,6 @@ mod tests {
         assert!(outside.join("content").exists());
         assert!(!fixture.paths.models_dir().exists());
         assert!(fixture.paths.cuda_pack_dir().exists());
-        assert!(!fixture.paths.logs_dir().exists());
+        assert!(!fixture.paths.python_logs_dir().exists());
     }
 }

@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 #[serde(rename_all = "camelCase")]
 pub struct SettingsView {
     pub settings: Settings,
+    pub start_on_login: bool,
     /// What is not in effect although the settings ask for it, worded for the user.
     pub warnings: Vec<String>,
 }
@@ -24,6 +25,7 @@ impl SettingsView {
     pub fn new(settings: &Settings) -> Self {
         Self {
             settings: settings.clone(),
+            start_on_login: false,
             warnings: settings.cleanup_warning().into_iter().collect(),
         }
     }

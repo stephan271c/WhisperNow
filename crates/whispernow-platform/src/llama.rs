@@ -18,6 +18,19 @@ use libloading::Library;
 use thiserror::Error;
 use whispernow_core::llm::local::{DecodeContext, LocalDecodeError, Outputs, Token};
 
+macro_rules! llama_cpp_build {
+    () => {
+        "b11259"
+    };
+}
+#[cfg(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
+pub(crate) use llama_cpp_build;
+
+pub(crate) const LLAMA_CPP_BUILD: &str = llama_cpp_build!();
+
 /// The release's libraries, in load order: each needs the ones before it.
 #[cfg(target_os = "linux")]
 const LIBRARIES: [&str; 3] = ["libggml-base.so.0", "libggml.so.0", "libllama.so.0"];
@@ -189,7 +202,8 @@ impl Llama {
         libraries.push(open(&backend).map_err(|error| failed(error.to_string()))?);
         let path = CString::new(backend.as_os_str().as_encoded_bytes())
             .map_err(|error| failed(error.to_string()))?;
-        // SAFETY: a NUL-terminated path to a backend of the same release.
+        // SAFETY: a NUL-terminated path in the pack directory for the pinned build,
+        // matching the bundled libraries.
         if unsafe { (self.api.ggml_backend_load)(path.as_ptr()) }.is_null() {
             return Err(failed("ggml did not load the CUDA backend".to_owned()));
         }

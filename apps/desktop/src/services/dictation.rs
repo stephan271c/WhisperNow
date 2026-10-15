@@ -552,9 +552,7 @@ impl Worker {
     /// loaded it would have its stop wait behind the load. A model that is not installed or
     /// fails to load is left for the first dictation to report.
     fn preload_model(&mut self) {
-        let Ok(settings) = self.parts.settings.transaction().load() else {
-            return;
-        };
+        let settings = self.parts.settings.load();
         if let Ok(model) = installed(self.parts.models.as_ref(), &settings.model_id) {
             let _reported_by_dictation = self.ensure_loaded(&model);
         }
@@ -656,23 +654,21 @@ impl Worker {
             Ok(prepared) => prepared,
             Err(kind) => return self.pipeline_failure(recording, &samples, has_audio, kind),
         };
-        let cleanup_model = if let Some(plan) = &settings.cleanup {
+        if let Some(plan) = &settings.cleanup {
             self.parts.state.apply(|state| {
                 state.phase = Phase::Processing { cleaning_up: true };
             });
             self.parts
                 .cleanup
-                .apply(&mut prepared, plan, &recording.cancellation)
-        } else {
-            None
-        };
+                .apply(&mut prepared, plan, &recording.cancellation);
+        }
         if recording.cancellation.is_cancelled() {
             return self.cancelled(recording, &samples, has_audio);
         }
         if recording.trigger.is_setup_test() {
             return Outcome::Heard(prepared.final_text);
         }
-        self.deliver(recording, &samples, prepared, cleanup_model)
+        self.deliver(recording, &samples, prepared)
     }
 
     /// Saves the transcript to history, pastes it, and records whether the paste worked.
@@ -681,7 +677,6 @@ impl Worker {
         recording: &Recording,
         samples: &[f32],
         prepared: PreparedTranscription,
-        cleanup_model: Option<String>,
     ) -> Outcome {
         let history = self.parts.history.insert(
             NewHistoryEntry {
@@ -693,7 +688,6 @@ impl Worker {
                 status: EntryStatus::Ok,
                 error: None,
                 asr_model_id: Some(recording.settings.model_id.clone()),
-                llm_model: cleanup_model,
             },
             samples,
             recording.settings.keep_audio,
@@ -705,7 +699,6 @@ impl Worker {
             .output
             .output(&prepared.final_text, &recording.cancellation);
         let (delivery_failure, delivery_error) = notice.failure();
-        let history_warning = self.parts.history.take_warning();
         if let (Some(reason), Ok(entry)) = (delivery_failure, &history) {
             match self.parts.history.mark_not_delivered(*entry, reason) {
                 Ok(()) => self.history_changed(),
@@ -720,8 +713,7 @@ impl Worker {
             .err()
             .cloned()
             .or_else(|| recording.sink.interruption().and_then(interruption_warning))
-            .or(cleanup_warning)
-            .or(history_warning);
+            .or(cleanup_warning);
         Outcome::Delivered {
             transcript: prepared.final_text,
             failure: delivery_error,

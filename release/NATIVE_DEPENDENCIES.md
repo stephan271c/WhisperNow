@@ -94,7 +94,7 @@ files taken from it; nothing is extracted before an archive matches.
 | Linux x86_64 | `ubuntu-cuda-13.4-x64.tar.gz`, `cudart-…-ubuntu-cuda-13.4-x64.tar.gz` | 593 MB | 766 MB |
 | Windows x86_64 | `win-cuda-13.4-x64.zip`, `cudart-…-win-cuda-13.4-x64.zip` | 577 MB | not measured |
 
-The files go flat into the app data's `llama-cuda/`. The engine opens the runtime and
+The files go flat into the app data's `llama-cuda-b11259/`. The engine opens the runtime and
 the backend from there by full path and adds the backend to the bundled ones
 (`ggml_backend_load`); on Windows the release's core DLLs are byte-identical in the
 Vulkan and CUDA builds. The model goes to a CUDA GPU first, then Vulkan, then the CPU.

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use whispernow_domain::{
@@ -54,6 +56,14 @@ fn settings_round_trip_and_missing_fields_take_defaults() {
     };
     let document = serde_json::to_string(&settings).expect("serialize settings");
     assert_eq!(parse_json::<Settings>(&document), settings);
+    let saved: Value = parse_json(&document);
+    assert!(saved.get("recording_shortcut").is_some());
+    assert!(saved.get("cancel_shortcut").is_some());
+    assert!(saved["setup"].get("recording_shortcut").is_some());
+    for key in ["hotkey", "cancel_hotkey", "auto_start_on_login"] {
+        assert!(saved.get(key).is_none());
+        assert!(saved["setup"].get(key).is_none());
+    }
 
     let partial: Settings = parse_json(r#"{"keep_audio":true,"unknown":{"nested":true}}"#);
     assert_eq!(
@@ -83,7 +93,7 @@ fn python_settings_import_picks_known_fields() {
     assert_eq!(settings.recording_mode, RecordingMode::Hold);
     // The fixture's Whisper Small is no longer offered.
     assert_eq!(settings.model_id, ModelId::default());
-    assert!(settings.start_minimized && settings.auto_start_on_login);
+    assert!(settings.start_minimized && imported.enable_autostart);
     assert!(settings.first_run_complete);
     assert!(
         settings.cleanup_enabled,
@@ -227,6 +237,49 @@ fn python_settings_import_moves_keys_out_and_reads_the_older_layouts() {
 }
 
 #[test]
+fn python_settings_copy_keeps_only_refused_keys_in_both_layouts() {
+    let document = json!({
+        "llm_provider": "openrouter",
+        "llm_api_key": " flat-key ",
+        "llm_model": "legacy-model",
+        "llm_provider_settings": {
+            "openai": { "api_key": "accepted-key", "model": "gpt-test" },
+            "gemini": { "api_key": "refused-key", "model": "gemini-test" },
+            "anthropic": { "api_key": "invalid\nkey", "model": "claude-test" },
+            "future-provider": { "api_key": "unknown-key", "model": "future-model" }
+        },
+        "unknown": { "values": [true, null, 42] }
+    });
+    let imported = PythonSettings::import(&document);
+    let mut expected = json!({
+        "llm_provider": "openrouter",
+        "llm_model": "legacy-model",
+        "llm_provider_settings": {
+            "openai": { "model": "gpt-test" },
+            "gemini": { "model": "gemini-test" },
+            "anthropic": { "model": "claude-test" },
+            "future-provider": { "model": "future-model" }
+        },
+        "unknown": { "values": [true, null, 42] }
+    });
+    assert_eq!(
+        imported.copy_with_refused_keys(&document, &BTreeSet::new()),
+        expected
+    );
+
+    expected["llm_api_key"] = document["llm_api_key"].clone();
+    expected["llm_provider_settings"]["gemini"]["api_key"] =
+        document["llm_provider_settings"]["gemini"]["api_key"].clone();
+    assert_eq!(
+        imported.copy_with_refused_keys(
+            &document,
+            &[LlmProvider::Gemini, LlmProvider::OpenRouter].into()
+        ),
+        expected
+    );
+}
+
+#[test]
 fn saved_shortcuts_keep_their_key_names() {
     let shortcut =
         parse_json::<Shortcut>(r#"{"modifiers":["shift","ctrl","ctrl"],"key":" Space "}"#);
@@ -242,31 +295,4 @@ fn saved_shortcuts_keep_their_key_names() {
         serde_json::json!({"modifiers": ["ctrl", "shift"], "key": "space"})
     );
     assert!(serde_json::from_str::<Shortcut>(r#"{"key":"f25"}"#).is_err());
-}
-
-#[test]
-fn the_recording_shortcut_loads_and_saves_under_the_old_key_name() {
-    let document = json!({
-        "hotkey": { "modifiers": ["ctrl"], "key": "r" },
-        "recording_mode": "toggle",
-        "cancel_hotkey": null,
-        "setup": { "step": "shortcuts", "hotkey": { "modifiers": ["alt"], "key": "t" } },
-    });
-    let settings: Settings = parse_json(&document.to_string());
-    assert_eq!(
-        settings.recording_shortcut,
-        Shortcut {
-            modifiers: [ShortcutModifier::Control].into(),
-            key: ShortcutKey::R,
-        }
-    );
-    assert_eq!(settings.recording_mode, RecordingMode::Toggle);
-    assert_eq!(settings.cancel_shortcut, None);
-    let setup = settings.setup.clone().expect("setup checkpoint");
-    assert_eq!(setup.step, SetupStep::Shortcuts);
-    assert_eq!(setup.recording_shortcut.key, ShortcutKey::T);
-
-    let saved = serde_json::to_value(&settings).expect("serialize settings");
-    assert!(saved.get("hotkey").is_some() && saved.get("cancel_hotkey").is_some());
-    assert!(saved["setup"].get("hotkey").is_some());
 }

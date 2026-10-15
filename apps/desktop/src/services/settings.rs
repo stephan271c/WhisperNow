@@ -13,46 +13,39 @@ use super::{
     state::StateCell,
 };
 
-/// The guard preserves the model-transition -> settings -> state lock order.
-pub(super) struct SettingsTransaction<'a> {
-    coordinator: &'a SettingsCoordinator,
-    _mutation: MutexGuard<'a, ()>,
-}
-
-impl SettingsTransaction<'_> {
-    /// A file that could not be read is reported once here.
-    pub(super) fn load(&self) -> Result<Settings, AppError> {
-        let (settings, notice) = self.coordinator.persistence.load()?;
-        self.coordinator.report_notice(notice);
-        Ok(settings)
-    }
-
-    pub(super) fn save(&self, settings: &Settings) -> Result<(), AppError> {
-        self.coordinator.persistence.save(settings)
-    }
-}
-
 /// Owns settings persistence and serializes its writers.
 pub(crate) struct SettingsCoordinator {
     persistence: Arc<SettingsStore>,
     state: Arc<StateCell>,
-    mutation: Mutex<()>,
+    current: Mutex<Settings>,
 }
 
 impl SettingsCoordinator {
-    pub(super) fn new(persistence: Arc<SettingsStore>, state: Arc<StateCell>) -> Self {
+    pub(super) fn new(
+        persistence: Arc<SettingsStore>,
+        state: Arc<StateCell>,
+        settings: Settings,
+    ) -> Self {
         Self {
             persistence,
             state,
-            mutation: Mutex::new(()),
+            current: Mutex::new(settings),
         }
     }
 
-    pub(super) fn transaction(&self) -> SettingsTransaction<'_> {
-        SettingsTransaction {
-            coordinator: self,
-            _mutation: lock(&self.mutation),
-        }
+    /// Lock order: model-transition -> settings -> history -> state.
+    pub(super) fn lock(&self) -> MutexGuard<'_, Settings> {
+        lock(&self.current)
+    }
+
+    pub(super) fn save(
+        &self,
+        saved: &mut MutexGuard<'_, Settings>,
+        edited: Settings,
+    ) -> Result<(), AppError> {
+        self.persistence.save(&edited)?;
+        **saved = edited;
+        Ok(())
     }
 
     /// Where an LLM call reads its provider's API key when it is prepared, so settings
@@ -71,7 +64,7 @@ impl SettingsCoordinator {
     }
 
     /// Publishes, once, what happened to the settings file as a state warning.
-    pub(super) fn report_notice(&self, notice: Option<SettingsNotice>) {
+    fn report_notice(&self, notice: Option<SettingsNotice>) {
         let (code, summary) = match notice {
             None => return,
             Some(SettingsNotice::Unreadable { path }) => (
@@ -112,7 +105,7 @@ impl SettingsCoordinator {
 
     /// Provider configurations in the snapshot carry no API key.
     pub(super) fn recording_settings(&self) -> Result<RecordingSettings, AppError> {
-        let settings = self.transaction().load()?;
+        let settings = self.load();
         let input_device = device_choice(settings.input_device.as_deref())?;
         let cleanup = cleanup_plan(&settings);
         let model_id = settings.model_id.clone();
@@ -123,7 +116,7 @@ impl SettingsCoordinator {
     /// has chosen so far, or the saved ones once setup has finished. It never runs AI cleanup,
     /// so the test never reaches a provider.
     pub(super) fn setup_test_settings(&self) -> Result<RecordingSettings, AppError> {
-        let settings = self.transaction().load()?;
+        let settings = self.load();
         let (model_id, selected_device) = if settings.first_run_complete {
             (settings.model_id.clone(), settings.input_device.as_deref())
         } else if let Some(checkpoint) = settings.setup.as_ref() {
@@ -138,22 +131,22 @@ impl SettingsCoordinator {
         Ok(recording(settings, model_id, input_device, None))
     }
 
-    pub(crate) fn load(&self) -> Result<Settings, AppError> {
-        self.transaction().load()
+    pub(crate) fn load(&self) -> Settings {
+        self.lock().clone()
     }
 
-    pub(crate) fn get(&self) -> Result<SettingsView, AppError> {
-        Ok(SettingsView::new(&self.load()?))
+    pub(crate) fn get(&self) -> SettingsView {
+        SettingsView::new(&self.load())
     }
 
     pub(crate) fn save_window_geometry(&self, geometry: WindowGeometry) -> Result<(), AppError> {
-        let transaction = self.transaction();
-        let mut settings = transaction.load()?;
+        let mut saved = self.lock();
+        let mut settings = saved.clone();
         if settings.window_geometry == Some(geometry) {
             return Ok(());
         }
         settings.window_geometry = Some(geometry);
-        transaction.save(&settings)
+        self.save(&mut saved, settings)
     }
 
     /// Saves the settings the window edited, keeping what it does not edit: the providers
@@ -166,8 +159,8 @@ impl SettingsCoordinator {
         audio: &dyn AudioInput,
     ) -> Result<(Settings, SettingsView), AppError> {
         let choice = device_choice(edited.input_device.as_deref())?;
-        let transaction = self.transaction();
-        let before = transaction.load()?;
+        let mut saved = self.lock();
+        let before = saved.clone();
         edited.model_id.clone_from(&before.model_id);
         edited.first_run_complete = before.first_run_complete;
         edited.setup.clone_from(&before.setup);
@@ -179,13 +172,11 @@ impl SettingsCoordinator {
         if edited.input_device != before.input_device {
             require_connected_device(audio, &choice)?;
         }
-        transaction.save(&edited)?;
-        Ok((before, SettingsView::new(&edited)))
+        self.save(&mut saved, edited)?;
+        Ok((before, SettingsView::new(&saved)))
     }
 
     pub(crate) fn set_api_key(&self, request: &SetApiKeyRequest) -> Result<SettingsView, AppError> {
-        let transaction = self.transaction();
-        let mut settings = transaction.load()?;
         self.persistence
             .store_api_key(request.provider, &request.key)
             .map_err(|_| {
@@ -195,14 +186,14 @@ impl SettingsCoordinator {
                     "The OS credential store is unavailable, so the API key was not saved",
                 )
             })?;
+        let mut saved = self.lock();
+        let mut settings = saved.clone();
         settings.api_keys.insert(request.provider);
-        transaction.save(&settings)?;
-        Ok(SettingsView::new(&settings))
+        self.save(&mut saved, settings)?;
+        Ok(SettingsView::new(&saved))
     }
 
     pub(crate) fn clear_api_key(&self, provider: LlmProvider) -> Result<SettingsView, AppError> {
-        let transaction = self.transaction();
-        let mut settings = transaction.load()?;
         self.persistence.delete_api_key(provider).map_err(|_| {
             AppError::new(
                 ErrorCategory::General,
@@ -210,17 +201,19 @@ impl SettingsCoordinator {
                 "The OS credential store is unavailable, so the API key was not removed",
             )
         })?;
+        let mut saved = self.lock();
+        let mut settings = saved.clone();
         settings.api_keys.remove(&provider);
-        transaction.save(&settings)?;
-        Ok(SettingsView::new(&settings))
+        self.save(&mut saved, settings)?;
+        Ok(SettingsView::new(&saved))
     }
 
-    pub(crate) fn get_setup_state(&self) -> Result<SetupStateView, AppError> {
-        let settings = self.transaction().load()?;
-        Ok(SetupStateView {
+    pub(crate) fn get_setup_state(&self) -> SetupStateView {
+        let settings = self.load();
+        SetupStateView {
             first_run_complete: settings.first_run_complete,
             checkpoint: settings.setup.unwrap_or_default(),
-        })
+        }
     }
 
     pub(crate) fn save_setup_checkpoint(
@@ -228,8 +221,8 @@ impl SettingsCoordinator {
         checkpoint: SetupCheckpoint,
         models: &ModelStore,
     ) -> Result<SetupStateView, AppError> {
-        let transaction = self.transaction();
-        let mut settings = transaction.load()?;
+        let mut saved = self.lock();
+        let mut settings = saved.clone();
         if settings.first_run_complete {
             return Err(AppError::new(
                 ErrorCategory::General,
@@ -246,9 +239,9 @@ impl SettingsCoordinator {
         }
         device_choice(checkpoint.input_device.as_deref())?;
         settings.setup = Some(checkpoint.clone());
-        transaction.save(&settings)?;
+        self.save(&mut saved, settings)?;
         Ok(SetupStateView {
-            first_run_complete: settings.first_run_complete,
+            first_run_complete: saved.first_run_complete,
             checkpoint,
         })
     }
@@ -257,8 +250,8 @@ impl SettingsCoordinator {
     /// with the saved choices, and the saved settings stay in effect until setup
     /// finishes again.
     pub(crate) fn restart_setup(&self) -> Result<SetupStateView, AppError> {
-        let transaction = self.transaction();
-        let mut settings = transaction.load()?;
+        let mut saved = self.lock();
+        let mut settings = saved.clone();
         if !settings.first_run_complete {
             return Err(AppError::new(
                 ErrorCategory::General,
@@ -276,7 +269,7 @@ impl SettingsCoordinator {
         };
         settings.setup = Some(checkpoint.clone());
         settings.first_run_complete = false;
-        transaction.save(&settings)?;
+        self.save(&mut saved, settings)?;
         Ok(SetupStateView {
             first_run_complete: false,
             checkpoint,
@@ -406,7 +399,11 @@ mod tests {
                 State::new(whispernow_domain::ModelId::default()),
                 Events::channel().0,
             ));
-            let settings = SettingsCoordinator::new(persistence, Arc::clone(&state));
+            let settings = SettingsCoordinator::new(
+                persistence,
+                Arc::clone(&state),
+                whispernow_domain::Settings::default(),
+            );
             Self {
                 _root: root,
                 paths,
@@ -414,6 +411,16 @@ mod tests {
                 state,
                 settings,
             }
+        }
+
+        fn restart(&mut self) {
+            let loaded = self.settings.persistence.load().expect("startup load");
+            self.settings = SettingsCoordinator::new(
+                Arc::clone(&self.settings.persistence),
+                Arc::clone(&self.state),
+                loaded.settings.clone(),
+            );
+            self.settings.report_loaded(&loaded.settings, loaded.notice);
         }
 
         fn warning_code(&self) -> Option<String> {
@@ -448,6 +455,76 @@ mod tests {
         }
     }
 
+    #[test]
+    fn recording_settings_does_not_wait_for_a_keyring_write() {
+        use std::sync::{Mutex, mpsc};
+        use std::time::Duration;
+        use whispernow_platform::{CredentialStore, CredentialStoreUnavailable};
+
+        struct BlockingStore {
+            entered: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+
+        impl CredentialStore for BlockingStore {
+            fn read(&self, _: &str) -> Result<Option<ApiKey>, CredentialStoreUnavailable> {
+                Ok(None)
+            }
+
+            fn write(&self, _: &str, _: &ApiKey) -> Result<(), CredentialStoreUnavailable> {
+                self.entered.send(()).expect("write entered");
+                self.release
+                    .lock()
+                    .expect("release lock")
+                    .recv()
+                    .expect("released");
+                Ok(())
+            }
+
+            fn delete(&self, _: &str) -> Result<(), CredentialStoreUnavailable> {
+                Ok(())
+            }
+        }
+
+        let fixture = Fixture::start();
+        let (entered, waiting) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        let persistence = Arc::new(SettingsStore::with_store(
+            fixture.paths.clone(),
+            Arc::new(BlockingStore {
+                entered,
+                release: Mutex::new(blocked),
+            }),
+        ));
+        let coordinator = SettingsCoordinator::new(
+            persistence,
+            Arc::clone(&fixture.state),
+            fixture.settings.load(),
+        );
+        std::thread::scope(|scope| {
+            let write = scope.spawn(|| {
+                coordinator.set_api_key(&SetApiKeyRequest {
+                    provider: LlmProvider::OpenAi,
+                    key: ApiKey::new("blocked-key").expect("key"),
+                })
+            });
+            waiting
+                .recv_timeout(Duration::from_secs(5))
+                .expect("keyring entered");
+            let (ready, snapshot) = mpsc::channel();
+            let coordinator = &coordinator;
+            scope.spawn(move || {
+                ready
+                    .send(coordinator.recording_settings().is_ok())
+                    .expect("snapshot");
+            });
+            let result = snapshot.recv_timeout(Duration::from_secs(5));
+            release.send(()).expect("release keyring before asserting");
+            assert!(result.expect("recording settings returned while keyring blocked"));
+            write.join().expect("writer thread").expect("key saved");
+        });
+    }
+
     struct ConnectedMicrophone;
 
     impl AudioInput for ConnectedMicrophone {
@@ -472,7 +549,7 @@ mod tests {
     fn malformed_explicit_microphone_updates_and_checkpoints_are_not_saved() {
         let fixture = Fixture::start();
         let models = ModelStore::new(fixture.paths.clone());
-        let before = fixture.settings.get().expect("saved settings");
+        let before = fixture.settings.get();
         let mut edited = before.settings.clone();
         edited.input_device = Some(" ".to_owned());
         assert_eq!(
@@ -495,14 +572,14 @@ mod tests {
                 .code,
             "audio_device_invalid"
         );
-        assert_eq!(fixture.settings.get().expect("unchanged settings"), before);
+        assert_eq!(fixture.settings.get(), before);
         assert!(!fixture.paths.settings_file().exists());
     }
 
     #[test]
     fn connected_and_default_microphone_selections_persist_and_disconnected_ones_are_refused() {
         let fixture = Fixture::start();
-        let mut edited = fixture.settings.get().expect("saved settings").settings;
+        let mut edited = fixture.settings.get().settings;
         edited.input_device = Some("connected microphone".to_owned());
         let (_, saved) = fixture
             .settings
@@ -555,7 +632,7 @@ mod tests {
     fn malformed_saved_microphones_cannot_become_default_recording_snapshots() {
         for setup in [false, true] {
             let fixture = Fixture::start();
-            let mut saved = fixture.settings.get().expect("settings").settings;
+            let mut saved = fixture.settings.get().settings;
             if setup {
                 saved.setup = Some(SetupCheckpoint {
                     input_device: Some(" ".to_owned()),
@@ -564,11 +641,12 @@ mod tests {
             } else {
                 saved.input_device = Some(" ".to_owned());
             }
+            let mut current = fixture.settings.lock();
             fixture
                 .settings
-                .transaction()
-                .save(&saved)
+                .save(&mut current, saved)
                 .expect("hand-edited settings");
+            drop(current);
             let snapshot = if setup {
                 fixture.settings.setup_test_settings()
             } else {
@@ -611,15 +689,7 @@ mod tests {
             "the unrelated installation cannot be scanned"
         );
         assert_eq!(saved.expect("supported checkpoint").checkpoint, checkpoint);
-        assert_eq!(
-            fixture
-                .settings
-                .get()
-                .expect("saved settings")
-                .settings
-                .setup,
-            Some(checkpoint)
-        );
+        assert_eq!(fixture.settings.get().settings.setup, Some(checkpoint));
         let unknown = SetupCheckpoint {
             model_id: ModelId::new("unknown-model").expect("model id"),
             ..SetupCheckpoint::default()
@@ -636,13 +706,13 @@ mod tests {
 
     #[test]
     fn an_update_saves_the_edit_and_keeps_what_the_window_does_not_own() {
-        let fixture = Fixture::start();
+        let mut fixture = Fixture::start();
         fixture
             .settings
             .save_window_geometry(geometry())
             .expect("geometry save");
         fixture.set_key("kept-key").expect("store key");
-        let saved = fixture.settings.get().expect("settings view").settings;
+        let saved = fixture.settings.get().settings;
         let mut edited = saved.clone();
         edited.theme = ThemePreference::Dark;
         edited.first_run_complete = !saved.first_run_complete;
@@ -658,14 +728,15 @@ mod tests {
         let mut expected = saved;
         expected.theme = ThemePreference::Dark;
         assert_eq!(view.settings, expected);
-        assert_eq!(fixture.settings.get().expect("reload").settings, expected);
+        fixture.restart();
+        assert_eq!(fixture.settings.get().settings, expected);
         assert_eq!(fixture.stored_key().as_deref(), Some("kept-key"));
     }
 
     #[test]
     fn recording_settings_enable_cleanup_only_after_the_provider_is_repaired() {
         let fixture = Fixture::start();
-        let mut edited = fixture.settings.get().expect("settings view").settings;
+        let mut edited = fixture.settings.get().settings;
         edited.cleanup_enabled = true;
         edited.llm_provider = LlmProvider::Custom;
         edited
@@ -697,16 +768,16 @@ mod tests {
 
     #[test]
     fn saved_settings_that_break_a_rule_load_with_a_warning_and_other_edits_save() {
-        let fixture = Fixture::start();
+        let mut fixture = Fixture::start();
         fs::write(
             fixture.paths.settings_file(),
             r#"{"settings_version": 2, "vocabulary_replacements": [[" ", "x"]]}"#,
         )
         .expect("hand-edited settings");
 
-        let saved = fixture.settings.get().expect("settings load").settings;
+        fixture.restart();
+        let saved = fixture.settings.get().settings;
         assert_eq!(saved.vocabulary_replacements[0].source, " ");
-        fixture.settings.report_loaded(&saved, None);
         assert_eq!(
             fixture.warning_code().as_deref(),
             Some("settings_break_a_rule")
@@ -719,7 +790,7 @@ mod tests {
             .settings
             .update(edited, &whispernow_platform::CpalAudioInput::new())
             .expect("an edit that leaves the broken rule alone saves");
-        let reloaded = fixture.settings.get().expect("reload").settings;
+        let reloaded = fixture.settings.get().settings;
         assert_eq!(
             (reloaded.theme, reloaded.vocabulary_replacements),
             (ThemePreference::Dark, saved_rules)
@@ -727,9 +798,50 @@ mod tests {
     }
 
     #[test]
+    fn settings_reads_ignore_disk_changes_until_restart() {
+        let fixture = Fixture::start();
+        let before = fixture.settings.load();
+        let malformed = "{ unreadable hand edit";
+        fs::write(fixture.paths.settings_file(), malformed).expect("hand edit");
+
+        assert_eq!(fixture.settings.get().settings, before);
+        assert!(!fixture.settings.get_setup_state().first_run_complete);
+        assert!(fixture.settings.recording_settings().is_ok());
+        assert!(fixture.settings.setup_test_settings().is_ok());
+        assert_eq!(
+            fs::read_to_string(fixture.paths.settings_file()).expect("original file"),
+            malformed
+        );
+        assert!(
+            fixture
+                .paths
+                .settings_backup_files()
+                .expect("backups")
+                .is_empty()
+        );
+        assert_eq!(fixture.warning_code(), None);
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_last_settings_in_memory() {
+        let fixture = Fixture::start();
+        let before = fixture.settings.load();
+        fs::create_dir(fixture.paths.settings_file()).expect("block settings replacement");
+        let mut edited = before.clone();
+        edited.theme = ThemePreference::Dark;
+
+        let error = fixture
+            .settings
+            .update(edited, &ConnectedMicrophone)
+            .expect_err("settings write refused");
+        assert_eq!(error.code, "settings_write");
+        assert_eq!(fixture.settings.load(), before);
+    }
+
+    #[test]
     fn an_update_that_breaks_a_rule_is_refused_and_nothing_is_saved() {
         let fixture = Fixture::start();
-        let mut edited = fixture.settings.get().expect("settings view").settings;
+        let mut edited = fixture.settings.get().settings;
         edited.vocabulary_replacements = vec![VocabularyReplacement::new(" ", "x")];
 
         let error = fixture
@@ -750,7 +862,7 @@ mod tests {
 
         let saved = fs::read_to_string(fixture.paths.settings_file()).expect("settings");
         assert!(!saved.contains(&secret));
-        let view = fixture.settings.get().expect("settings view");
+        let view = fixture.settings.get();
         assert!(view.settings.api_keys.contains(&LlmProvider::OpenAi));
         assert_eq!(fixture.stored_key(), Some(secret));
 
@@ -763,7 +875,6 @@ mod tests {
             !fixture
                 .settings
                 .get()
-                .expect("settings view")
                 .settings
                 .api_keys
                 .contains(&LlmProvider::OpenAi)
@@ -794,11 +905,11 @@ mod tests {
 
     #[test]
     fn unreadable_settings_are_reported_once_with_where_they_went() {
-        let fixture = Fixture::start();
+        let mut fixture = Fixture::start();
         let truncated = r#"{"settings_version": 2, "vocabulary_replacements": [["teh", "#;
         fs::write(fixture.paths.settings_file(), truncated).expect("truncated settings");
 
-        fixture.settings.get().expect("defaults load");
+        fixture.restart();
         let moved = fixture.paths.settings_backup_files().expect("list");
         let warning = fixture
             .state
@@ -810,7 +921,7 @@ mod tests {
         assert!(warning.summary.contains(&moved[0].display().to_string()));
 
         fixture.state.lock().last_error = None;
-        fixture.settings.get().expect("reload");
+        fixture.settings.get();
         assert_eq!(fixture.warning_code(), None);
     }
 }

@@ -50,7 +50,6 @@ impl ShortcutRegistrar for Registrar {
 #[derive(Default)]
 struct Autostart {
     enabled: std::sync::atomic::AtomicBool,
-    hold: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl AutostartRegistration for Autostart {
@@ -59,13 +58,6 @@ impl AutostartRegistration for Autostart {
     }
 
     fn set_enabled(&self, enabled: bool) -> Result<(), AutostartError> {
-        let hold = self.hold.lock().expect("autostart hold").take();
-        if let Some((entered, release)) = hold {
-            entered.send(()).expect("autostart observer");
-            release
-                .recv_timeout(Duration::from_secs(10))
-                .expect("autostart released");
-        }
         self.enabled.store(enabled, Ordering::SeqCst);
         Ok(())
     }
@@ -112,7 +104,7 @@ pub(super) fn native_services_before_preload(
 #[test]
 #[expect(
     clippy::too_many_lines,
-    reason = "Keeping the two native barriers and geometry save together exposes their ordering"
+    reason = "Keeping shortcut registration and geometry saves together exposes their ordering"
 )]
 fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_settings() {
     use whispernow_domain::{Shortcut, ShortcutKey, ThemePreference, WindowGeometry};
@@ -123,7 +115,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         .build()
         .expect("runtime");
     let (services, _root) = native_services(Fixture::new());
-    let saved = services.settings.get().expect("saved settings").settings;
+    let saved = services.settings.get().settings;
     let registrar = Arc::new(Registrar::default());
     let shortcuts = Arc::new(ShortcutCoordinator::new(
         registrar.clone(),
@@ -143,17 +135,12 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
     let (release, released) = mpsc::channel();
     *registrar.hold.lock().expect("registration hold") = Some((entered, released));
     let mut registration_release = ReleaseOnDrop(Some(release));
-    let (entered, applying) = mpsc::channel();
-    let (release, released) = mpsc::channel();
-    *autostart.hold.lock().expect("autostart hold") = Some((entered, released));
-    let mut autostart_release = ReleaseOnDrop(Some(release));
     let first = Settings {
         theme: ThemePreference::Dark,
         recording_shortcut: Shortcut {
             key: ShortcutKey::F1,
             ..Shortcut::default()
         },
-        auto_start_on_login: true,
         ..saved.clone()
     };
     let second = Settings {
@@ -161,7 +148,6 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
             key: ShortcutKey::F2,
             ..Shortcut::default()
         },
-        auto_start_on_login: false,
         ..saved
     };
     let expected = second.clone();
@@ -193,18 +179,14 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
     starting
         .recv_timeout(Duration::from_secs(10))
         .expect("second save started");
-    registration_release.release();
-    applying
-        .recv_timeout(Duration::from_secs(10))
-        .expect("first native effect");
     assert!(
         matches!(
             finishing.recv_timeout(Duration::from_millis(250)),
             Err(mpsc::RecvTimeoutError::Timeout)
         ),
-        "second save must wait for the first saved settings' native effects"
+        "second save must wait for the first shortcut registration"
     );
-    autostart_release.release();
+    registration_release.release();
     runtime.block_on(async {
         tokio::time::timeout(Duration::from_secs(10), async {
             first.await.expect("first save task").expect("first save");
@@ -217,12 +199,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         .expect("settings saves completed");
     });
 
-    let saved = gateway
-        .services
-        .settings
-        .get()
-        .expect("final settings")
-        .settings;
+    let saved = gateway.services.settings.get().settings;
     assert_eq!(saved.theme, expected.theme);
     assert_eq!(saved.window_geometry, Some(geometry));
     assert_eq!(saved.recording_shortcut, expected.recording_shortcut);
@@ -232,10 +209,23 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
             .expect("final recording shortcut")
             .binding]
     );
-    assert_eq!(
-        autostart.is_enabled().expect("final autostart"),
-        saved.auto_start_on_login
-    );
+    runtime.block_on(async {
+        gateway
+            .set_start_on_login(true)
+            .await
+            .expect("enable autostart");
+        assert!(
+            gateway
+                .settings_view()
+                .await
+                .expect("enabled view")
+                .start_on_login
+        );
+        autostart.set_enabled(false).expect("external change");
+        let view = gateway.settings_view().await.expect("changed view");
+        assert!(!view.start_on_login);
+        assert!(view.warnings.is_empty());
+    });
     gateway.services.request_shutdown();
     gateway.services.shutdown();
 }
@@ -283,36 +273,20 @@ fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
                 fs::write(path, b"fixture").expect("model artifact");
             }
         }
-        let saved = services.settings.get().expect("saved settings").settings;
+        let saved = services.settings.get().settings;
         let selected = services.state.lock().selected_model_id.clone();
         let loaded = services.state.lock().model.clone();
 
         let error = services
-            .complete_setup(
-                &checkpoint,
-                &services.settings.load().expect("saved settings"),
-            )
+            .complete_setup(&checkpoint, &services.settings.load())
             .expect_err("setup refused");
 
         assert_eq!(error.code, expected);
         let state = services.state.snapshot();
         assert_eq!(services.state.lock().model.clone(), loaded);
         assert_eq!(state.selected_model_id, selected);
-        assert!(
-            !services
-                .settings
-                .load()
-                .expect("saved setup state")
-                .first_run_complete
-        );
-        assert_eq!(
-            services
-                .settings
-                .get()
-                .expect("unchanged settings")
-                .settings,
-            saved
-        );
+        assert!(!services.settings.load().first_run_complete);
+        assert_eq!(services.settings.get().settings, saved);
     }
 }
 
@@ -327,10 +301,7 @@ fn setup_loads_and_selects_the_model_then_saves_its_choices() {
     };
 
     let view = services
-        .complete_setup(
-            &checkpoint,
-            &services.settings.load().expect("saved settings"),
-        )
+        .complete_setup(&checkpoint, &services.settings.load())
         .expect("complete setup");
 
     assert!(view.settings.first_run_complete);
@@ -395,7 +366,7 @@ fn invalid_setup_choices_leave_the_saved_and_selected_model_unchanged() {
     use whispernow_domain::{SetupCheckpoint, SetupStep, Shortcut};
 
     let (services, _root) = native_services(Fixture::new());
-    let before = services.settings.get().expect("saved settings").settings;
+    let before = services.settings.get().settings;
     let registry = ModelRegistry::builtin();
     let model = registry
         .speech_models()
@@ -418,27 +389,11 @@ fn invalid_setup_choices_leave_the_saved_and_selected_model_unchanged() {
     };
 
     let error = services
-        .complete_setup(
-            &checkpoint,
-            &services.settings.load().expect("saved settings"),
-        )
+        .complete_setup(&checkpoint, &services.settings.load())
         .expect_err("invalid setup choices");
 
     assert_eq!(error.code, "invalid_settings");
-    assert_eq!(
-        services
-            .settings
-            .get()
-            .expect("saved model unchanged")
-            .settings,
-        before
-    );
+    assert_eq!(services.settings.get().settings, before);
     assert_eq!(services.state.snapshot().selected_model_id, before.model_id);
-    assert!(
-        !services
-            .settings
-            .load()
-            .expect("saved setup state")
-            .first_run_complete
-    );
+    assert!(!services.settings.load().first_run_complete);
 }

@@ -11,7 +11,8 @@ use whispernow_core::{
 use whispernow_domain::ipc::ErrorCategory;
 use whispernow_platform::{
     AppPaths, CleanupModelLocator, CpalAudioInput, CudaPackLocator, LocalCleanupService,
-    ModelStore, SettingsStore, SherpaAsrEngine, silero_vad_model_path, silero_voice_activity,
+    ModelStore, SettingsLoad, SettingsStore, SherpaAsrEngine, silero_vad_model_path,
+    silero_voice_activity,
 };
 
 use super::{
@@ -30,7 +31,7 @@ impl NativeServices {
         events: Events,
         native_wayland: bool,
         resource_dir: PathBuf,
-    ) -> Result<Self, AppError> {
+    ) -> Result<(Self, bool), AppError> {
         let paths = AppPaths::discover().map_err(|_| {
             AppError::new(
                 ErrorCategory::General,
@@ -43,9 +44,13 @@ impl NativeServices {
         let output = Arc::new(OutputCoordinator::native(wayland_token_path));
         let audio: Arc<dyn AudioInput> = Arc::new(CpalAudioInput::new());
         let persistence = Arc::new(SettingsStore::new(paths.clone()));
-        let (persisted, settings_notice) = persistence.load()?;
-        let history = Arc::new(HistoryStore::open(paths.clone()));
-        let startup_history_warning = history.take_warning();
+        let SettingsLoad {
+            settings: persisted,
+            notice: settings_notice,
+            enable_autostart,
+        } = persistence.load()?;
+        let (history, startup_history_warning) = HistoryStore::open(paths.clone());
+        let history = Arc::new(history);
         let cleanup_runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("whispernow-llm")
@@ -68,6 +73,7 @@ impl NativeServices {
         let settings = Arc::new(SettingsCoordinator::new(
             Arc::clone(&persistence),
             Arc::clone(&state),
+            persisted.clone(),
         ));
         settings.report_loaded(&persisted, settings_notice);
         let store = Arc::new(ModelStore::new(paths.clone()));
@@ -103,19 +109,22 @@ impl NativeServices {
             output: output.clone(),
             engine: Box::new(|| Box::new(SherpaAsrEngine::new())),
         })?;
-        Ok(Self {
-            settings,
-            history,
-            audio,
-            models,
-            state,
-            dictation,
-            paths,
-            output,
-            paste_helper_setup_dir,
-            microphone_access: MicrophoneAccess::default(),
-            local_cleanup,
-        })
+        Ok((
+            Self {
+                settings,
+                history,
+                audio,
+                models,
+                state,
+                dictation,
+                paths,
+                output,
+                paste_helper_setup_dir,
+                microphone_access: MicrophoneAccess::default(),
+                local_cleanup,
+            },
+            enable_autostart,
+        ))
     }
 }
 

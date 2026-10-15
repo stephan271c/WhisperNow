@@ -10,8 +10,6 @@ pub(crate) fn history_entry(id: i64, text: &str) -> HistoryEntry {
         cleaned_text: None,
         status: EntryStatus::Ok,
         error: None,
-        has_audio: false,
-        asr_model_id: None,
-        llm_model: None,
+        audio_kept: false,
     }
 }

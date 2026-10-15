@@ -109,6 +109,11 @@ pub(super) fn GeneralPage() -> Element {
     let Some(settings) = management.read().shown_settings().cloned() else {
         return rsx! { SettingsLoading {} };
     };
+    let start_on_login = management
+        .read()
+        .settings
+        .as_ref()
+        .is_some_and(|view| view.start_on_login);
     let restart_blocked = context
         .blocked(UiOperation::RestartSetup)
         .or(context.settings_blocked());
@@ -183,9 +188,9 @@ pub(super) fn GeneralPage() -> Element {
             }
             AutosaveRow { id: "start-on-login", title: "Start on login",
                 setting: SettingKey::StartOnLogin,
-                Toggle { checked: settings.auto_start_on_login,
+                Toggle { checked: start_on_login,
                     disabled,
-                    onchange: move |value| { context.change_setting(SettingKey::StartOnLogin, move |settings| settings.auto_start_on_login = value); } }
+                    onchange: move |value| context.set_start_on_login(value) }
             }
         }
         if let Some(setup) = paste_helper_setup {

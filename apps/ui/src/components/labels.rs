@@ -32,8 +32,7 @@ pub(crate) const fn clear_category(category: ClearDataCategory) -> &'static str 
     match category {
         ClearDataCategory::Settings => "Settings",
         ClearDataCategory::History => "History",
-        ClearDataCategory::Models => "Speech models",
-        ClearDataCategory::Logs => "Logs",
+        ClearDataCategory::Models => "Models",
     }
 }
 

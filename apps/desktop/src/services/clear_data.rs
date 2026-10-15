@@ -32,16 +32,36 @@ impl NativeServices {
             None
         };
         let clears_settings = categories.contains(&ClearDataCategory::Settings);
-        let settings_lock = clears_settings.then(|| self.settings.transaction());
+        let mut settings_lock = clears_settings.then(|| self.settings.lock());
         let cuda_path = self.paths.cuda_pack_dir();
-        let clear_files = || self.paths.clear_data(categories).map_err(inspect_error);
-        let entries = if categories.contains(&ClearDataCategory::History) {
-            let result = self.history.with_repository_closed(clear_files);
+        self.paths
+            .data_locations_for(categories)
+            .map_err(inspect_error)?;
+        let history_item = categories.contains(&ClearDataCategory::History).then(|| {
+            let item = self.history.clear_data();
             self.publish_history_changed();
-            result.and_then(|result| result)?
-        } else {
-            clear_files()?
-        };
+            item
+        });
+        let other_categories: Vec<_> = categories
+            .iter()
+            .copied()
+            .filter(|category| *category != ClearDataCategory::History)
+            .collect();
+        let entries = self
+            .paths
+            .clear_data(&other_categories)
+            .map_err(inspect_error)?;
+        if let Some(saved) = &mut settings_lock
+            && entries
+                .iter()
+                .filter(|entry| {
+                    entry.category == ClearDataCategory::Settings
+                        && entry.path == self.paths.settings_file().to_string_lossy()
+                })
+                .all(|entry| entry.deleted)
+        {
+            **saved = whispernow_domain::Settings::default();
+        }
         let mut restart_required = entries.iter().any(|entry| {
             matches!(
                 entry.category,
@@ -66,8 +86,7 @@ impl NativeServices {
         } else {
             None
         };
-        // Keys are deleted after the files so a slow or unavailable store never
-        // holds history closed or blocks them.
+        drop(settings_lock);
         let credential_item = clears_settings.then(|| ClearDataItem {
             category: ClearDataCategory::Settings,
             path: CREDENTIAL_STORE_CLEAR_TARGET.to_owned(),
@@ -84,6 +103,7 @@ impl NativeServices {
             });
         let result_items = entries
             .into_iter()
+            .chain(history_item)
             .chain(cuda_item)
             .chain(credential_item)
             .collect();
@@ -95,7 +115,6 @@ impl NativeServices {
             state.last_error = credential_warning;
             state.download_failures = 0;
         });
-        drop(settings_lock);
         Ok(ClearDataResult {
             items: result_items,
             restart_required,

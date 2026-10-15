@@ -149,6 +149,82 @@ fn make_store_for_definition(
 }
 
 #[test]
+fn startup_removes_download_staging_and_preserves_installed_models_and_other_files() {
+    let root = tempdir().expect("temporary root");
+    let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+    let models = paths.models_dir();
+    let installed = models.join(MODEL_ID);
+    fs::create_dir_all(&installed).expect("installed model root");
+    for artifact in ARTIFACTS {
+        fs::write(installed.join(artifact), artifact).expect("installed artifact");
+    }
+    let download = models.join(".model-download-crashed.part");
+    fs::write(&download, b"incomplete archive").expect("interrupted download");
+    let stage = models.join(".model-stage-crashed");
+    fs::create_dir(&stage).expect("interrupted extraction root");
+    fs::write(stage.join("incomplete.onnx"), b"incomplete artifact")
+        .expect("interrupted extraction");
+    let preserved = [
+        models.join("notes.txt"),
+        models.join(".model-download-retained.txt"),
+        models.join(".model-download-retained.part.backup"),
+        models.join(".model-stage"),
+    ];
+    for path in &preserved {
+        fs::write(path, b"keep").expect("unrelated file");
+    }
+    #[cfg(unix)]
+    let outside = root.path().join("outside");
+    #[cfg(unix)]
+    let linked_stage = models.join(".model-stage-linked");
+    #[cfg(unix)]
+    {
+        fs::create_dir(&outside).expect("outside root");
+        fs::write(outside.join("keep.txt"), b"keep").expect("outside file");
+        std::os::unix::fs::symlink(&outside, &linked_stage).expect("staging symlink");
+    }
+    let definition = definition(
+        "http://127.0.0.1:1/model.tar.bz2".to_owned(),
+        &valid_archive(),
+    );
+    let id = definition.id.clone();
+
+    let store = ModelStore::with_registry_and_timeouts(
+        ModelRegistry::new(vec![definition]),
+        paths,
+        DownloadTimeouts::default(),
+    );
+
+    assert!(!download.exists());
+    assert!(!stage.exists());
+    assert_eq!(
+        store
+            .resolve(&id)
+            .expect("resolve")
+            .expect("installed model")
+            .root,
+        installed
+    );
+    for artifact in ARTIFACTS {
+        assert_eq!(
+            fs::read_to_string(installed.join(artifact)).expect("installed artifact preserved"),
+            artifact
+        );
+    }
+    for path in preserved {
+        assert_eq!(fs::read(path).expect("unrelated file preserved"), b"keep");
+    }
+    #[cfg(unix)]
+    {
+        assert!(fs::symlink_metadata(linked_stage).is_err());
+        assert_eq!(
+            fs::read(outside.join("keep.txt")).expect("outside file preserved"),
+            b"keep"
+        );
+    }
+}
+
+#[test]
 fn local_streaming_download_reports_monotonic_progress_and_installs_atomically() {
     let archive = valid_archive();
     let server = serve(paused(

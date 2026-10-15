@@ -43,7 +43,7 @@ pub use paste_delivery::{
 };
 pub use paste_keys::PasteKeys;
 pub use paths::AppPaths;
-pub use settings_store::{SettingsNotice, SettingsStore};
+pub use settings_store::{SettingsLoad, SettingsNotice, SettingsStore};
 pub use sqlite_history::SqliteHistoryRepository;
 use tracing_subscriber::EnvFilter;
 pub use voice_activity::{silero_vad_model_path, silero_voice_activity};

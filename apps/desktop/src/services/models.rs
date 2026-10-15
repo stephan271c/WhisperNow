@@ -194,11 +194,11 @@ impl ModelCoordinator {
             ));
         }
         dictation.load_model(resolved)?;
-        let transaction = settings.transaction();
-        let mut saved = transaction.load()?;
+        let mut current = settings.lock();
+        let mut saved = current.clone();
         if saved.model_id != model_id {
             saved.model_id = model_id.clone();
-            transaction.save(&saved)?;
+            settings.save(&mut current, saved)?;
         }
         self.state.apply(|state| state.selected_model_id = model_id);
         Ok(())

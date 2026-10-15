@@ -227,7 +227,7 @@ impl Fixture {
             ..Settings::default()
         };
         persistence.save(&saved).expect("save settings");
-        let history = Arc::new(HistoryStore::open(paths.clone()));
+        let history = Arc::new(HistoryStore::open(paths.clone()).0);
         let state = Arc::new(StateCell::new(
             State::new(model_id.clone()),
             Events::channel().0,
@@ -235,6 +235,7 @@ impl Fixture {
         let settings = Arc::new(SettingsCoordinator::new(
             Arc::clone(&persistence),
             Arc::clone(&state),
+            saved,
         ));
         let models = Arc::new(ModelStore::new(paths));
         let model = models
@@ -365,21 +366,20 @@ fn a_dictation_is_transcribed_saved_and_pasted() {
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].status, EntryStatus::Ok);
     assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
-    assert!(history[0].has_audio);
+    assert!(history[0].audio_kept);
 }
 
 #[test]
 fn vocabulary_that_empties_a_transcript_clears_the_last_transcript() {
     let fixture = Fixture::new();
     fixture.state.lock().last_transcript = Some("earlier dictation".to_owned());
-    let mut settings = fixture.settings.load().expect("saved settings");
+    let mut settings = fixture.settings.load();
     settings.vocabulary_replacements = vec![whispernow_domain::VocabularyReplacement::new(
         TRANSCRIPT, " ",
     )];
     fixture
         .settings
-        .transaction()
-        .save(&settings)
+        .save(&mut fixture.settings.lock(), settings)
         .expect("save vocabulary");
     fixture.start();
     fixture.dictation.stop().expect("stop");
@@ -484,7 +484,7 @@ fn cancelling_a_recording_keeps_its_audio_as_a_cancelled_entry() {
     let history = fixture.history();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].status, EntryStatus::Cancelled);
-    assert!(history[0].has_audio);
+    assert!(history[0].audio_kept);
 }
 
 #[test]
@@ -559,7 +559,7 @@ fn a_decode_that_fails_twice_keeps_the_audio_as_a_failed_entry() {
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].status, EntryStatus::Failed);
     assert!(history[0].raw_text.is_none());
-    assert!(history[0].has_audio);
+    assert!(history[0].audio_kept);
 
     fixture.state.dismiss_error();
     let state = fixture.state.lock();
@@ -572,11 +572,13 @@ fn a_decode_that_fails_twice_keeps_the_audio_as_a_failed_entry() {
 
 impl Fixture {
     fn enable_cleanup(&self) {
-        let transaction = self.settings.transaction();
-        let mut saved = transaction.load().expect("load settings");
+        let mut current = self.settings.lock();
+        let mut saved = current.clone();
         saved.cleanup_enabled = true;
         saved.provider_settings_mut(LlmProvider::OpenAi).model = "gpt-test".to_owned();
-        transaction.save(&saved).expect("save settings");
+        self.settings
+            .save(&mut current, saved)
+            .expect("save settings");
     }
 
     fn cleanup_models(&self) -> Vec<String> {
@@ -611,7 +613,6 @@ fn a_cleaned_dictation_pastes_and_saves_the_cleaned_text() {
     assert_eq!(history[0].status, EntryStatus::Ok);
     assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
     assert_eq!(history[0].cleaned_text.as_deref(), Some("Cleaned words."));
-    assert_eq!(history[0].llm_model.as_deref(), Some("gpt-test"));
 }
 
 #[test]
@@ -647,15 +648,18 @@ fn a_saved_remote_api_key_reaches_the_cleanup_request() {
 fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
     let fixture = Fixture::new();
     let saved = {
-        let transaction = fixture.settings.transaction();
-        let mut saved = transaction.load().expect("load settings");
+        let mut current = fixture.settings.lock();
+        let mut saved = current.clone();
         saved.cleanup_enabled = true;
         saved.llm_provider = LlmProvider::LocalCleanup;
         saved.vocabulary_replacements = vec![whispernow_domain::VocabularyReplacement::new(
             "worker",
             "WhisperNow team",
         )];
-        transaction.save(&saved).expect("save settings");
+        fixture
+            .settings
+            .save(&mut current, saved.clone())
+            .expect("save settings");
         saved
     };
     *fixture.provider.reply.lock().expect("reply") = Some("Hello from the WhisperNow team.");
@@ -685,16 +689,12 @@ fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
         history[0].cleaned_text.as_deref(),
         Some("Hello from the WhisperNow team.")
     );
-    assert_eq!(
-        history[0].llm_model.as_deref(),
-        Some(saved.cleanup_model_id().as_str())
-    );
 }
 
 #[test]
 fn an_incomplete_cleanup_provider_keeps_the_transcript_without_calling_the_provider() {
     let fixture = Fixture::new();
-    let mut edited = fixture.settings.get().expect("settings").settings;
+    let mut edited = fixture.settings.get().settings;
     edited.cleanup_enabled = true;
     edited.llm_provider = LlmProvider::Custom;
     edited.provider_settings_mut(LlmProvider::Custom).model = String::new();
@@ -713,7 +713,6 @@ fn an_incomplete_cleanup_provider_keeps_the_transcript_without_calling_the_provi
     let history = fixture.history();
     assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
     assert_eq!(history[0].cleaned_text, None);
-    assert_eq!(history[0].llm_model, None);
 }
 
 #[test]
@@ -736,7 +735,7 @@ fn a_failed_cleanup_pastes_the_recognized_text_and_says_so() {
     assert_eq!(category, Some(ErrorCategory::Cleanup));
     let history = fixture.history();
     assert_eq!(history[0].status, EntryStatus::Ok);
-    assert!(history[0].llm_model.is_none());
+    assert_eq!(fixture.cleanup_models(), ["gpt-test"]);
 }
 
 #[test]
@@ -815,7 +814,7 @@ fn closing_during_processing_keeps_the_audio_and_stops_the_worker() {
         history[0].error.as_deref(),
         Some("WhisperNow closed before this dictation was transcribed")
     );
-    assert!(history[0].has_audio);
+    assert!(history[0].audio_kept);
     let refused = fixture
         .dictation
         .start(RecordingTrigger::Toggle)

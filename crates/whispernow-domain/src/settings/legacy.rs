@@ -1,6 +1,6 @@
 //! The Python release's `settings.json`, imported once into [`Settings`].
 
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -16,6 +16,7 @@ use crate::{
 pub struct PythonSettings {
     pub settings: Settings,
     pub api_keys: BTreeMap<LlmProvider, ApiKey>,
+    pub enable_autostart: bool,
 }
 
 impl PythonSettings {
@@ -40,11 +41,6 @@ impl PythonSettings {
             settings.model_id = ModelId::default();
         }
         pick(document, "start_minimized", &mut settings.start_minimized);
-        pick(
-            document,
-            "auto_start_on_login",
-            &mut settings.auto_start_on_login,
-        );
         pick(
             document,
             "first_run_complete",
@@ -103,7 +99,56 @@ impl PythonSettings {
         );
 
         let api_keys = import_providers(document, &mut settings);
-        Self { settings, api_keys }
+        Self {
+            settings,
+            api_keys,
+            enable_autostart: document
+                .get("auto_start_on_login")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        }
+    }
+
+    /// Removes every API key field except an imported key the credential store refused.
+    #[must_use]
+    pub fn copy_with_refused_keys(
+        &self,
+        document: &Value,
+        refused: &BTreeSet<LlmProvider>,
+    ) -> Value {
+        let keep_key = |provider: Option<LlmProvider>, value: &Value| {
+            provider
+                .filter(|provider| refused.contains(provider))
+                .and_then(|provider| self.api_keys.get(&provider))
+                .is_some_and(|key| {
+                    value
+                        .as_str()
+                        .is_some_and(|value| value.trim() == key.expose_secret())
+                })
+        };
+        let mut copy = document.clone();
+        if let Some(providers) = copy
+            .get_mut("llm_provider_settings")
+            .and_then(Value::as_object_mut)
+        {
+            for (name, entry) in providers {
+                if let Some(fields) = entry.as_object_mut()
+                    && !fields
+                        .get("api_key")
+                        .is_some_and(|value| keep_key(LlmProvider::from_name(name), value))
+                {
+                    fields.remove("api_key");
+                }
+            }
+        }
+        if let Some(fields) = copy.as_object_mut()
+            && !fields
+                .get("llm_api_key")
+                .is_some_and(|value| keep_key(Some(self.settings.llm_provider), value))
+        {
+            fields.remove("llm_api_key");
+        }
+        copy
     }
 }
 

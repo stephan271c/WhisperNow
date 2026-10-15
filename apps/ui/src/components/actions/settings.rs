@@ -21,6 +21,23 @@ impl UiContext {
         });
     }
 
+    pub(crate) fn set_start_on_login(mut self, enabled: bool) {
+        if self
+            .management
+            .write()
+            .begin_settings_update(SettingKey::StartOnLogin, |_| {})
+            .is_none()
+        {
+            return;
+        }
+        spawn_forever(async move {
+            let answer = client::invoke("set_start_on_login", Some(&enabled)).await;
+            self.management
+                .write()
+                .finish_settings_update(answer.map_err(|error| error.summary));
+        });
+    }
+
     pub(crate) fn set_credential(self, provider: LlmProvider, key: ApiKey) {
         let request = SetApiKeyRequest { provider, key };
         self.run(

@@ -203,6 +203,7 @@ fn idle_snapshot() -> AppState {
 fn management_with_history() -> ManagementState {
     let mut management = ManagementState::default();
     management.install_settings(SettingsView {
+        start_on_login: false,
         settings: Settings {
             model_id: model_id(),
             first_run_complete: true,

@@ -9,9 +9,10 @@ const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/downl
 
 const DEFAULT_SPEECH_MODEL_ID: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
 
-pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-lfm2.5-350m-q8_0";
+// Retrained cleanup models get new ids so installed weights cannot outlive their revision.
+pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-lfm2.5-350m-r112-q8_0";
 /// The larger local cleanup model (a `MiniCPM5-1B` fine-tune): slower, but keeps more facts.
-const MINICPM_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-minicpm5-1b-q8_0";
+const MINICPM_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-minicpm5-1b-r112-q8_0";
 /// Every local cleanup model, the default first.
 pub const CLEANUP_MODEL_IDS: [&str; CLEANUP_MODELS.len()] = {
     let mut ids = [""; CLEANUP_MODELS.len()];

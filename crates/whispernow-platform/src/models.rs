@@ -84,15 +84,14 @@ impl Default for DownloadTimeouts {
     }
 }
 
-/// Downloads transfer, verify and extract into per-download staging paths
-/// without holding the store lock, so resolving, listing and removing other
-/// models stays responsive. The store lock covers only directory scans,
-/// removal and the final install rename.
+/// Transfers and extraction run unlocked; model resolution, listing, removals and final
+/// installs share the store lock.
 pub struct ModelStore {
     registry: ModelRegistry,
     paths: AppPaths,
     runtime: tokio::runtime::Runtime,
     client: reqwest::Client,
+    // Model reads must not see replacement gaps; CUDA pack mutations also share this lock.
     mutation: Mutex<()>,
     cuda_pack: &'static [CudaPackArchive],
 }
@@ -114,6 +113,18 @@ impl ModelStore {
         paths: AppPaths,
         timeouts: DownloadTimeouts,
     ) -> Self {
+        if let Ok(entries) = fs::read_dir(paths.models_dir()) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if (name.starts_with(".model-stage-")
+                    || (name.starts_with(".model-download-") && name.ends_with(".part")))
+                    && let Err(error) = remove_path(&entry.path())
+                {
+                    tracing::warn!(%error, "model download staging could not be removed");
+                }
+            }
+        }
         let client = reqwest::Client::builder()
             .connect_timeout(timeouts.connect)
             .read_timeout(timeouts.receive_body)

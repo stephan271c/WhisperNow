@@ -81,7 +81,6 @@ impl NativeServices {
         &self,
         edited: Settings,
     ) -> Result<(Settings, SaveSettingsResponse), AppError> {
-        self.state.lock().phase.require_idle()?;
         let (before, settings) = self.settings.update(edited, self.audio.as_ref())?;
         self.follow_cleanup_provider(&settings.settings);
         let limit = settings.settings.history_limit;
@@ -250,11 +249,11 @@ impl NativeServices {
             .map_err(|error| settings_error(&error))?;
         self.models
             .select(checkpoint.model_id.clone(), &self.settings, &self.dictation)?;
-        let transaction = self.settings.transaction();
-        let mut settings = transaction.load()?;
+        let mut current = self.settings.lock();
+        let mut settings = current.clone();
         apply_checkpoint(&mut settings, checkpoint);
-        transaction.save(&settings)?;
-        Ok(SettingsView::new(&settings))
+        self.settings.save(&mut current, settings)?;
+        Ok(SettingsView::new(&current))
     }
 
     /// Reads one history page in any phase; only the history store's own lock
@@ -269,14 +268,9 @@ impl NativeServices {
                 "This search is too long. Shorten it and try again.",
             ));
         }
-        let page = self
-            .history
+        self.history
             .list(request)
-            .inspect_err(|error| self.state.publish_error(error.clone()))?;
-        if let Some(warning) = self.history.take_warning() {
-            self.state.publish_error(warning);
-        }
-        Ok(page)
+            .inspect_err(|error| self.state.publish_error(error.clone()))
     }
 
     /// The path never crosses the webview boundary.
@@ -313,12 +307,6 @@ impl NativeServices {
         // before draining also covers the helper's early keystroke response.
         self.output.shutdown();
         self.state.lock().active_downloads.clear();
-        if let Err(error) = self.history.close() {
-            tracing::warn!(
-                code = error.code,
-                "history repository could not close cleanly"
-            );
-        }
     }
 }
 

@@ -7,9 +7,8 @@ pub enum ClearDataCategory {
     Settings,
     History,
     Models,
-    Logs,
 }
 
 impl ClearDataCategory {
-    pub const ALL: [Self; 4] = [Self::Settings, Self::History, Self::Models, Self::Logs];
+    pub const ALL: [Self; 3] = [Self::Settings, Self::History, Self::Models];
 }

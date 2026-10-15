@@ -15,6 +15,7 @@
     "core:window:allow-close",
     "allow-get-settings",
     "allow-update-settings",
+    "allow-set-start-on-login",
     "allow-set-api-key",
     "allow-clear-api-key",
     "allow-list-audio-devices",

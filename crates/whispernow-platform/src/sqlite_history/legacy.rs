@@ -19,7 +19,7 @@ struct LegacyRecord {
     cleaned_text: Option<String>,
 }
 
-/// Imports `history.json` once: it is renamed to `history.json.migrated` afterwards.
+/// Imports `history.json` once, renaming it before the transaction commits.
 pub(super) fn import_legacy(
     connection: &mut Connection,
     paths: &AppPaths,
@@ -30,10 +30,12 @@ pub(super) fn import_legacy(
         Err(_) => return Err(history_error("history_import_read")),
     };
     let Ok(records) = serde_json::from_str::<Vec<LegacyRecord>>(&document) else {
-        quarantine_legacy(paths)?;
+        let stamp = OffsetDateTime::now_utc().unix_timestamp_nanos().to_string();
+        fs::rename(paths.history_file(), paths.unreadable_history_file(&stamp))
+            .map_err(|_| history_error("history_import_invalid_backup"))?;
         tracing::warn!(
             code = "history_import_invalid",
-            "legacy transcription history was quarantined"
+            "malformed legacy transcription history was moved aside"
         );
         return Ok(Some(AppError::new(
             ErrorCategory::General,
@@ -47,10 +49,25 @@ pub(super) fn import_legacy(
     for record in records {
         import_record(&transaction, record)?;
     }
-    transaction
-        .commit()
-        .map_err(|_| history_error("history_import_commit"))?;
-    rename_legacy(paths);
+    if fs::rename(paths.history_file(), paths.migrated_history_file()).is_err() {
+        transaction
+            .rollback()
+            .map_err(|_| history_error("history_import_rollback"))?;
+        tracing::warn!(
+            code = "history_import_rename",
+            "legacy transcription history was not imported because it could not be renamed"
+        );
+        return Ok(Some(AppError::new(
+            ErrorCategory::General,
+            "history_import_rename",
+            "Legacy transcription history could not be imported",
+        )));
+    }
+    if transaction.commit().is_err() {
+        fs::rename(paths.migrated_history_file(), paths.history_file())
+            .map_err(|_| history_error("history_import_restore"))?;
+        return Err(history_error("history_import_commit"));
+    }
     Ok(None)
 }
 
@@ -110,27 +127,5 @@ fn parse_legacy_timestamp(value: &str) -> Option<UtcMillis> {
         .map(UtcMillis)
 }
 
-fn rename_legacy(paths: &AppPaths) {
-    if fs::rename(paths.history_file(), paths.migrated_history_file()).is_err() {
-        tracing::warn!(
-            code = "history_import_rename",
-            "legacy transcription history could not be renamed; it is imported again at the next start"
-        );
-    }
-}
-
-fn quarantine_legacy(paths: &AppPaths) -> Result<(), AppError> {
-    let quarantine = paths.history_quarantine_dir();
-    fs::create_dir_all(&quarantine).map_err(|_| history_error("history_import_quarantine"))?;
-    let initial = quarantine.join("history.json.invalid");
-    let destination = if initial.exists() {
-        (1_u32..=1_000)
-            .map(|index| quarantine.join(format!("history.json.invalid.{index}")))
-            .find(|candidate| !candidate.exists())
-            .ok_or_else(|| history_error("history_import_quarantine"))?
-    } else {
-        initial
-    };
-    fs::rename(paths.history_file(), destination)
-        .map_err(|_| history_error("history_import_quarantine"))
-}
+#[cfg(test)]
+mod tests;

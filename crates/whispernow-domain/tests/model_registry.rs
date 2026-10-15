@@ -102,8 +102,21 @@ fn each_model_has_the_artifacts_its_family_needs() {
 }
 
 #[test]
-fn cleanup_models_start_with_the_default() {
+fn cleanup_models_start_with_the_default_and_name_the_published_revision() {
     assert_eq!(CLEANUP_MODEL_IDS[0], DEFAULT_CLEANUP_MODEL_ID);
+    let registry = ModelRegistry::builtin();
+    for id in CLEANUP_MODEL_IDS {
+        let model = registry.get(id).expect("registered cleanup model");
+        assert!(id.ends_with("-r112-q8_0"), "{id}");
+        assert!(
+            model
+                .source
+                .url
+                .ends_with(&format!("/cleanup-model-r112/{id}.gguf")),
+            "{}",
+            model.source.url
+        );
+    }
 }
 
 #[test]

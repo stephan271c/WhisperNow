@@ -19,7 +19,6 @@ fn retained_entry(services: &NativeServices) -> (HistoryEntry, Vec<u8>) {
                 status: EntryStatus::Ok,
                 error: None,
                 asr_model_id: Some(ModelId::default()),
-                llm_model: None,
             },
             &[0.25; 160],
             true,
@@ -40,43 +39,78 @@ fn retained_entry(services: &NativeServices) -> (HistoryEntry, Vec<u8>) {
 fn assert_retained(services: &NativeServices, entry: &HistoryEntry, audio: &[u8]) {
     let page = services
         .history(&HistoryPageRequest::first_page(HistoryFilter::default()))
-        .expect("reopen history");
+        .expect("history");
     assert_eq!(page.entries.as_slice(), std::slice::from_ref(entry));
     assert_eq!(services.history.audio(entry.id).expect("audio"), audio);
 }
 
 #[test]
-fn logs_only_and_empty_clear_requests_preserve_history_and_audio() {
-    for categories in [vec![ClearDataCategory::Logs], Vec::new()] {
+fn clearing_settings_resets_memory_before_the_next_edit_even_when_the_file_is_missing() {
+    use whispernow_domain::{ThemePreference, VocabularyReplacement};
+
+    for missing_file in [false, true] {
         let (services, _root) = native_services(Fixture::new());
-        let (entry, audio) = retained_entry(&services);
-        fs::create_dir_all(services.paths.logs_dir()).expect("logs directory");
-        let log = services.paths.logs_dir().join("app.log");
-        fs::write(&log, b"log").expect("log");
-        let cuda = services.paths.cuda_pack_dir().join("native-library");
-        fs::create_dir_all(cuda.parent().expect("CUDA directory")).expect("CUDA directory");
-        fs::write(&cuda, b"CUDA data").expect("CUDA file");
-        let settings = fs::read(services.paths.settings_file()).expect("saved settings");
+        let mut edited = services.settings.load();
+        edited.vocabulary_replacements = vec![VocabularyReplacement::new("teh", "the")];
+        services.update_settings(edited).expect("save vocabulary");
+        if missing_file {
+            fs::remove_file(services.paths.settings_file()).expect("external deletion");
+        }
 
-        let result = services
-            .clear_data(&categories)
-            .expect("clear selected data");
-
-        assert_eq!(result.items.len(), usize::from(!categories.is_empty()));
-        assert!(result.items.iter().all(|item| item.deleted));
-        assert!(!result.restart_required);
-        assert_eq!(log.exists(), categories.is_empty());
-        assert_eq!(
-            fs::read(services.paths.settings_file()).expect("settings"),
-            settings
+        services
+            .clear_data(&[ClearDataCategory::Settings])
+            .expect("clear settings");
+        assert_eq!(services.settings.load(), Settings::default());
+        let mut edited = services.settings.load();
+        edited.theme = ThemePreference::Dark;
+        services
+            .update_settings(edited)
+            .expect("edit after clearing");
+        let expected = Settings {
+            theme: ThemePreference::Dark,
+            ..Settings::default()
+        };
+        assert_eq!(services.settings.load(), expected);
+        let persisted = SettingsStore::with_store(
+            services.paths.clone(),
+            Arc::new(MemoryCredentialStore::default()),
         );
-        assert!(services.paths.models_dir().exists());
-        assert_eq!(fs::read(&cuda).expect("CUDA file preserved"), b"CUDA data");
-        assert_eq!(services.state.snapshot().phase, Phase::Idle);
-        assert_retained(&services, &entry, &audio);
+        assert_eq!(
+            persisted.load().expect("reload saved settings").settings,
+            expected
+        );
         services.request_shutdown();
         services.shutdown();
     }
+}
+
+#[test]
+fn empty_clear_requests_preserve_history_and_audio() {
+    let (services, _root) = native_services(Fixture::new());
+    let (entry, audio) = retained_entry(&services);
+    fs::create_dir_all(services.paths.python_logs_dir()).expect("logs directory");
+    let log = services.paths.python_logs_dir().join("app.log");
+    fs::write(&log, b"log").expect("log");
+    let cuda = services.paths.cuda_pack_dir().join("native-library");
+    fs::create_dir_all(cuda.parent().expect("CUDA directory")).expect("CUDA directory");
+    fs::write(&cuda, b"CUDA data").expect("CUDA file");
+    let settings = fs::read(services.paths.settings_file()).expect("saved settings");
+
+    let result = services.clear_data(&[]).expect("clear selected data");
+
+    assert!(result.items.is_empty());
+    assert!(!result.restart_required);
+    assert!(log.exists());
+    assert_eq!(
+        fs::read(services.paths.settings_file()).expect("settings"),
+        settings
+    );
+    assert!(services.paths.models_dir().exists());
+    assert_eq!(fs::read(&cuda).expect("CUDA file preserved"), b"CUDA data");
+    assert_eq!(services.state.snapshot().phase, Phase::Idle);
+    assert_retained(&services, &entry, &audio);
+    services.request_shutdown();
+    services.shutdown();
 }
 
 #[test]
@@ -117,14 +151,17 @@ fn clearing_only_cuda_model_data_reports_removal_and_restart_and_preserves_histo
 fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
     let (services, _root) = native_services(Fixture::new());
     let (entry, _) = retained_entry(&services);
-    fs::create_dir_all(services.paths.logs_dir()).expect("logs directory");
+    fs::write(services.paths.migrated_history_file(), b"Python history").expect("migrated history");
+    let unreadable = services.paths.unreadable_history_file("20261015T120000Z");
+    fs::write(&unreadable, b"legacy").expect("malformed history backup");
+    fs::create_dir_all(services.paths.python_logs_dir()).expect("logs directory");
     let settings = fs::read(services.paths.settings_file()).expect("saved settings");
 
     let result = services
         .clear_data(&[ClearDataCategory::History])
         .expect("clear history data");
 
-    assert!(!result.items.is_empty());
+    assert_eq!(result.items.len(), 1);
     assert!(
         result
             .items
@@ -132,9 +169,11 @@ fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
             .all(|item| item.category == ClearDataCategory::History && item.deleted)
     );
     assert!(!result.restart_required);
-    assert!(!services.paths.history_database_file().exists());
+    assert!(services.paths.history_database_file().exists());
     assert!(!services.paths.recordings_dir().exists());
-    assert!(services.paths.logs_dir().exists());
+    assert!(!services.paths.migrated_history_file().exists());
+    assert!(!unreadable.exists());
+    assert!(services.paths.python_logs_dir().exists());
     assert!(services.paths.models_dir().exists());
     assert_eq!(
         fs::read(services.paths.settings_file()).expect("settings"),
@@ -145,6 +184,25 @@ fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
         .expect("new history");
     assert!(page.entries.is_empty());
     assert!(services.history.audio(entry.id).is_err());
+    let later = services
+        .history
+        .insert(
+            NewHistoryEntry {
+                created_at: UtcMillis::now(),
+                duration_millis: Some(1_000),
+                raw_text: Some("after clear".to_owned()),
+                cleaned_text: None,
+                status: EntryStatus::Ok,
+                error: None,
+                asr_model_id: None,
+            },
+            &[0.25; 160],
+            true,
+            HistoryLimit::Unlimited,
+        )
+        .expect("dictation after clear");
+    assert!(later > entry.id);
+    assert!(services.history.audio(later).is_ok());
     services.request_shutdown();
     services.shutdown();
 }
@@ -165,7 +223,7 @@ fn clearing_every_category_reports_files_and_unavailable_credentials_separately(
                 key: ApiKey::new("saved-key").expect("key"),
             })
             .expect("save key");
-        fs::create_dir_all(services.paths.logs_dir()).expect("logs directory");
+        fs::create_dir_all(services.paths.python_logs_dir()).expect("logs directory");
         credentials.set_available(available);
 
         let result = services
@@ -186,10 +244,10 @@ fn clearing_every_category_reports_files_and_unavailable_credentials_separately(
                 .any(|item| item.path == CREDENTIAL_STORE_CLEAR_TARGET)
         );
         assert!(!services.paths.settings_file().exists());
-        assert!(!services.paths.history_database_file().exists());
+        assert!(services.paths.history_database_file().exists());
         assert!(!services.paths.recordings_dir().exists());
         assert!(!services.paths.models_dir().exists());
-        assert!(!services.paths.logs_dir().exists());
+        assert!(!services.paths.python_logs_dir().exists());
         let warning = services.state.snapshot().error.map(|error| error.code);
         assert_eq!(
             warning.as_deref(),
@@ -227,14 +285,11 @@ fn a_recordings_deletion_failure_keeps_history_recoverable() {
     fs::set_permissions(&recordings, original_permissions).expect("restore recordings permissions");
     let result = result.expect("partial deletion report");
 
-    for path in [&recordings, &services.paths.history_database_file()] {
-        let item = result
-            .items
-            .iter()
-            .find(|item| item.path == path.to_string_lossy())
-            .expect("reported failure");
-        assert!(!item.deleted, "{} must remain recoverable", path.display());
-    }
+    assert_eq!(result.items.len(), 1);
+    assert_eq!(result.items[0].category, ClearDataCategory::History);
+    assert!(!result.items[0].deleted);
+    assert!(recordings.exists());
+    assert!(services.paths.history_database_file().exists());
     assert!(!result.restart_required);
     assert_eq!(services.state.snapshot().phase, Phase::Idle);
     assert_retained(&services, &entry, &audio);

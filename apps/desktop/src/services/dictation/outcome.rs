@@ -172,7 +172,6 @@ impl Worker {
                 status,
                 error,
                 asr_model_id: Some(recording.settings.model_id.clone()),
-                llm_model: None,
             },
             samples,
             recording.settings.keep_audio,
@@ -185,9 +184,6 @@ impl Worker {
             );
         }
         self.history_changed();
-        if let Some(warning) = self.parts.history.take_warning() {
-            self.parts.state.publish_error(warning);
-        }
     }
 }
 

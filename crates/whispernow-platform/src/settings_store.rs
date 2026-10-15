@@ -1,6 +1,6 @@
 //! `settings.json`, with every API key kept in the OS credential store instead.
 
-use std::{fs, io::ErrorKind, path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, fs, io::ErrorKind, path::PathBuf, sync::Arc};
 use whispernow_domain::AppError;
 
 use serde::Serialize;
@@ -36,6 +36,13 @@ pub enum SettingsNotice {
     ApiKeysNotImported { path: PathBuf },
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct SettingsLoad {
+    pub settings: Settings,
+    pub notice: Option<SettingsNotice>,
+    pub enable_autostart: bool,
+}
+
 pub struct SettingsStore {
     paths: AppPaths,
     credentials: Arc<dyn CredentialStore>,
@@ -55,22 +62,30 @@ impl SettingsStore {
     /// Loads the saved settings; without a file they are the defaults. The Python
     /// release's file is imported and replaced. A file that cannot be read is renamed to
     /// `settings.json.bad-<timestamp>` and the defaults are loaded with a notice.
-    pub fn load(&self) -> Result<(Settings, Option<SettingsNotice>), AppError> {
+    pub fn load(&self) -> Result<SettingsLoad, AppError> {
         let path = self.paths.settings_file();
         let document = match fs::read(&path) {
             Ok(document) => document,
             Err(error) if error.kind() == ErrorKind::NotFound => {
-                return Ok((Settings::default(), None));
+                return Ok(SettingsLoad {
+                    settings: Settings::default(),
+                    notice: None,
+                    enable_autostart: false,
+                });
             }
             Err(_) => return Err(redacted("settings_read", "could not read settings")),
         };
         match serde_json::from_slice::<Value>(&document) {
             Ok(value) if value.is_object() && value.get(VERSION_FIELD).is_none() => {
-                return self.import_python(&value, &document);
+                return self.import_python(&value);
             }
             Ok(value) => {
                 if let Ok(settings) = serde_json::from_value(value) {
-                    return Ok((settings, None));
+                    return Ok(SettingsLoad {
+                        settings,
+                        notice: None,
+                        enable_autostart: false,
+                    });
                 }
             }
             Err(_) => {}
@@ -86,10 +101,11 @@ impl SettingsStore {
             code = "settings_unreadable",
             "unreadable settings were moved aside and the defaults loaded"
         );
-        Ok((
-            Settings::default(),
-            Some(SettingsNotice::Unreadable { path: bad }),
-        ))
+        Ok(SettingsLoad {
+            settings: Settings::default(),
+            notice: Some(SettingsNotice::Unreadable { path: bad }),
+            enable_autostart: false,
+        })
     }
 
     pub fn save(&self, settings: &Settings) -> Result<(), AppError> {
@@ -129,39 +145,39 @@ impl SettingsStore {
     }
 
     /// Imports the Python release's settings: its API keys move into the credential
-    /// store, the file is kept as `settings.json.python`, and the imported settings
-    /// replace it.
-    fn import_python(
-        &self,
-        document: &Value,
-        original: &[u8],
-    ) -> Result<(Settings, Option<SettingsNotice>), AppError> {
-        let PythonSettings {
-            mut settings,
-            api_keys,
-        } = PythonSettings::import(document);
+    /// store, the copy in `settings.json.python` retains only refused keys, and the
+    /// imported settings replace it.
+    fn import_python(&self, document: &Value) -> Result<SettingsLoad, AppError> {
+        let mut imported = PythonSettings::import(document);
+        let mut refused = BTreeSet::new();
+        for (provider, key) in &imported.api_keys {
+            if self.store_api_key(*provider, key).is_ok() {
+                imported.settings.api_keys.insert(*provider);
+            } else {
+                refused.insert(*provider);
+            }
+        }
+        let copy = serde_json::to_vec_pretty(&imported.copy_with_refused_keys(document, &refused))
+            .map_err(|_| redacted("settings_encode", "could not encode settings"))?;
         let kept = self.paths.python_settings_file();
-        write_atomically(&kept, original).map_err(|_| {
+        write_atomically(&kept, &copy).map_err(|_| {
             redacted(
                 "settings_import",
                 "The earlier version's settings could not be imported",
             )
         })?;
-        let mut key_import_failed = false;
-        for (provider, key) in &api_keys {
-            if self.store_api_key(*provider, key).is_ok() {
-                settings.api_keys.insert(*provider);
-            } else {
-                key_import_failed = true;
-            }
-        }
-        self.save(&settings)?;
+        self.save(&imported.settings)?;
         tracing::info!(
-            keys = settings.api_keys.len(),
+            keys = imported.settings.api_keys.len(),
             "imported the earlier version's settings"
         );
-        let notice = key_import_failed.then_some(SettingsNotice::ApiKeysNotImported { path: kept });
-        Ok((settings, notice))
+        let notice =
+            (!refused.is_empty()).then_some(SettingsNotice::ApiKeysNotImported { path: kept });
+        Ok(SettingsLoad {
+            settings: imported.settings,
+            notice,
+            enable_autostart: imported.enable_autostart,
+        })
     }
 }
 

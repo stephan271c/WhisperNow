@@ -24,7 +24,8 @@ use gateway::{
         get_settings, get_setup_state, get_state, list_audio_devices, list_models,
         open_main_window, open_permission_settings, open_recordings_folder, request_permission,
         restart_setup, resume_shortcuts, save_setup_checkpoint, select_model, set_api_key,
-        start_test_dictation, stop_recording, suspend_shortcuts, test_microphone, update_settings,
+        set_start_on_login, start_test_dictation, stop_recording, suspend_shortcuts,
+        test_microphone, update_settings,
     },
     forward_events,
 };
@@ -65,6 +66,7 @@ macro_rules! registered_commands {
 registered_commands![
     get_settings,
     update_settings,
+    set_start_on_login,
     set_api_key,
     clear_api_key,
     list_audio_devices,
@@ -174,23 +176,18 @@ pub fn run() {
             );
             let (events, event_receiver) = services::Events::channel();
             let resource_dir = app.path().resource_dir()?;
-            let services =
+            let (services, enable_autostart) =
                 NativeServices::compose(events, native_wayland, resource_dir).map_err(|error| {
                     io::Error::other(format!("desktop setup failed ({})", error.code))
                 })?;
             if !services.output.can_copy() {
                 tray.mark_copy_unavailable();
             }
-            let settings = services.settings.load().map_err(|error| {
-                io::Error::other(format!("settings unavailable ({})", error.code))
-            })?;
+            let settings = services.settings.load();
             let start_minimized = settings.start_minimized;
             let autostart: Arc<dyn AutostartRegistration> =
                 Arc::new(TauriAutostart::new(app.handle().clone()));
-            if let Err(error) =
-                autostart::reconcile(autostart.as_ref(), settings.auto_start_on_login)
-            {
-                tracing::warn!("start-on-login registration could not be synchronized");
+            if enable_autostart && let Err(error) = autostart.set_enabled(true) {
                 services
                     .state
                     .publish_error(gateway::autostart_error(error));

@@ -358,6 +358,45 @@ fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
 }
 
 #[test]
+fn startup_removes_old_pack_versions_and_interrupted_downloads_but_keeps_the_current_pack() {
+    let (fixture, _server, _) = fixture(None);
+    let paths = &fixture.paths;
+    let current = paths.cuda_pack_dir();
+    let previous = paths.data_dir().join("llama-cuda-b11258");
+    let unversioned = paths.data_dir().join("llama-cuda");
+    let stage = paths.data_dir().join(".llama-cuda-stage-interrupted");
+    let download = paths
+        .data_dir()
+        .join(".llama-cuda-download-interrupted.part");
+    let unrelated = paths.data_dir().join("llama-cuda-notes.txt");
+    fs::create_dir_all(&previous).expect("previous build");
+    fs::create_dir_all(&unversioned).expect("unversioned pack");
+    fs::create_dir_all(&stage).expect("interrupted staging");
+    fs::write(&download, b"partial archive").expect("interrupted download");
+    fs::write(&unrelated, b"notes").expect("unrelated file");
+    for directory in [&previous, &unversioned] {
+        for name in CUDA_LIBRARIES.expect("pack").files() {
+            fs::write(directory.join(name), contents(name)).expect("old library");
+        }
+    }
+    assert_eq!(fixture.store.cuda_pack_state(), CudaPackState::NotInstalled);
+    assert!(fixture.store.cuda_pack_dir().is_none());
+    fs::create_dir_all(&current).expect("current build");
+    for name in CUDA_LIBRARIES.expect("pack").files() {
+        fs::write(current.join(name), contents(name)).expect("current library");
+    }
+
+    fixture.store.finish_cuda_pack_removal();
+
+    assert!(!previous.exists());
+    assert!(!unversioned.exists());
+    assert!(!stage.exists());
+    assert!(!download.exists());
+    assert!(unrelated.exists());
+    assert_eq!(fixture.store.cuda_pack_dir(), Some(current));
+}
+
+#[test]
 fn a_pack_not_in_use_is_removed_at_once() {
     let (fixture, _server, _) = fixture(None);
     let (_, observer) = recorded();

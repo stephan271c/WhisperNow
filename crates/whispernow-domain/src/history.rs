@@ -108,9 +108,7 @@ pub struct HistoryEntry {
     pub status: EntryStatus,
     /// A plain-language explanation of a failure or an undelivered paste.
     pub error: Option<String>,
-    pub has_audio: bool,
-    pub asr_model_id: Option<ModelId>,
-    pub llm_model: Option<String>,
+    pub audio_kept: bool,
 }
 
 impl HistoryEntry {
@@ -129,7 +127,6 @@ pub struct NewHistoryEntry {
     pub status: EntryStatus,
     pub error: Option<String>,
     pub asr_model_id: Option<ModelId>,
-    pub llm_model: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

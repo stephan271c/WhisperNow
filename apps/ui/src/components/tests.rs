@@ -34,6 +34,7 @@ pub(super) fn shortcut() -> Shortcut {
 pub(super) fn loaded() -> ManagementState {
     let mut management = ManagementState::default();
     management.install_settings(SettingsView {
+        start_on_login: false,
         settings: editable_settings(),
         warnings: Vec::new(),
     });
@@ -355,6 +356,7 @@ fn configured() -> ManagementState {
     settings.api_keys = [LlmProvider::OpenAi].into();
     let mut management = ManagementState::default();
     management.install_settings(SettingsView {
+        start_on_login: false,
         settings,
         warnings: Vec::new(),
     });
@@ -959,6 +961,7 @@ fn local_cleanup(small: &str, large: &str, pack: &str) -> ManagementState {
             .model,
     );
     management.install_settings(SettingsView {
+        start_on_login: false,
         settings,
         warnings: Vec::new(),
     });
@@ -1122,15 +1125,15 @@ fn one_language_is_named_and_several_open_as_a_list_by_name() {
 
 #[test]
 fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() {
-    const SMALL: &str = "whispernow-cleanup-lfm2.5-350m-q8_0";
-    const LARGE: &str = "whispernow-cleanup-minicpm5-1b-q8_0";
+    const SMALL: &str = "whispernow-cleanup-lfm2.5-350m-r112-q8_0";
+    const LARGE: &str = "whispernow-cleanup-minicpm5-1b-r112-q8_0";
     const PACK: &str = "llama-cuda-13.4";
     let management = local_cleanup(SMALL, LARGE, PACK);
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
     assert!(
-        tag(&html, "model-whispernow-cleanup-lfm2-5-350m-q8_0-name").is_none(),
+        tag(&html, "model-whispernow-cleanup-lfm2-5-350m-r112-q8_0-name").is_none(),
         "cleanup models are not speech models"
     );
     assert!(tag(&html, "cuda-pack-title").is_none());
@@ -1143,7 +1146,7 @@ fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() 
             .contains("aria-pressed=\"true\"")
     );
     assert!(
-        tag(&html, "model-whispernow-cleanup-lfm2-5-350m-q8_0-use").is_none(),
+        tag(&html, "model-whispernow-cleanup-lfm2-5-350m-r112-q8_0-use").is_none(),
         "the chosen model is in use"
     );
     let section = html
@@ -1158,12 +1161,12 @@ fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() 
 
     open(
         &mut page,
-        &["model-whispernow-cleanup-minicpm5-1b-q8_0-use"],
+        &["model-whispernow-cleanup-minicpm5-1b-r112-q8_0-use"],
     );
     let sent = sent_settings();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].cleanup_model_id().as_str(), LARGE);
-    let other = "model-whispernow-cleanup-lfm2-5-350m-q8_0-use";
+    let other = "model-whispernow-cleanup-lfm2-5-350m-r112-q8_0-use";
     assert!(
         tag(&page.html(), other)
             .expect("other cleanup model")

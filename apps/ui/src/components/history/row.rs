@@ -84,7 +84,7 @@ pub(super) fn HistoryRow(
                 p { "{error}" }
             }
         }
-        if entry.has_audio {
+        if entry.audio_kept {
             AudioPlayer { id }
         }
     } }

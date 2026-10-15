@@ -51,7 +51,6 @@ fn entry(created_at: i64, status: EntryStatus, text: &str) -> NewHistoryEntry {
         status,
         error: (status == EntryStatus::Failed).then(|| "Speech recognition failed".to_owned()),
         asr_model_id: Some(ModelId::new("parakeet").expect("model id")),
-        llm_model: None,
     }
 }
 
@@ -70,12 +69,11 @@ fn all(repository: &SqliteHistoryRepository) -> Vec<whispernow_domain::HistoryEn
 #[test]
 fn an_entry_round_trips_and_only_kept_audio_is_written() {
     let fixture = Fixture::new();
-    let history = fixture.open();
+    let mut history = fixture.open();
     let spoken = history
         .insert(
             NewHistoryEntry {
                 cleaned_text: Some("Hello.".to_owned()),
-                llm_model: Some("gpt".to_owned()),
                 ..entry(1, EntryStatus::Ok, "hello")
             },
             &SPEECH,
@@ -86,7 +84,7 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
     let spoken = history.get(spoken).expect("get").expect("entry");
     assert_eq!(spoken.raw_text.as_deref(), Some("hello"));
     assert_eq!(spoken.text(), Some("Hello."));
-    assert!(!spoken.has_audio);
+    assert!(!spoken.audio_kept);
     assert_eq!(history.audio(spoken.id).expect("audio"), None);
 
     let kept = history
@@ -98,7 +96,7 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
         )
         .expect("insert");
     let kept = history.get(kept).expect("get").expect("entry");
-    assert!(kept.has_audio);
+    assert!(kept.audio_kept);
     let wav = history.audio(kept.id).expect("audio").expect("kept audio");
     assert_eq!(&wav[..4], b"RIFF");
     assert_eq!(fixture.wav_names(), vec![format!("{}.wav", kept.id.0)]);
@@ -106,9 +104,43 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
 }
 
 #[test]
+fn history_reads_do_not_parse_the_asr_model_id_saved_for_training() {
+    let fixture = Fixture::new();
+    let mut history = fixture.open();
+    let id = history
+        .insert(
+            entry(1, EntryStatus::Ok, "dictation"),
+            &[],
+            false,
+            HistoryLimit::Unlimited,
+        )
+        .expect("insert");
+    let stored: String = history
+        .connection
+        .query_row(
+            "SELECT asr_model_id FROM entries WHERE id = ?1",
+            [id.0],
+            |row| row.get(0),
+        )
+        .expect("training model id");
+    assert_eq!(stored, "parakeet");
+    history
+        .connection
+        .execute(
+            "UPDATE entries SET asr_model_id = '../retired/model' WHERE id = ?1",
+            [id.0],
+        )
+        .expect("unrecognized stored model id");
+
+    let saved = history.get(id).expect("read history").expect("entry");
+    assert_eq!(saved.text(), Some("dictation"));
+    assert_eq!(all(&history), vec![saved]);
+}
+
+#[test]
 fn failed_and_cancelled_entries_keep_their_audio_when_keep_audio_is_off() {
     let fixture = Fixture::new();
-    let history = fixture.open();
+    let mut history = fixture.open();
     let failed = history
         .insert(
             entry(1, EntryStatus::Failed, ""),
@@ -127,7 +159,7 @@ fn failed_and_cancelled_entries_keep_their_audio_when_keep_audio_is_off() {
         .expect("insert");
     let failed = history.get(failed).expect("get").expect("entry");
     let cancelled = history.get(cancelled).expect("get").expect("entry");
-    assert!(failed.has_audio && cancelled.has_audio);
+    assert!(failed.audio_kept && cancelled.audio_kept);
     assert_eq!(failed.error.as_deref(), Some("Speech recognition failed"));
     assert_eq!(fixture.wav_names().len(), 2);
 }
@@ -135,7 +167,7 @@ fn failed_and_cancelled_entries_keep_their_audio_when_keep_audio_is_off() {
 #[test]
 fn inserting_beyond_the_limit_deletes_the_oldest_entries_with_their_audio() {
     let fixture = Fixture::new();
-    let history = fixture.open();
+    let mut history = fixture.open();
     let mut ids = Vec::new();
     for index in 0..25 {
         ids.push(
@@ -163,7 +195,7 @@ fn inserting_beyond_the_limit_deletes_the_oldest_entries_with_their_audio() {
 #[test]
 fn listing_pages_newest_first_and_filters_by_text_and_failure() {
     let fixture = Fixture::new();
-    let history = fixture.open();
+    let mut history = fixture.open();
     let mut notes = Vec::new();
     for index in 0..5 {
         let note = history
@@ -236,7 +268,7 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
 #[test]
 fn delivery_failure_delete_and_clear_update_entries_and_audio() {
     let fixture = Fixture::new();
-    let history = fixture.open();
+    let mut history = fixture.open();
     let first = history
         .insert(
             entry(1, EntryStatus::Ok, "one"),
@@ -272,7 +304,7 @@ fn delivery_failure_delete_and_clear_update_entries_and_audio() {
 #[test]
 fn ids_are_never_reused_after_a_delete() {
     let fixture = Fixture::new();
-    let history = fixture.open();
+    let mut history = fixture.open();
     let first = history
         .insert(
             entry(1, EntryStatus::Ok, "one"),
@@ -294,9 +326,87 @@ fn ids_are_never_reused_after_a_delete() {
 }
 
 #[test]
+fn clearing_vacuums_transcript_pages_without_reusing_ids() {
+    let fixture = Fixture::new();
+    let mut history = fixture.open();
+    let private_text = "private-transcript-to-remove".repeat(1_000);
+    let first = history
+        .insert(
+            entry(1, EntryStatus::Ok, &private_text),
+            &SPEECH,
+            true,
+            HistoryLimit::Unlimited,
+        )
+        .expect("insert");
+    let database = fixture.paths.history_database_file();
+    let before = fs::metadata(&database).expect("database").len();
+
+    assert!(history.clear().expect("clear"));
+
+    assert!(all(&history).is_empty());
+    assert!(!fixture.paths.recordings_dir().exists());
+    assert!(fs::metadata(&database).expect("vacuumed database").len() < before);
+    let bytes = fs::read(&database).expect("database bytes");
+    assert!(
+        !bytes
+            .windows(b"private-transcript-to-remove".len())
+            .any(|window| window == b"private-transcript-to-remove")
+    );
+    let later = history
+        .insert(
+            entry(2, EntryStatus::Ok, "after clear"),
+            &SPEECH,
+            true,
+            HistoryLimit::Unlimited,
+        )
+        .expect("insert after clear");
+    assert!(later > first);
+    assert!(history.audio(later).expect("audio").is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_recordings_removal_failure_keeps_history_rows() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let fixture = Fixture::new();
+    let mut history = fixture.open();
+    let id = history
+        .insert(
+            entry(1, EntryStatus::Ok, "recoverable"),
+            &SPEECH,
+            true,
+            HistoryLimit::Unlimited,
+        )
+        .expect("insert");
+    let recordings = fixture.paths.recordings_dir();
+    let permissions = fs::metadata(&recordings).expect("recordings").permissions();
+    fs::set_permissions(&recordings, fs::Permissions::from_mode(0o500))
+        .expect("read-only recordings");
+
+    let result = history.clear();
+
+    fs::set_permissions(&recordings, permissions).expect("restore permissions");
+    assert_eq!(
+        result.expect_err("recordings kept").code,
+        "history_clear_audio"
+    );
+    assert_eq!(
+        history
+            .get(id)
+            .expect("entry")
+            .expect("retained")
+            .raw_text
+            .as_deref(),
+        Some("recoverable")
+    );
+    assert!(history.audio(id).expect("audio").is_some());
+}
+
+#[test]
 fn startup_removes_audio_files_that_no_entry_owns() {
     let fixture = Fixture::new();
-    let history = fixture.open();
+    let mut history = fixture.open();
     let kept = history
         .insert(
             entry(1, EntryStatus::Failed, ""),
@@ -305,21 +415,28 @@ fn startup_removes_audio_files_that_no_entry_owns() {
             HistoryLimit::Last20,
         )
         .expect("insert");
-    history.close().expect("close");
+    drop(history);
     let audio_dir = fixture.paths.recordings_dir();
     fs::write(audio_dir.join("9999.wav"), b"orphan").expect("orphan");
-    fs::write(audio_dir.join(".tmp-crash"), b"partial").expect("temporary");
+    fs::write(audio_dir.join(".history-audio-crash.tmp"), b"partial").expect("temporary");
     fs::write(audio_dir.join("20260101T000000.000000Z.wav"), b"old").expect("old name");
+    fs::write(audio_dir.join("notes.txt"), b"keep").expect("user file");
 
     let reopened = fixture.open();
-    assert_eq!(fixture.wav_names(), vec![format!("{}.wav", kept.0)]);
+    let mut expected = vec![
+        format!("{}.wav", kept.0),
+        "20260101T000000.000000Z.wav".to_owned(),
+        "notes.txt".to_owned(),
+    ];
+    expected.sort();
+    assert_eq!(fixture.wav_names(), expected);
     assert!(reopened.audio(kept).expect("audio").is_some());
 }
 
 #[test]
 fn an_entry_with_an_unknown_status_fails_to_load() {
     let fixture = Fixture::new();
-    let history = fixture.open();
+    let mut history = fixture.open();
     let stored = history
         .insert(
             entry(1, EntryStatus::Ok, "one"),
@@ -328,7 +445,7 @@ fn an_entry_with_an_unknown_status_fails_to_load() {
             HistoryLimit::Last20,
         )
         .expect("insert");
-    history.close().expect("close");
+    drop(history);
     Connection::open(fixture.paths.history_database_file())
         .expect("database")
         .execute("UPDATE entries SET status = 'lost'", [])
@@ -395,12 +512,12 @@ fn a_python_history_document_imports_once_as_entries() {
     assert!(!fixture.paths.history_file().exists());
     assert!(fixture.paths.migrated_history_file().exists());
 
-    history.close().expect("close");
+    drop(history);
     assert_eq!(all(&fixture.open()).len(), 4, "imported once");
 }
 
 #[test]
-fn a_malformed_python_history_document_is_quarantined_with_a_diagnostic() {
+fn a_malformed_python_history_document_is_moved_aside_with_a_diagnostic() {
     let fixture = Fixture::new();
     fs::create_dir_all(fixture.paths.config_dir()).expect("config directory");
     fs::write(fixture.paths.history_file(), b"{not json").expect("malformed");
@@ -410,11 +527,20 @@ fn a_malformed_python_history_document_is_quarantined_with_a_diagnostic() {
         Some("history_import_invalid")
     );
     assert!(all(&history).is_empty());
+    let backups = fixture
+        .paths
+        .history_backup_files()
+        .expect("history backups");
+    assert_eq!(backups.len(), 1);
     assert!(
-        fixture
-            .paths
-            .history_quarantine_dir()
-            .join("history.json.invalid")
-            .exists()
+        backups[0]
+            .file_name()
+            .expect("backup name")
+            .to_string_lossy()
+            .starts_with("history.json.bad-")
     );
+    assert_eq!(fs::read(&backups[0]).expect("backup content"), b"{not json");
+    assert!(!fixture.paths.history_file().exists());
 }
+
+mod transactions;

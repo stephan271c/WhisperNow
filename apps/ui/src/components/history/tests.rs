@@ -48,7 +48,7 @@ fn entry(id: i64, created_at: UtcMillis) -> HistoryEntry {
         created_at,
         duration_millis: Some(75_000),
         cleaned_text: Some(format!("cleaned {id}")),
-        has_audio: true,
+        audio_kept: true,
         ..crate::test_support::history_entry(id, &format!("raw {id}"))
     }
 }
@@ -57,6 +57,7 @@ fn entry(id: i64, created_at: UtcMillis) -> HistoryEntry {
 fn management(entries: Vec<HistoryEntry>) -> ManagementState {
     let mut management = ManagementState::default();
     management.install_settings(SettingsView {
+        start_on_login: false,
         settings: crate::test_support::editable_settings(),
         warnings: Vec::new(),
     });
@@ -152,7 +153,7 @@ fn a_failed_entry_shows_its_error_and_its_audio_can_be_played() {
     failed.cleaned_text = None;
     failed.error = Some("The speech model could not turn this recording into text.".to_owned());
     let mut without_audio = entry(8, UtcMillis(NOW.0 - 2 * HOUR));
-    without_audio.has_audio = false;
+    without_audio.audio_kept = false;
     let page = history_page(management(vec![failed, without_audio]));
     let html = page.html();
 

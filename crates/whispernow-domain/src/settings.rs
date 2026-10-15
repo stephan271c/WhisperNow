@@ -56,7 +56,6 @@ pub struct SetupCheckpoint {
     pub step: SetupStep,
     pub model_id: ModelId,
     pub input_device: Option<String>,
-    #[serde(rename = "hotkey")]
     pub recording_shortcut: Shortcut,
     pub recording_mode: RecordingMode,
 }
@@ -182,16 +181,12 @@ impl From<WindowGeometry> for (i32, i32, u32, u32) {
 pub struct Settings {
     /// Selected input device name, or the host default.
     pub input_device: Option<String>,
-    #[serde(rename = "hotkey")]
     pub recording_shortcut: Shortcut,
     pub recording_mode: RecordingMode,
-    /// Shortcut that cancels the active dictation; `None` turns it off. Documents from
-    /// before this setting get the Escape default.
-    #[serde(rename = "cancel_hotkey")]
+    /// Shortcut that cancels the active dictation; `None` turns it off.
     pub cancel_shortcut: Option<Shortcut>,
     pub model_id: ModelId,
     pub start_minimized: bool,
-    pub auto_start_on_login: bool,
     pub theme: ThemePreference,
     pub first_run_complete: bool,
     pub setup: Option<SetupCheckpoint>,
@@ -217,7 +212,6 @@ impl Default for Settings {
             cancel_shortcut: Some(Shortcut::default_cancel()),
             model_id: ModelId::default(),
             start_minimized: false,
-            auto_start_on_login: false,
             theme: ThemePreference::System,
             first_run_complete: false,
             setup: None,

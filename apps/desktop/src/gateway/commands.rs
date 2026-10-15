@@ -28,6 +28,14 @@ pub(crate) async fn update_settings(
 }
 
 #[tauri::command]
+pub(crate) async fn set_start_on_login(
+    request: bool,
+    state: tauri::State<'_, Gateway>,
+) -> Result<SaveSettingsResponse, AppError> {
+    state.set_start_on_login(request).await
+}
+
+#[tauri::command]
 pub(crate) async fn suspend_shortcuts(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state.set_shortcut_capture(true).await
 }
@@ -42,11 +50,13 @@ pub(crate) async fn set_api_key(
     request: SetApiKeyRequest,
     state: tauri::State<'_, Gateway>,
 ) -> Result<SettingsView, AppError> {
-    state
+    let mut view = state
         .run_command("set_api_key", Failure::Local, move |services| {
             services.settings.set_api_key(&request)
         })
-        .await
+        .await?;
+    state.read_start_on_login(&mut view);
+    Ok(view)
 }
 
 #[tauri::command]
@@ -54,11 +64,13 @@ pub(crate) async fn clear_api_key(
     request: LlmProvider,
     state: tauri::State<'_, Gateway>,
 ) -> Result<SettingsView, AppError> {
-    state
+    let mut view = state
         .run_command("clear_api_key", Failure::Local, move |services| {
             services.settings.clear_api_key(request)
         })
-        .await
+        .await?;
+    state.read_start_on_login(&mut view);
+    Ok(view)
 }
 
 #[tauri::command]
@@ -100,7 +112,7 @@ pub(crate) async fn get_setup_state(
 ) -> Result<SetupStateView, AppError> {
     state
         .run_command("get_setup_state", Failure::Published, |services| {
-            services.settings.get_setup_state()
+            Ok(services.settings.get_setup_state())
         })
         .await
 }

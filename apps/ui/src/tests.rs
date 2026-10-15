@@ -71,14 +71,15 @@ fn failed_refresh_keeps_loaded_rows() {
 fn loaded_management(settings: Settings) -> ManagementState {
     let mut management = ManagementState::default();
     management.install_settings(SettingsView {
+        start_on_login: false,
         settings,
         warnings: Vec::new(),
     });
     management
 }
 
-fn start_on_login(settings: &mut Settings) {
-    settings.auto_start_on_login = true;
+fn start_minimized(settings: &mut Settings) {
+    settings.start_minimized = true;
 }
 
 fn theme(theme: whispernow_domain::ThemePreference) -> impl Fn(&mut Settings) {
@@ -296,6 +297,7 @@ fn a_saved_native_warning_keeps_the_desktops_substituted_shortcut() {
 
     management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
         settings: SettingsView {
+            start_on_login: false,
             settings: returned,
             warnings: Vec::new(),
         },
@@ -325,11 +327,11 @@ fn a_saved_native_warning_keeps_the_desktops_substituted_shortcut() {
 fn an_unrelated_save_keeps_an_unresolved_native_settings_warning() {
     let mut management = loaded_management(editable_settings());
     let request = management
-        .begin_settings_update(SettingKey::StartOnLogin, start_on_login)
+        .begin_settings_update(SettingKey::StartMinimized, start_minimized)
         .expect("startup edit");
     management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
         settings: SettingsView::new(&request),
-        warnings: vec!["The OS startup registration failed".to_owned()],
+        warnings: vec!["The recording shortcut could not be activated".to_owned()],
     }));
     let warning = management.notice.clone();
 
@@ -354,6 +356,7 @@ fn theme_attribute_follows_a_theme_change_at_once_and_its_rollback() {
     let mut settings = editable_settings();
     settings.theme = whispernow_domain::ThemePreference::Dark;
     management.install_settings(SettingsView {
+        start_on_login: false,
         settings,
         warnings: Vec::new(),
     });

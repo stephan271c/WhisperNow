@@ -7,7 +7,8 @@ use directories::BaseDirs;
 
 const APP_DIRECTORY: &str = "WhisperNow";
 const SETTINGS_FILE: &str = "settings.json";
-const UNREADABLE_SETTINGS_MARKER: &str = ".bad-";
+const HISTORY_FILE: &str = "history.json";
+const UNREADABLE_MARKER: &str = ".bad-";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppPaths {
@@ -72,9 +73,8 @@ impl AppPaths {
     /// Where an unreadable `settings.json` is moved: `settings.json.bad-<stamp>`.
     #[must_use]
     pub fn unreadable_settings_file(&self, stamp: &str) -> PathBuf {
-        self.config_dir.join(format!(
-            "{SETTINGS_FILE}{UNREADABLE_SETTINGS_MARKER}{stamp}"
-        ))
+        self.config_dir
+            .join(format!("{SETTINGS_FILE}{UNREADABLE_MARKER}{stamp}"))
     }
 
     /// The Python release's `settings.json`, kept after it was imported.
@@ -86,13 +86,16 @@ impl AppPaths {
     /// Every existing `settings.json.bad-*` entry and the kept Python settings, sorted by
     /// path. A missing config directory has none.
     pub fn settings_backup_files(&self) -> io::Result<Vec<PathBuf>> {
-        let unreadable_prefix = format!("{SETTINGS_FILE}{UNREADABLE_SETTINGS_MARKER}");
+        self.backup_files(SETTINGS_FILE, &self.python_settings_file())
+    }
+
+    fn backup_files(&self, name: &str, imported: &Path) -> io::Result<Vec<PathBuf>> {
+        let unreadable_prefix = format!("{name}{UNREADABLE_MARKER}");
         let entries = match fs::read_dir(&self.config_dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error),
         };
-        let python = self.python_settings_file();
         let mut backups = Vec::new();
         for entry in entries {
             let entry = entry?;
@@ -100,7 +103,7 @@ impl AppPaths {
                 .file_name()
                 .as_encoded_bytes()
                 .starts_with(unreadable_prefix.as_bytes())
-                || entry.path() == python
+                || entry.path() == imported
             {
                 backups.push(entry.path());
             }
@@ -111,33 +114,27 @@ impl AppPaths {
 
     #[must_use]
     pub fn history_file(&self) -> PathBuf {
-        self.config_dir.join("history.json")
+        self.config_dir.join(HISTORY_FILE)
     }
 
     #[must_use]
     pub fn migrated_history_file(&self) -> PathBuf {
-        self.config_dir.join("history.json.migrated")
+        self.config_dir.join(format!("{HISTORY_FILE}.migrated"))
     }
 
-    /// Collision-safe quarantine for malformed legacy history documents.
     #[must_use]
-    pub fn history_quarantine_dir(&self) -> PathBuf {
-        self.config_dir.join("history-quarantine")
+    pub fn unreadable_history_file(&self, stamp: &str) -> PathBuf {
+        self.config_dir
+            .join(format!("{HISTORY_FILE}{UNREADABLE_MARKER}{stamp}"))
+    }
+
+    pub fn history_backup_files(&self) -> io::Result<Vec<PathBuf>> {
+        self.backup_files(HISTORY_FILE, &self.migrated_history_file())
     }
 
     #[must_use]
     pub fn history_database_file(&self) -> PathBuf {
         self.data_dir.join("history.sqlite3")
-    }
-
-    #[must_use]
-    pub fn history_database_wal_file(&self) -> PathBuf {
-        self.data_dir.join("history.sqlite3-wal")
-    }
-
-    #[must_use]
-    pub fn history_database_shm_file(&self) -> PathBuf {
-        self.data_dir.join("history.sqlite3-shm")
     }
 
     #[must_use]
@@ -152,11 +149,12 @@ impl AppPaths {
 
     #[must_use]
     pub fn cuda_pack_dir(&self) -> PathBuf {
-        self.data_dir.join("llama-cuda")
+        self.data_dir
+            .join(format!("llama-cuda-{}", crate::llama::LLAMA_CPP_BUILD))
     }
 
     #[must_use]
-    pub fn logs_dir(&self) -> PathBuf {
+    pub fn python_logs_dir(&self) -> PathBuf {
         self.data_dir.join("logs")
     }
 
