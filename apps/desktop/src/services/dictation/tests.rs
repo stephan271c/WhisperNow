@@ -397,7 +397,7 @@ fn a_blank_segment_is_left_out_of_the_transcript() {
     let speech = vec![0.25; 24_000];
     let audio = [
         speech.as_slice(),
-        &vec![0.0; TARGET_SAMPLE_RATE as usize],
+        &vec![0.0; 3 * TARGET_SAMPLE_RATE as usize],
         &speech,
     ]
     .concat();

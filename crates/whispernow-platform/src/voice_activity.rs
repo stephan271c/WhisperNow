@@ -22,7 +22,8 @@ const SPEECH_THRESHOLD: f32 = 0.5;
 // the minimum speech duration, which stays well inside the segmenter's leading padding.
 const MIN_SPEECH_DURATION_SECONDS: f32 = 0.064;
 const MIN_SILENCE_DURATION_SECONDS: f32 = 0.1;
-// Segments are forced below 25 s by the core segmenter; this only bounds the native buffer.
+// The core segmenter owns segment length. Natively, a speech run this long raises the threshold
+// to 0.9, which needs 30 s without a 0.1 s pause; it also sizes the native buffer.
 const MAX_SPEECH_DURATION_SECONDS: f32 = 30.0;
 const VAD_BUFFER_SIZE_SECONDS: f32 = 30.0;
 
@@ -104,6 +105,7 @@ enum SileroVadError {
 mod tests {
     use sha2::{Digest as _, Sha256};
     use whispernow_core::workflow::{AudioSegment, SpeechSegmenter};
+    use whispernow_domain::ModelFamily;
 
     use super::*;
 
@@ -135,9 +137,10 @@ mod tests {
     }
 
     fn segments(samples: &[f32]) -> Vec<AudioSegment> {
-        let mut segmenter = SpeechSegmenter::new(Box::new(
-            SileroVoiceActivity::new(&bundled_model_path()).expect("native detector"),
-        ));
+        let mut segmenter = SpeechSegmenter::new(
+            Box::new(SileroVoiceActivity::new(&bundled_model_path()).expect("native detector")),
+            ModelFamily::Transducer,
+        );
         let mut segments = segmenter.push(samples);
         segments.extend(segmenter.finish());
         segments
@@ -202,11 +205,11 @@ mod tests {
     }
 
     #[test]
-    fn pauses_between_utterances_split_segments() {
+    fn a_long_pause_between_utterances_splits_segments() {
         let speech = fixture_speech_without_edge_silence();
         let mut recording = vec![0.0; SECOND / 2];
         recording.extend_from_slice(&speech);
-        recording.resize(recording.len() + SECOND, 0.0);
+        recording.resize(recording.len() + 3 * SECOND, 0.0);
         recording.extend_from_slice(&speech);
         recording.resize(recording.len() + SECOND / 2, 0.0);
 

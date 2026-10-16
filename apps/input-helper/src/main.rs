@@ -8,8 +8,10 @@
 //!
 //! - It watches only the chord given as an argument, which must hold Ctrl,
 //!   Alt or Super, so typed text is never observable through it.
-//! - It writes one line, `<CLOCK_MONOTONIC milliseconds>`,
-//!   when a fully held chord stops being held, and nothing else.
+//! - It writes `ready` after reading the devices' initial key states,
+//!   `held <CLOCK_MONOTONIC milliseconds>` when the chord is held,
+//!   `<CLOCK_MONOTONIC milliseconds>` when it is released, and
+//!   `unavailable` when the chord can no longer be monitored.
 //! - It exits when standard input closes, so it never outlives `WhisperNow`.
 //!
 //! Usage: `whispernow-input-helper <code>[,<code>]+<code>...`, where codes

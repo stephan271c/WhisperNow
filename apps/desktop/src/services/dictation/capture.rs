@@ -181,6 +181,7 @@ mod tests {
     use std::{sync::Arc, thread, time::Duration};
 
     use whispernow_core::workflow::VoiceActivity;
+    use whispernow_domain::ModelFamily;
 
     use super::*;
 
@@ -200,7 +201,7 @@ mod tests {
             worker,
             Events::channel().0,
             whispernow_core::audio::TARGET_SAMPLE_RATE as usize,
-            SpeechSegmenter::new(Box::new(Silence)),
+            SpeechSegmenter::new(Box::new(Silence), ModelFamily::Transducer),
         ));
         let busy = sink.audio.lock().expect("audio");
         let delivery = {
@@ -222,7 +223,7 @@ mod tests {
             worker,
             events,
             TARGET_SAMPLE_RATE as usize,
-            SpeechSegmenter::new(Box::new(Silence)),
+            SpeechSegmenter::new(Box::new(Silence), ModelFamily::Transducer),
         );
         sink.samples(AudioBlock::new(vec![0.5; 320]));
         sink.observe(AudioLevelSummary {

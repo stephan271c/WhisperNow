@@ -1,6 +1,6 @@
 //! [`ReleaseWatcher`] learns when a held recording shortcut is released, because GNOME's
 //! `GlobalShortcuts` portal sometimes drops the release. The portal still decides when a
-//! shortcut is pressed; without the helper, releases fall back to the portal's key repeats.
+//! shortcut is pressed; without a matching helper press, activation timeouts approximate releases.
 //!
 //! [`HelperPastePlatform`] pastes on Wayland without a remote desktop session. The clipboard
 //! goes through `XWayland`, which GNOME shares with Wayland applications, and the helper's
@@ -20,12 +20,9 @@ use std::{
 };
 
 use whispernow_core::text_output::{KeystrokeOutcome, PastePlatform};
-use whispernow_domain::Shortcut;
 use whispernow_platform::{
     ClipboardContents, NativeClipboard, NativePasteError, PasteKeys, wayland::active_paste_keys,
 };
-
-use crate::shortcuts::{ShortcutBinding, ShortcutId};
 
 const HELPER: &str = "whispernow-input-helper";
 const INSTALLED_DIRS: [&str; 2] = ["/usr/local/libexec/whispernow", "/usr/libexec/whispernow"];
@@ -35,12 +32,11 @@ const READY_TIMEOUT: Duration = Duration::from_secs(2);
 /// The helper waits up to a second for held modifiers before it answers.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Starts the helper with `args`. Each line it writes goes to `on_line` until that returns
-/// false, and each line of its errors to the log.
+/// `None` reports stdout closing; returning false stops reading it.
 fn spawn(
     path: &Path,
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
-    mut on_line: impl FnMut(String) -> bool + Send + 'static,
+    mut on_line: impl FnMut(Option<String>) -> bool + Send + 'static,
 ) -> io::Result<Child> {
     let mut child = Command::new(path)
         .args(args)
@@ -51,10 +47,11 @@ fn spawn(
     if let Some(stdout) = child.stdout.take() {
         thread::spawn(move || {
             for line in lines(stdout) {
-                if !on_line(line) {
+                if !on_line(Some(line)) {
                     return;
                 }
             }
+            on_line(None);
         });
     }
     if let Some(stderr) = child.stderr.take() {
@@ -76,35 +73,44 @@ fn stop(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// Receives each reported release with its `CLOCK_MONOTONIC` time, the clock
-/// of portal shortcut timestamps.
-pub(crate) type OnRelease = Arc<dyn Fn(ShortcutId, Duration) + Send + Sync>;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReleaseEvent {
+    Ready,
+    Held(Duration),
+    Released(Duration),
+    Unavailable,
+}
+
+impl ReleaseEvent {
+    fn parse(line: &str) -> Option<Self> {
+        match line {
+            "ready" => Some(Self::Ready),
+            "unavailable" => Some(Self::Unavailable),
+            _ => {
+                let (time, held) = line
+                    .strip_prefix("held ")
+                    .map_or((line, false), |time| (time, true));
+                let at = Duration::from_millis(time.parse().ok()?);
+                Some(if held {
+                    Self::Held(at)
+                } else {
+                    Self::Released(at)
+                })
+            }
+        }
+    }
+}
 
 pub(crate) struct ReleaseWatcher {
-    chord: Option<(ShortcutId, String)>,
     child: Option<Child>,
-    on_release: OnRelease,
     reported_missing: bool,
 }
 
 impl ReleaseWatcher {
-    pub(crate) fn new(on_release: OnRelease) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            chord: None,
             child: None,
-            on_release,
             reported_missing: false,
-        }
-    }
-
-    pub(crate) fn watch(&mut self, binding: &ShortcutBinding) {
-        self.chord = Some((binding.id, chord(&binding.shortcut)));
-        self.restart();
-    }
-
-    pub(crate) fn unwatch(&mut self, id: ShortcutId) {
-        if self.chord.take_if(|(bound, _)| *bound == id).is_some() {
-            self.restart();
         }
     }
 
@@ -114,30 +120,43 @@ impl ReleaseWatcher {
         }
     }
 
-    /// The helper takes its chord as an argument, so a change starts a new one.
-    fn restart(&mut self) {
+    pub(crate) fn watch(
+        &mut self,
+        chord: &str,
+        on_event: impl Fn(ReleaseEvent) + Send + Sync + 'static,
+    ) {
         self.stop();
-        let Some((id, chord)) = &self.chord else {
-            return;
-        };
-        let id = *id;
         let Some(helper) = helper_path() else {
             if !std::mem::replace(&mut self.reported_missing, true) {
-                tracing::info!("{HELPER} is not installed; shortcut releases rely on key repeats");
+                tracing::info!(
+                    "{HELPER} is not installed; shortcut releases rely on activation timeouts"
+                );
             }
+            on_event(ReleaseEvent::Unavailable);
             return;
         };
-        let on_release = Arc::clone(&self.on_release);
+        let on_event = Arc::new(on_event);
+        let reader_event = Arc::clone(&on_event);
         let spawned = spawn(&helper, [chord], move |line| {
-            if let Some(at) = parse_release(&line) {
-                on_release(id, at);
-            }
-            true
+            let event = match line.as_deref() {
+                None => ReleaseEvent::Unavailable,
+                Some(line) => {
+                    let Some(event) = ReleaseEvent::parse(line) else {
+                        tracing::warn!("the release helper returned an invalid response");
+                        reader_event(ReleaseEvent::Unavailable);
+                        return false;
+                    };
+                    event
+                }
+            };
+            reader_event(event);
+            line.is_some()
         });
         match spawned {
             Ok(child) => self.child = Some(child),
             Err(error) => {
                 tracing::warn!(%error, helper = %helper.display(), "the key release watcher did not start");
+                on_event(ReleaseEvent::Unavailable);
             }
         }
     }
@@ -171,9 +190,11 @@ impl HelperPastePlatform {
             .build()
             .ok()?;
         let (sender, answers) = mpsc::channel();
-        let mut helper = spawn(&path, ["--paste"], move |line| sender.send(line).is_ok())
-            .inspect_err(|error| tracing::warn!(%error, "the paste helper did not start"))
-            .ok()?;
+        let mut helper = spawn(&path, ["--paste"], move |line| {
+            line.is_some_and(|line| sender.send(line).is_ok())
+        })
+        .inspect_err(|error| tracing::warn!(%error, "the paste helper did not start"))
+        .ok()?;
         let Some(commands) = helper.stdin.take() else {
             stop(&mut helper);
             return None;
@@ -305,34 +326,8 @@ fn shell_quoted(text: &str) -> String {
     }
 }
 
-fn parse_release(line: &str) -> Option<Duration> {
-    Some(Duration::from_millis(line.parse().ok()?))
-}
-
-/// The helper's chord for `shortcut`: each key's Linux input codes, modifiers on either side.
-/// Letters and digits are their QWERTY positions; on another layout a letter chord may not
-/// match, and its release then falls back to key repeats.
-fn chord(shortcut: &Shortcut) -> String {
-    shortcut
-        .modifiers
-        .iter()
-        .map(|modifier| modifier.evdev())
-        .chain([shortcut.key.evdev()])
-        .map(|codes| {
-            codes
-                .iter()
-                .map(u16::to_string)
-                .collect::<Vec<_>>()
-                .join(",")
-        })
-        .collect::<Vec<_>>()
-        .join("+")
-}
-
 #[cfg(test)]
 mod tests {
-    use whispernow_domain::{ShortcutKey, ShortcutModifier};
-
     use super::*;
 
     #[test]
@@ -366,42 +361,43 @@ mod tests {
     }
 
     #[test]
-    fn shortcuts_become_input_code_chords() {
-        let chord_of = |modifiers: &[ShortcutModifier], key| {
-            chord(&Shortcut {
-                modifiers: modifiers.iter().copied().collect(),
-                key,
-            })
-        };
-        assert_eq!(
-            chord_of(&[ShortcutModifier::Control], ShortcutKey::Space),
-            "29,97+57"
-        );
-        assert_eq!(
-            chord_of(
-                &[
-                    ShortcutModifier::Meta,
-                    ShortcutModifier::Shift,
-                    ShortcutModifier::Alt,
-                    ShortcutModifier::Control
-                ],
-                ShortcutKey::Enter
-            ),
-            "29,97+56,100+42,54+125,126+28,96"
-        );
-        assert_eq!(
-            chord_of(&[ShortcutModifier::Control], ShortcutKey::F24),
-            "29,97+194"
-        );
+    fn a_helper_reports_its_output_and_stdout_closing() {
+        let (sender, messages) = mpsc::channel();
+        let mut helper = spawn(
+            Path::new("/bin/sh"),
+            ["-c", "printf 'ready\\n123456\\n'"],
+            move |line| sender.send(line).is_ok(),
+        )
+        .expect("helper");
+        for expected in [Some("ready"), Some("123456"), None] {
+            assert_eq!(
+                messages
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("helper message")
+                    .as_deref(),
+                expected,
+            );
+        }
+        assert!(helper.wait().expect("helper exit").success());
     }
 
     #[test]
     fn release_lines_carry_the_monotonic_time() {
         assert_eq!(
-            parse_release("123456"),
-            Some(Duration::from_millis(123_456))
+            ReleaseEvent::parse("123456"),
+            Some(ReleaseEvent::Released(Duration::from_millis(123_456)))
         );
-        assert_eq!(parse_release("not-a-time"), None);
-        assert_eq!(parse_release("123 456"), None);
+        assert_eq!(
+            ReleaseEvent::parse("held 123456"),
+            Some(ReleaseEvent::Held(Duration::from_millis(123_456)))
+        );
+        assert_eq!(ReleaseEvent::parse("ready"), Some(ReleaseEvent::Ready));
+        assert_eq!(
+            ReleaseEvent::parse("unavailable"),
+            Some(ReleaseEvent::Unavailable)
+        );
+        assert_eq!(ReleaseEvent::parse("not-a-time"), None);
+        assert_eq!(ReleaseEvent::parse("123 456"), None);
+        assert_eq!(ReleaseEvent::parse("held not-a-time"), None);
     }
 }

@@ -14,7 +14,7 @@ use whispernow_domain::{ModelId, ModelLayout};
 const THREAD_COUNT: i32 = 4;
 const TRANSDUCER_FEATURE_DIM: i32 = 80;
 const GREEDY_SEARCH: &str = "greedy_search";
-/// A 25 s segment is about 325 audio tokens, more than sherpa-onnx's default 512-token budget
+/// A 28 s segment is about 364 audio tokens, more than sherpa-onnx's default 512-token budget
 /// leaves room for with the text.
 const QWEN3_ASR_MAX_TOTAL_TOKENS: i32 = 1024;
 const QWEN3_ASR_MAX_NEW_TOKENS: i32 = 256;

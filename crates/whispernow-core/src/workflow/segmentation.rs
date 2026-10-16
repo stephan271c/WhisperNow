@@ -1,8 +1,10 @@
-//! A recording is split at pauses so each finished segment can be decoded as an ordinary offline
-//! batch request while capture continues. Every segment is a complete buffer and no decoder state
-//! crosses a segment boundary.
+//! A recording is split at long pauses, and cut before it outgrows the recognizer, so each
+//! finished segment can be decoded as an ordinary offline batch request while capture continues.
+//! Every segment is a complete buffer and no decoder state crosses a segment boundary.
 
 use std::{collections::VecDeque, ops::Range};
+
+use whispernow_domain::ModelFamily;
 
 use crate::audio::TARGET_SAMPLE_RATE;
 
@@ -31,7 +33,9 @@ const fn millis(milliseconds: usize) -> usize {
 // Segmentation constants, in samples at 16 kHz. These are tuning constants, not user settings.
 
 pub const FRAME_SAMPLES: usize = 512;
-const END_SILENCE_SAMPLES: usize = millis(600);
+/// About the 95th percentile of pauses in recorded dictations. Recognizers often end a sentence at
+/// a cut, so the shorter pauses inside a thought must not end a segment.
+const END_SILENCE_SAMPLES: usize = millis(2_000);
 /// Audio kept before the first and after the last speech frame of a segment. It fits inside the
 /// pause that ends a segment.
 const PADDING_SAMPLES: usize = millis(200);
@@ -41,11 +45,18 @@ const MIN_SEGMENT_SPEECH_SAMPLES: usize = millis(1_000);
 const MIN_KEPT_SPEECH_SAMPLES: usize = millis(250);
 /// Longest pause a short segment waits across to merge into the next one.
 const MAX_MERGE_GAP_SAMPLES: usize = millis(3_000);
-/// Length at which a segment is cut even without a pause, below Whisper's 30 s window.
-const MAX_SEGMENT_SAMPLES: usize = millis(25_000);
-/// Trailing window searched for the quietest frame when forcing a cut. Shorter than the maximum
-/// segment, so a forced cut always leaves a non-empty segment.
-const CUT_SEARCH_SAMPLES: usize = millis(2_000);
+
+/// Length at which a segment is cut even without a long pause.
+const fn max_segment_samples(family: ModelFamily) -> usize {
+    match family {
+        // Parakeet decodes minutes in one pass; the cap bounds what is left to decode when the
+        // user stops, about 2 s for 45 s of audio on the CPU.
+        ModelFamily::Transducer => millis(45_000),
+        // sherpa-onnx keeps only the first 30 s of Whisper input, SenseVoice's upstream pipeline
+        // feeds it clips of at most 30 s, and the Qwen3-ASR token budget is sized for 28 s.
+        _ => millis(28_000),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AudioSegment {
@@ -84,6 +95,7 @@ struct OpenSegment {
 /// on the samples, so segmenting retained audio offline reproduces the live segments exactly.
 pub struct SpeechSegmenter {
     activity: Box<dyn VoiceActivity>,
+    max_samples: usize,
     partial: Vec<f32>,
     position: usize,
     emitted_end: usize,
@@ -91,10 +103,12 @@ pub struct SpeechSegmenter {
 }
 
 impl SpeechSegmenter {
+    /// Segments for a recognizer of `family`.
     #[must_use]
-    pub fn new(activity: Box<dyn VoiceActivity>) -> Self {
+    pub fn new(activity: Box<dyn VoiceActivity>, family: ModelFamily) -> Self {
         Self {
             activity,
+            max_samples: max_segment_samples(family),
             partial: Vec::with_capacity(FRAME_SAMPLES),
             position: 0,
             emitted_end: 0,
@@ -167,7 +181,7 @@ impl SpeechSegmenter {
             energy: mean_square(&frame[..len]),
             speech,
         });
-        let window_start = end.saturating_sub(CUT_SEARCH_SAMPLES);
+        let window_start = end.saturating_sub(self.max_samples / 2);
         while open
             .recent
             .front()
@@ -188,7 +202,7 @@ impl SpeechSegmenter {
             self.close_open(finished);
             return;
         }
-        if end - open.start >= MAX_SEGMENT_SAMPLES {
+        if end - open.start >= self.max_samples {
             self.force_cut(finished);
         }
     }
@@ -204,20 +218,20 @@ impl SpeechSegmenter {
         self.emit(open.start, end, open.speech_samples, finished);
     }
 
-    /// Cuts the open segment at the quietest frame of its trailing window, preferring the latest
-    /// such frame, and keeps the remainder open.
+    /// Cuts the open segment in the middle of the longest pause in its second half, or without a
+    /// pause there at the quietest frame, preferring the latest on ties. The remainder stays open.
     fn force_cut(&mut self, finished: &mut Vec<AudioSegment>) {
         let mut open = self
             .open
             .take()
             .expect("forced cut requires an open segment");
-        let cut = open
-            .recent
-            .iter()
-            .rev()
-            .filter(|frame| frame.start > open.start)
-            .min_by(|left, right| left.energy.total_cmp(&right.energy))
-            .map_or(self.position, |frame| frame.start);
+        let window = || open.recent.iter().filter(|frame| frame.start > open.start);
+        let cut = longest_pause_middle(window()).unwrap_or_else(|| {
+            window()
+                .rev()
+                .min_by(|left, right| left.energy.total_cmp(&right.energy))
+                .map_or(self.position, |frame| frame.start)
+        });
         let remainder_speech: usize = open
             .recent
             .iter()
@@ -257,6 +271,26 @@ impl SpeechSegmenter {
     }
 }
 
+fn longest_pause_middle<'frame>(frames: impl Iterator<Item = &'frame FrameStats>) -> Option<usize> {
+    let mut longest: Option<Range<usize>> = None;
+    let mut run: Option<Range<usize>> = None;
+    for frame in frames {
+        if frame.speech {
+            run = None;
+            continue;
+        }
+        let pause = run.get_or_insert(frame.start..frame.start);
+        pause.end = frame.start + frame.len;
+        if longest
+            .as_ref()
+            .is_none_or(|longest| pause.len() >= longest.len())
+        {
+            longest = Some(pause.clone());
+        }
+    }
+    longest.map(|pause| pause.start.midpoint(pause.end))
+}
+
 fn mean_square(samples: &[f32]) -> f32 {
     #[allow(
         clippy::cast_precision_loss,
@@ -267,8 +301,12 @@ fn mean_square(samples: &[f32]) -> f32 {
 }
 
 #[cfg(test)]
-fn segment_recording(samples: &[f32], activity: Box<dyn VoiceActivity>) -> Vec<AudioSegment> {
-    let mut segmenter = SpeechSegmenter::new(activity);
+fn segment_recording(
+    samples: &[f32],
+    activity: Box<dyn VoiceActivity>,
+    family: ModelFamily,
+) -> Vec<AudioSegment> {
+    let mut segmenter = SpeechSegmenter::new(activity, family);
     let mut segments = segmenter.push(samples);
     segments.extend(segmenter.finish());
     segments
@@ -288,6 +326,7 @@ mod tests {
     }
 
     const SECOND: usize = TARGET_SAMPLE_RATE as usize;
+    const WHISPER_MAX_SAMPLES: usize = max_segment_samples(ModelFamily::Whisper);
 
     fn speech(seconds: f64) -> Vec<f32> {
         tone(seconds, 0.25)
@@ -320,7 +359,7 @@ mod tests {
     }
 
     fn segment(samples: &[f32]) -> Vec<AudioSegment> {
-        segment_recording(samples, Box::new(EnergyActivity))
+        segment_recording(samples, Box::new(EnergyActivity), ModelFamily::Whisper)
     }
 
     #[test]
@@ -341,15 +380,15 @@ mod tests {
         let audio = concat(&[
             silence(1.0),
             speech(2.0),
-            silence(1.0),
+            silence(2.5),
             speech(1.5),
-            silence(1.0),
+            silence(2.5),
         ]);
         let segments = segment(&audio);
 
         assert_eq!(segments.len(), 2);
         let first_speech = SECOND..3 * SECOND;
-        let second_speech = 4 * SECOND..11 * SECOND / 2;
+        let second_speech = 11 * SECOND / 2..7 * SECOND;
         for (segment, speech) in segments.iter().zip([first_speech, second_speech]) {
             assert!(segment.start <= speech.start - PADDING_SAMPLES);
             assert!(segment.start >= speech.start - PADDING_SAMPLES - FRAME_SAMPLES);
@@ -373,8 +412,8 @@ mod tests {
     }
 
     #[test]
-    fn short_pauses_do_not_split_a_segment() {
-        let audio = concat(&[speech(1.5), silence(0.4), speech(1.5)]);
+    fn pauses_shorter_than_two_seconds_do_not_split_a_segment() {
+        let audio = concat(&[speech(1.5), silence(1.8), speech(1.5)]);
         let segments = segment(&audio);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].range(), 0..audio.len());
@@ -382,11 +421,11 @@ mod tests {
 
     #[test]
     fn short_segments_merge_into_the_next_one() {
-        let audio = concat(&[speech(0.5), silence(1.0), speech(1.5), silence(1.0)]);
+        let audio = concat(&[speech(0.5), silence(2.5), speech(1.5), silence(2.5)]);
         let segments = segment(&audio);
         assert_eq!(segments.len(), 1, "{segments:?}");
         assert_eq!(segments[0].start, 0);
-        assert!(segments[0].end > 3 * SECOND);
+        assert!(segments[0].end > 9 * SECOND / 2);
         assert!(segments[0].speech_samples >= 2 * SECOND - 1_024);
     }
 
@@ -402,9 +441,33 @@ mod tests {
     }
 
     #[test]
+    fn a_forced_cut_takes_the_middle_of_the_longest_pause_in_the_second_half() {
+        // Pauses at 4 s (1.5 s, before the window), 15.5 s (0.4 s), 20.9 s (1 s) and 25.9 s
+        // (0.5 s); the cut is due at 28 s.
+        let audio = concat(&[
+            speech(4.0),
+            silence(1.5),
+            speech(10.0),
+            silence(0.4),
+            speech(5.0),
+            silence(1.0),
+            speech(4.0),
+            silence(0.5),
+            speech(8.0),
+        ]);
+        let segments = segment(&audio);
+
+        assert_eq!(segments.len(), 2, "{segments:?}");
+        assert_eq!(segments[0].start, 0);
+        assert!(segments[0].end.abs_diff(107 * SECOND / 5) <= FRAME_SAMPLES);
+        assert_eq!(segments[0].end, segments[1].start);
+        assert_eq!(segments[1].end, audio.len());
+    }
+
+    #[test]
     fn continuous_speech_is_cut_before_the_maximum_at_the_quietest_frame() {
         let mut audio = speech(40.0);
-        let quiet = 24 * SECOND;
+        let quiet = 20 * SECOND;
         for sample in &mut audio[quiet..quiet + 512] {
             *sample *= 0.5;
         }
@@ -416,7 +479,7 @@ mod tests {
         assert!(
             segments
                 .iter()
-                .all(|segment| segment.end - segment.start <= MAX_SEGMENT_SAMPLES)
+                .all(|segment| segment.end - segment.start <= WHISPER_MAX_SAMPLES)
         );
         assert_eq!(
             segments
@@ -428,20 +491,23 @@ mod tests {
     }
 
     #[test]
-    fn uniform_speech_is_cut_as_late_as_possible() {
-        let audio = speech(60.0);
-        let segments = segment(&audio);
+    fn uniform_speech_is_cut_as_late_as_each_family_allows() {
+        let audio = speech(100.0);
+        for family in [ModelFamily::Whisper, ModelFamily::Transducer] {
+            let max = max_segment_samples(family);
+            let segments = segment_recording(&audio, Box::new(EnergyActivity), family);
 
-        assert_eq!(segments.len(), 3);
-        assert_eq!(segments[0].start, 0);
-        for pair in segments.windows(2) {
-            assert_eq!(pair[0].end, pair[1].start, "forced cuts drop no audio");
-        }
-        assert_eq!(segments[2].end, audio.len());
-        for segment in &segments[..2] {
-            let len = segment.end - segment.start;
-            assert!(len <= MAX_SEGMENT_SAMPLES);
-            assert!(len > MAX_SEGMENT_SAMPLES - FRAME_SAMPLES * 2);
+            assert_eq!(segments.len(), audio.len().div_ceil(max), "{family:?}");
+            assert_eq!(segments[0].start, 0);
+            for pair in segments.windows(2) {
+                assert_eq!(pair[0].end, pair[1].start, "forced cuts drop no audio");
+            }
+            assert_eq!(segments[segments.len() - 1].end, audio.len());
+            for segment in &segments[..segments.len() - 1] {
+                let len = segment.end - segment.start;
+                assert!(len <= max);
+                assert!(len > max - FRAME_SAMPLES * 2);
+            }
         }
     }
 
@@ -450,28 +516,34 @@ mod tests {
         let audio = concat(&[
             silence(0.7),
             speech(1.2),
-            silence(0.8),
+            silence(2.4),
             speech(0.3),
             silence(0.9),
-            speech(2.1),
+            speech(20.0),
+            silence(0.6),
+            speech(12.0),
             silence(0.3),
         ]);
         let expected = segment(&audio);
-        let mut segmenter = SpeechSegmenter::new(Box::new(EnergyActivity));
+        let mut segmenter = SpeechSegmenter::new(Box::new(EnergyActivity), ModelFamily::Whisper);
         let mut incremental = Vec::new();
         for block in audio.chunks(333) {
             incremental.extend(segmenter.push(block));
         }
         incremental.extend(segmenter.finish());
 
-        assert!(!expected.is_empty());
+        assert_eq!(
+            expected.len(),
+            3,
+            "a pause end and a forced cut: {expected:?}"
+        );
         assert_eq!(incremental, expected);
     }
 
     #[test]
     fn always_speech_segments_everything_at_forced_cuts() {
         let audio = silence(30.0);
-        let segments = segment_recording(&audio, Box::new(AlwaysSpeech));
+        let segments = segment_recording(&audio, Box::new(AlwaysSpeech), ModelFamily::Whisper);
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].start, 0);
         assert_eq!(segments[1].end, audio.len());

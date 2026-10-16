@@ -45,6 +45,8 @@ zeroize = { workspace = true }
 ashpd = { workspace = true, features = ["clipboard", "remote_desktop", "screencast"] }
 atspi = { version = "=0.30.0", default-features = false, features = ["connection", "proxies", "tokio"] }
 x11rb = { version = "=0.14.0", default-features = false, features = ["xkb", "xtest"] }
+wayland-client = "=0.31.14"
+xkbcommon = { version = "=0.9.0", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }

@@ -478,7 +478,7 @@ impl Worker {
             self.sender.clone(),
             self.parts.state.events().clone(),
             MAX_RECORDING_SAMPLES,
-            SpeechSegmenter::new((self.parts.voice_activity)()),
+            SpeechSegmenter::new((self.parts.voice_activity)(), model.definition.family()),
         ));
         let previous_phase = self.parts.state.update(|state| {
             state.phase.require_idle()?;
