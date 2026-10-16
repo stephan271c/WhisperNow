@@ -1,0 +1,23 @@
+# LFM2.5-2.6B, full fine-tune from the base checkpoint, on a Modal GPU (modal_train.py).
+# The 350M and 1B recipe: lr 1e-5, cosine, 3 epochs, 32 rows per optimizer step, fp32 master
+# weights under bf16 autocast, fused AdamW. fp32 weights, gradients and Adam state take about
+# 42 GB, so it needs an 80 GB GPU. Liger has no LFM2 kernels, so the chunked loss keeps the
+# 128k-vocabulary logits from being built.
+base_model = "LiquidAI/LFM2.5-2.6B-Base"
+method = "full"
+learning_rate = 1e-5
+epochs = 3
+# 32 rows in one micro-batch. Each micro-batch has a fixed cost: an H100 took 0.70 s a step at
+# 32 × 1, 1.0 s at 16 × 2 and 1.7 s at 8 × 4 (an A100 80 GB 1.13 s at 32 × 1); peak 64 GB.
+batch_size = 32
+grad_accum = 1
+warmup = 0.03
+weight_decay = 0.0
+lr_scheduler = "cosine"
+# The longest rendered training row is 2,577 tokens with this tokenizer.
+max_length = 2816
+seed = 109
+gradient_checkpointing = true
+chunked_loss = true
+# Modal's GPUs can be preempted.
+checkpoint_minutes = 25

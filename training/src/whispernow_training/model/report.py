@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from ..datagen.paths import TRAINING_ROOT
 
@@ -127,9 +126,8 @@ def sweep_table(names: list[str], stem: str) -> str:
     return "\n".join(lines)
 
 
-def comparison_table(candidates: dict[str, Path], group: str | None = None) -> str:
-    """Candidates (label → scores.json) side by side, overall or per member of one group."""
-    loaded = {label: json.loads(path.read_text(encoding="utf-8")) for label, path in candidates.items()}
+def comparison_table(loaded: dict[str, dict], group: str | None = None) -> str:
+    """Candidates' scores (label → a scores file's contents) side by side, overall or per member of one group."""
     with_faults = any("faults" in scores["overall"] for scores in loaded.values())
     header = ["model", *([group] if group else []), "rows", *QUALITY_COLUMNS, *(FAULT_COLUMNS if with_faults else [])]
     lines = [_row(header), _row(["---"] * len(header))]

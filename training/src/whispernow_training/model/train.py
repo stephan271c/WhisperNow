@@ -109,7 +109,35 @@ class EpochCheckpoints(TrainerCallback):
         self.tokenizer.save_pretrained(target)
 
 
-def train(config: TrainConfig, out: Path) -> dict:
+class TimedCheckpoints(TrainerCallback):
+    """Asks for a resumable checkpoint every `minutes` of training, but not at the last step."""
+
+    def __init__(self, minutes: float) -> None:
+        self.seconds = minutes * 60
+        self.last = time.monotonic()
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self.last = time.monotonic()
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if time.monotonic() - self.last >= self.seconds and state.global_step < state.max_steps:
+            control.should_save = True
+
+    def on_save(self, args, state, control, **kwargs):
+        self.last = time.monotonic()
+
+
+def latest_checkpoint(out: Path) -> str | None:
+    """The newest complete checkpoint in `out/checkpoints`.
+
+    The trainer writes `trainer_state.json` after the weights, optimizer, scheduler and RNG state, and
+    deletes the previous checkpoint only after that, so a save cut short leaves an older complete one.
+    """
+    complete = [path for path in (out / "checkpoints").glob("checkpoint-*") if (path / "trainer_state.json").exists()]
+    return str(max(complete, key=lambda path: int(path.name.split("-")[1]))) if complete else None
+
+
+def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ()) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
     base_model = resolve(config.base_model)
@@ -160,12 +188,20 @@ def train(config: TrainConfig, out: Path) -> dict:
         # A short probe evaluates once, at its end; a ratio below 1 is a share of the total steps.
         eval_steps=config.max_steps or 1 / (EVALS_PER_EPOCH * math.ceil(config.epochs)),
         save_strategy="no",
+        save_total_limit=1,
         report_to="none",
         seed=config.seed,
         dataloader_num_workers=2,
     )
-    callbacks = [] if config.max_steps else [EpochCheckpoints(out, config.epochs, tokenizer)]
-    args = SFTConfig(**common, completion_only_loss=True, train_sampling_strategy="group_by_length")
+    callbacks = [*callbacks, *([] if config.max_steps else [EpochCheckpoints(out, config.epochs, tokenizer)])]
+    if config.checkpoint_minutes:
+        callbacks.append(TimedCheckpoints(config.checkpoint_minutes))
+    args = SFTConfig(
+        **common,
+        completion_only_loss=True,
+        train_sampling_strategy="group_by_length",
+        loss_type="chunked_nll" if config.chunked_loss else "nll",
+    )
     trainer = SFTTrainer(
         model=model,
         args=args,
@@ -175,9 +211,10 @@ def train(config: TrainConfig, out: Path) -> dict:
         peft_config=peft_config,
         callbacks=callbacks,
     )
+    resumed_from = latest_checkpoint(out)
     torch.cuda.reset_peak_memory_stats()
     started = time.monotonic()
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resumed_from)
     seconds = time.monotonic() - started
     final_eval = trainer.evaluate()
     trainable = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
@@ -193,6 +230,8 @@ def train(config: TrainConfig, out: Path) -> dict:
         "train_files": [str(path) for path in files],
         "train_rows": len(train_rows),
         "steps": trainer.state.global_step,
+        # A resumed run's seconds and peak memory cover only the part since `resumed_from`.
+        "resumed_from": resumed_from,
         "seconds": round(seconds),
         "peak_gpu_gb": round(torch.cuda.max_memory_allocated() / 1e9, 2),
         "trainable_parameters": trainable,

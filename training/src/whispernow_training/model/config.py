@@ -43,6 +43,14 @@ class TrainConfig:
     optim: str = "adamw_torch_fused"
     freeze_embeddings: bool = False
     liger: bool = False
+    # TRL's chunked cross-entropy (`loss_type="chunked_nll"`): skips the output layer on prompt and
+    # padding tokens and never builds the whole vocabulary's logits. For architectures Liger has no
+    # kernels for, such as LFM2, where `liger` silently does nothing.
+    chunked_loss: bool = False
+    # Save a resumable checkpoint (weights, optimizer, scheduler, data position) this often, keeping
+    # only the latest, and resume from it when the run starts again; 0 saves none. For preemptible
+    # cloud GPUs (modal_train.py).
+    checkpoint_minutes: float = 0
     # Fresh speech noise per epoch: train one pass over `epochs` noisy variants of the
     # train split (`datagen epochs`), so each row is seen once per epoch, each time with new noise.
     noise_per_epoch: bool = False

@@ -1,9 +1,11 @@
 import asyncio
+import json
 import os
 import shlex
 import time
 from dataclasses import replace
 
+import httpx
 import pytest
 from conftest import SETTINGS
 
@@ -109,7 +111,7 @@ def test_each_role_can_use_its_own_backend_and_model(monkeypatch):
     monkeypatch.setenv("LLM_JUDGE_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("LLM_JUDGE_REASONING", "high")
     assert LlmSettings.from_env().target("judge") == ("codex", "gpt-6.1-sol", "high")
-    monkeypatch.setenv("LLM_JUDGE_BACKEND", "claude")
+    monkeypatch.setenv("LLM_JUDGE_BACKEND", "anthropic")
     with pytest.raises(SystemExit):
         LlmSettings.from_env()
 
@@ -150,6 +152,80 @@ def test_supported_messages_reach_the_backend(backend, monkeypatch, tmp_path):
     monkeypatch.setattr(client, "_connect", connect)
     monkeypatch.setattr(client, "_request", request)
     assert asyncio.run(client.complete(messages)) == "done"
+
+
+def _fake_router(monkeypatch, tmp_path, fail_first: bool = False, expire: bool = False) -> list[dict]:
+    """An OpenRouter batch API that answers each request with its user message reversed. Returns the
+    batches sent; with `fail_first`, the first request of the first batch fails; with `expire`, every batch
+    expires with only its first request answered."""
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    monkeypatch.setattr(llm, "_BATCH_POLL_SECONDS", 0.0)
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    sent: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer test-key"
+        if request.method == "POST":
+            body = json.loads(request.content)
+            assert list(body)[:2] == ["endpoint", "model"]
+            sent.append(body)
+            return httpx.Response(202, json={"id": f"b{len(sent)}", "status": "validating"})
+        number = int(request.url.path.rsplit("/b", 1)[1])
+        results = [
+            {"custom_id": item["custom_id"], "error": {"message": "overloaded"}, "response": None}
+            if fail_first and number == 1 and index == 0 else
+            {"custom_id": item["custom_id"], "error": None, "response": {"status_code": 200, "body": {
+                "choices": [{"message": {"content": item["body"]["messages"][-1]["content"][::-1]}}]}}}
+            for index, item in enumerate(sent[number - 1]["requests"])
+        ]
+        if expire:
+            return httpx.Response(200, json={"id": f"b{number}", "status": "expired", "results": results[:1]})
+        return httpx.Response(200, json={"id": f"b{number}", "status": "completed", "results": results})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(transport=httpx.MockTransport(handle), **kwargs))
+    return sent
+
+
+def test_complete_batch_caches_each_reply_and_sends_failures_again(monkeypatch, tmp_path):
+    sent = _fake_router(monkeypatch, tmp_path, fail_first=True)
+    client = llm.LlmClient(replace(SETTINGS, model="vendor/model:batch", base_url="https://router.test/api/v1"))
+    requests = [[{"role": "system", "content": "clean"}, {"role": "user", "content": text}] for text in ("ab", "cd", "ef")]
+
+    async def no_request(*_args):
+        raise AssertionError("complete should answer from the cache")
+
+    monkeypatch.setattr(client, "_request", no_request)
+
+    async def run():
+        await client.complete_batch(requests)
+        return [await client.complete(messages) for messages in requests]
+
+    assert asyncio.run(run()) == ["ba", "dc", "fe"]
+    assert [len(batch["requests"]) for batch in sent] == [3, 1]
+    assert sent[0]["requests"][0]["body"]["reasoning_effort"] == "low"
+    asyncio.run(client.complete_batch(requests))
+    assert len(sent) == 2
+
+
+def test_complete_batch_waits_for_the_batch_a_killed_run_sent(monkeypatch, tmp_path):
+    sent = _fake_router(monkeypatch, tmp_path)
+    settings = replace(SETTINGS, model="vendor/model:batch", base_url="https://router.test/api/v1")
+    requests = [[{"role": "user", "content": "ab"}]]
+    asyncio.run(llm.LlmClient(settings).complete_batch(requests))
+    for reply in tmp_path.glob("llm/*/*.json"):
+        reply.unlink()
+    asyncio.run(llm.LlmClient(settings).complete_batch(requests))
+    assert len(sent) == 1 and len(list(tmp_path.glob("llm/*/*.json"))) == 1
+
+
+def test_an_expired_batch_keeps_its_answers_and_is_not_sent_again(monkeypatch, tmp_path):
+    sent = _fake_router(monkeypatch, tmp_path, expire=True)
+    settings = replace(SETTINGS, model="vendor/model:batch", base_url="https://router.test/api/v1")
+    requests = [[{"role": "user", "content": text}] for text in ("ab", "cd")]
+    with pytest.raises(llm.LlmError, match="expired with 1 of 2"):
+        asyncio.run(llm.LlmClient(settings).complete_batch(requests))
+    assert len(sent) == 1 and len(list(tmp_path.glob("llm/*/*.json"))) == 1
 
 
 def test_response_cache_separates_backends_and_endpoints(monkeypatch, tmp_path):
@@ -280,6 +356,32 @@ def test_codex_refusals_classify_throttling_and_usage_limits(tmp_path, monkeypat
             asyncio.run(runner.complete("gpt-6.1-sol", "high", ("", "hi")))
         error = caught.value
         assert error.retryable and error.limited is limited and error.throttled is not limited
+    finally:
+        runner.stop()
+
+
+@pytest.mark.parametrize("reply, exit_code, expected", [
+    ('{"type": "result", "is_error": false, "result": "Cleaned text."}', 0, "Cleaned text."),
+    ('{"type": "result", "is_error": true, "result": "Claude AI usage limit reached|1760000000"}', 1, "limited"),
+    ('{"type": "result", "is_error": true, "result": "API Error: 529 Overloaded"}', 1, "retryable"),
+])
+def test_claude_runner_returns_the_result_and_classifies_failures(tmp_path, monkeypatch, reply, exit_code, expected):
+    fake = tmp_path / "fake-claude"
+    seen = tmp_path / "seen"
+    fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {seen}\ncat > /dev/null\necho {shlex.quote(reply)}\nexit {exit_code}\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(llm.shutil, "which", lambda _: str(fake))
+    runner = llm._ClaudeRunner()
+    try:
+        if expected == "Cleaned text.":
+            assert asyncio.run(runner.complete("claude-haiku-5-5", "low", ("Our rules.", "hi"))) == expected
+            args = seen.read_text().splitlines()
+            assert args[args.index("--system-prompt") + 1] == "Our rules." and args[args.index("--effort") + 1] == "low"
+            assert args[args.index("--tools") + 1] == "" and "--safe-mode" in args
+        else:
+            with pytest.raises(llm.LlmError) as caught:
+                asyncio.run(runner.complete("claude-haiku-5-5", "low", ("", "hi")))
+            assert caught.value.limited is (expected == "limited") and caught.value.retryable is (expected == "retryable")
     finally:
         runner.stop()
 

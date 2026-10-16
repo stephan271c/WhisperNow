@@ -1,6 +1,6 @@
 """Rate-limited, cached LLM calls configured from the repo-root `.env`.
 
-Three backends share the retry policy and the response cache, and each has its own concurrency cap.
+Four backends share the retry policy and the response cache, and each has its own concurrency cap.
 Each role (generator, teacher, judge) can use a different backend and model:
 
 - `opencode` (default) sends each request through a private `opencode serve`
@@ -8,9 +8,14 @@ Each role (generator, teacher, judge) can use a different backend and model:
   global opencode instructions and plugins never reach the prompt. opencode
   still adds a short environment note before our system message.
 - `openai` sends requests to any OpenAI-compatible endpoint with `AsyncOpenAI`.
+  `LlmClient.complete_batch` sends many at once to an OpenRouter `:batch` model.
 - `codex` runs one `codex exec` per request. Our system message replaces
   codex's own instructions, and the user's codex config, rules and any AGENTS.md
   are ignored. codex still declares its tools and adds its environment note; the
+  README records this.
+- `claude` runs one `claude -p` per request, with our system message in place of
+  Claude Code's and no tools. Claude Code still adds an identity line, a reminder
+  with the account's email, and an environment note after the user message; the
   README records this.
 
 Only the final message text is returned and cached; reasoning is dropped.
@@ -31,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -40,7 +46,7 @@ from dotenv import load_dotenv
 
 from .paths import CACHE, REPO_ROOT
 
-Backend = Literal["opencode", "openai", "codex"]
+Backend = Literal["opencode", "openai", "codex", "claude"]
 Role = Literal["generator", "teacher", "judge"]
 Message = dict[str, str]
 
@@ -58,6 +64,11 @@ _LIMIT_WAIT_SECONDS = 60.0
 _LIMIT_REPORT_SECONDS = 600.0
 # Retried failures are logged at most this often, so a throttled run says why it is quiet.
 _RETRY_REPORT_SECONDS = 60.0
+_BATCH_ROUNDS = 3
+_BATCH_POLL_SECONDS = 30.0
+_BATCH_REPORT_SECONDS = 600.0
+_BATCH_TERMINAL = frozenset({"completed", "failed", "expired", "cancelled"})
+_BATCH_DEAD = frozenset({"failed", "cancelled"})
 
 
 class LlmError(RuntimeError):
@@ -73,8 +84,8 @@ class LlmError(RuntimeError):
 
 def _backend(name: str, default: str) -> Backend:
     backend = os.environ.get(name) or default
-    if backend not in ("opencode", "openai", "codex"):
-        raise SystemExit(f"{name} must be opencode, openai or codex, not {backend!r}")
+    if backend not in ("opencode", "openai", "codex", "claude"):
+        raise SystemExit(f"{name} must be opencode, openai, codex or claude, not {backend!r}")
     return backend
 
 
@@ -86,7 +97,7 @@ class LlmSettings:
     model: str
     judge_model: str
     concurrency: int
-    # opencode `variant`, OpenAI `reasoning_effort` or codex `model_reasoning_effort`; empty leaves the
+    # opencode `variant`, OpenAI `reasoning_effort`, codex `model_reasoning_effort` or claude `--effort`; empty leaves the
     # provider default.
     reasoning: str
     judge_reasoning: str
@@ -192,8 +203,11 @@ def _kill_group(pid: int) -> None:
         pass
 
 
-async def run_process_group(command: list[str], data: bytes, cwd: Path, timeout: float) -> tuple[int, bytes]:
-    """Runs `command` in its own process group with `data` on stdin; returns its exit code and stderr.
+async def run_process_group(
+    command: list[str], data: bytes, cwd: Path, timeout: float, stdout: Path | None = None
+) -> tuple[int, bytes]:
+    """Runs `command` in its own process group with `data` on stdin; returns its exit code and stderr,
+    and writes its stdout to `stdout` when given.
 
     `codex` is a node wrapper around a native binary. Killing only the wrapper leaves the binary
     holding stderr, and asyncio's `wait()` and `communicate()` return only once every pipe closes,
@@ -201,10 +215,15 @@ async def run_process_group(command: list[str], data: bytes, cwd: Path, timeout:
     cancellation, `_ORPHAN_GRACE_SECONDS` after the wrapper exits if the pipes are still open,
     and at the end, so nothing outlives the call. Raises `TimeoutError` after `timeout` seconds.
     """
-    process = await asyncio.create_subprocess_exec(
-        *command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-        start_new_session=True, preexec_fn=_exit_with_parent,
-    )
+    sink = stdout.open("wb") if stdout is not None else subprocess.DEVNULL
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command, cwd=cwd, stdin=subprocess.PIPE, stdout=sink, stderr=subprocess.PIPE,
+            start_new_session=True, preexec_fn=_exit_with_parent,
+        )
+    finally:
+        if stdout is not None:
+            sink.close()
     io_task = asyncio.ensure_future(process.communicate(data))
     deadline = time.monotonic() + timeout
     exited_at = None
@@ -435,6 +454,97 @@ class _CodexRunner:
         shutil.rmtree(self.work, ignore_errors=True)
 
 
+_CLAUDE_LIMITED = re.compile(r"usage limit|limit reached|hit your limit|out of extra usage|not logged in|/login|\b401\b", re.I)
+_CLAUDE_RETRYABLE = re.compile(r"overloaded|\b529\b|\b5\d\d\b|\b429\b|rate.?limit|timed? ?out|ECONNRESET|socket hang up|try again", re.I)
+
+
+def claude_command(claude: str, model: str, reasoning: str, system: str) -> list[str]:
+    """The `claude -p` call for one request; the user message goes on stdin."""
+    command = [
+        claude, "-p", "--model", model, "--system-prompt", system, "--tools", "", "--safe-mode",
+        "--strict-mcp-config", "--no-session-persistence", "--output-format", "json",
+    ]
+    if reasoning:
+        command += ["--effort", reasoning]
+    return command
+
+
+class _ClaudeRunner:
+    """Runs `claude -p` from an empty directory outside the repo, with our system message in place of
+    Claude Code's."""
+
+    def __init__(self) -> None:
+        claude = shutil.which("claude")
+        if claude is None:
+            raise SystemExit("LLM_BACKEND=claude needs the claude CLI on PATH")
+        self.claude = claude
+        self.work = Path(tempfile.mkdtemp(prefix="datagen-claude-"))
+
+    async def complete(self, model: str, reasoning: str, prompt: tuple[str, str]) -> str:
+        system, user = prompt
+        with tempfile.NamedTemporaryFile(dir=self.work, suffix=".json", delete=False) as handle:
+            reply = Path(handle.name)
+        try:
+            try:
+                returncode, stderr = await run_process_group(
+                    claude_command(self.claude, model, reasoning, system or "Follow the user's instructions."),
+                    user.encode(), self.work, _REQUEST_TIMEOUT_SECONDS, stdout=reply,
+                )
+            except TimeoutError as error:
+                raise LlmError("claude -p timed out", retryable=True) from error
+            text = reply.read_text(encoding="utf-8")
+        finally:
+            reply.unlink(missing_ok=True)
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            result = None
+        if returncode != 0 or not isinstance(result, dict) or result.get("is_error") or "result" not in result:
+            detail = result.get("result") if isinstance(result, dict) else None
+            tail = str(detail or text or stderr.decode(errors="replace")).strip()[-600:]
+            raise LlmError(
+                f"claude exit {returncode}: {tail}",
+                retryable=bool(_CLAUDE_RETRYABLE.search(tail)), limited=bool(_CLAUDE_LIMITED.search(tail)),
+            )
+        return result["result"]
+
+    def stop(self) -> None:
+        shutil.rmtree(self.work, ignore_errors=True)
+
+
+async def _get_batch(http: httpx.AsyncClient, batch_id: str) -> dict | None:
+    """The batch, or None once OpenRouter has deleted it; network and server errors are retried."""
+    while True:
+        try:
+            response = await http.get(f"batches/{batch_id}")
+        except httpx.TransportError:
+            await asyncio.sleep(_BATCH_POLL_SECONDS)
+            continue
+        if response.status_code in (404, 410):
+            return None
+        if response.status_code >= 500 or response.status_code == 429:
+            await asyncio.sleep(_BATCH_POLL_SECONDS)
+            continue
+        if response.status_code >= 400:
+            raise LlmError(f"batch {batch_id} ({response.status_code}): {response.text[:300]}", retryable=False)
+        return response.json()
+
+
+async def _wait_for_batch(http: httpx.AsyncClient, batch: dict) -> dict:
+    reported = time.monotonic()
+    while batch["status"] not in _BATCH_TERMINAL:
+        await asyncio.sleep(_BATCH_POLL_SECONDS)
+        polled = await _get_batch(http, batch["id"])
+        if polled is None:
+            raise LlmError(f"batch {batch['id']} was deleted before it finished", retryable=False)
+        batch = polled
+        if time.monotonic() - reported >= _BATCH_REPORT_SECONDS:
+            reported = time.monotonic()
+            print(f"{time.strftime('%H:%M')} batch {batch['id']} {batch['status']}: {batch.get('request_counts')}",
+                  file=sys.stderr, flush=True)
+    return batch
+
+
 class LlmClient:
     """Use as `async with LlmClient(settings) as llm:`."""
 
@@ -443,12 +553,13 @@ class LlmClient:
         self.cache = ResponseCache(CACHE / "llm")
         self._semaphores = {
             backend: asyncio.Semaphore(settings.codex_concurrency if backend == "codex" else settings.concurrency)
-            for backend in ("opencode", "openai", "codex")
+            for backend in ("opencode", "openai", "codex", "claude")
         }
         self._opencode: _OpencodeServer | None = None
         self._http: httpx.AsyncClient | None = None
         self._openai = None
         self._codex: _CodexRunner | None = None
+        self._claude: _ClaudeRunner | None = None
         self._connect_lock = asyncio.Lock()
         self.calls = 0
         self.cache_hits = 0
@@ -479,6 +590,9 @@ class LlmClient:
             elif backend == "codex":
                 if self._codex is None:
                     self._codex = _CodexRunner()
+            elif backend == "claude":
+                if self._claude is None:
+                    self._claude = _ClaudeRunner()
             elif self._openai is None:
                 from openai import AsyncOpenAI
 
@@ -490,10 +604,14 @@ class LlmClient:
     async def __aexit__(self, *_exc: object) -> None:
         if self._http is not None:
             await self._http.aclose()
+        if self._openai is not None:
+            await self._openai.close()
         if self._opencode is not None:
             self._opencode.stop()
         if self._codex is not None:
             self._codex.stop()
+        if self._claude is not None:
+            self._claude.stop()
 
     async def _request(
         self, backend: Backend, model: str, reasoning: str, messages: list[Message] | tuple[str, str]
@@ -509,6 +627,9 @@ class LlmClient:
         if backend == "codex":
             assert self._codex is not None
             return await self._codex.complete(model, reasoning, messages)
+        if backend == "claude":
+            assert self._claude is not None
+            return await self._claude.complete(model, reasoning, messages)
         import openai
 
         extra = {"reasoning_effort": reasoning} if reasoning else {}
@@ -541,15 +662,14 @@ class LlmClient:
         """
         backend, model, default_reasoning = self.settings.target(role)
         payload: list[Message] | tuple[str, str] = messages
-        if backend in ("opencode", "codex"):
+        if backend in ("opencode", "codex", "claude"):
             system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
             users = [m["content"] for m in messages if m["role"] == "user"]
             if len(users) != 1 or len(messages) != len(users) + (1 if system else 0):
                 raise ValueError(f"the {backend} backend sends one optional system message and one user message")
             payload = (system, users[0])
         reasoning = default_reasoning if reasoning is None else reasoning
-        key = request_key({**self.settings.request(role), "model": model, "reasoning": reasoning, "messages": messages,
-                           **({"attempt": attempt} if attempt else {})})
+        key = self._key(role, messages, reasoning, attempt)
         cached_content = self.cache.get(key) if cached else None
         if cached_content is not None:
             self.cache_hits += 1
@@ -586,6 +706,74 @@ class LlmClient:
         content = strip_think(content)
         self.cache.put(key, content, {"model": model, "seconds": round(time.monotonic() - started, 2)})
         return content
+
+    def _key(self, role: Role, messages: list[Message], reasoning: str, attempt: int = 0) -> str:
+        _, model, _ = self.settings.target(role)
+        return request_key({**self.settings.request(role), "model": model, "reasoning": reasoning, "messages": messages,
+                            **({"attempt": attempt} if attempt else {})})
+
+    async def complete_batch(self, requests: Sequence[list[Message]], *, role: Role = "teacher") -> None:
+        """Caches the replies to `requests` through OpenRouter's batch API, so `complete` then finds them.
+
+        For a `:batch` model, which OpenRouter serves only this way, at half the per-token price. A batch can
+        take up to 24 hours. Its id is kept under the cache, so a rerun waits for the batch already sent
+        instead of paying for another. Failed requests go again in a new batch, twice at most; a batch that
+        expires unanswered raises instead, since another batch could wait as long again.
+        """
+        backend, model, reasoning = self.settings.target(role)
+        if backend != "openai" or not model.endswith(":batch"):
+            raise ValueError(f"{model} on the {backend} backend is not an OpenRouter :batch model")
+        pending: dict[str, list[Message]] = {}
+        for messages in requests:
+            key = self._key(role, messages, reasoning)
+            if self.cache.get(key) is None:
+                pending[key] = messages
+        extra = {"reasoning_effort": reasoning} if reasoning else {}
+        headers = {"Authorization": f"Bearer {os.environ['LLM_API_KEY']}"}
+        errors: list[str] = []
+        async with httpx.AsyncClient(base_url=f"{(self.settings.base_url or '').rstrip('/')}/", headers=headers, timeout=300) as http:
+            for _ in range(_BATCH_ROUNDS):
+                if not pending:
+                    return
+                keys = sorted(pending)
+                record = CACHE / "llm-batches" / f"{request_key(keys)}.json"
+                batch = await _get_batch(http, json.loads(record.read_text())["id"]) if record.exists() else None
+                if batch is None or batch["status"] in _BATCH_DEAD:
+                    # OpenRouter requires `endpoint` and `model` before `requests`.
+                    body = {"endpoint": "/v1/chat/completions", "model": model, "requests": [
+                        {"custom_id": f"r{index}", "body": {"messages": pending[key], **extra}} for index, key in enumerate(keys)
+                    ]}
+                    response = await http.post("batches", json=body)
+                    if response.status_code >= 400:
+                        raise LlmError(f"batch refused ({response.status_code}): {response.text[:300]}", retryable=False)
+                    batch = response.json()
+                    record.parent.mkdir(parents=True, exist_ok=True)
+                    record.write_text(json.dumps({"id": batch["id"], "model": model}), encoding="utf-8")
+                    print(f"{time.strftime('%H:%M')} sent batch {batch['id']}: {len(keys)} requests", file=sys.stderr, flush=True)
+                batch = await _wait_for_batch(http, batch)
+                errors = []
+                for result in batch.get("results") or []:
+                    key = keys[int(result["custom_id"][1:])]
+                    response = result.get("response") or {}
+                    if result.get("error") or response.get("status_code") != 200:
+                        errors.append(str(result.get("error") or response)[:300])
+                        continue
+                    content = strip_think(response["body"]["choices"][0]["message"]["content"] or "")
+                    self.cache.put(key, content, {"model": model, "batch": batch["id"]})
+                    pending.pop(key, None)
+                    self.calls += 1
+                print(
+                    f"{time.strftime('%H:%M')} batch {batch['id']} {batch['status']}: {len(keys) - len(pending)} of {len(keys)}"
+                    f" answered, cost ${(batch.get('usage') or {}).get('cost')}",
+                    file=sys.stderr, flush=True,
+                )
+                if batch["status"] == "expired" and pending:
+                    raise LlmError(
+                        f"batch {batch['id']} expired with {len(pending)} of {len(keys)} requests unanswered;"
+                        " send them without :batch", retryable=False,
+                    )
+        if pending:
+            raise LlmError(f"{len(pending)} batch requests failed; first error: {errors[:1]}", retryable=False)
 
 
     def _report_retry(self, backend: Backend, error: LlmError, attempt: int) -> None:

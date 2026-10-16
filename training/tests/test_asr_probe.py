@@ -27,36 +27,50 @@ def silence(seconds):
     return tone(seconds, 0.0)
 
 
-def segment(*parts):
-    return asr_probe.segment(np.concatenate(parts), energy)
+WHISPER_MAX = asr_probe.max_segment("whisper")
+
+
+def segment(*parts, max_samples=WHISPER_MAX):
+    return asr_probe.segment(np.concatenate(parts), energy, max_samples)
 
 
 def test_silence_and_a_click_produce_no_segments():
     assert segment(silence(5.0)) == []
     click = silence(2.0)
     click[SECOND : SECOND + 512] = tone(0.032)
-    assert asr_probe.segment(click, energy) == []
+    assert segment(click) == []
 
 
 def test_a_long_pause_splits_speech_into_padded_segments():
-    segments = segment(silence(1.0), tone(2.0), silence(1.0), tone(1.5), silence(1.0))
+    segments = segment(silence(1.0), tone(2.0), silence(2.5), tone(1.5), silence(2.5))
     assert len(segments) == 2
-    for (start, end), (speech_start, speech_end) in zip(segments, [(SECOND, 3 * SECOND), (4 * SECOND, 11 * SECOND // 2)]):
+    for (start, end), (speech_start, speech_end) in zip(segments, [(SECOND, 3 * SECOND), (11 * SECOND // 2, 7 * SECOND)]):
         assert speech_start - asr_probe.PADDING - asr_probe.FRAME <= start <= speech_start - asr_probe.PADDING
         assert speech_end + asr_probe.PADDING - asr_probe.FRAME <= end <= speech_end + asr_probe.PADDING + asr_probe.FRAME
 
 
 def test_short_pauses_do_not_split_and_short_segments_merge():
-    audio = np.concatenate([tone(1.5), silence(0.4), tone(1.5)])
-    assert asr_probe.segment(audio, energy) == [(0, len(audio))]
-    merged = segment(tone(0.5), silence(1.0), tone(1.5), silence(1.0))
-    assert len(merged) == 1 and merged[0][0] == 0 and merged[0][1] > 3 * SECOND
+    audio = np.concatenate([tone(1.5), silence(1.8), tone(1.5)])
+    assert segment(audio) == [(0, len(audio))]
+    merged = segment(tone(0.5), silence(2.5), tone(1.5), silence(2.5))
+    assert len(merged) == 1 and merged[0][0] == 0 and merged[0][1] > 9 * SECOND // 2
 
 
-def test_a_long_segment_is_cut_below_the_maximum():
-    segments = segment(tone(60.0))
-    assert len(segments) >= 3
-    assert all(end - start <= asr_probe.MAX_SEGMENT for start, end in segments)
+def test_a_forced_cut_takes_the_middle_of_the_longest_pause_in_the_second_half():
+    parts = [tone(4.0), silence(1.5), tone(10.0), silence(0.4), tone(5.0), silence(1.0), tone(4.0), silence(0.5), tone(8.0)]
+    segments = segment(*parts)
+    assert len(segments) == 2
+    assert abs(segments[0][1] - 107 * SECOND // 5) <= asr_probe.FRAME
+    assert segments[0][1] == segments[1][0]
+
+
+def test_a_long_segment_is_cut_below_each_models_maximum():
+    for model in ("whisper", "parakeet"):
+        cap = asr_probe.max_segment(model)
+        audio = tone(100.0)
+        segments = segment(audio, max_samples=cap)
+        assert len(segments) == -(-len(audio) // cap)
+        assert all(cap - 2 * asr_probe.FRAME < end - start <= cap for start, end in segments[:-1])
 
 
 def test_join_lowercases_a_continuing_segment_but_keeps_i_and_acronyms():

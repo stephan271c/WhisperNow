@@ -36,7 +36,7 @@ Every row has one schema (`datagen/schema.py`): `id`, `input`, `output`, `source
 | 110.4 New references for the probed rows, through the gates | `uv run datagen bench gate-probed` | `data/bench/noise/probed.gated.jsonl` |
 | 110.4 Write both benchmark files, and check them against the build | `uv run datagen bench assemble` | `data/bench/{long,noise}.jsonl`, `report.json` |
 | 110.5 Long composed training rows (40/35/25% by bucket). `gpt-6.1-sol` through codex writes the transcripts (low) and references (high; xhigh over 600 words). The judge checks one row per request (low up to 600 words, high above), and a failure is relabelled once by the teacher. Each cell runs `compose.LANES` batches at once (2, 6 and 12 by bucket), so the slow long cells keep the codex slots busy. The first 2,558 rows had `glm-5.3` as generator, teacher and judge | `LLM_BACKEND=codex LLM_MODEL=gpt-6.1-sol LLM_REASONING=high LLM_GENERATOR_MODEL=gpt-6.1-sol LLM_GENERATOR_REASONING=low LLM_JUDGE_MODEL=gpt-6.1-sol LLM_JUDGE_REASONING=high LLM_CODEX_CONCURRENCY=64 uv run datagen compose --total 8300` | `data/stage4/<category>.<bucket>.jsonl` |
-| 112. Rewrite every reference with `gpt-6.1-sol` at high reasoning (teacher and judge; the command refuses any other setting for any role). `build`, `bench-long`, `bench-noise` or `all` is the full run; `--report` only compares old and new references | `LLM_BACKEND=codex LLM_MODEL=gpt-6.1-sol LLM_REASONING=high LLM_JUDGE_BACKEND=codex LLM_JUDGE_MODEL=gpt-6.1-sol LLM_JUDGE_REASONING=high LLM_GENERATOR_BACKEND=codex LLM_GENERATOR_MODEL=gpt-6.1-sol LLM_GENERATOR_REASONING=high LLM_CODEX_CONCURRENCY=64 uv run datagen relabel all` | `data/relabel/<scope>.jsonl`, `data/relabel/inputs/` |
+| 112. Rewrite every reference with `gpt-6.1-sol` at high reasoning (teacher and judge; the command refuses any other setting for any role). `build`, `bench-long`, `bench-noise` or `all` is the full run; `--retry N` checks the dropped rows again and rewrites the ones that still fail, with the judge's notes from this round and the one before (rows the user ruled dropped stay dropped); `--settled-hedges` with `--retry` also rechecks passed rows that keep a hedge the speaker may have settled; `--report` only compares old and new references | `LLM_BACKEND=codex LLM_MODEL=gpt-6.1-sol LLM_REASONING=high LLM_JUDGE_BACKEND=codex LLM_JUDGE_MODEL=gpt-6.1-sol LLM_JUDGE_REASONING=high LLM_GENERATOR_BACKEND=codex LLM_GENERATOR_MODEL=gpt-6.1-sol LLM_GENERATOR_REASONING=high LLM_CODEX_CONCURRENCY=64 uv run datagen relabel all` | `data/relabel/<scope>.jsonl`, `data/relabel/inputs/` |
 | 4. Filter, deduplicate, split, report | `uv run datagen build` | `data/build/{train,val,test}.jsonl`, `stats.md` |
 | Draw rows for a hand review | `uv run datagen sample list --n 50 --seed 110` | stdout |
 | Publish (private) | `uv run datagen publish <user>/<repo>` | Hugging Face dataset |
@@ -67,6 +67,9 @@ Every row has one schema (`datagen/schema.py`): `id`, `input`, `output`, `source
 
 **Backend.** `LLM_BACKEND=openai` calls any OpenAI-compatible endpoint directly with `LLM_BASE_URL` and `LLM_API_KEY`.
 
+- An OpenRouter model ending in `:batch` (for example `anthropic/claude-haiku-5.5:batch`) is served only through OpenRouter's batch API, at half the per-token price. `cleanup eval --teacher` sends every row it needs as one batch and waits for it, which can take up to 24 hours. The batch's id is kept under `.cache/llm-batches/`, so a rerun waits for the same batch instead of paying for another. A batch that expires after 24 hours stops the run with an error, keeping whatever it answered; send the rest through the model without `:batch`.
+- `cleanup bench --teacher` times single requests, so it needs the model without `:batch`.
+
 `LLM_BACKEND=codex` runs one `codex exec` per request.
 
 - Each request runs from an empty temporary directory, with a read-only sandbox, no web search and no session saved.
@@ -75,6 +78,13 @@ Every row has one schema (`datagen/schema.py`): `id`, `input`, `output`, `source
 - **Caveat:** codex still declares its tools and adds its environment note, about 4,000 tokens per request.
 - Each call runs in its own process group (`llm.run_process_group`). `codex` is a node wrapper around a native binary, and a binary left behind holds the pipes open, which once hung a run for 70 minutes. On a timeout or cancellation, or 10 s after the wrapper exits with its pipes still open, the whole group is killed.
 - The reasoning setting is codex's `model_reasoning_effort`: low, medium, high, xhigh or max.
+
+`LLM_BACKEND=claude` runs one `claude -p` per request, under `LLM_CONCURRENCY`.
+
+- Each request runs from an empty temporary directory with `--safe-mode` (no CLAUDE.md, skills, plugins or hooks), no MCP servers, no tools and no session saved.
+- Our system message replaces Claude Code's (`--system-prompt`). The user message goes on stdin, and only the final result is kept.
+- **Caveat:** Claude Code still adds a line naming it a Claude agent to the system message, a reminder with the account's email before the user message, and an environment note (working directory, platform) after it. A clean environment doesn't remove them.
+- The reasoning setting is `--effort`: low, medium, high, xhigh or max.
 
 **Thinking.** GLM 5.3 models always reason. `LLM_REASONING` and `LLM_JUDGE_REASONING` set the effort. We run both at `low`; see the teacher agreement section.
 
@@ -380,7 +390,7 @@ Measured on a Ryzen 9 8945HS on 2026-10-08. The GPU column was measured on an RT
 
 The app runs speech models on the CPU only: the int8 builds are slower on the GPU and use more host memory there, and only FP16 Parakeet and the Whisper models gained.
 
-Three builds were tried and left out. Whisper large-v3 int8 ran slower than real time (0.5×; 6.3% WER), while Parakeet v2 is more accurate in English and Turbo covers the same languages. Moonshine Tiny (`sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27`) returns an empty result for any segment over about 9 s, and the app's segments run to 25 s. The 2025-09-09 SenseVoice build is a Cantonese fine-tune (WSYue) that writes English in garbled capitals (34% WER here).
+Three builds were tried and left out. Whisper large-v3 int8 ran slower than real time (0.5×; 6.3% WER), while Parakeet v2 is more accurate in English and Turbo covers the same languages. Moonshine Tiny (`sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27`) returns an empty result for any segment over about 9 s, and the app's segments run to 28 s. The 2025-09-09 SenseVoice build is a Cantonese fine-tune (WSYue) that writes English in garbled capitals (34% WER here).
 
 ### Restyle
 
@@ -568,7 +578,11 @@ A small model fine-tuned on `data/build/` to do Clean Up & Format alone. It take
 | Score the split's own references, as a baseline for the judge | `cleanup eval --reference --split val --limit 500 --judge` | `runs/reference/eval/` |
 | Decode with another repeat penalty, or penalty window (server only) | `cleanup eval NAME … --repeat-penalty 1.0` / `--repeat-last-n 64` | `runs/NAME/eval…-rp1/`, `…-last64/` |
 | Score a benchmark (`bench-long` or `bench-noise`, from `data/bench/`) | `cleanup eval NAME --server http://127.0.0.1:8080/v1 --label gpu-q8 --split bench-long --judge` | `runs/NAME/eval-gpu-q8/bench-long.*` |
+| Score a hosted model on 800 test rows instead of 3,297 (`configs/test-sample-800.txt`, per category and length bucket in proportion to test). Through OpenRouter: `LLM_BACKEND=openai LLM_BASE_URL=https://openrouter.ai/api/v1 LLM_API_KEY=… LLM_MODEL=google/gemma-4-26b-a4b-it LLM_REASONING=` (empty: the provider's default; `none` turns reasoning off), with the judge settings above | `cleanup eval --teacher --label gemma4-26b-a4b --split test-sample --judge` | `runs/teacher/eval-gemma4-26b-a4b/test-sample.*` |
+| Score a run judged on all of test on the same 800 rows, from its saved outputs and verdicts | `cleanup rescore NAME/eval-q4 --split test-sample` | `runs/NAME/eval-q4/test-sample.r112.faults.metrics2.scores.json` |
 | Compare evaluations side by side | `cleanup compare teacher=teacher/eval q4=NAME/eval-q4 [--stem test] [--group test_group --group length …]` | stdout |
+| Score saved outputs and judge verdicts again with the current checks, generating and judging nothing (`compare` then reads the new file) | `cleanup rescore NAME/eval-q4 [teacher/eval …] --split test` | `runs/NAME/eval-q4/<stem>.metrics2.scores.json` |
+| Judge chosen rows' saved outputs again with the current judge (after a reference or judge prompt change), then rescore. The verdicts are appended to the split's verdict file and replace those rows' earlier ones; other rows keep theirs | `LLM_JUDGE_BACKEND=codex LLM_JUDGE_MODEL=gpt-6.1-sol LLM_JUDGE_REASONING=high cleanup rejudge NAME/eval-q4 [teacher/eval …] --split bench-long --ids IDS.txt` | `runs/NAME/eval-q4/<stem>.faults.judge.jsonl`, `<stem>.metrics2.scores.json` |
 
 `--limit N` scores a fixed random sample (seed 109) of a split; the sweep scores 500 val rows, for the final model and for each `epoch-N` checkpoint that training saves before the last epoch. Evaluation reuses the outputs it already wrote, so adding `--judge` later only runs the judge.
 

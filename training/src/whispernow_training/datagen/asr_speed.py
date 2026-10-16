@@ -106,31 +106,36 @@ def edits(ref: list[str], hyp: list[str]) -> int:
     return row[-1]
 
 
-def clips() -> list[tuple[str, str, list[np.ndarray]]]:
-    """Every n-th probe dictation, cut by the app's segmenter."""
+def clips() -> list[tuple[str, np.ndarray]]:
+    """The spoken text and audio of every n-th probe dictation."""
     records = probe.load()
     records = sorted(records, key=lambda r: r["id"])[:: max(1, len(records) // CLIPS)][:CLIPS]
     out = []
     for r in records:
         with wave.open(str(probe.AUDIO_DIR / f"{r['id']}.wav")) as w:
             samples = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
-        out.append((r["id"], r["spoken"], probe.segments(samples)))
+        out.append((r["spoken"], samples))
     return out
 
 
 def run(only: list[str] | None = None) -> dict:
     """Measures each model in `only` (default all) not already in `OUT`; returns every result."""
-    data = clips()
-    audio = sum(len(s) for _, _, segs in data for s in segs) / 16000
+    recordings = clips()
+    by_cap: dict[int, list[tuple[str, list[np.ndarray]]]] = {}
     results = json.loads(OUT.read_text()) if OUT.exists() else {}
     for name, make in MODELS.items():
         if (only and name not in only) or name in results:
             continue
+        cap = probe.max_segment(name)
+        if cap not in by_cap:
+            by_cap[cap] = [(spoken, probe.segments(samples, cap)) for spoken, samples in recordings]
+        data = by_cap[cap]
+        audio = sum(len(s) for _, segs in data for s in segs) / 16000
         recognizer = make()
-        probe.decode_segment(recognizer, data[0][2][0])
+        probe.decode_segment(recognizer, data[0][1][0])
         spent = 0.0
         errors = words = 0
-        for _, spoken, segments in data:
+        for spoken, segments in data:
             texts = []
             for segment in segments:
                 text, elapsed = probe.decode_segment(recognizer, segment)

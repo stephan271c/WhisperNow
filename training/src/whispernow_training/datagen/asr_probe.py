@@ -62,13 +62,16 @@ def _ms(milliseconds: int) -> int:
 
 
 FRAME = 512
-END_SILENCE = _ms(600)
+END_SILENCE = _ms(2000)
 PADDING = _ms(200)
 MIN_SEGMENT_SPEECH = _ms(1000)
 MIN_KEPT_SPEECH = _ms(250)
 MAX_MERGE_GAP = _ms(3000)
-MAX_SEGMENT = _ms(25_000)
-CUT_SEARCH = _ms(2000)
+
+
+def max_segment(model: str) -> int:
+    """`max_segment_samples`: Parakeet's segments run to 45 s, every other recognizer's to 28 s."""
+    return _ms(45_000) if model.startswith("parakeet") else _ms(28_000)
 
 
 @dataclass
@@ -80,7 +83,19 @@ class _Open:
     recent: deque = field(default_factory=deque)  # (start, len, energy, speech)
 
 
-def segment(samples: np.ndarray, is_speech) -> list[tuple[int, int]]:
+def _longest_pause_middle(frames) -> int | None:
+    longest = run = None
+    for start, length, _, speech in frames:
+        if speech:
+            run = None
+            continue
+        run = (run[0] if run else start, start + length)
+        if longest is None or run[1] - run[0] >= longest[1] - longest[0]:
+            longest = run
+    return None if longest is None else (longest[0] + longest[1]) // 2
+
+
+def segment(samples: np.ndarray, is_speech, max_samples: int) -> list[tuple[int, int]]:
     """`SpeechSegmenter` over a whole recording: (start, end) sample ranges to decode."""
     segments: list[tuple[int, int]] = []
     position = 0
@@ -113,7 +128,7 @@ def segment(samples: np.ndarray, is_speech) -> list[tuple[int, int]]:
             active.speech_samples += length
             active.held = False
         active.recent.append((start, length, float(np.mean(frame[:length] ** 2)), speech))
-        while active.recent and active.recent[0][0] < end - CUT_SEARCH:
+        while active.recent and active.recent[0][0] < end - max_samples // 2:
             active.recent.popleft()
         pause = end - active.speech_end
         if not speech and not active.held and pause >= END_SILENCE:
@@ -126,9 +141,11 @@ def segment(samples: np.ndarray, is_speech) -> list[tuple[int, int]]:
             close(active)
             active = None
             continue
-        if end - active.start >= MAX_SEGMENT:
-            candidates = [f for f in reversed(active.recent) if f[0] > active.start]
-            cut = min(candidates, key=lambda f: f[2])[0] if candidates else position
+        if end - active.start >= max_samples:
+            window = [f for f in active.recent if f[0] > active.start]
+            cut = _longest_pause_middle(window)
+            if cut is None:
+                cut = min(reversed(window), key=lambda f: f[2])[0] if window else position
             remaining_speech = sum(f[1] for f in active.recent if f[3] and f[0] >= cut)
             emit(active.start, cut, active.speech_samples - remaining_speech)
             if cut < position:
@@ -158,7 +175,7 @@ def vad_config():
     return config
 
 
-def segments(samples: np.ndarray) -> list[np.ndarray]:
+def segments(samples: np.ndarray, max_samples: int) -> list[np.ndarray]:
     import sherpa_onnx as so
 
     detector = so.VoiceActivityDetector(vad_config(), buffer_size_in_seconds=30)
@@ -170,7 +187,7 @@ def segments(samples: np.ndarray) -> list[np.ndarray]:
             detector.pop()
         return speech
 
-    return [samples[start:end] for start, end in segment(samples, is_speech)]
+    return [samples[start:end] for start, end in segment(samples, is_speech, max_samples)]
 
 
 def decode_segment(recognizer, samples: np.ndarray) -> tuple[str, float]:
@@ -284,6 +301,8 @@ class Recognizer:
     def __init__(self, model: str = "parakeet") -> None:
         import sherpa_onnx as so
 
+        self.max_segment = max_segment(model)
+
         if model == "parakeet":
             self.recognizer = so.OfflineRecognizer.from_transducer(
                 encoder=str(PARAKEET_DIR / "encoder.fp16.onnx"),
@@ -311,7 +330,7 @@ class Recognizer:
                 enable_token_timestamps=True,
             )
         elif model == "qwen3":
-            # A 25 s segment is about 325 audio tokens, more than the default 512-token budget allows with the text.
+            # A 28 s segment is about 364 audio tokens, more than the default 512-token budget allows with the text.
             self.recognizer = so.OfflineRecognizer.from_qwen3_asr(
                 conv_frontend=str(QWEN3_DIR / "conv_frontend.onnx"),
                 encoder=str(QWEN3_DIR / "encoder.int8.onnx"),
@@ -325,7 +344,7 @@ class Recognizer:
             raise ValueError(f"unknown model {model!r}; expected one of {MODELS}")
 
     def transcribe(self, samples: np.ndarray) -> tuple[str, list[str]]:
-        texts = [decode_segment(self.recognizer, part)[0] for part in segments(samples)]
+        texts = [decode_segment(self.recognizer, part)[0] for part in segments(samples, self.max_segment)]
         return join_segment_texts(texts), texts
 
 

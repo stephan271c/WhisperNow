@@ -100,7 +100,15 @@ def cmd_eval(args: argparse.Namespace) -> None:
         out_dir = out_dir.with_name(f"{out_dir.name}-last{args.repeat_last_n}")
     else:
         args.repeat_last_n = prompt.REPEAT_LAST_N
-    scores = evaluate.evaluate(produce, out_dir, args.split, args.limit, with_judge=args.judge, generation=generation)
+    if args.chunk_words is not None:
+        from . import chunking
+
+        if args.reference:
+            raise SystemExit("--chunk-words splits a model's requests; --reference makes none")
+        out_dir = out_dir.with_name(f"{out_dir.name}-chunk{args.chunk_words}")
+        generation = {**generation, "chunk_words": args.chunk_words}
+        produce = chunking.chunked(produce, args.chunk_words)
+    scores =evaluate.evaluate(produce, out_dir, args.split, args.limit, with_judge=args.judge, generation=generation)
     overall = scores["overall"]
     def rate(value):
         if not isinstance(value, dict):
@@ -177,17 +185,42 @@ def cmd_sweep_table(args: argparse.Namespace) -> None:
     print(report.sweep_table([run["name"] for run in runs], f"val{SWEEP_VAL_ROWS}"))
 
 
-def cmd_compare(args: argparse.Namespace) -> None:
-    """Scores side by side: `LABEL=RUN/EVAL_DIR`, e.g. `teacher=teacher/eval q4=full-inst-3e-5/eval-q4`."""
-    from . import report
+def cmd_rescore(args: argparse.Namespace) -> None:
+    from . import evaluate
 
-    candidates = {}
+    for where in args.eval_dirs:
+        print(evaluate.rescore(RUNS / where, args.split, args.limit))
+
+
+def cmd_rejudge(args: argparse.Namespace) -> None:
+    from . import evaluate
+
+    ids = args.ids.read_text(encoding="utf-8").split()
+    for where in args.eval_dirs:
+        print(evaluate.rejudge(RUNS / where, args.split, ids))
+
+
+def cmd_compare(args: argparse.Namespace) -> None:
+    """Scores side by side: `LABEL=RUN/EVAL_DIR`, e.g. `teacher=teacher/eval q4=full-inst-3e-5/eval-q4`.
+    Reads an evaluation's rescored file when it has one, and refuses scores of different checks."""
+    from . import evaluate, report
+
+    loaded = {}
     for item in args.candidates:
         label, _, where = item.partition("=")
-        candidates[label] = RUNS / where / f"{args.stem}.scores.json"
+        rescored = evaluate.rescored_path(RUNS / where, args.stem)
+        path = rescored if rescored.exists() else RUNS / where / f"{args.stem}.scores.json"
+        loaded[label] = json.loads(path.read_text(encoding="utf-8"))
+    versions = {label: scores.get("metrics_version", 1) for label, scores in loaded.items()}
+    if len(set(versions.values())) > 1:
+        listed = ", ".join(f"{label} {version}" for label, version in versions.items())
+        raise SystemExit(
+            f"the scores use different metric versions ({listed}); "
+            f"`cleanup rescore` the older evaluations to version {evaluate.METRICS_VERSION}"
+        )
     groups = [None] if not args.group else args.group
     for group in groups:
-        print(report.comparison_table(candidates, group))
+        print(report.comparison_table(loaded, group))
         print()
 
 
@@ -230,9 +263,29 @@ def main() -> None:
     eval_parser.add_argument(
         "--repeat-last-n", type=int, default=None, help="with --server: the penalty's window instead of the served one; scores go to <eval dir>-last<value>"
     )
+    eval_parser.add_argument(
+        "--chunk-words", type=int, default=None,
+        help="clean inputs over this many words in pieces, cut at sentence ends, and join the replies; scores go to <eval dir>-chunk<value>",
+    )
     eval_parser.add_argument("--reference", action="store_true", help="score the split's own references, as a baseline")
     eval_parser.add_argument("--teacher", action="store_true", help="evaluate LLM_MODEL with the app's hosted prompt")
     eval_parser.set_defaults(handler=cmd_eval)
+
+    rescore_parser = commands.add_parser(
+        "rescore", help="score saved outputs and judge verdicts again with the current checks, without generating or judging"
+    )
+    rescore_parser.add_argument("eval_dirs", nargs="+", metavar="RUN/EVAL_DIR", help="under runs/, e.g. teacher/eval-112")
+    rescore_parser.add_argument("--split", default="test", choices=evaluate.SPLITS)
+    rescore_parser.add_argument("--limit", type=int, help="the sample size `eval --limit` scored")
+    rescore_parser.set_defaults(handler=cmd_rescore)
+
+    rejudge_parser = commands.add_parser(
+        "rejudge", help="judge chosen rows' saved outputs again with the current judge, then rescore"
+    )
+    rejudge_parser.add_argument("eval_dirs", nargs="+", metavar="RUN/EVAL_DIR", help="under runs/, e.g. teacher/eval-112")
+    rejudge_parser.add_argument("--split", default="test", choices=evaluate.SPLITS)
+    rejudge_parser.add_argument("--ids", type=Path, required=True, help="a file of row ids, one per line")
+    rejudge_parser.set_defaults(handler=cmd_rejudge)
 
     export_parser = commands.add_parser("export", help="convert runs/<run>/model to GGUF and quantize")
     export_parser.add_argument("run")
@@ -266,7 +319,7 @@ def main() -> None:
 
     compare = commands.add_parser("compare", help="print scores of several evaluations side by side")
     compare.add_argument("candidates", nargs="+", metavar="LABEL=RUN/EVAL_DIR")
-    compare.add_argument("--stem", default="test", help="scores file stem, e.g. test or val500")
+    compare.add_argument("--stem", default="test", help="scores file stem, e.g. test, val500 or test.r112.faults")
     compare.add_argument(
         "--group",
         action="append",

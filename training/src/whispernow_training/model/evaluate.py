@@ -3,6 +3,8 @@
 Three sources produce outputs: a trained checkpoint through transformers (`hf`), a GGUF behind
 `llama-server` (`server`), and the hosted teacher with the app's current prompt (`teacher`).
 Each appends completed requests to `<dir>/<split>.outputs.jsonl`; matching requests resume.
+`rescore` scores saved outputs and verdicts again with the current checks, and `rejudge` judges
+chosen rows again with the current judge.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from ..datagen.concurrency import task_group
-from ..datagen.judge import Verdict
+from ..datagen.judge import Verdict, load_verdicts
 from ..datagen.llm import R112_TARGET, request_key, require_r112
 from ..datagen.paths import BUILD, DATA, PROMPTS, TRAINING_ROOT
 from ..datagen.schema import Example, length_bucket, read_examples, read_jsonl
@@ -42,11 +44,23 @@ LOST_KINDS = ("dropped", "changed", "wrong_side")
 # Judge and score files carry this after the reference tag, so verdicts of the pass/fail judge
 # before fault counts (`<stem>.r112.judge.jsonl`) are never resumed or overwritten.
 JUDGE_VERSION = "faults"
+# The definition of the mechanical checks, recorded in every scores file as `metrics_version`; bump
+# it when a check here or in `text_rules` changes meaning. A file without one is version 1: it
+# predates whole-token protected matching, and may predate other rule changes too.
+METRICS_VERSION = 2
 # Categories the acceptance criteria name for answered transcripts.
 COMMAND_CATEGORIES = ("dictated_command", "command_question_list")
 # The held-out benchmarks, scored like a split.
 BENCHMARKS = {"bench-long": DATA / "bench" / "long.jsonl", "bench-noise": DATA / "bench" / "noise.jsonl"}
-SPLITS = ("train", "val", "test", *BENCHMARKS)
+# Fixed subsets of a split, scored like a split, for models too slow or costly to run on all of it:
+# name → (split, id file). `test-sample` is 800 test rows drawn per category and length bucket in
+# proportion to the split. Of 500 such draws (seeds 0–499), seed 408's came closest to the full split
+# in facts lost per 1,000 words for glm-5.3 max, glm-5.3-flash and todo 113's two models: within 1.6%
+# for each, where the median draw is 10% off for one of them. `test-long` is the 536 test rows over
+# 200 words, where the local models lose the most facts per word.
+SAMPLES = {"test-sample": ("test", TRAINING_ROOT / "configs" / "test-sample-800.txt"),
+           "test-long": ("test", TRAINING_ROOT / "configs" / "test-long-536.txt")}
+SPLITS = ("train", "val", "test", *BENCHMARKS, *SAMPLES)
 # The original test rows, by id: later builds add test rows, and scores report the two groups apart.
 TEST_IDS_109 = TRAINING_ROOT / "configs" / "test-ids-109.txt"
 # A judge request holds up to 15 rows, or fewer when long rows would pass this many characters.
@@ -67,7 +81,11 @@ def reference_tag(rows: Sequence[Example]) -> str:
 
 
 def load_rows(split: str, limit: int | None = None, seed: int = 109) -> list[Example]:
-    rows = read_examples(BENCHMARKS.get(split, BUILD / f"{split}.jsonl"))
+    parent, ids_file = SAMPLES.get(split, (split, None))
+    rows = read_examples(BENCHMARKS.get(parent, BUILD / f"{parent}.jsonl"))
+    if ids_file is not None:
+        ids = set(ids_file.read_text(encoding="utf-8").split())
+        rows = [row for row in rows if row.id in ids]
     if limit is not None and limit < len(rows):
         rows = random.Random(seed).sample(rows, limit)
     return rows
@@ -210,11 +228,16 @@ async def generate_server(
 
 
 async def generate_teacher(rows: Sequence[Example]) -> list[dict]:
-    """`LLM_MODEL` with the app's current hosted prompt, through the datagen client and cache."""
+    """`LLM_MODEL` with the app's current hosted prompt, through the datagen client and cache.
+
+    An OpenRouter `:batch` model gets every row in one batch first.
+    """
     from ..datagen.llm import LlmClient, LlmSettings
-    from ..datagen.teacher import relabel
+    from ..datagen.teacher import relabel, teacher_messages
 
     async with LlmClient(LlmSettings.from_env()) as llm:
+        if llm.settings.model.endswith(":batch"):
+            await llm.complete_batch([teacher_messages(row.input) for row in rows])
         done = 0
 
         async def one(row: Example) -> dict:
@@ -389,6 +412,70 @@ def score(rows: Sequence[Example], outputs: dict[str, dict], judged: dict[str, V
     }
 
 
+def _file_stem(stem: str, tag: str, judged: bool) -> str:
+    tagged = f"{stem}.{tag}" if tag else stem
+    return f"{tagged}.{JUDGE_VERSION}" if judged else tagged
+
+
+def rescored_path(out_dir: Path, file_stem: str) -> Path:
+    """Where `rescore` puts `<file_stem>.scores.json`'s scores under the current checks."""
+    return out_dir / f"{file_stem}.metrics{METRICS_VERSION}.scores.json"
+
+
+def write_scores(
+    path: Path, rows: Sequence[Example], outputs: dict[str, dict], judged: dict[str, Verdict] | None, tag: str
+) -> dict:
+    scores = score(rows, outputs, judged)
+    scores["judged"] = judged is not None
+    if judged is not None:
+        scores["judge"] = JUDGE_VERSION
+    scores["references"] = tag or "before todo 112"
+    scores["metrics_version"] = METRICS_VERSION
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(scores, indent=2) + "\n", encoding="utf-8")
+    return scores
+
+
+def rescore(out_dir: Path, split: str, limit: int | None = None) -> Path:
+    """Scores the saved outputs and fault verdicts of `out_dir` with the current checks, generating
+    and judging nothing, into `rescored_path` beside the scores they had. A run with no files of its
+    own for a `SAMPLES` split is scored from the whole split's."""
+    rows = load_rows(split, limit)
+    stem = split if limit is None else f"{split}{limit}"
+    source = SAMPLES[split][0] if split in SAMPLES and not (out_dir / f"{stem}.outputs.jsonl").exists() else stem
+    outputs = read_outputs(out_dir / f"{source}.outputs.jsonl")
+    if unsaved := [row.id for row in rows if row.id not in outputs]:
+        raise ValueError(f"{out_dir}: {len(unsaved)} of {len(rows)} {stem} rows have no saved output")
+    tag = reference_tag(rows)
+    judged = load_verdicts(out_dir / f"{_file_stem(source, tag, judged=True)}.judge.jsonl") or None
+    if judged is not None and (unjudged := [row.id for row in rows if row.id not in judged]):
+        raise ValueError(f"{out_dir}: {len(unjudged)} of {len(rows)} {stem} rows have no verdict")
+    path = rescored_path(out_dir, _file_stem(stem, tag, judged is not None))
+    write_scores(path, rows, {row.id: outputs[row.id] for row in rows}, judged, tag)
+    return path
+
+
+def rejudge(out_dir: Path, split: str, ids: Sequence[str]) -> Path:
+    """Judges the saved outputs of the rows `ids` again with the current judge, then `rescore`s.
+
+    The verdicts are appended to the split's verdict file, where a row's last line wins: every other
+    row keeps its verdict, and the replaced ones stay on record. A row whose request is unchanged
+    since its last verdict is not judged again."""
+    rows = {row.id: row for row in load_rows(split)}
+    if unknown := [id_ for id_ in ids if id_ not in rows]:
+        raise ValueError(f"{len(unknown)} ids are not {split} rows, such as {unknown[0]}")
+    tag = reference_tag(list(rows.values()))
+    verdicts = out_dir / f"{_file_stem(split, tag, judged=True)}.judge.jsonl"
+    if not verdicts.exists():
+        raise ValueError(f"{out_dir}: {split} was never judged; run `cleanup eval --judge` on it first")
+    outputs = read_outputs(out_dir / f"{split}.outputs.jsonl")
+    picked = [rows[id_] for id_ in dict.fromkeys(ids)]
+    if unsaved := [row.id for row in picked if row.id not in outputs]:
+        raise ValueError(f"{out_dir}: {len(unsaved)} chosen {split} rows have no saved output, such as {unsaved[0]}")
+    asyncio.run(judge(picked, {row.id: outputs[row.id] for row in picked}, verdicts, bool(tag)))
+    return rescore(out_dir, split)
+
+
 def evaluate(
     produce: Callable[[Sequence[Example]], list[dict]],
     out_dir: Path,
@@ -420,18 +507,9 @@ def evaluate(
         write_outputs(outputs_file, generated)
     outputs = {row.id: outputs[row.id] for row in rows}
     tag = reference_tag(rows)
-    score_stem = f"{stem}.{tag}" if tag else stem
-    if with_judge:
-        score_stem = f"{score_stem}.{JUDGE_VERSION}"
+    file_stem = _file_stem(stem, tag, with_judge)
     judged = (
-        asyncio.run(judge(rows, outputs, out_dir / f"{score_stem}.judge.jsonl", bool(tag)))
+        asyncio.run(judge(rows, outputs, out_dir / f"{file_stem}.judge.jsonl", bool(tag)))
         if with_judge else None
     )
-    scores = score(rows, outputs, judged)
-    scores["judged"] = with_judge
-    if with_judge:
-        scores["judge"] = JUDGE_VERSION
-    scores["references"] = tag or "before todo 112"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{score_stem}.scores.json").write_text(json.dumps(scores, indent=2) + "\n", encoding="utf-8")
-    return scores
+    return write_scores(out_dir / f"{file_stem}.scores.json", rows, outputs, judged, tag)

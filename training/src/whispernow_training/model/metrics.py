@@ -1,7 +1,8 @@
 """Deterministic evaluation checks for one output against its row's reference.
 
 These live only in evaluation; the app gets no output-policing heuristics. The LLM judge
-(`prompts/judge/eval.md`) covers answered transcripts and dropped or invented facts.
+(`prompts/judge/eval.md`) covers answered transcripts and dropped or invented facts. A change to
+what a check means bumps `evaluate.METRICS_VERSION`.
 """
 
 from __future__ import annotations

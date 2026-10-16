@@ -93,5 +93,6 @@ def test_judged_scores_get_their_own_files(tmp_path, monkeypatch):
     produce = lambda missing: [{"id": row.id, "output": row.output, "hit_limit": False} for row in missing]  # noqa: E731
     evaluate.evaluate(produce, tmp_path, "test", with_judge=True, generation={"source": "reference"})
     evaluate.evaluate(produce, tmp_path, "test", generation={"source": "reference"})
-    assert json.loads((tmp_path / "test.faults.scores.json").read_text())["judge"] == "faults"
+    judged = json.loads((tmp_path / "test.faults.scores.json").read_text())
+    assert judged["judge"] == "faults" and judged["metrics_version"] == evaluate.METRICS_VERSION
     assert not json.loads((tmp_path / "test.scores.json").read_text())["judged"]
