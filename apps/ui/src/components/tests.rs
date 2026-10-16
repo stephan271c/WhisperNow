@@ -241,6 +241,39 @@ fn test_microphone_runs_once_and_shows_the_measured_level() {
 }
 
 #[test]
+fn the_level_meter_hides_after_a_moment_and_a_new_test_replaces_it() {
+    let mut page = shell(snapshot(Phase::Idle), loaded());
+    page.click("test-microphone");
+    page.answer(
+        "test_microphone",
+        Ok(MicrophoneTestResponse {
+            levels: vec![0.1, 0.3, 0.2],
+            peak: 0.46,
+        }),
+    );
+    assert!(tag(&page.html(), "microphone-level").is_some());
+
+    page.click("test-microphone");
+    assert!(
+        tag(&page.html(), "microphone-level").is_none(),
+        "a new test replaces the shown meter"
+    );
+    page.answer(
+        "test_microphone",
+        Ok(MicrophoneTestResponse {
+            levels: vec![0.2, 0.4],
+            peak: 0.51,
+        }),
+    );
+    assert!(tag(&page.html(), "microphone-level").is_some());
+    page.wait();
+    assert!(
+        tag(&page.html(), "microphone-level").is_none(),
+        "the meter hides itself after a moment"
+    );
+}
+
+#[test]
 fn disabled_controls_explain_why_in_visible_text() {
     let mut dictating = snapshot(Phase::Idle);
     dictating.phase = crate::test_support::RECORDING;
@@ -465,7 +498,7 @@ fn settings_controls_on_each_blocked_page_are_disabled() {
         ),
         (
             "nav-settings-privacy",
-            &["history-limit", "history-keep-audio"],
+            &["history-limit", "history-retention", "history-keep-audio"],
         ),
     ];
     for saving in [false, true] {

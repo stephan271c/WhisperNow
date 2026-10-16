@@ -241,7 +241,6 @@ small {
 
 /* Setup: shortcuts and the test dictation */
 
-.setup-tips,
 .setup-test {
   display: grid;
   gap: var(--space-3);
@@ -250,23 +249,9 @@ small {
   border-radius: var(--radius-sm);
 }
 
-.setup-tips {
-  background: var(--color-surface-sunken);
-}
-
-.setup-tips h3,
 .setup-test h3 {
   margin: 0;
   font-size: var(--font-size-sm);
-}
-
-.setup-tips ul {
-  display: grid;
-  gap: var(--space-1);
-  margin: 0;
-  padding-left: var(--space-5);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
 }
 
 .setup-test {

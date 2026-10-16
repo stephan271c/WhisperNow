@@ -217,8 +217,7 @@ const fn step_hint(step: SetupStep) -> Option<&'static str> {
 fn WelcomeStep() -> Element {
     rsx! { div { class: "setup-hero",
         div { class: "setup-hero-icon", Icon { name: IconName::Mic } }
-        p { "WhisperNow turns your speech into text in any app. Speech is recognized on this computer, so your audio stays here." }
-        p { class: "field-help", "Setup takes a few minutes and saves your progress as you go." }
+        p { "WhisperNow turns your speech into text in any app. Speech is recognized locally on this computer." }
     } }
 }
 
@@ -236,7 +235,6 @@ fn PermissionsStep() -> Element {
         .is_none()
         .then_some(BlockedReason::Connecting);
     rsx! { div { class: "setup-content",
-        p { class: "field-help", "WhisperNow needs these to hear you and to type the text where you are working. Nothing leaves this computer." }
         match permissions {
             None => rsx! { p { role: "status", "Checking permissions…" } },
             Some(permissions) => rsx! {
@@ -274,7 +272,9 @@ fn PermissionCard(permission: Permission, blocked: bool) -> Element {
     rsx! { li { id: "permission-{slug}", class: "permission-card {status_class(permission.status)}",
         div { class: "permission-text",
             h3 { id: "permission-{slug}-title", "{title}" }
-            p { "{purpose}" }
+            if let Some(purpose) = purpose {
+                p { "{purpose}" }
+            }
             if let Some(help) = permission_help(kind, permission.status) {
                 p { class: "field-help", "{help}" }
             }
@@ -326,29 +326,22 @@ const fn status_class(status: PermissionStatus) -> &'static str {
     }
 }
 
-/// Each permission's name and why dictation needs it, in plain words.
-const fn permission_text(kind: PermissionKind) -> (&'static str, &'static str) {
+/// Each permission's name, plus an explanation for the less obvious ones.
+const fn permission_text(kind: PermissionKind) -> (&'static str, Option<&'static str>) {
     match kind {
-        PermissionKind::Microphone => (
-            "Microphone",
-            "Lets WhisperNow hear you while you dictate. Audio is processed on this computer.",
-        ),
+        PermissionKind::Microphone => ("Microphone", None),
         PermissionKind::Accessibility => (
             "Accessibility",
-            "Lets WhisperNow paste the text into the app you are using.",
+            Some("Lets WhisperNow paste the text into the app you are using."),
         ),
-        PermissionKind::GlobalShortcuts => (
-            "Recording shortcuts",
-            "Lets your recording shortcut work in every app. Your desktop asks once whether to allow it.",
-        ),
+        PermissionKind::GlobalShortcuts => ("Recording shortcuts", None),
         PermissionKind::RemoteDesktop => (
             "Typing into other apps",
-            "Lets WhisperNow press the paste keys for you. Your desktop asks once to allow input control; nothing on your screen is shared.",
+            Some(
+                "Lets WhisperNow press the paste keys for you. Your desktop asks once to allow input control; nothing on your screen is shared.",
+            ),
         ),
-        PermissionKind::PasteSupport => (
-            "Pasting into other apps",
-            "Checks that WhisperNow can press the paste keys in the app you are using.",
-        ),
+        PermissionKind::PasteSupport => ("Pasting into other apps", None),
     }
 }
 
@@ -399,7 +392,6 @@ fn ModelStep(selected: ModelId) -> Element {
         .partition(|model| model.recommended || model.id == selected);
     let hidden = others.len();
     rsx! { div { class: "setup-content",
-        p { class: "field-help", "Models run on this computer. The download continues in the background, so you can go on to the next step." }
         if !loaded {
             p { role: "status", "Loading models…" }
         }
@@ -496,9 +488,6 @@ fn ModelChoice(
 fn shortcut_conflict(shortcut: &Shortcut) -> Option<&'static str> {
     let only = |modifier: ShortcutModifier| shortcut.modifiers == [modifier].into();
     match shortcut.key {
-        ShortcutKey::Space if only(ShortcutModifier::Control) => Some(
-            "Ctrl + Space often switches the input language or opens autocomplete. Add Shift or Alt if it does nothing.",
-        ),
         ShortcutKey::Space if only(ShortcutModifier::Meta) => {
             Some("Meta + Space opens the launcher or Spotlight on many desktops. Try another key.")
         }
@@ -539,14 +528,6 @@ fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
             }
         }
         DisabledReason { id: "setup-shortcuts-disabled-reason", reason: edit_blocked }
-        aside { class: "setup-tips", aria_labelledby: "setup-tips-title",
-            h3 { id: "setup-tips-title", "Tips" }
-            ul {
-                li { "Pick keys you don't use for anything else, such as Ctrl + Alt + a letter or an F key." }
-                li { "Shortcuts with Meta (the Windows or Command key) are often taken by the desktop." }
-                li { "If a shortcut does nothing after setup, change it in Settings; your previous one stays active until the new one works." }
-            }
-        }
     } }
 }
 
@@ -570,7 +551,6 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
     let selected = checkpoint.input_device.clone().unwrap_or_default();
     let settings_pending = context.settings_pending().is_some();
     rsx! { div { class: "setup-content",
-        p { class: "field-help", "Say a sentence to check that everything works. The test shows the text here; nothing is pasted or saved." }
         dl { id: "setup-summary", class: "setup-summary",
             div { dt { "Speech model" } dd { "{model_name}" } }
             div { dt { "{labels::recording_mode(checkpoint.recording_mode)}" }
@@ -697,13 +677,12 @@ fn DoneStep() -> Element {
     };
     rsx! { div { class: "setup-hero",
         div { class: "setup-hero-icon complete", Icon { name: IconName::CheckCircle } }
-        p { "Use your shortcut in any app, speak, and your words appear where you are typing." }
         dl { id: "setup-done-shortcuts", class: "setup-summary",
             if let Some((mode, shortcut)) = shortcut {
                 div { dt { "{labels::recording_mode(mode)}" } dd { ShortcutLabel { shortcut } } }
             }
         }
-        p { class: "field-help", "Optional: AI cleanup can fix punctuation and remove filler words using a provider you choose." }
+        p { class: "field-help", "Optional: AI cleanup can fix punctuation and remove filler words." }
         div { class: "wizard-actions",
             Button { id: "setup-ai-cleanup", onclick: move |_| navigator.go(Route::Settings(SettingsRoute::AiCleanup)),
                 Icon { name: IconName::Sparkles }

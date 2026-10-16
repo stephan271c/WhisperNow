@@ -236,6 +236,7 @@ pub fn run() {
                 Arc::clone(&activation),
                 Arc::clone(&tray),
             ));
+            NativeServices::spawn_retention_checks(Arc::clone(&app.state::<Gateway>().services));
             let updates_enabled = !cfg!(debug_assertions) && !public_key.is_empty();
             let update_controller =
                 updater::UpdateController::new(app.handle().clone(), updates_enabled);

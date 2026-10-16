@@ -301,6 +301,7 @@ fn recording(
             vocabulary: settings.vocabulary_replacements,
             cleanup,
             history_limit: settings.history_limit,
+            history_retention: settings.history_retention,
             keep_audio: settings.keep_audio,
         },
     }

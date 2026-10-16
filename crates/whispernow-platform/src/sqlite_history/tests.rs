@@ -3,8 +3,8 @@ use std::fs;
 use rusqlite::Connection;
 use serde_json::json;
 use whispernow_domain::{
-    EntryStatus, ErrorCategory, HistoryFilter, HistoryLimit, HistoryPageRequest, ModelId,
-    NewHistoryEntry, UtcMillis,
+    EntryStatus, ErrorCategory, HistoryFilter, HistoryLimit, HistoryPageRequest, HistoryRetention,
+    ModelId, NewHistoryEntry, UtcMillis,
 };
 
 use super::SqliteHistoryRepository;
@@ -79,6 +79,7 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
             &SPEECH,
             false,
             HistoryLimit::Last20,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     let spoken = history.get(spoken).expect("get").expect("entry");
@@ -93,6 +94,7 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
             &SPEECH,
             true,
             HistoryLimit::Last20,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     let kept = history.get(kept).expect("get").expect("entry");
@@ -113,6 +115,7 @@ fn history_reads_do_not_parse_the_asr_model_id_saved_for_training() {
             &[],
             false,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     let stored: String = history
@@ -147,6 +150,7 @@ fn failed_and_cancelled_entries_keep_their_audio_when_keep_audio_is_off() {
             &SPEECH,
             false,
             HistoryLimit::Last20,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     let cancelled = history
@@ -155,6 +159,7 @@ fn failed_and_cancelled_entries_keep_their_audio_when_keep_audio_is_off() {
             &SPEECH,
             false,
             HistoryLimit::Last20,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     let failed = history.get(failed).expect("get").expect("entry");
@@ -177,6 +182,7 @@ fn inserting_beyond_the_limit_deletes_the_oldest_entries_with_their_audio() {
                     &SPEECH,
                     true,
                     HistoryLimit::Last20,
+                    HistoryRetention::Forever,
                 )
                 .expect("insert"),
         );
@@ -188,8 +194,109 @@ fn inserting_beyond_the_limit_deletes_the_oldest_entries_with_their_audio() {
     assert_eq!(fixture.wav_names().len(), 20);
     assert!(!fixture.wav_names().contains(&format!("{}.wav", ids[4].0)));
 
-    assert_eq!(history.prune(HistoryLimit::Unlimited).expect("prune"), 0);
-    assert_eq!(history.prune(HistoryLimit::Last20).expect("prune"), 0);
+    assert_eq!(
+        history
+            .prune(HistoryLimit::Unlimited, HistoryRetention::Forever)
+            .expect("prune"),
+        0
+    );
+    assert_eq!(
+        history
+            .prune(HistoryLimit::Last20, HistoryRetention::Forever)
+            .expect("prune"),
+        0
+    );
+}
+
+#[test]
+fn an_entry_older_than_the_retention_is_deleted_with_its_audio() {
+    let fixture = Fixture::new();
+    let mut history = fixture.open();
+    let now = UtcMillis::now().get();
+    let day = 86_400_000;
+    let old = history
+        .insert(
+            entry(now - 10 * day, EntryStatus::Ok, "old"),
+            &SPEECH,
+            true,
+            HistoryLimit::Unlimited,
+            HistoryRetention::Days7,
+        )
+        .expect("insert");
+    let fresh = history
+        .insert(
+            entry(now, EntryStatus::Ok, "fresh"),
+            &SPEECH,
+            true,
+            HistoryLimit::Unlimited,
+            HistoryRetention::Days7,
+        )
+        .expect("insert");
+    assert_eq!(fixture.wav_names(), vec![format!("{}.wav", fresh.0)]);
+
+    let kept = all(&history);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].id, fresh);
+    assert_ne!(kept[0].id, old);
+}
+
+#[test]
+fn a_forever_retention_keeps_entries_of_any_age() {
+    let fixture = Fixture::new();
+    let mut history = fixture.open();
+    let ancient = history
+        .insert(
+            entry(
+                UtcMillis::now().get() - 365 * 86_400_000,
+                EntryStatus::Ok,
+                "ancient",
+            ),
+            &SPEECH,
+            true,
+            HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
+        )
+        .expect("insert");
+    assert_eq!(all(&history).len(), 1);
+    assert_eq!(fixture.wav_names(), vec![format!("{}.wav", ancient.0)]);
+}
+
+#[test]
+fn pruning_deletes_entries_that_aged_out() {
+    let fixture = Fixture::new();
+    let mut history = fixture.open();
+    let now = UtcMillis::now().get();
+    let day = 86_400_000;
+    let mut ids = Vec::new();
+    for age_days in [10, 8, 2, 0] {
+        ids.push(
+            history
+                .insert(
+                    entry(
+                        now - age_days * day,
+                        EntryStatus::Ok,
+                        &format!("entry {age_days}"),
+                    ),
+                    &SPEECH,
+                    true,
+                    HistoryLimit::Unlimited,
+                    HistoryRetention::Forever,
+                )
+                .expect("insert"),
+        );
+    }
+    assert_eq!(
+        history
+            .prune(HistoryLimit::Unlimited, HistoryRetention::Days7)
+            .expect("prune"),
+        2
+    );
+    let kept = all(&history);
+    assert_eq!(
+        kept.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![ids[3], ids[2]]
+    );
+    assert_eq!(fixture.wav_names().len(), 2);
 }
 
 #[test]
@@ -204,6 +311,7 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
                 &[],
                 false,
                 HistoryLimit::Unlimited,
+                HistoryRetention::Forever,
             )
             .expect("insert");
         notes.push(note);
@@ -214,6 +322,7 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
             &[],
             false,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("insert");
 
@@ -275,6 +384,7 @@ fn delivery_failure_delete_and_clear_update_entries_and_audio() {
             &SPEECH,
             true,
             HistoryLimit::Last20,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     let second = history
@@ -283,6 +393,7 @@ fn delivery_failure_delete_and_clear_update_entries_and_audio() {
             &SPEECH,
             true,
             HistoryLimit::Last20,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     history
@@ -311,6 +422,7 @@ fn ids_are_never_reused_after_a_delete() {
             &[],
             false,
             HistoryLimit::Last20,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     history.delete(first).expect("delete");
@@ -320,6 +432,7 @@ fn ids_are_never_reused_after_a_delete() {
             &[],
             false,
             HistoryLimit::Last20,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     assert!(second > first);
@@ -336,6 +449,7 @@ fn clearing_vacuums_transcript_pages_without_reusing_ids() {
             &SPEECH,
             true,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     let database = fixture.paths.history_database_file();
@@ -358,6 +472,7 @@ fn clearing_vacuums_transcript_pages_without_reusing_ids() {
             &SPEECH,
             true,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("insert after clear");
     assert!(later > first);
@@ -377,6 +492,7 @@ fn a_recordings_removal_failure_keeps_history_rows() {
             &SPEECH,
             true,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     let recordings = fixture.paths.recordings_dir();
@@ -413,6 +529,7 @@ fn startup_removes_audio_files_that_no_entry_owns() {
             &SPEECH,
             false,
             HistoryLimit::Last20,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     drop(history);
@@ -443,6 +560,7 @@ fn an_entry_with_an_unknown_status_fails_to_load() {
             &[],
             false,
             HistoryLimit::Last20,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     drop(history);

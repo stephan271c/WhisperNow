@@ -156,7 +156,6 @@ fn MicrophoneCard() -> Element {
     rsx! {
         article { class: "card home-card", aria_labelledby: "home-microphone-title",
             h2 { id: "home-microphone-title", "Microphone" }
-            p { "Listens for three seconds. Nothing is kept." }
             MicrophoneTest { id_prefix: "test-microphone" }
             NoticeRegion { scope: NoticeScope::Home }
         }

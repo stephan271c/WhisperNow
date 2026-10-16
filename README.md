@@ -54,7 +54,11 @@ control and shortcut-capture control, and validation errors are announced as ale
 ## Develop
 
 Setup, native prerequisites and desktop behaviour are in
-[`docs/development.md`](docs/development.md). The quality gates:
+[`docs/development.md`](docs/development.md). For a Python developer learning this
+codebase, the [Rust guide](docs/rust-guide/README.md) covers the language, Tokio,
+and Dioxus with examples from the repository.
+
+The quality gates:
 
 ```bash
 cargo fmt --all --check

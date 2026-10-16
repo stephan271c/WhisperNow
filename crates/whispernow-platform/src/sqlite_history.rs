@@ -15,7 +15,7 @@ use rusqlite::{
 use whispernow_core::audio::TARGET_SAMPLE_RATE;
 use whispernow_domain::{
     EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryLimit, HistoryPage,
-    HistoryPageRequest, ModelId, NewHistoryEntry, UtcMillis,
+    HistoryPageRequest, HistoryRetention, ModelId, NewHistoryEntry, UtcMillis,
 };
 
 use crate::AppPaths;
@@ -79,14 +79,15 @@ impl SqliteHistoryRepository {
     }
 
     /// Stores one dictation. Its audio is kept when `keep_audio` is on or the dictation failed
-    /// or was cancelled; entries beyond `limit` are then deleted with their audio. A failure to
-    /// write the audio still stores the entry, without audio.
+    /// or was cancelled; entries beyond `limit` or older than `retention` are then deleted with
+    /// their audio. A failure to write the audio still stores the entry, without audio.
     pub fn insert(
         &mut self,
         entry: NewHistoryEntry,
         audio: &[f32],
         keep_audio: bool,
         limit: HistoryLimit,
+        retention: HistoryRetention,
     ) -> Result<EntryId, AppError> {
         let NewHistoryEntry {
             created_at,
@@ -143,7 +144,7 @@ impl SqliteHistoryRepository {
         } else {
             false
         };
-        let result = prune(&transaction, limit).and_then(|pruned| {
+        let result = prune(&transaction, limit, retention).and_then(|pruned| {
             transaction
                 .commit()
                 .map_err(|_| history_error("history_insert"))?;
@@ -262,8 +263,12 @@ impl SqliteHistoryRepository {
     }
 
     /// Deletes the entries beyond `limit`, with their audio; returns how many were deleted.
-    pub fn prune(&self, limit: HistoryLimit) -> Result<usize, AppError> {
-        let pruned = prune(&self.connection, limit)?;
+    pub fn prune(
+        &self,
+        limit: HistoryLimit,
+        retention: HistoryRetention,
+    ) -> Result<usize, AppError> {
+        let pruned = prune(&self.connection, limit, retention)?;
         for id in &pruned {
             remove_audio(&self.audio_dir, *id);
         }
@@ -271,9 +276,26 @@ impl SqliteHistoryRepository {
     }
 }
 
-fn prune(connection: &Connection, limit: HistoryLimit) -> Result<Vec<EntryId>, AppError> {
+fn prune(
+    connection: &Connection,
+    limit: HistoryLimit,
+    retention: HistoryRetention,
+) -> Result<Vec<EntryId>, AppError> {
+    let mut pruned = Vec::new();
+    if let Some(days) = retention.days() {
+        let cutoff = UtcMillis::now().get() - sql_u64(days) * 86_400_000;
+        let expired: Vec<EntryId> = connection
+            .prepare("DELETE FROM entries WHERE created_at_ms < ?1 RETURNING id")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([cutoff], |row| row.get(0).map(EntryId))?
+                    .collect()
+            })
+            .map_err(|_| history_error("history_prune"))?;
+        pruned.extend(expired);
+    }
     let Some(kept) = limit.max_entries() else {
-        return Ok(Vec::new());
+        return Ok(pruned);
     };
     connection
         .prepare(
@@ -287,6 +309,10 @@ fn prune(connection: &Connection, limit: HistoryLimit) -> Result<Vec<EntryId>, A
                 .collect()
         })
         .map_err(|_| history_error("history_prune"))
+        .map(|ids: Vec<EntryId>| {
+            pruned.extend(ids);
+            pruned
+        })
 }
 
 /// Removes unowned numeric WAVs and unfinished writes before the first insert.

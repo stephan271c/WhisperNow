@@ -74,7 +74,6 @@ pub(super) fn AiCleanupPage() -> Element {
         NoticeRegion { scope: NoticeScope::Models }
         Section { id: "ai-cleanup", title: "Cleanup",
             AutosaveRow { id: "ai-cleanup-enabled", title: "Use AI cleanup",
-                description: "If cleanup fails, the plain transcript is pasted.",
                 setting: SettingKey::CleanupEnabled,
                 Toggle { checked: settings.cleanup_enabled,
                     disabled,

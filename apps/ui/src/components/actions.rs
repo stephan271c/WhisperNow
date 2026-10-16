@@ -25,6 +25,9 @@ use crate::client;
 
 use crate::{NoticeScope, Route, UiContext, UiOperation};
 
+/// How long the level meter stays up after a microphone test.
+const METER_MS: u32 = 20_000;
+
 impl UiContext {
     pub(crate) fn active_download(
         self,
@@ -146,16 +149,37 @@ impl UiContext {
             let mut management = self.management;
             let mut management = management.write();
             management.microphone_test = None;
+            if let Some(previous) = management.microphone_test_task.take() {
+                previous.cancel();
+            }
             management.clear_notice_scope(NoticeScope::Home);
         }
         self.run(
             operation,
             client::call("test_microphone"),
             move |mut actions, answer| match answer {
-                Ok(result) => actions.management.write().finish_microphone_test(result),
+                Ok(result) => {
+                    actions.management.write().finish_microphone_test(result);
+                    actions.hide_meter_later();
+                }
                 Err(error) => actions.report(NoticeScope::Home, &error),
             },
         );
+    }
+
+    /// Hides the level meter a moment after the test that showed it; a newer test
+    /// cancels the hide.
+    fn hide_meter_later(self) {
+        let mut management = self.management;
+        let hide_task = spawn_forever(async move {
+            client::delay(METER_MS).await;
+            let mut management = management.write();
+            management.microphone_test = None;
+            management.microphone_test_task = None;
+        });
+        if let Some(previous) = management.write().microphone_test_task.replace(hide_task) {
+            previous.cancel();
+        }
     }
 
     pub(crate) fn review_data(mut self) {

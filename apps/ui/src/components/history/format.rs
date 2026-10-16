@@ -2,7 +2,7 @@
 //! time. The clock is a context value so tests and galleries can pin both the time and the
 //! offset from UTC.
 
-use whispernow_domain::{HistoryEntry, HistoryLimit, UtcMillis};
+use whispernow_domain::{HistoryEntry, HistoryLimit, HistoryRetention, UtcMillis};
 
 const MINUTE_MILLIS: i64 = 60_000;
 const DAY_MILLIS: i64 = 86_400_000;
@@ -156,17 +156,24 @@ pub(crate) fn duration_label(milliseconds: u64) -> String {
     }
 }
 
-pub(crate) fn retention_summary(limit: HistoryLimit, keep_audio: bool) -> String {
+pub(crate) fn retention_summary(
+    limit: HistoryLimit,
+    retention: HistoryRetention,
+    keep_audio: bool,
+) -> String {
     let transcripts = limit.max_entries().map_or_else(
         || "every transcript".to_owned(),
         |entries| format!("the last {entries} transcripts"),
     );
+    let window = retention
+        .days()
+        .map_or_else(String::new, |days| format!(" from the last {days} days"));
     let audio = if keep_audio {
         "their audio"
     } else {
         "audio only for failed and cancelled dictations"
     };
-    format!("Keeping {transcripts} and {audio}")
+    format!("Keeping {transcripts}{window} and {audio}")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -332,12 +339,20 @@ mod tests {
     #[test]
     fn retention_summary_names_both_settings() {
         assert_eq!(
-            retention_summary(HistoryLimit::Last100, true),
+            retention_summary(HistoryLimit::Last100, HistoryRetention::Forever, true),
             "Keeping the last 100 transcripts and their audio"
         );
         assert_eq!(
-            retention_summary(HistoryLimit::Unlimited, false),
+            retention_summary(HistoryLimit::Unlimited, HistoryRetention::Forever, false),
             "Keeping every transcript and audio only for failed and cancelled dictations"
+        );
+        assert_eq!(
+            retention_summary(HistoryLimit::Last20, HistoryRetention::Days30, false),
+            "Keeping the last 20 transcripts from the last 30 days and audio only for failed and cancelled dictations"
+        );
+        assert_eq!(
+            retention_summary(HistoryLimit::Unlimited, HistoryRetention::Days7, true),
+            "Keeping every transcript from the last 7 days and their audio"
         );
     }
 }

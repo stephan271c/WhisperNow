@@ -3,7 +3,9 @@ use std::process::{Child, Command};
 use super::lifecycle::{native_services, native_services_before_preload};
 use super::*;
 use crate::services::NativeServices;
-use whispernow_domain::{ClearDataCategory, HistoryLimit, NewHistoryEntry, UtcMillis};
+use whispernow_domain::{
+    ClearDataCategory, HistoryLimit, HistoryRetention, NewHistoryEntry, UtcMillis,
+};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -23,6 +25,7 @@ fn retained_entry(services: &NativeServices) -> (HistoryEntry, Vec<u8>) {
             &[0.25; 160],
             true,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("retained dictation");
     let entry = services
@@ -199,6 +202,7 @@ fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
             &[0.25; 160],
             true,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("dictation after clear");
     assert!(later > entry.id);

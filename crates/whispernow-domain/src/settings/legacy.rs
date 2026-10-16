@@ -6,8 +6,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    ApiKey, HistoryLimit, LlmProvider, ModelId, ModelRegistry, ProviderEndpoint, ProviderSettings,
-    RecordingMode, Settings, Shortcut,
+    ApiKey, HistoryLimit, HistoryRetention, LlmProvider, ModelId, ModelRegistry, ProviderEndpoint,
+    ProviderSettings, RecordingMode, Settings, Shortcut,
 };
 
 /// Settings read from the Python release's `settings.json`, and the API keys it held in
@@ -90,6 +90,17 @@ impl PythonSettings {
                 value => value
                     .as_u64()
                     .map_or_else(HistoryLimit::default, HistoryLimit::at_least),
+            };
+        }
+        if let Some(max_age_days) = document
+            .get("text_retention")
+            .and_then(|retention| retention.get("max_age_days"))
+        {
+            settings.history_retention = match max_age_days {
+                Value::Null => HistoryRetention::Forever,
+                value => value
+                    .as_u64()
+                    .map_or_else(HistoryRetention::default, HistoryRetention::at_least_days),
             };
         }
         pick(

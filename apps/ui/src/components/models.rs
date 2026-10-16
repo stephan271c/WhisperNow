@@ -61,7 +61,7 @@ pub(super) fn ModelsPage() -> Element {
             }
         }
         Section { id: "speech-models", title: "Speech models",
-            description: "Run on this computer, so your audio never leaves it.",
+            description: "Runs locally.",
             div { class: "section-note",
                 DisabledReason { id: "models-disabled-reason", reason }
             }

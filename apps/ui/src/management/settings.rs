@@ -16,6 +16,7 @@ pub enum SettingKey {
     StartOnLogin,
     Theme,
     HistoryLimit,
+    HistoryRetention,
     KeepAudio,
     ActiveProvider,
     ProviderModel,

@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{PermissionKind, PermissionStatus};
 use whispernow_domain::{
-    CleanupTarget, HistoryLimit, RecordingMode, RemoteProvider, Settings, Shortcut, ThemePreference,
+    CleanupTarget, HistoryLimit, HistoryRetention, RecordingMode, RemoteProvider, Settings,
+    Shortcut, ThemePreference,
 };
 
 use super::microphone_test::MicrophoneTest;
@@ -27,6 +28,13 @@ fn history_limit_value(limit: HistoryLimit) -> String {
     limit
         .max_entries()
         .map_or_else(|| "unlimited".to_owned(), |entries| entries.to_string())
+}
+
+/// The select value for a retention: its day count, or `"forever"`.
+fn history_retention_value(retention: HistoryRetention) -> String {
+    retention
+        .days()
+        .map_or_else(|| "forever".to_owned(), |days| days.to_string())
 }
 
 pub(super) fn choice_value<T: PartialEq>(
@@ -80,22 +88,23 @@ pub(super) fn SettingsLoading() -> Element {
 #[component]
 fn MicrophonePermissionNotice(status: Option<PermissionStatus>) -> Element {
     let (label, guidance) = match status {
-        Some(PermissionStatus::Granted) => (
-            "Microphone access is available",
-            "Starting a recording remains the final permission check.",
-        ),
+        Some(PermissionStatus::Granted) => ("Microphone access is available", None),
         Some(PermissionStatus::Denied) => (
             "Microphone access is denied",
-            "Allow microphone access in system privacy settings, then reopen or retry setup.",
+            Some("Allow microphone access in system privacy settings, then reopen or retry setup."),
         ),
         _ => (
             "Microphone permission is unknown",
-            "Your system will request access when capture starts. If it fails, enable microphone access in system privacy settings.",
+            Some(
+                "Your system will request access when capture starts. If it fails, enable microphone access in system privacy settings.",
+            ),
         ),
     };
     rsx! { div { class: "permission-status", role: "status",
         strong { "{label}" }
-        p { "{guidance}" }
+        if let Some(guidance) = guidance {
+            p { "{guidance}" }
+        }
     } }
 }
 
@@ -201,7 +210,6 @@ pub(super) fn GeneralPage() -> Element {
         if management.read().setup.as_ref().is_some_and(|setup| setup.first_run_complete) {
             Section { id: "setup", title: "Setup",
                 SettingRow { id: "run-setup-again", title: "Run setup again",
-                    description: "Your settings are kept.",
                     Button {
                         id: "run-setup-again",
                         disabled: restart_blocked.is_some(),
@@ -252,7 +260,6 @@ pub(super) fn AudioPage() -> Element {
                 }
             }
             SettingRow { id: "audio-test-microphone", title: "Test microphone",
-                description: "Listens for three seconds. Nothing is kept.",
                 MicrophoneTest { id_prefix: "audio-test" }
             }
         }
@@ -291,6 +298,24 @@ pub(super) fn PrivacyPage() -> Element {
                     },
                     for limit in HistoryLimit::ALL {
                         option { value: history_limit_value(limit), "{limit.label()}" }
+                    }
+                }
+            }
+            AutosaveRow { id: "history-retention", title: "For",
+                description: "Older entries are deleted, with their audio.",
+                setting: SettingKey::HistoryRetention,
+                Select { value: history_retention_value(settings.history_retention),
+                    disabled,
+                    onchange: move |event: FormEvent| {
+                        if let Some(retention) = HistoryRetention::ALL
+                            .into_iter()
+                            .find(|retention| history_retention_value(*retention) == event.value())
+                        {
+                            context.change_setting(SettingKey::HistoryRetention, move |settings| settings.history_retention = retention);
+                        }
+                    },
+                    for retention in HistoryRetention::ALL {
+                        option { value: history_retention_value(retention), "{retention.label()}" }
                     }
                 }
             }

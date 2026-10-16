@@ -5,7 +5,9 @@ use std::{
 use whispernow_domain::AppError;
 
 use whispernow_domain::{ClearDataCategory, ErrorCategory, ipc::ClearDataItem};
-use whispernow_domain::{EntryId, HistoryLimit, HistoryPage, HistoryPageRequest, NewHistoryEntry};
+use whispernow_domain::{
+    EntryId, HistoryLimit, HistoryPage, HistoryPageRequest, HistoryRetention, NewHistoryEntry,
+};
 use whispernow_platform::{AppPaths, SqliteHistoryRepository};
 
 pub(crate) struct HistoryStore {
@@ -28,28 +30,34 @@ impl HistoryStore {
         )
     }
 
-    /// Removes the entries beyond a new `limit`; returns whether any were removed.
-    pub(super) fn prune(&self, limit: HistoryLimit) -> Result<bool, AppError> {
+    /// Removes entries beyond a new `limit` or older than `retention`; returns whether any were
+    /// removed.
+    pub(super) fn prune(
+        &self,
+        limit: HistoryLimit,
+        retention: HistoryRetention,
+    ) -> Result<bool, AppError> {
         self.lock()
             .as_ref()
             .map_err(Clone::clone)?
-            .prune(limit)
+            .prune(limit, retention)
             .map(|removed| removed > 0)
     }
 
     /// Saves one dictation, keeping its audio when `keep_audio` or its status ask for it, and
-    /// at most `limit` entries.
+    /// at most `limit` entries of at most `retention` age.
     pub(super) fn insert(
         &self,
         entry: NewHistoryEntry,
         audio: &[f32],
         keep_audio: bool,
         limit: HistoryLimit,
+        retention: HistoryRetention,
     ) -> Result<EntryId, AppError> {
         self.lock()
             .as_mut()
             .map_err(|error| error.clone())?
-            .insert(entry, audio, keep_audio, limit)
+            .insert(entry, audio, keep_audio, limit, retention)
     }
 
     /// Records that an entry's text never reached the focused application.
@@ -164,15 +172,35 @@ mod tests {
     fn pruning_reports_removals_and_missing_audio_reports_not_kept() {
         let (_dir, store) = store();
         let first = store
-            .insert(entry("first"), &[], false, HistoryLimit::Unlimited)
+            .insert(
+                entry("first"),
+                &[],
+                false,
+                HistoryLimit::Unlimited,
+                HistoryRetention::Forever,
+            )
             .expect("insert");
-        assert!(!store.prune(HistoryLimit::Last20).expect("nothing to prune"));
+        assert!(
+            !store
+                .prune(HistoryLimit::Last20, HistoryRetention::Forever)
+                .expect("nothing to prune")
+        );
         for _ in 0..20 {
             store
-                .insert(entry("later"), &[], false, HistoryLimit::Unlimited)
+                .insert(
+                    entry("later"),
+                    &[],
+                    false,
+                    HistoryLimit::Unlimited,
+                    HistoryRetention::Forever,
+                )
                 .expect("insert");
         }
-        assert!(store.prune(HistoryLimit::Last20).expect("prune"));
+        assert!(
+            store
+                .prune(HistoryLimit::Last20, HistoryRetention::Forever)
+                .expect("prune")
+        );
         let error = store.audio(first).expect_err("missing audio");
         assert_eq!(error.code, "history_audio_not_kept");
     }
@@ -190,7 +218,13 @@ mod tests {
         assert_eq!(store.list(&request).expect_err("not reopened"), error);
         assert_eq!(
             store
-                .insert(entry("later"), &[], false, HistoryLimit::Unlimited)
+                .insert(
+                    entry("later"),
+                    &[],
+                    false,
+                    HistoryLimit::Unlimited,
+                    HistoryRetention::Forever
+                )
                 .expect_err("not reopened"),
             error
         );

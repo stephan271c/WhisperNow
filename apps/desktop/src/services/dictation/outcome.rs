@@ -176,6 +176,7 @@ impl Worker {
             samples,
             recording.settings.keep_audio,
             recording.settings.history_limit,
+            recording.settings.history_retention,
         );
         if let Err(error) = saved {
             tracing::warn!(

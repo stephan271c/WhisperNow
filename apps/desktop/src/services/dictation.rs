@@ -26,7 +26,8 @@ use whispernow_core::{
 };
 use whispernow_domain::ipc::{ErrorCategory, EventPayload, MicrophoneTestResponse};
 use whispernow_domain::{
-    EntryStatus, HistoryLimit, ModelId, NewHistoryEntry, UtcMillis, VocabularyReplacement,
+    EntryStatus, HistoryLimit, HistoryRetention, ModelId, NewHistoryEntry, UtcMillis,
+    VocabularyReplacement,
 };
 use whispernow_platform::ModelStore;
 
@@ -60,6 +61,8 @@ pub(crate) struct DictationSettings {
     pub(crate) vocabulary: Vec<VocabularyReplacement>,
     pub(crate) cleanup: Option<CleanupPlan>,
     pub(crate) history_limit: HistoryLimit,
+    /// Entries older than this are deleted from history.
+    pub(crate) history_retention: HistoryRetention,
     /// Whether a successful dictation keeps its audio in history.
     pub(crate) keep_audio: bool,
 }
@@ -692,6 +695,7 @@ impl Worker {
             samples,
             recording.settings.keep_audio,
             recording.settings.history_limit,
+            recording.settings.history_retention,
         );
         self.history_changed();
         let notice = self

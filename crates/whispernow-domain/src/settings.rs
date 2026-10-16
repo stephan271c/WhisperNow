@@ -7,8 +7,8 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use thiserror::Error;
 
 use crate::{
-    CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, HistoryLimit, LlmProvider, ModelId,
-    ProviderEndpoint, RecordingMode, Shortcut,
+    CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, HistoryLimit, HistoryRetention, LlmProvider,
+    ModelId, ProviderEndpoint, RecordingMode, Shortcut,
 };
 
 mod legacy;
@@ -199,6 +199,8 @@ pub struct Settings {
     pub vocabulary_replacements: Vec<VocabularyReplacement>,
     pub window_geometry: Option<WindowGeometry>,
     pub history_limit: HistoryLimit,
+    /// Entries older than this are deleted with the history, or nothing when `Forever`.
+    pub history_retention: HistoryRetention,
     /// Whether successful dictations keep their audio. Failed and cancelled ones always do.
     pub keep_audio: bool,
 }
@@ -222,6 +224,7 @@ impl Default for Settings {
             vocabulary_replacements: Vec::new(),
             window_geometry: None,
             history_limit: HistoryLimit::default(),
+            history_retention: HistoryRetention::default(),
             keep_audio: false,
         }
     }

@@ -54,7 +54,9 @@ pub(super) fn HistoryScreen() -> Element {
         header { class: "history-header",
             p { class: "history-retention",
                 if let Some(settings) = &settings {
-                    span { "{retention_summary(settings.history_limit, settings.keep_audio)}. " }
+                    span {
+                        "{retention_summary(settings.history_limit, settings.history_retention, settings.keep_audio)}. "
+                    }
                 }
                 button { r#type: "button", class: "link-button", id: RETENTION_ID,
                     onclick: move |_| navigator.go(Route::Settings(SettingsRoute::PrivacyData)),
@@ -121,7 +123,9 @@ pub(super) fn HistoryScreen() -> Element {
                 p { class: "history-status", id: SEARCH_ERROR_ID, role: "alert", "{problem}" }
             } else if entries.is_empty() && filtered {
                 EmptyState { icon: IconName::History, title: "No matching transcripts",
-                    p { "Try other words, or show every transcript." }
+                    if filter.search_text().is_some() {
+                        p { "Try other words, or show every transcript." }
+                    }
                     Button { id: CLEAR_FILTER_ID, size: ButtonSize::Sm,
                         onclick: move |_| context.clear_history_filter(),
                         "Show all transcripts"

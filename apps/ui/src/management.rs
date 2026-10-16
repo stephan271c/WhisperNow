@@ -58,6 +58,8 @@ pub(crate) struct ManagementState {
     pub notice: Option<Notice>,
     next_notice: u64,
     pub microphone_test: Option<MicrophoneTestResponse>,
+    /// The latest microphone test, which hides its level meter after a moment.
+    pub(crate) microphone_test_task: Option<Task>,
     pub permissions: Option<PermissionsResponse>,
     /// The polls setup runs after a permission request until no card can change any more.
     pub(crate) permission_watch: Option<Task>,

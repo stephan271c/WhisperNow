@@ -15,7 +15,7 @@ pub use cleanup::{CleanupTarget, MissingCleanupField, RemoteCleanupTarget, Remot
 pub use data::ClearDataCategory;
 pub use history::{
     EntryId, EntryStatus, HistoryEntry, HistoryFilter, HistoryLimit, HistoryPage,
-    HistoryPageRequest, NewHistoryEntry, UtcMillis,
+    HistoryPageRequest, HistoryRetention, NewHistoryEntry, UtcMillis,
 };
 pub use models::{
     CLEANUP_MODEL_IDS, CUDA_PACK_ID, DEFAULT_CLEANUP_MODEL_ID, DownloadPhase, ModelAvailability,

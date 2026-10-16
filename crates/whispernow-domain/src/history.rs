@@ -75,6 +75,67 @@ impl HistoryLimit {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum HistoryRetention {
+    #[default]
+    #[serde(rename = "forever")]
+    Forever,
+    #[serde(rename = "7")]
+    Days7,
+    #[serde(rename = "14")]
+    Days14,
+    #[serde(rename = "30")]
+    Days30,
+    #[serde(rename = "90")]
+    Days90,
+}
+
+impl HistoryRetention {
+    pub const ALL: [Self; 5] = [
+        Self::Days7,
+        Self::Days14,
+        Self::Days30,
+        Self::Days90,
+        Self::Forever,
+    ];
+
+    /// Entries older than this are deleted, or everything when `None`.
+    #[must_use]
+    pub const fn days(self) -> Option<u64> {
+        match self {
+            Self::Forever => None,
+            Self::Days7 => Some(7),
+            Self::Days14 => Some(14),
+            Self::Days30 => Some(30),
+            Self::Days90 => Some(90),
+        }
+    }
+
+    /// The shortest choice that keeps at least `days`, as [`HistoryLimit::at_least`] does for
+    /// entries.
+    #[must_use]
+    pub const fn at_least_days(days: u64) -> Self {
+        match days {
+            0..=7 => Self::Days7,
+            8..=14 => Self::Days14,
+            15..=30 => Self::Days30,
+            31..=90 => Self::Days90,
+            _ => Self::Forever,
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Forever => "Forever",
+            Self::Days7 => "7 days",
+            Self::Days14 => "14 days",
+            Self::Days30 => "30 days",
+            Self::Days90 => "90 days",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryStatus {

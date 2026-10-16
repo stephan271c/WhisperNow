@@ -344,6 +344,7 @@ fn the_header_summarizes_retention_and_links_to_privacy() {
     let settings = crate::test_support::editable_settings();
     assert!(page.html().contains(&retention_summary(
         settings.history_limit,
+        settings.history_retention,
         settings.keep_audio
     )));
     page.click("history-retention-settings")

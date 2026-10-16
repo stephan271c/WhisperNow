@@ -3,9 +3,9 @@ use std::collections::BTreeSet;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use whispernow_domain::{
-    ApiKey, HistoryLimit, LlmProvider, ModelId, ProviderEndpoint, ProviderSettings, PythonSettings,
-    RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
-    VocabularyReplacement,
+    ApiKey, HistoryLimit, HistoryRetention, LlmProvider, ModelId, ProviderEndpoint,
+    ProviderSettings, PythonSettings, RecordingMode, Settings, SetupCheckpoint, SetupStep,
+    Shortcut, ShortcutKey, ShortcutModifier, VocabularyReplacement,
 };
 
 fn parse_json<T: DeserializeOwned>(document: &str) -> T {
@@ -41,6 +41,7 @@ fn settings_round_trip_and_missing_fields_take_defaults() {
         },
         cleanup_enabled: true,
         history_limit: HistoryLimit::Last1000,
+        history_retention: HistoryRetention::Days30,
         keep_audio: true,
         setup: Some(SetupCheckpoint {
             step: SetupStep::TryIt,
@@ -57,6 +58,7 @@ fn settings_round_trip_and_missing_fields_take_defaults() {
     let document = serde_json::to_string(&settings).expect("serialize settings");
     assert_eq!(parse_json::<Settings>(&document), settings);
     let saved: Value = parse_json(&document);
+    assert_eq!(saved["history_retention"], "30");
     assert!(saved.get("recording_shortcut").is_some());
     assert!(saved.get("cancel_shortcut").is_some());
     assert!(saved["setup"].get("recording_shortcut").is_some());
@@ -234,6 +236,28 @@ fn python_settings_import_moves_keys_out_and_reads_the_older_layouts() {
 
     let unlimited = PythonSettings::import(&json!({ "text_retention": { "max_entries": null } }));
     assert_eq!(unlimited.settings.history_limit, HistoryLimit::Unlimited);
+}
+
+#[test]
+fn python_max_age_days_imports_as_the_choice_that_keeps_it() {
+    let week = PythonSettings::import(&json!({
+        "text_retention": { "max_age_days": 7 },
+    }));
+    assert_eq!(week.settings.history_retention, HistoryRetention::Days7);
+    let no_age_limit = PythonSettings::import(&json!({
+        "text_retention": { "max_age_days": null },
+    }));
+    assert_eq!(
+        no_age_limit.settings.history_retention,
+        HistoryRetention::Forever
+    );
+    let ancient = PythonSettings::import(&json!({
+        "text_retention": { "max_age_days": 200 },
+    }));
+    assert_eq!(
+        ancient.settings.history_retention,
+        HistoryRetention::Forever
+    );
 }
 
 #[test]

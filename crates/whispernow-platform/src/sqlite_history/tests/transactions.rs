@@ -10,6 +10,7 @@ fn deleting_retained_audio_updates_list_results_and_playback() {
             &SPEECH,
             true,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     fs::remove_file(fixture.paths.recordings_dir().join(format!("{}.wav", id.0)))
@@ -32,6 +33,7 @@ fn an_old_database_with_an_audio_flag_accepts_new_entries() {
             &SPEECH,
             true,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("insert");
     assert!(all(&history)[0].audio_kept);
@@ -61,7 +63,8 @@ fn a_failed_commit_rolls_back_the_entry_and_removes_audio_before_id_reuse() {
                 entry(1, EntryStatus::Ok, "rolled back"),
                 &SPEECH,
                 true,
-                HistoryLimit::Unlimited
+                HistoryLimit::Unlimited,
+                HistoryRetention::Forever,
             )
             .is_err()
     );
@@ -77,6 +80,7 @@ fn a_failed_commit_rolls_back_the_entry_and_removes_audio_before_id_reuse() {
             &[],
             false,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("next insert");
     assert_eq!(id.0, 1);
@@ -95,6 +99,7 @@ fn a_failed_prune_rolls_back_the_new_entry_and_preserves_owned_audio() {
                 &SPEECH,
                 true,
                 HistoryLimit::Unlimited,
+                HistoryRetention::Forever,
             )
             .expect("existing entry");
     }
@@ -105,7 +110,8 @@ fn a_failed_prune_rolls_back_the_new_entry_and_preserves_owned_audio() {
                 entry(20, EntryStatus::Ok, "rolled back"),
                 &SPEECH,
                 true,
-                HistoryLimit::Last20
+                HistoryLimit::Last20,
+                HistoryRetention::Forever,
             )
             .is_err()
     );
@@ -131,6 +137,7 @@ fn a_reused_id_cannot_acquire_audio_that_could_not_be_cleaned_up() {
         &[],
         false,
         HistoryLimit::Unlimited,
+        HistoryRetention::Forever,
     );
     fs::set_permissions(&recordings, permissions).expect("allow cleanup");
     assert_eq!(
@@ -144,6 +151,7 @@ fn a_reused_id_cannot_acquire_audio_that_could_not_be_cleaned_up() {
             &[],
             false,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("retry");
     assert_eq!(id.0, 1);
@@ -162,6 +170,7 @@ fn an_audio_write_failure_still_saves_the_transcript() {
             &SPEECH,
             true,
             HistoryLimit::Unlimited,
+            HistoryRetention::Forever,
         )
         .expect("transcript saved");
     let entries = all(&history);

@@ -73,6 +73,32 @@ impl NativeServices {
         result.map(|_| ())
     }
 
+    /// Deletes aged-out history on its own: once now, then daily, so entries expire while the
+    /// app sits minimized for days.
+    pub(crate) fn spawn_retention_checks(services: Arc<Self>) {
+        tauri::async_runtime::spawn(async move {
+            services.prune_expired_history();
+            let mut interval = tokio::time::interval(Duration::from_hours(24));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                services.prune_expired_history();
+            }
+        });
+    }
+
+    /// The settings lock is dropped before the history lock is taken, per their lock order.
+    fn prune_expired_history(&self) {
+        let (limit, retention) = {
+            let settings = self.settings.lock();
+            (settings.history_limit, settings.history_retention)
+        };
+        if let Err(error) = self.run_history_mutation(|| self.history.prune(limit, retention)) {
+            tracing::warn!(code = error.code, "aged-out history could not be pruned");
+        }
+    }
+
     /// Persists the edited settings and applies the resulting history limit. The
     /// caller applies native side effects after this returns, from the settings
     /// before the edit that come back with the response. A pruning failure after
@@ -84,10 +110,11 @@ impl NativeServices {
         let (before, settings) = self.settings.update(edited, self.audio.as_ref())?;
         self.follow_cleanup_provider(&settings.settings);
         let limit = settings.settings.history_limit;
-        let pruning = if limit == before.history_limit {
+        let retention = settings.settings.history_retention;
+        let pruning = if limit == before.history_limit && retention == before.history_retention {
             Ok(false)
         } else {
-            self.history.prune(limit)
+            self.history.prune(limit, retention)
         };
         if !matches!(pruning, Ok(false)) {
             self.publish_history_changed();
