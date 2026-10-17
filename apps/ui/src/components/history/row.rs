@@ -28,6 +28,7 @@ pub(super) fn HistoryRow(
     let id = entry.id;
     let rid = id.0;
     let text = entry.text().map(str::to_owned);
+    let original = entry.cleaned_text.as_ref().and(entry.raw_text.clone());
     let when = clock.relative_time(entry.created_at);
     let target = format!("the transcript from {when}");
     let duration = entry.duration_millis.map(duration_label);
@@ -51,8 +52,22 @@ pub(super) fn HistoryRow(
                     if let Some((label, class)) = badge {
                         span { class, "{label}" }
                     }
+                    if original.is_some() {
+                        span { class: "history-row-cleaned", id: "history-cleaned-{rid}",
+                            Icon { name: IconName::Sparkles }
+                            "Cleaned"
+                        }
+                    }
                 }
-                if let Some(text) = &text {
+                if let (Some(text), Some(original)) = (&text, &original) {
+                    details { class: "history-row-text", id: "history-text-{rid}",
+                        summary { class: "history-row-preview", "{text}" }
+                        div { class: "history-row-original", id: "history-original-{rid}",
+                            p { class: "history-row-original-label", "Original transcript" }
+                            p { class: "transcript-text", "{original}" }
+                        }
+                    }
+                } else if let Some(text) = &text {
                     p { class: "history-row-preview", "{text}" }
                 } else {
                     p { class: "history-row-preview empty", "No transcript" }

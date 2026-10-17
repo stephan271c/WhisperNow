@@ -406,14 +406,11 @@ fn NoticeView(notice: Notice, inline: bool) -> Element {
     let context = use_context::<UiContext>();
     let mut management = context.management;
     let id = notice.id;
-    let auto_dismisses = notice.auto_dismisses(inline);
-    use_effect(use_reactive!(|id, auto_dismisses| {
-        if auto_dismisses {
-            spawn(async move {
-                crate::client::delay(Notice::AUTO_DISMISS_MS).await;
-                management.write().dismiss_notice(id);
-            });
-        }
+    use_effect(use_reactive!(|id| {
+        spawn(async move {
+            crate::client::delay(Notice::AUTO_DISMISS_MS).await;
+            management.write().dismiss_notice(id);
+        });
     }));
     let placement = if inline {
         "notice-inline"

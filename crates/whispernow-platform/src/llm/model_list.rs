@@ -74,12 +74,11 @@ pub async fn list_models(
                 .bearer_auth(required_key(api_key)?);
             ids(fetch::<IdList>(request).await?)
         }
+        // OpenRouter lists its models without a key.
         RemoteProvider::OpenRouter(endpoint) => {
             let base = openai_compatible_base_url(endpoint.as_ref(), OPENROUTER_BASE_URL);
-            let request = http
-                .get(format!("{}/models", base.trim_end_matches('/')))
-                .bearer_auth(required_key(api_key)?);
-            ids(fetch::<IdList>(request).await?)
+            let request = http.get(format!("{}/models", base.trim_end_matches('/')));
+            ids(fetch::<IdList>(optional_bearer(request)).await?)
         }
         RemoteProvider::Custom(endpoint) => {
             let request = http.get(format!(
@@ -296,10 +295,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn openrouter_is_asked_without_a_key() {
+        let (address, server) = serve_once("200 OK", r#"{"data":[{"id":"openai/gpt-6-mini"}]}"#);
+        let provider = RemoteProvider::OpenRouter(Some(endpoint(format!("{address}/api/v1"))));
+        let models = list_models(&provider, None).await;
+        let request = server.join().expect("fixture");
+        assert_eq!(models, Ok(vec!["openai/gpt-6-mini".to_owned()]));
+        assert!(request.starts_with("GET /api/v1/models "), "{request}");
+        assert!(!request.contains("authorization"), "{request}");
+    }
+
+    #[tokio::test]
     async fn a_hosted_provider_without_a_key_is_not_asked() {
         for provider in [
             RemoteProvider::OpenAi(None),
-            RemoteProvider::OpenRouter(None),
             RemoteProvider::Anthropic(None),
             RemoteProvider::Gemini(None),
         ] {

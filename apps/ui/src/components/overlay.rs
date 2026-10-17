@@ -1,9 +1,13 @@
+use dioxus::core::Task;
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{Phase, RecordingTrigger};
 
 use super::ui::{Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
 use crate::overlay::{LEVEL_BARS, format_elapsed};
-use crate::{OverlayView, UiContext, UiOperation};
+use crate::{Notice, OverlayView, UiContext, UiOperation, client};
+
+/// A failure with a button stays longer than one without, so the button can be reached.
+const FAILURE_WITH_ACTION_MS: u32 = 5_000;
 
 /// Meter geometry in SVG units; bars are attributes because the CSP forbids inline styles.
 const BAR_WIDTH: f32 = 4.0;
@@ -85,6 +89,24 @@ pub fn RecordingBar() -> Element {
     let failed = matches!(phase, Phase::Error { .. });
     let visible = in_flight || failed;
     drop(state);
+
+    let close_after = if action.is_some() {
+        FAILURE_WITH_ACTION_MS
+    } else {
+        Notice::AUTO_DISMISS_MS
+    };
+    let mut closing = use_signal(|| None::<Task>);
+    use_effect(use_reactive!(|failed, close_after| {
+        if let Some(pending) = closing.write().take() {
+            pending.cancel();
+        }
+        if failed {
+            closing.set(Some(spawn(async move {
+                client::delay(close_after).await;
+                context.dismiss_overlay();
+            })));
+        }
+    }));
 
     let blocked = |operation| context.blocked(operation).is_some();
     let stop_blocked = blocked(UiOperation::StopRecording);

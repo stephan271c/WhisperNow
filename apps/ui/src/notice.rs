@@ -23,12 +23,6 @@ pub struct Notice {
 }
 
 impl Notice {
+    /// How long every notice, and a failure without a button, stays shown.
     pub const AUTO_DISMISS_MS: u32 = 3_000;
-
-    /// Toasts and success notices leave on their own; other notices beside their controls wait
-    /// to be dismissed.
-    #[must_use]
-    pub fn auto_dismisses(&self, inline: bool) -> bool {
-        !inline || self.tone == Tone::Success
-    }
 }

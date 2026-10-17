@@ -141,8 +141,26 @@ fn rows_show_local_time_the_pasted_text_the_duration_and_a_problem_status() {
     let row_9 = text(&html, "history-entry-9");
     assert!(row_9.contains("07:30") && row_9.contains("raw 9"));
     let row_7 = text(&html, "history-entry-7");
-    assert!(row_7.contains("cleaned 7") && !row_7.contains("raw 7"));
+    assert!(row_7.contains("cleaned 7"));
     assert!(!row_7.contains("Failed") && !row_7.contains("Not pasted"));
+}
+
+#[test]
+fn a_cleaned_row_opens_to_its_original_transcript() {
+    let mut raw = entry(9, UtcMillis(NOW.0 - 3 * HOUR));
+    raw.cleaned_text = None;
+    let page = history_page(management(vec![entry(7, UtcMillis(NOW.0 - HOUR)), raw]));
+    let html = page.html();
+
+    assert_eq!(text(&html, "history-cleaned-7"), "Cleaned");
+    assert!(tag(&html, "history-text-7").is_some_and(|tag| !tag.contains(" open")));
+    assert_eq!(
+        text(&html, "history-original-7"),
+        "Original transcriptraw 7"
+    );
+    assert!(text(&html, "history-entry-9").contains("raw 9"));
+    assert!(tag(&html, "history-text-9").is_none());
+    assert!(tag(&html, "history-cleaned-9").is_none());
 }
 
 #[test]

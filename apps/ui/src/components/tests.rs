@@ -204,17 +204,27 @@ fn global_notices_show_the_message_and_allow_dismissal() {
 }
 
 #[test]
-fn an_error_toast_leaves_on_its_own() {
-    let mut page = shell(snapshot(Phase::Idle), loaded());
-    page.context().management.write().notify(
-        Tone::Error,
-        NoticeScope::Global,
-        "The desktop connection failed",
-    );
-    page.settle();
-    assert!(tag(&page.html(), "notice").is_some());
-    page.wait();
-    assert!(tag(&page.html(), "notice").is_none());
+fn error_toasts_and_notices_beside_controls_leave_on_their_own() {
+    for (scope, placement) in [
+        (NoticeScope::Global, "notice-toast"),
+        (NoticeScope::Home, "notice-inline"),
+    ] {
+        let mut page = shell(snapshot(Phase::Idle), loaded());
+        page.context().management.write().notify(
+            Tone::Error,
+            scope,
+            "The desktop connection failed",
+        );
+        page.settle();
+        assert!(
+            tag(&page.html(), "notice")
+                .expect("notice")
+                .contains(placement),
+            "{scope:?}"
+        );
+        page.wait();
+        assert!(tag(&page.html(), "notice").is_none(), "{scope:?}");
+    }
 }
 
 #[test]

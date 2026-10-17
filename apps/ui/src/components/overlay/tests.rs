@@ -606,3 +606,18 @@ fn a_failed_overlay_action_is_announced_until_the_next_phase() {
     show(&mut bar, phase_event(listening(RecordingMode::Toggle)));
     assert_eq!(announced(&bar), "Starting…");
 }
+
+#[test]
+fn a_failure_closes_on_its_own_unless_a_newer_phase_came_first() {
+    let mut bar = mount_bar(state_in(failed(ErrorCategory::Audio)));
+    bar.settle().wait();
+    assert_eq!(fake::commands(), ["dismiss_recording_overlay"]);
+
+    let mut bar = mount_bar(state_in(failed(ErrorCategory::General)));
+    show(&mut bar, phase_event(listening(RecordingMode::Hold)));
+    bar.wait();
+    assert!(fake::commands().is_empty(), "a new recording keeps its bar");
+    show(&mut bar, phase_event(failed(ErrorCategory::General)));
+    bar.wait();
+    assert_eq!(fake::commands(), ["dismiss_recording_overlay"]);
+}

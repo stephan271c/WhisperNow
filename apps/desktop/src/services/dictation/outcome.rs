@@ -269,7 +269,7 @@ pub(super) fn pipeline_error(kind: PipelineFailureKind) -> AppError {
         PipelineFailureKind::NoAudio => AppError::new(
             ErrorCategory::Audio,
             "no_microphone_audio",
-            "No microphone audio was detected; check the selected input and try again.",
+            "No audio was detected; check the microphone and try again.",
         ),
         PipelineFailureKind::NoSpeech => AppError::new(
             ErrorCategory::Recognition,
