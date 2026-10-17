@@ -1,14 +1,17 @@
 use dioxus::prelude::*;
-use whispernow_domain::{ApiKey, LlmProvider, ModelFamily, ProviderEndpoint, Settings};
+use whispernow_domain::{
+    ApiKey, LlmProvider, ModelFamily, ProviderEndpoint, ProviderSettings, Settings,
+};
 
 use super::NoticeRegion;
 use super::configuration::{AutosaveRow, SettingsLoading, choice_value, chosen};
 use super::models::{ModelRow, ModelRowKind};
 use super::ui::{
-    Button, ButtonSize, ButtonVariant, ConfirmButton, DraftText, Section, Segmented, Select,
+    Button, ButtonVariant, Combobox, ConfirmButton, DraftText, Section, Segmented, Select,
     SettingRow, TextInput, Toggle,
 };
 use crate::blocked_reason::DisabledReason;
+use crate::client;
 use crate::{NoticeScope, SettingKey, UiContext, UiOperation};
 
 /// Where cleanup runs: one of the app's own cleanup models, an LLM server on this computer,
@@ -97,11 +100,11 @@ pub(super) fn AiCleanupPage() -> Element {
             if source.providers().len() > 1 {
                 AutosaveRow { id: "provider-name", title: "Provider", setting: SettingKey::ActiveProvider,
                     Select { value: provider.as_str(),
+                        options: source.providers().iter().map(|item| (item.as_str().to_owned(), item.label().to_owned())).collect::<Vec<_>>(),
                         disabled,
-                        onchange: move |event: FormEvent| if let Some(provider) = LlmProvider::from_name(&event.value()) {
+                        onchange: move |value: String| if let Some(provider) = LlmProvider::from_name(&value) {
                             pick(provider);
                         },
-                        for item in source.providers() { option { value: item.as_str(), "{item.label()}" } }
                     }
                 }
             }
@@ -115,6 +118,20 @@ pub(super) fn AiCleanupPage() -> Element {
     } }
 }
 
+/// The model picker's form and its new-name field; tests fill and submit them as the user does.
+const MODEL_FORM: &str = "provider-model-form";
+const MODEL_NAME: &str = "provider-model-name";
+
+/// The names the model picker lists: the saved ones, after the active model if it was never
+/// saved. A change from the picker saves this list.
+fn listed_models(settings: &ProviderSettings) -> Vec<String> {
+    let mut models = settings.saved_models.clone();
+    if !settings.model.is_empty() && !models.contains(&settings.model) {
+        models.insert(0, settings.model.clone());
+    }
+    models
+}
+
 #[component]
 fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> Element {
     let context = use_context::<UiContext>();
@@ -125,70 +142,82 @@ fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> El
     let mut credential = use_signal(String::new);
     let mut new_model = use_signal(String::new);
     let provider_settings = settings.provider_settings(provider);
+    let models = listed_models(provider_settings);
+    let active = provider_settings.model.clone();
     let key_saved = management
         .read()
         .settings
         .as_ref()
         .is_some_and(|view| view.settings.api_keys.contains(&provider));
+    let saved_endpoint = management.read().settings.as_ref().and_then(|view| {
+        view.settings
+            .provider_settings(provider)
+            .api_base
+            .as_ref()
+            .map(|endpoint| endpoint.expose_url().to_owned())
+    });
+    // The desktop asks with the saved endpoint and key, so saving either asks again.
+    let offered = use_resource(use_reactive(
+        (&provider, &saved_endpoint, &key_saved),
+        |(provider, _, _)| async move {
+            client::invoke::<_, Vec<String>>("list_provider_models", Some(&provider))
+                .await
+                .unwrap_or_default()
+        },
+    ));
+    let offered = offered.read().clone().unwrap_or_default();
     rsx! {
         AutosaveRow { id: "provider-model", title: "Model", setting: SettingKey::ProviderModel,
-            DraftText { value: provider_settings.model.clone(),
-                disabled,
-                oncommit: move |model: String| {
-                    let model = model.trim().to_owned();
-                    context.change_setting(SettingKey::ProviderModel, move |settings| settings.provider_settings_mut(provider).model.clone_from(&model));
-                    true
-                },
-            }
-        }
-        SettingRow { id: "provider-saved-models", title: "Saved models",
-            div { class: "stacked-control",
-                if !provider_settings.saved_models.is_empty() {
-                    ul { class: "saved-models",
-                        for saved in provider_settings.saved_models.clone() {
-                            li { key: "{saved}",
-                                span { class: "saved-model-name", "{saved}" }
-                                Button { size: ButtonSize::Sm, aria_label: "Use {saved}",
-                                    disabled: disabled || saved == provider_settings.model,
-                                    onclick: { let model = saved.clone(); move |_| {
-                                        let model = model.clone();
-                                        context.change_setting(SettingKey::ProviderModel, move |settings| settings.provider_settings_mut(provider).model.clone_from(&model));
-                                    } },
-                                    "Use"
-                                }
-                                Button { size: ButtonSize::Sm, variant: ButtonVariant::Ghost, aria_label: "Remove {saved}",
-                                    disabled,
-                                    onclick: { let model = saved.clone(); move |_| {
-                                        let model = model.clone();
-                                        context.change_setting(SettingKey::ProviderModel, move |settings| {
-                                            settings.provider_settings_mut(provider).saved_models.retain(|saved| *saved != model);
-                                        });
-                                    } },
-                                    "Remove"
-                                }
+            form { id: MODEL_FORM, class: "model-picker",
+                onsubmit: move |event: FormEvent| {
+                    event.prevent_default();
+                    let model = new_model().trim().to_owned();
+                    if !model.is_empty() {
+                        context.change_setting(SettingKey::ProviderModel, move |settings| {
+                            let entry = settings.provider_settings_mut(provider);
+                            entry.saved_models = listed_models(entry);
+                            if !entry.saved_models.contains(&model) {
+                                entry.saved_models.push(model.clone());
                             }
-                        }
+                            entry.model = model;
+                        });
+                        new_model.set(String::new());
+                    }
+                },
+                if !models.is_empty() {
+                    Select { value: active.clone(), placeholder: "Choose a model",
+                        options: models.iter().map(|model| (model.clone(), model.clone())).collect::<Vec<_>>(),
+                        disabled,
+                        onchange: move |model: String| {
+                            context.change_setting(SettingKey::ProviderModel, move |settings| {
+                                let entry = settings.provider_settings_mut(provider);
+                                entry.saved_models = listed_models(entry);
+                                entry.model = model;
+                            });
+                        },
+                    }
+                    Button { id: "provider-model-remove", variant: ButtonVariant::Ghost,
+                        aria_label: "Remove {active}",
+                        disabled: disabled || active.is_empty(),
+                        onclick: move |_| {
+                            let removed = active.clone();
+                            context.change_setting(SettingKey::ProviderModel, move |settings| {
+                                let entry = settings.provider_settings_mut(provider);
+                                entry.saved_models = listed_models(entry);
+                                entry.saved_models.retain(|saved| *saved != removed);
+                                if entry.model == removed {
+                                    entry.model = entry.saved_models.first().cloned().unwrap_or_default();
+                                }
+                            });
+                        },
+                        "Remove"
                     }
                 }
-                form { class: "inline-form",
-                    onsubmit: move |event: FormEvent| {
-                        event.prevent_default();
-                        let model = new_model().trim().to_owned();
-                        if !model.is_empty() {
-                            context.change_setting(SettingKey::ProviderModel, move |settings| {
-                            let saved = &mut settings.provider_settings_mut(provider).saved_models;
-                            if !saved.contains(&model) {
-                                saved.push(model.clone());
-                            }
-                        });
-                            new_model.set(String::new());
-                        }
-                    },
-                    TextInput { placeholder: "Model name",
-                        disabled,
-                        value: "{new_model}", oninput: move |event: FormEvent| new_model.set(event.value()) }
-                    button { r#type: "submit", class: "btn btn-secondary btn-sm", disabled, "Add model" }
+                Combobox { id: MODEL_NAME, label: "New model name", placeholder: "Model name",
+                    value: new_model(), suggestions: offered, disabled,
+                    oninput: move |typed: String| new_model.set(typed),
                 }
+                button { r#type: "submit", id: "provider-model-add", class: "btn btn-secondary btn-md", disabled, "Add model" }
             }
         }
         AutosaveRow { id: "provider-endpoint", title: "API endpoint",

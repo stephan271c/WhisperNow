@@ -18,6 +18,10 @@ use rig_core::{
 use whispernow_core::llm::{LlmError, LlmFinishReason, LlmPrompt, LlmRemoteConfig, LlmResponse};
 use whispernow_domain::{ApiKey, ProviderEndpoint, RemoteProvider};
 
+mod model_list;
+
+pub use model_list::list_models;
+
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Anthropic requires `max_tokens`. Rig fills in the output maximum of the Claude models it
 /// knows; any other model gets this, the smallest maximum among current Claude models.
@@ -173,8 +177,12 @@ where
 
 fn map_error(error: &CompletionError) -> LlmError {
     if let Some(status) = error.provider_response_status() {
+        if names_missing_model(error) {
+            return LlmError::ModelNotFound;
+        }
         return match status.as_u16() {
             401 | 403 => LlmError::Authentication,
+            404 => LlmError::ModelNotFound,
             408 | 429 => LlmError::RateLimited,
             500..=599 => LlmError::TemporarilyUnavailable,
             400..=499 => LlmError::InvalidRequest,
@@ -188,12 +196,24 @@ fn map_error(error: &CompletionError) -> LlmError {
     }
 }
 
+// OpenAI, and servers that copy its error shape, name a missing model in `error.code`; some
+// answer 400 rather than 404.
+fn names_missing_model(error: &CompletionError) -> bool {
+    error
+        .provider_response_json()
+        .ok()
+        .flatten()
+        .is_some_and(|body| body["error"]["code"] == "model_not_found")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ANTHROPIC_FALLBACK_MAX_TOKENS, GeminiFinishReason, OPENROUTER_BASE_URL, complete,
-        gemini_finish_reason, openai_compatible_base_url, required_key,
+        gemini_finish_reason, map_error, openai_compatible_base_url, required_key,
     };
+    use reqwest::StatusCode;
+    use rig_core::completion::CompletionError;
     use whispernow_core::llm::{
         LlmError, LlmFinishReason, LlmPrompt, LlmRemoteConfig, build_cleanup_prompt,
     };
@@ -217,6 +237,35 @@ mod tests {
         assert_eq!(required_key(None), Err(LlmError::Authentication));
         let key = ApiKey::new("token").expect("a key");
         assert_eq!(required_key(Some(&key)), Ok("token".to_owned()));
+    }
+
+    #[test]
+    fn a_missing_model_is_told_apart_from_other_rejections() {
+        for (status, body, expected) in [
+            (
+                StatusCode::NOT_FOUND,
+                r#"{"type":"error","error":{"type":"not_found_error","message":"model: claude-x"}}"#,
+                LlmError::ModelNotFound,
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"error":{"message":"The model `gpt-x` does not exist","code":"model_not_found"}}"#,
+                LlmError::ModelNotFound,
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"error":{"message":"Invalid value","code":"invalid_value"}}"#,
+                LlmError::InvalidRequest,
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                "not json",
+                LlmError::InvalidRequest,
+            ),
+        ] {
+            let error = CompletionError::from_http_response(status, body);
+            assert_eq!(map_error(&error), expected, "{status} {body}");
+        }
     }
 
     #[test]

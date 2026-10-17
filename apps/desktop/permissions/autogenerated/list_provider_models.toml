@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-provider-models"
+description = "Enables the list_provider_models command without any pre-configured scope."
+commands.allow = ["list_provider_models"]
+
+[[permission]]
+identifier = "deny-list-provider-models"
+description = "Denies the list_provider_models command without any pre-configured scope."
+commands.deny = ["list_provider_models"]

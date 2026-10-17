@@ -3,12 +3,12 @@ use dioxus::prelude::*;
 /// How a `Field` or `SettingRow` labels and describes the control rendered inside it.
 ///
 /// The frame owns the ids: the control takes `id`, the label is `{id}-label`, and the
-/// description, error and save status are `{id}-description`, `{id}-error` and `{id}-status`.
+/// description and error are `{id}-description` and `{id}-error`.
 #[derive(Clone, Debug, PartialEq)]
-struct FieldWiring {
-    id: String,
-    described_by: Option<String>,
-    invalid: bool,
+pub(super) struct FieldWiring {
+    pub(super) id: String,
+    pub(super) described_by: Option<String>,
+    pub(super) invalid: bool,
 }
 
 impl FieldWiring {
@@ -42,19 +42,16 @@ fn use_field_wiring(id: &str, has_description: bool, has_error: bool) {
     use_context_provider(|| wiring);
 }
 
-fn current_wiring() -> Option<FieldWiring> {
+pub(super) fn current_wiring() -> Option<FieldWiring> {
     try_use_context::<Memo<FieldWiring>>().map(|wiring| wiring())
 }
 
-/// A control that saves itself passes `status`: the frame then keeps a polite live region for
-/// it, so "Saving…" and "Saved" are announced without taking focus. Only `error` is an alert.
 #[component]
 pub(crate) fn Field(
     id: String,
     label: String,
     description: Option<String>,
     error: Option<String>,
-    status: Option<String>,
     children: Element,
 ) -> Element {
     use_field_wiring(&id, description.is_some(), error.is_some());
@@ -65,9 +62,6 @@ pub(crate) fn Field(
                 p { id: "{id}-description", class: "field-description", "{description}" }
             }
             {children}
-            if let Some(status) = status {
-                SaveStatusText { id: id.clone(), status }
-            }
             if let Some(error) = error {
                 p { id: "{id}-error", class: "field-error-message", role: "alert", "{error}" }
             }
@@ -75,22 +69,13 @@ pub(crate) fn Field(
     }
 }
 
-#[component]
-fn SaveStatusText(id: String, status: String) -> Element {
-    rsx! {
-        span { id: "{id}-status", class: "save-status", role: "status", aria_live: "polite", "{status}" }
-    }
-}
-
-/// A settings row: title and description on the left, the control on the right. `status`
-/// works as in [`Field`] and is shown beside the control.
+/// A settings row: title and description on the left, the control on the right.
 #[component]
 pub(crate) fn SettingRow(
     id: String,
     title: String,
     description: Option<String>,
     error: Option<String>,
-    status: Option<String>,
     children: Element,
 ) -> Element {
     use_field_wiring(&id, description.is_some(), error.is_some());
@@ -105,12 +90,7 @@ pub(crate) fn SettingRow(
                     p { id: "{id}-error", class: "field-error-message", role: "alert", "{error}" }
                 }
             }
-            div { class: "setting-row-control",
-                {children}
-                if let Some(status) = status {
-                    SaveStatusText { id: id.clone(), status }
-                }
-            }
+            div { class: "setting-row-control", {children} }
         }
     }
 }
@@ -220,29 +200,6 @@ pub(crate) fn DraftText(
             onchange: commit,
             onkeydown: revert,
             ..attributes,
-        }
-    }
-}
-
-/// A native select showing `value`. Inside a `Field` or `SettingRow` it takes the frame's id.
-#[component]
-pub(crate) fn Select(
-    #[props(into)] value: String,
-    onchange: EventHandler<FormEvent>,
-    #[props(extends = GlobalAttributes, extends = select)] attributes: Vec<Attribute>,
-    children: Element,
-) -> Element {
-    let wiring = current_wiring();
-    rsx! {
-        select {
-            class: "select",
-            id: wiring.as_ref().map(|wiring| wiring.id.clone()),
-            aria_describedby: wiring.as_ref().and_then(|wiring| wiring.described_by.clone()),
-            aria_invalid: wiring.as_ref().filter(|wiring| wiring.invalid).map(|_| "true"),
-            value,
-            onchange: move |event: FormEvent| onchange.call(event),
-            ..attributes,
-            {children}
         }
     }
 }

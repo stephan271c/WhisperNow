@@ -65,7 +65,7 @@ try {
       <button id="button" class="btn btn-secondary" data-text data-motion="transition">Save</button>
       <button id="small-button" class="btn btn-sm btn-secondary" data-text data-motion="transition">Retry</button>
       <input id="input" class="text-input" value="Microphone" data-text data-motion="transition">
-      <select id="select" class="select" data-text data-motion="transition"><option>Default</option></select>
+      <button id="select" class="select" data-text data-motion="transition">Default</button>
       <button id="segmented-option" class="segmented-option" data-text data-motion="transition">System</button>
       <button id="toggle" class="toggle" data-motion="transition"><span id="toggle-thumb" class="toggle-thumb" data-motion="transition"></span></button>
       <button id="window-control" class="window-control" data-motion="transition">×</button>

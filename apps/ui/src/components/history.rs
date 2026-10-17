@@ -140,7 +140,7 @@ pub(super) fn HistoryScreen() -> Element {
                                 RecordingMode::Toggle => "Press ",
                             }
                             ShortcutLabel { shortcut: settings.recording_shortcut.clone() }
-                            " to dictate. Your words will be waiting here."
+                            " to dictate."
                         }
                     }
                 }

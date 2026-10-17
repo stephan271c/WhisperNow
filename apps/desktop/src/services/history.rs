@@ -44,8 +44,8 @@ impl HistoryStore {
             .map(|removed| removed > 0)
     }
 
-    /// Saves one dictation, keeping its audio when `keep_audio` or its status ask for it, and
-    /// at most `limit` entries of at most `retention` age.
+    /// Saves one dictation, with its audio when `keep_audio` is on, and keeps at most `limit`
+    /// entries of at most `retention` age.
     pub(super) fn insert(
         &self,
         entry: NewHistoryEntry,

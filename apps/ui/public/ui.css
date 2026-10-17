@@ -110,7 +110,7 @@
   gap: var(--space-2);
 }
 
-/* Field, TextInput, Select ------------------------------------------------ */
+/* Field, TextInput -------------------------------------------------------- */
 
 .field {
   display: grid;
@@ -173,6 +173,113 @@
   color: var(--color-text-secondary);
   background: var(--color-surface-sunken);
   cursor: not-allowed;
+}
+
+/* Select and Combobox ----------------------------------------------------- */
+
+.select-field {
+  position: relative;
+  min-width: 0;
+}
+
+.select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  text-align: start;
+  cursor: pointer;
+}
+
+.select[aria-expanded="true"] {
+  border-color: var(--color-text-secondary);
+}
+
+.select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-placeholder {
+  color: var(--color-text-secondary);
+}
+
+.select .icon {
+  width: 16px;
+  height: 16px;
+  color: var(--color-text-secondary);
+  transition: transform var(--duration-fast) ease;
+}
+
+.select[aria-expanded="true"] .icon {
+  transform: rotate(180deg);
+}
+
+/* Hidden until the component has measured which side of the trigger has room. */
+.select-listbox {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(100% + var(--space-1));
+  z-index: 10;
+  display: grid;
+  gap: 2px;
+  max-height: min(18rem, var(--select-room, 18rem));
+  margin: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-3);
+  list-style: none;
+  visibility: hidden;
+}
+
+.select-listbox[data-placement] {
+  visibility: visible;
+}
+
+.select-listbox[data-placement="above"] {
+  top: auto;
+  bottom: calc(100% + var(--space-1));
+}
+
+.select-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-tight);
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.select-option.active {
+  background: var(--color-accent-soft);
+}
+
+.select-option[aria-selected="true"] {
+  color: var(--color-accent-text);
+  font-weight: var(--font-weight-semibold);
+}
+
+.select-option-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.select-option .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.select-option[aria-selected="false"] .icon {
+  visibility: hidden;
 }
 
 /* Segmented ---------------------------------------------------------------- */
@@ -288,10 +395,13 @@
   gap: var(--space-2);
 }
 
-.setting-row-control .select,
 .setting-row-control .text-input {
   width: auto;
   min-width: 12rem;
+}
+
+.setting-row-control .select-field {
+  width: 16rem;
 }
 
 @media (max-width: 560px) {

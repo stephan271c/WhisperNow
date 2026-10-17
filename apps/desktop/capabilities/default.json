@@ -18,6 +18,7 @@
     "allow-set-start-on-login",
     "allow-set-api-key",
     "allow-clear-api-key",
+    "allow-list-provider-models",
     "allow-list-audio-devices",
     "allow-test-microphone",
     "allow-list-models",

@@ -99,7 +99,7 @@ pub(super) enum ModelRowKind {
     Speech { state: Option<ModelState> },
     /// `chosen` marks the model the local cleanup provider runs.
     Cleanup { chosen: bool },
-    /// The CUDA pack, which has no speed or accuracy of its own.
+    /// The CUDA pack.
     Runtime,
 }
 
@@ -143,7 +143,7 @@ pub(super) fn ModelRow(
                     span { "{format_bytes(model.size_bytes)} download" }
                     ModelLanguages { languages: model.languages.clone() }
                 }
-                if kind != ModelRowKind::Runtime {
+                if matches!(kind, ModelRowKind::Speech { .. }) {
                     div { class: "model-ratings",
                         RatingBars { label: "Speed", value: model.speed,
                             detail: model.benchmark.map(|benchmark| speed_detail(&benchmark)) }

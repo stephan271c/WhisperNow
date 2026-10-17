@@ -78,9 +78,9 @@ impl SqliteHistoryRepository {
         ))
     }
 
-    /// Stores one dictation. Its audio is kept when `keep_audio` is on or the dictation failed
-    /// or was cancelled; entries beyond `limit` or older than `retention` are then deleted with
-    /// their audio. A failure to write the audio still stores the entry, without audio.
+    /// Stores one dictation, with its audio when `keep_audio` is on; entries beyond `limit` or
+    /// older than `retention` are then deleted with their audio. A failure to write the audio
+    /// still stores the entry, without audio.
     pub fn insert(
         &mut self,
         entry: NewHistoryEntry,
@@ -131,7 +131,7 @@ impl SqliteHistoryRepository {
                 ) => {}
             Err(_) => return Err(history_error("history_audio_delete")),
         }
-        let wrote_audio = if (keep_audio || status.always_keeps_audio()) && !audio.is_empty() {
+        let wrote_audio = if keep_audio && !audio.is_empty() {
             if write_wav(&self.audio_dir, id, audio).is_ok() {
                 true
             } else {

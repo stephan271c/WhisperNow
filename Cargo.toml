@@ -27,7 +27,7 @@ bzip2 = "=0.6.1"
 cpal = "=0.18.1"
 directories = "=6.0.0"
 flate2 = "=1.1.9"
-dioxus = { version = "=0.7.10", default-features = false, features = ["web", "minimal"] }
+dioxus = { version = "=0.7.10", default-features = false, features = ["web", "minimal", "mounted"] }
 dioxus-ssr = "=0.7.10"
 futures-util = "=0.3.33"
 gdk = "=0.18.2"

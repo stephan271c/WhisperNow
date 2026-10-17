@@ -23,11 +23,12 @@ pub struct Notice {
 }
 
 impl Notice {
-    pub const AUTO_DISMISS_MS: u32 = 4_000;
+    pub const AUTO_DISMISS_MS: u32 = 3_000;
 
-    /// Success notices confirm and leave; the others wait to be read and dismissed.
+    /// Toasts and success notices leave on their own; other notices beside their controls wait
+    /// to be dismissed.
     #[must_use]
-    pub fn auto_dismisses(&self) -> bool {
-        self.tone == Tone::Success
+    pub fn auto_dismisses(&self, inline: bool) -> bool {
+        !inline || self.tone == Tone::Success
     }
 }

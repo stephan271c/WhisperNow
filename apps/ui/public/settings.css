@@ -30,7 +30,7 @@ small {
   font-weight: var(--font-weight-semibold);
 }
 
-:where(.settings-content) :where(input:not([type="checkbox"], [type="radio"]), select, textarea) {
+:where(.settings-content) :where(input:not([type="checkbox"], [type="radio"]), textarea) {
   width: 100%;
   min-width: 0;
   min-height: var(--control-height-md);
@@ -332,7 +332,7 @@ small {
 
 .custom-chrome .settings-sidebar {
   grid-row: 1 / -1;
-  padding-top: var(--space-1);
+  padding-top: var(--space-6);
 }
 
 .custom-chrome .brand {
@@ -656,18 +656,6 @@ small {
   overflow-wrap: anywhere;
 }
 
-/* Settings: autosave ------------------------------------------------------ */
-
-.save-status {
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-}
-
-/* Reserves room so "Saving…" and "Saved" do not shift the control. */
-.setting-row-control .save-status {
-  min-width: 4.5rem;
-}
-
 .section-note {
   margin-block: var(--space-2);
 }
@@ -697,13 +685,6 @@ small {
 
 .section-body > .btn {
   justify-self: start;
-}
-
-.inline-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
 }
 
 /* A switch, then the current keys and the capture button, with guidance below. */
@@ -743,14 +724,9 @@ small {
   min-width: 0;
 }
 
-.inline-form .text-input {
-  flex: 1 1 10rem;
-}
-
 /* Speech models ----------------------------------------------------------- */
 
 .model-list,
-.saved-models,
 .vocabulary-list {
   margin: 0;
   padding: 0;
@@ -834,21 +810,22 @@ small {
 
 /* AI cleanup -------------------------------------------------------------- */
 
-.saved-models {
+/* The saved models and their Remove button, then a new name and Add model. */
+.model-picker {
   display: grid;
-  gap: var(--space-1);
-}
-
-.saved-models li {
-  display: flex;
+  grid-template-columns: minmax(0, 16rem) auto;
   align-items: center;
   gap: var(--space-2);
 }
 
-.saved-model-name {
-  flex: 1;
-  font-size: var(--font-size-sm);
-  overflow-wrap: anywhere;
+.setting-row-control .model-picker .select-field,
+.setting-row-control .model-picker .text-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.model-picker .btn {
+  justify-self: stretch;
 }
 
 /* Vocabulary -------------------------------------------------------------- */
@@ -857,7 +834,8 @@ small {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
   align-items: end;
-  gap: var(--space-3);
+  gap: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-3);
 }
 
 .field + .vocabulary-list,
@@ -865,14 +843,12 @@ small {
   margin-top: var(--space-3);
 }
 
-.vocabulary-add-action {
-  display: grid;
-  gap: var(--space-1);
+/* Under the button, in the last column however many there are. */
+.vocabulary-add-hint {
+  grid-column: -2 / -1;
 }
 
-.vocabulary-feedback {
-  display: grid;
-  gap: var(--space-1);
+.vocabulary-error {
   margin-block: var(--space-2);
 }
 
@@ -1344,12 +1320,6 @@ small {
   color: var(--color-text-secondary);
 }
 
-.footer-model {
-  width: 100%;
-  font-size: var(--font-size-sm);
-  padding-inline: var(--space-2);
-}
-
 .sidebar-footer .btn {
   justify-self: start;
 }
@@ -1376,7 +1346,6 @@ small {
 .home-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  align-items: start;
   gap: var(--space-4);
 }
 
@@ -1417,8 +1386,9 @@ small {
   margin: 0;
 }
 
-.home-card > .btn {
-  justify-self: start;
+/* Lines the button's text up with the card's text. */
+.home-card > .btn-ghost {
+  margin-inline-start: calc(-1 * (var(--space-2) + 1px));
 }
 
 .microphone-test,
@@ -1477,7 +1447,7 @@ small {
   justify-self: start;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 800px) {
   .home-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1485,8 +1455,19 @@ small {
   .home-grid > .setup-checklist-card,
   .home-grid > .banner,
   .home-grid > .update-banner,
+  .home-microphone,
   .home-transcript {
     grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 1100px) {
+  .home-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .home-microphone {
+    grid-column: auto;
   }
 }
 
@@ -1577,6 +1558,10 @@ small {
   .vocabulary-add,
   .vocabulary-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vocabulary-add {
+    row-gap: var(--space-3);
   }
 
   .vocabulary-arrow {

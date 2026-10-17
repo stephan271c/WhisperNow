@@ -8,7 +8,7 @@ use crate::{
 
 impl Gateway {
     /// The shortcut backend stopped delivering events. A recording a shortcut started is
-    /// cancelled, since its release can no longer arrive; history keeps its audio.
+    /// cancelled, since its release can no longer arrive; history records it.
     pub(crate) fn shortcut_capability_lost(&self, error: ShortcutRegistrationError) {
         self.publish_error(&shortcut_error(error));
         self.shortcuts.capability_lost(error);

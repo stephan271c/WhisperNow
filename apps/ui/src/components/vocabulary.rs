@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 use whispernow_domain::{Settings, VocabularyReplacement};
 
-use super::configuration::{SettingsLoading, status_parts};
+use super::configuration::SettingsLoading;
 use super::ui::focus::{neighbour, take_focus};
 use super::ui::{
     Button, ButtonVariant, DraftText, Field, IconButton, IconName, Section, TextInput,
@@ -62,8 +62,7 @@ pub(super) fn VocabularyPage() -> Element {
     let Some(settings) = management.read().shown_settings().cloned() else {
         return rsx! { SettingsLoading {} };
     };
-    let vocabulary_status = management.read().setting_status(SettingKey::Vocabulary);
-    let (status, error) = status_parts(vocabulary_status);
+    let error = management.read().setting_error(SettingKey::Vocabulary);
     let filtering = !search().trim().is_empty();
     let total = settings.vocabulary_replacements.len();
     let shown = settings
@@ -102,16 +101,11 @@ pub(super) fn VocabularyPage() -> Element {
                 Field { id: "vocabulary-replacement", label: "With this",
                     TextInput { value: "{replacement}", disabled, oninput: move |event: FormEvent| replacement.set(event.value()) }
                 }
-                div { class: "vocabulary-add-action",
-                    button { r#type: "submit", id: "vocabulary-add", class: "btn btn-primary btn-md", disabled, "Add rule" }
-                    p { class: "field-description", "Press Enter to add." }
-                }
+                button { r#type: "submit", id: "vocabulary-add", class: "btn btn-primary btn-md", disabled, "Add rule" }
+                p { class: "field-description vocabulary-add-hint", "Press Enter to add." }
             }
-            div { class: "vocabulary-feedback",
-                span { id: "vocabulary-status", class: "save-status", role: "status", aria_live: "polite", "{status}" }
-                if let Some(error) = error {
-                    p { id: "vocabulary-error", class: "field-error-message", role: "alert", "{error}" }
-                }
+            if let Some(error) = error {
+                p { id: "vocabulary-error", class: "field-error-message vocabulary-error", role: "alert", "{error}" }
             }
             if total > 0 {
                 Field { id: "vocabulary-search", label: "Search rules",

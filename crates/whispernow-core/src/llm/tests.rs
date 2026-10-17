@@ -180,6 +180,28 @@ async fn transient_failures_are_retried_at_most_twice() {
 }
 
 #[tokio::test]
+async fn a_missing_model_is_reported_without_a_retry() {
+    let service = FakeService::new([
+        Behavior::Error(LlmError::ModelNotFound),
+        Behavior::Text("Hello world."),
+    ]);
+    let config = config();
+    let result = clean_up(
+        &service,
+        "hello world",
+        &config,
+        None,
+        &CancellationToken::default(),
+    )
+    .await;
+    assert_eq!(
+        result,
+        Err(CleanupFallback::ProviderFailed(LlmError::ModelNotFound))
+    );
+    assert_eq!(service.calls(), 1);
+}
+
+#[tokio::test]
 async fn cancelling_during_a_call_ends_it_promptly() {
     let service = FakeService::new([Behavior::Wait]);
     let config = config();

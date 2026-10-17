@@ -28,6 +28,8 @@ pub(crate) enum IconName {
     Minimize,
     Maximize,
     Restore,
+    Check,
+    ChevronDown,
 }
 
 impl IconName {
@@ -65,6 +67,8 @@ impl IconName {
             Self::Play => "M7 4.5v15l12.5-7.5Z",
             Self::Minimize => "M6 12h12",
             Self::Restore => "M6 9h9v9H6Zm3-3h9v9",
+            Self::Check => "m5 12.5 4.5 4.5L19 7.5",
+            Self::ChevronDown => "m6 9 6 6 6-6",
         }
     }
 }

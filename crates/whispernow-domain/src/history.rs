@@ -148,14 +148,6 @@ pub enum EntryStatus {
     NotDelivered,
 }
 
-impl EntryStatus {
-    /// Failed and cancelled dictations always keep their audio, so the speech is not lost.
-    #[must_use]
-    pub const fn always_keeps_audio(self) -> bool {
-        matches!(self, Self::Failed | Self::Cancelled)
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HistoryEntry {
     pub id: EntryId,

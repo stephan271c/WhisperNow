@@ -133,6 +133,8 @@ pub enum LlmError {
     TemporarilyUnavailable,
     #[error("LLM provider authentication failed")]
     Authentication,
+    #[error("LLM provider has no model with that name")]
+    ModelNotFound,
     #[error("LLM provider rejected the request")]
     InvalidRequest,
     #[error("LLM provider returned an invalid response")]

@@ -10,13 +10,13 @@ use whispernow_domain::{
     ModelAvailability, ModelId, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
 };
 
-use super::configuration::{RECORDING_MODES, choice_value, chosen};
+use super::configuration::{RECORDING_MODES, choice_value, chosen, device_options};
 use super::labels::{self, format_bytes};
 use super::microphone_test::percent;
 use super::models::{DownloadProgress, ModelLanguages};
 use super::ui::focus::take_focus;
 use super::ui::{
-    Banner, Button, ButtonVariant, Field, Icon, IconName, Segmented, ShortcutLabel, Tone,
+    Banner, Button, ButtonVariant, Field, Icon, IconName, Segmented, Select, ShortcutLabel, Tone,
 };
 use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture};
 use crate::blocked_reason::DisabledReason;
@@ -557,15 +557,13 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
                 dd { ShortcutLabel { shortcut: checkpoint.recording_shortcut.clone() } }
             }
         }
-        div { class: "field",
-            label { r#for: "setup-microphone", "Microphone" }
-            select { id: "setup-microphone", value: "{selected}", disabled: running || settings_pending,
-                onchange: move |event| {
-                    let value = event.value();
+        Field { id: "setup-microphone", label: "Microphone",
+            Select { value: selected,
+                options: device_options(&devices),
+                disabled: running || settings_pending,
+                onchange: move |value: String| {
                     context.save_setup_edit(|setup| setup.input_device = (!value.is_empty()).then_some(value));
                 },
-                option { value: "", "System default" }
-                for device in devices { option { value: "{device.id}", "{device.display_name}" } }
             }
         }
         section { class: "setup-test", aria_labelledby: "setup-test-title",

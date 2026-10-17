@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex};
 use dioxus::prelude::*;
 
 use super::{
-    Banner, ConfirmButton, Field, IconButton, IconName, ProgressBar, SettingRow, TextInput, Toggle,
-    Tone,
+    Banner, Combobox, ConfirmButton, Field, IconButton, IconName, ProgressBar, Select, SettingRow,
+    TextInput, Toggle, Tone,
 };
-use crate::test_support::{click_rendered, element, focused, mount_rendered, tag, text};
+use crate::test_support::{Page, click_rendered, element, focused, mount_rendered, tag, text};
 
 /// Renders `app` inside a runtime so its event handlers can be created.
 fn render(app: fn() -> Element) -> String {
@@ -209,4 +209,281 @@ fn confirm_button_returns_focus_to_its_trigger_after_either_choice() {
             "{choice}: the trigger takes focus back when it is mounted again"
         );
     }
+}
+
+#[derive(Clone, Default)]
+struct ChoiceLog(Arc<Mutex<Vec<String>>>);
+
+impl PartialEq for ChoiceLog {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl ChoiceLog {
+    fn chosen(&self) -> Vec<String> {
+        self.0.lock().expect("choice log").clone()
+    }
+}
+
+#[component]
+fn SelectSurface(log: ChoiceLog) -> Element {
+    let options = [
+        ("system", "Match system"),
+        ("light", "Light"),
+        ("dark", "Dark"),
+    ]
+    .map(|(value, label)| (value.to_owned(), label.to_owned()))
+    .to_vec();
+    rsx! {
+        Field { id: "theme", label: "Theme",
+            Select { value: "light", options,
+                onchange: move |value| log.0.lock().expect("choice log").push(value),
+            }
+        }
+    }
+}
+
+fn select_page(log: &ChoiceLog) -> Page {
+    let log = log.clone();
+    Page::new(|_| VirtualDom::new_with_props(SelectSurface, SelectSurfaceProps { log }))
+}
+
+fn highlighted(page: &Page, id: &str) -> Option<String> {
+    let html = page.html();
+    let trigger = tag(&html, id).expect("trigger");
+    trigger
+        .split("aria-activedescendant=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .map(str::to_owned)
+}
+
+#[test]
+fn select_is_a_labelled_combobox_that_opens_on_its_value() {
+    let log = ChoiceLog::default();
+    let mut page = select_page(&log);
+    let html = page.html();
+    let trigger = tag(&html, "theme").expect("trigger");
+    assert!(trigger.starts_with("<button"));
+    assert!(trigger.contains("role=\"combobox\""));
+    assert!(trigger.contains("aria-labelledby=\"theme-label\""));
+    assert!(trigger.contains("aria-expanded=\"false\""));
+    assert!(text(&html, "theme").contains("Light"));
+    assert!(tag(&html, "theme-listbox").is_none());
+
+    page.click("theme");
+    let html = page.html();
+    assert!(
+        tag(&html, "theme")
+            .expect("trigger")
+            .contains("aria-expanded=\"true\"")
+    );
+    assert_eq!(
+        highlighted(&page, "theme").as_deref(),
+        Some("theme-option-1")
+    );
+    assert!(
+        tag(&html, "theme-option-1")
+            .expect("current option")
+            .contains("aria-selected=\"true\"")
+    );
+
+    page.click("theme-option-2");
+    assert_eq!(log.chosen(), ["dark"]);
+    assert!(tag(&page.html(), "theme-listbox").is_none());
+}
+
+#[test]
+fn select_keys_move_the_highlight_and_only_enter_or_a_click_chooses() {
+    let log = ChoiceLog::default();
+    let mut page = select_page(&log);
+    page.key("theme", Key::ArrowDown);
+    assert_eq!(
+        highlighted(&page, "theme").as_deref(),
+        Some("theme-option-1"),
+        "the first arrow opens the list without moving"
+    );
+    page.key("theme", Key::ArrowDown)
+        .key("theme", Key::ArrowDown);
+    assert_eq!(
+        highlighted(&page, "theme").as_deref(),
+        Some("theme-option-2")
+    );
+    page.key("theme", Key::Home);
+    assert_eq!(
+        highlighted(&page, "theme").as_deref(),
+        Some("theme-option-0")
+    );
+    page.key("theme", Key::Character("d".to_owned()));
+    assert_eq!(
+        highlighted(&page, "theme").as_deref(),
+        Some("theme-option-2")
+    );
+    page.key("theme", Key::Escape);
+    assert_eq!(highlighted(&page, "theme"), None);
+    assert!(log.chosen().is_empty());
+
+    page.key("theme", Key::End).key("theme", Key::Enter);
+    assert_eq!(log.chosen(), ["dark"]);
+    assert_eq!(highlighted(&page, "theme"), None);
+}
+
+#[test]
+fn choosing_the_current_option_closes_the_list_without_a_change() {
+    let log = ChoiceLog::default();
+    let mut page = select_page(&log);
+    page.click("theme").click("theme-option-1");
+    assert!(log.chosen().is_empty());
+    assert!(tag(&page.html(), "theme-listbox").is_none());
+}
+
+#[component]
+fn ComboboxSurface(log: ChoiceLog) -> Element {
+    let mut typed = use_signal(String::new);
+    let suggestions = [
+        "nvidia/nemotron-3.5-super-vl:free",
+        "NVIDIA/llama-3.1-nemotron",
+        "nousresearch/hermes-4",
+        "openai/gpt-6-mini",
+        "nemotron-mini-2",
+        "nemotron-mini",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    rsx! {
+        Combobox { id: "model", label: "Model", value: typed(), suggestions,
+            oninput: move |value: String| {
+                log.0.lock().expect("choice log").push(value.clone());
+                typed.set(value);
+            },
+        }
+    }
+}
+
+fn combobox_page(log: &ChoiceLog) -> Page {
+    let log = log.clone();
+    Page::new(|_| VirtualDom::new_with_props(ComboboxSurface, ComboboxSurfaceProps { log }))
+}
+
+fn listed(page: &Page) -> Vec<String> {
+    let html = page.html();
+    html.match_indices("id=\"model-option-")
+        .filter_map(|(at, _)| html[at + "id=\"".len()..].split('"').next())
+        .map(|option| text(&html, option))
+        .collect()
+}
+
+#[test]
+fn combobox_lists_the_suggestions_with_a_word_that_starts_with_the_typed_text() {
+    let log = ChoiceLog::default();
+    let mut page = combobox_page(&log);
+    let html = page.html();
+    let field = tag(&html, "model").expect("field");
+    assert!(field.starts_with("<input"));
+    assert!(field.contains("role=\"combobox\""));
+    assert!(field.contains("aria-autocomplete=\"list\""));
+    assert!(field.contains("aria-expanded=\"false\""));
+    assert!(tag(&html, "model-listbox").is_none());
+
+    page.input("model", "nvid");
+    assert_eq!(
+        listed(&page),
+        [
+            "nvidia/nemotron-3.5-super-vl:free",
+            "NVIDIA/llama-3.1-nemotron"
+        ],
+        "matched from the start, ignoring case"
+    );
+    assert!(
+        tag(&page.html(), "model")
+            .expect("field")
+            .contains("aria-expanded=\"true\"")
+    );
+    page.input("model", "nemotron");
+    assert_eq!(
+        listed(&page),
+        [
+            "nemotron-mini-2",
+            "nemotron-mini",
+            "nvidia/nemotron-3.5-super-vl:free",
+            "NVIDIA/llama-3.1-nemotron"
+        ],
+        "suggestions that start with it come first, then the others in their order"
+    );
+    page.input("model", "nemotron-mini");
+    assert_eq!(listed(&page), ["nemotron-mini", "nemotron-mini-2"]);
+    page.input("model", "3.5");
+    assert_eq!(listed(&page), ["nvidia/nemotron-3.5-super-vl:free"]);
+    page.input("model", "emotron");
+    assert!(
+        listed(&page).is_empty(),
+        "a match inside a word is not offered"
+    );
+    assert!(tag(&page.html(), "model-listbox").is_none());
+
+    page.input("model", "");
+    assert!(tag(&page.html(), "model-listbox").is_none());
+    page.key("model", Key::ArrowDown);
+    assert_eq!(
+        listed(&page).len(),
+        6,
+        "Down in an empty field lists everything"
+    );
+}
+
+#[test]
+fn combobox_keys_highlight_and_only_enter_on_a_highlight_fills_the_field() {
+    let log = ChoiceLog::default();
+    let mut page = combobox_page(&log);
+    page.input("model", "n").key("model", Key::Enter);
+    assert!(tag(&page.html(), "model-listbox").is_none());
+    assert_eq!(
+        log.chosen(),
+        ["n"],
+        "Enter without a highlight only closes the list"
+    );
+
+    page.input("model", "nv").key("model", Key::ArrowDown);
+    assert_eq!(
+        highlighted(&page, "model").as_deref(),
+        Some("model-option-0")
+    );
+    page.key("model", Key::ArrowDown)
+        .key("model", Key::ArrowDown);
+    assert_eq!(
+        highlighted(&page, "model").as_deref(),
+        Some("model-option-1"),
+        "the highlight stops at the last suggestion"
+    );
+    page.key("model", Key::ArrowUp);
+    assert_eq!(
+        highlighted(&page, "model").as_deref(),
+        Some("model-option-0")
+    );
+    page.key("model", Key::Enter);
+    assert_eq!(
+        log.chosen().last().map(String::as_str),
+        Some("nvidia/nemotron-3.5-super-vl:free")
+    );
+    assert!(tag(&page.html(), "model-listbox").is_none());
+
+    page.input("model", "o").key("model", Key::Escape);
+    assert!(tag(&page.html(), "model-listbox").is_none());
+    assert_eq!(log.chosen().last().map(String::as_str), Some("o"));
+}
+
+#[test]
+fn clicking_a_suggestion_fills_the_field() {
+    let log = ChoiceLog::default();
+    let mut page = combobox_page(&log);
+    page.input("model", "OPEN").click("model-option-0");
+    assert_eq!(log.chosen(), ["OPEN", "openai/gpt-6-mini"]);
+    let html = page.html();
+    assert!(
+        tag(&html, "model")
+            .expect("field")
+            .contains("value=\"openai/gpt-6-mini\"")
+    );
+    assert!(tag(&html, "model-listbox").is_none());
 }

@@ -16,7 +16,7 @@ use crate::components::ui::Tone;
 use crate::{Notice, NoticeScope, UiOperation};
 
 pub(crate) use history::HistoryCopied;
-pub(crate) use settings::{SaveStatus, SettingKey};
+pub(crate) use settings::SettingKey;
 pub(crate) use setup::SetupTest;
 
 #[derive(Clone, Default, PartialEq)]
@@ -25,7 +25,6 @@ pub(crate) struct ManagementState {
     edited: Option<Settings>,
     saving: Option<SettingKey>,
     setting_errors: BTreeMap<SettingKey, String>,
-    saved_setting: Option<SettingKey>,
     pub setup: Option<SetupStateView>,
     pub devices: Vec<AudioDevice>,
     pub devices_listed: bool,

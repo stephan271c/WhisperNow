@@ -50,7 +50,7 @@ impl SettingsCoordinator {
 
     /// Where an LLM call reads its provider's API key when it is prepared, so settings
     /// snapshots and recording start never wait on the OS credential store.
-    pub(super) fn api_keys(&self) -> Arc<SettingsStore> {
+    pub(crate) fn api_keys(&self) -> Arc<SettingsStore> {
         Arc::clone(&self.persistence)
     }
 

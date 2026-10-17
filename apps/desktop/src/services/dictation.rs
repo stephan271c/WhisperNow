@@ -63,7 +63,7 @@ pub(crate) struct DictationSettings {
     pub(crate) history_limit: HistoryLimit,
     /// Entries older than this are deleted from history.
     pub(crate) history_retention: HistoryRetention,
-    /// Whether a successful dictation keeps its audio in history.
+    /// Whether a dictation keeps its audio in history.
     pub(crate) keep_audio: bool,
 }
 
@@ -711,7 +711,10 @@ impl Worker {
                 }
             }
         }
-        let cleanup_warning = cleanup_fallback_warning(&prepared);
+        let cleanup_warning = cleanup_fallback_warning(
+            &prepared,
+            recording.settings.cleanup.as_ref().map(|plan| &plan.target),
+        );
         let warning = history
             .as_ref()
             .err()

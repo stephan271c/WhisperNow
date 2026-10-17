@@ -201,7 +201,7 @@ pub struct Settings {
     pub history_limit: HistoryLimit,
     /// Entries older than this are deleted with the history, or nothing when `Forever`.
     pub history_retention: HistoryRetention,
-    /// Whether successful dictations keep their audio. Failed and cancelled ones always do.
+    /// Whether dictations keep their audio in history.
     pub keep_audio: bool,
 }
 

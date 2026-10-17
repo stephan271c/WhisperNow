@@ -57,6 +57,12 @@ pub(crate) const fn document_hidden() -> bool {
     false
 }
 
+/// Natively there is no window to measure.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const fn viewport_height() -> Option<f64> {
+    None
+}
+
 pub(crate) async fn write_clipboard(text: &str) -> Answer<()> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -337,6 +343,13 @@ mod wasm {
             .ok()
             .and_then(|hidden| hidden.as_bool())
             .unwrap_or(false)
+    }
+
+    /// The height of the window's page area in CSS pixels.
+    pub(crate) fn viewport_height() -> Option<f64> {
+        js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("innerHeight"))
+            .ok()
+            .and_then(|height| height.as_f64())
     }
 
     #[must_use]

@@ -139,6 +139,19 @@ impl Page {
         self.settle()
     }
 
+    /// Opens the select rendered with `id` and clicks its option labelled `label`.
+    pub(crate) fn choose(&mut self, id: &str, label: &str) -> &mut Self {
+        self.click(id);
+        let html = self.html();
+        let option = html
+            .match_indices(&format!("id=\"{id}-option-"))
+            .filter_map(|(at, _)| html[at + "id=\"".len()..].split('"').next())
+            .find(|option| text(&html, option) == label)
+            .unwrap_or_else(|| panic!("{id} offers {label}"))
+            .to_owned();
+        self.click(&option)
+    }
+
     pub(crate) fn fire(&mut self, id: &str, name: &'static str, value: &str) -> &mut Self {
         let mutations = form_event_rendered(&mut self.dom, &self.rendered, id, name, value);
         self.keep(mutations);

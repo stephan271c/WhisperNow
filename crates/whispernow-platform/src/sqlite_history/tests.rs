@@ -141,31 +141,25 @@ fn history_reads_do_not_parse_the_asr_model_id_saved_for_training() {
 }
 
 #[test]
-fn failed_and_cancelled_entries_keep_their_audio_when_keep_audio_is_off() {
+fn failed_and_cancelled_entries_keep_audio_only_when_keep_audio_is_on() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    let failed = history
-        .insert(
-            entry(1, EntryStatus::Failed, ""),
-            &SPEECH,
-            false,
-            HistoryLimit::Last20,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
-    let cancelled = history
-        .insert(
-            entry(2, EntryStatus::Cancelled, "partial"),
-            &SPEECH,
-            false,
-            HistoryLimit::Last20,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
-    let failed = history.get(failed).expect("get").expect("entry");
-    let cancelled = history.get(cancelled).expect("get").expect("entry");
-    assert!(failed.audio_kept && cancelled.audio_kept);
-    assert_eq!(failed.error.as_deref(), Some("Speech recognition failed"));
+    let mut insert = |status, keep_audio| {
+        let id = history
+            .insert(
+                entry(1, status, "partial"),
+                &SPEECH,
+                keep_audio,
+                HistoryLimit::Last20,
+                HistoryRetention::Forever,
+            )
+            .expect("insert");
+        history.get(id).expect("get").expect("entry")
+    };
+    for status in [EntryStatus::Failed, EntryStatus::Cancelled] {
+        assert!(!insert(status, false).audio_kept, "{status:?}");
+        assert!(insert(status, true).audio_kept, "{status:?}");
+    }
     assert_eq!(fixture.wav_names().len(), 2);
 }
 
@@ -527,7 +521,7 @@ fn startup_removes_audio_files_that_no_entry_owns() {
         .insert(
             entry(1, EntryStatus::Failed, ""),
             &SPEECH,
-            false,
+            true,
             HistoryLimit::Last20,
             HistoryRetention::Forever,
         )

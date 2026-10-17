@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use whispernow_domain::ipc::{PermissionKind, PermissionStatus};
+use whispernow_domain::ipc::{AudioDevice, PermissionKind, PermissionStatus};
 use whispernow_domain::{
     CleanupTarget, HistoryLimit, HistoryRetention, RecordingMode, RemoteProvider, Settings,
     Shortcut, ThemePreference,
@@ -9,7 +9,7 @@ use super::microphone_test::MicrophoneTest;
 use super::ui::{Button, Section, Segmented, Select, SettingRow, Toggle};
 use super::{PasteHelperNotice, ShortcutCapture};
 use crate::blocked_reason::DisabledReason;
-use crate::{NoticeScope, Route, SaveStatus, SettingKey, UiContext, UiOperation};
+use crate::{NoticeScope, Route, SettingKey, UiContext, UiOperation};
 
 /// Theme choices as (setting, select value, label).
 const THEMES: [(ThemePreference, &str, &str); 3] = [
@@ -22,6 +22,17 @@ pub(super) const RECORDING_MODES: [(RecordingMode, &str, &str); 2] = [
     (RecordingMode::Hold, "hold", "Hold"),
     (RecordingMode::Toggle, "toggle", "Toggle"),
 ];
+
+/// Input device choices for a select: the system default (`""`), then each device.
+pub(super) fn device_options(devices: &[AudioDevice]) -> Vec<(String, String)> {
+    std::iter::once((String::new(), "System default".to_owned()))
+        .chain(
+            devices
+                .iter()
+                .map(|device| (device.id.clone(), device.display_name.clone())),
+        )
+        .collect()
+}
 
 /// The select value for a history limit: its entry count, or `"unlimited"`.
 fn history_limit_value(limit: HistoryLimit) -> String {
@@ -54,16 +65,6 @@ pub(super) fn chosen<T: Copy>(choices: &[(T, &str, &str)], value: &str) -> Optio
         .map(|(setting, _, _)| *setting)
 }
 
-/// The live status text and the error a control shows for `status`.
-pub(super) fn status_parts(status: SaveStatus) -> (String, Option<String>) {
-    match status {
-        SaveStatus::Idle => (String::new(), None),
-        SaveStatus::Saving => ("Saving…".to_owned(), None),
-        SaveStatus::Saved => ("Saved".to_owned(), None),
-        SaveStatus::Failed(message) => (String::new(), Some(message)),
-    }
-}
-
 #[component]
 pub(super) fn AutosaveRow(
     id: String,
@@ -74,9 +75,9 @@ pub(super) fn AutosaveRow(
 ) -> Element {
     let context = use_context::<UiContext>();
     let management = context.management;
-    let (status, error) = status_parts(management.read().setting_status(setting));
+    let error = management.read().setting_error(setting);
     rsx! {
-        SettingRow { id, title, description, error, status, {children} }
+        SettingRow { id, title, description, error, {children} }
     }
 }
 
@@ -180,11 +181,11 @@ pub(super) fn GeneralPage() -> Element {
         Section { id: "appearance", title: "Appearance",
             AutosaveRow { id: "theme", title: "Theme", setting: SettingKey::Theme,
                 Select { value: choice_value(&THEMES, &settings.theme),
+                    options: THEMES.iter().map(|(_, value, label)| ((*value).to_owned(), (*label).to_owned())).collect::<Vec<_>>(),
                     disabled,
-                    onchange: move |event: FormEvent| if let Some(theme) = chosen(&THEMES, &event.value()) {
+                    onchange: move |value: String| if let Some(theme) = chosen(&THEMES, &value) {
                         context.change_setting(SettingKey::Theme, move |settings| settings.theme = theme);
                     },
-                    for (_, value, label) in THEMES { option { value, "{label}" } }
                 }
             }
         }
@@ -249,14 +250,12 @@ pub(super) fn AudioPage() -> Element {
             AutosaveRow { id: "input-device", title: "Input device",
                 setting: SettingKey::InputDevice,
                 Select { value: settings.input_device.clone().unwrap_or_default(),
+                    options: device_options(&devices),
                     disabled,
-                    onchange: move |event: FormEvent| {
-                        let value = event.value();
+                    onchange: move |value: String| {
                         let device = (!value.is_empty()).then_some(value);
                         context.change_setting(SettingKey::InputDevice, move |settings| settings.input_device.clone_from(&device));
                     },
-                    option { value: "", "System default" }
-                    for device in devices { option { value: "{device.id}", "{device.display_name}" } }
                 }
             }
             SettingRow { id: "audio-test-microphone", title: "Test microphone",
@@ -287,40 +286,36 @@ pub(super) fn PrivacyPage() -> Element {
         Section { id: "transcript-history", title: "History",
             AutosaveRow { id: "history-limit", title: "Keep", setting: SettingKey::HistoryLimit,
                 Select { value: history_limit_value(settings.history_limit),
+                    options: HistoryLimit::ALL.map(|limit| (history_limit_value(limit), limit.label().to_owned())).to_vec(),
                     disabled,
-                    onchange: move |event: FormEvent| {
+                    onchange: move |value: String| {
                         if let Some(limit) = HistoryLimit::ALL
                             .into_iter()
-                            .find(|limit| history_limit_value(*limit) == event.value())
+                            .find(|limit| history_limit_value(*limit) == value)
                         {
                             context.change_setting(SettingKey::HistoryLimit, move |settings| settings.history_limit = limit);
                         }
                     },
-                    for limit in HistoryLimit::ALL {
-                        option { value: history_limit_value(limit), "{limit.label()}" }
-                    }
                 }
             }
             AutosaveRow { id: "history-retention", title: "For",
-                description: "Older entries are deleted, with their audio.",
+                description: "Older entries are deleted.",
                 setting: SettingKey::HistoryRetention,
                 Select { value: history_retention_value(settings.history_retention),
+                    options: HistoryRetention::ALL.map(|retention| (history_retention_value(retention), retention.label().to_owned())).to_vec(),
                     disabled,
-                    onchange: move |event: FormEvent| {
+                    onchange: move |value: String| {
                         if let Some(retention) = HistoryRetention::ALL
                             .into_iter()
-                            .find(|retention| history_retention_value(*retention) == event.value())
+                            .find(|retention| history_retention_value(*retention) == value)
                         {
                             context.change_setting(SettingKey::HistoryRetention, move |settings| settings.history_retention = retention);
                         }
                     },
-                    for retention in HistoryRetention::ALL {
-                        option { value: history_retention_value(retention), "{retention.label()}" }
-                    }
                 }
             }
             AutosaveRow { id: "history-keep-audio", title: "Keep audio",
-                description: "About 2 MB per minute. Failed and cancelled dictations always keep it.",
+                description: "About 2 MB per minute.",
                 setting: SettingKey::KeepAudio,
                 Toggle { checked: settings.keep_audio,
                     disabled,

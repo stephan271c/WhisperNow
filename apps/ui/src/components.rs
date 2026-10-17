@@ -38,7 +38,9 @@ use setup::SetupScreen;
 use shared::{PasteHelperNotice, ShortcutCapture};
 use titlebar::{TitleBar, use_window_chrome};
 use ui::focus::{focus, take_focus};
-use ui::{Banner, BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName, Tone};
+use ui::{
+    Banner, BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName, Select, Tone,
+};
 use updates::AboutPage;
 use vocabulary::VocabularyPage;
 
@@ -301,25 +303,21 @@ fn SidebarFooter() -> Element {
                 span { class: "model-status-state", "{state_label}" }
             }
             if installed.len() > 1 {
-                label { class: "visually-hidden", r#for: "footer-model", "Speech model" }
-                select {
+                Select {
                     id: "footer-model",
-                    class: "select footer-model",
-                    value: "{selected_id}",
+                    label: "Speech model",
+                    value: selected_id,
+                    options: installed.iter().map(|(id, name)| (id.as_str().to_owned(), name.clone())).collect::<Vec<_>>(),
                     disabled: switch_blocked.is_some(),
-                    aria_describedby: switch_blocked.as_ref().map(|_| "footer-model-disabled-reason"),
+                    aria_describedby: switch_blocked.as_ref().map(|_| "footer-model-disabled-reason".to_owned()),
                     onchange: {
                         let installed = installed.clone();
-                        move |event: FormEvent| {
-                            let value = event.value();
+                        move |value: String| {
                             if let Some((id, _)) = installed.iter().find(|(id, _)| id.as_str() == value) {
                                 context.switch_model(id.clone());
                             }
                         }
                     },
-                    for (id, name) in installed.clone() {
-                        option { value: id.as_str(), selected: id.as_str() == selected_id, "{name}" }
-                    }
                 }
                 DisabledReason { id: "footer-model-disabled-reason", reason: switch_blocked.clone() }
             }
@@ -408,7 +406,7 @@ fn NoticeView(notice: Notice, inline: bool) -> Element {
     let context = use_context::<UiContext>();
     let mut management = context.management;
     let id = notice.id;
-    let auto_dismisses = notice.auto_dismisses();
+    let auto_dismisses = notice.auto_dismisses(inline);
     use_effect(use_reactive!(|id, auto_dismisses| {
         if auto_dismisses {
             spawn(async move {

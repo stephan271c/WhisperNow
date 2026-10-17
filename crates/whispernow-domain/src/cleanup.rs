@@ -28,6 +28,21 @@ pub enum RemoteProvider {
 }
 
 impl RemoteProvider {
+    /// `provider` at `endpoint`, or at its default address when there is none. `None` for the
+    /// app's own cleanup model and for a custom provider without an endpoint.
+    #[must_use]
+    pub fn new(provider: LlmProvider, endpoint: Option<ProviderEndpoint>) -> Option<Self> {
+        match provider {
+            LlmProvider::OpenAi => Some(Self::OpenAi(endpoint)),
+            LlmProvider::Anthropic => Some(Self::Anthropic(endpoint)),
+            LlmProvider::OpenRouter => Some(Self::OpenRouter(endpoint)),
+            LlmProvider::Ollama => Some(Self::Ollama(endpoint)),
+            LlmProvider::Gemini => Some(Self::Gemini(endpoint)),
+            LlmProvider::Custom => endpoint.map(Self::Custom),
+            LlmProvider::LocalCleanup => None,
+        }
+    }
+
     #[must_use]
     pub const fn provider(&self) -> LlmProvider {
         match self {
@@ -86,18 +101,8 @@ impl Settings {
         if model.is_empty() {
             return Err(MissingCleanupField::Model);
         }
-        let endpoint = settings.api_base.clone();
-        let provider = match self.llm_provider {
-            LlmProvider::OpenAi => RemoteProvider::OpenAi(endpoint),
-            LlmProvider::Anthropic => RemoteProvider::Anthropic(endpoint),
-            LlmProvider::OpenRouter => RemoteProvider::OpenRouter(endpoint),
-            LlmProvider::Ollama => RemoteProvider::Ollama(endpoint),
-            LlmProvider::Gemini => RemoteProvider::Gemini(endpoint),
-            LlmProvider::Custom => {
-                RemoteProvider::Custom(endpoint.ok_or(MissingCleanupField::Endpoint)?)
-            }
-            LlmProvider::LocalCleanup => unreachable!(),
-        };
+        let provider = RemoteProvider::new(self.llm_provider, settings.api_base.clone())
+            .ok_or(MissingCleanupField::Endpoint)?;
         Ok(CleanupTarget::Remote(RemoteCleanupTarget {
             provider,
             model: model.to_owned(),

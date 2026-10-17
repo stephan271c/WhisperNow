@@ -154,7 +154,7 @@ fn ShortcutsCard(shortcut: Option<(RecordingMode, Shortcut)>) -> Element {
 #[component]
 fn MicrophoneCard() -> Element {
     rsx! {
-        article { class: "card home-card", aria_labelledby: "home-microphone-title",
+        article { class: "card home-card home-microphone", aria_labelledby: "home-microphone-title",
             h2 { id: "home-microphone-title", "Microphone" }
             MicrophoneTest { id_prefix: "test-microphone" }
             NoticeRegion { scope: NoticeScope::Home }

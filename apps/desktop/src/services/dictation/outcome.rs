@@ -1,11 +1,11 @@
 use whispernow_core::{
     audio::TARGET_SAMPLE_RATE,
-    llm::CleanupFallback,
+    llm::{CleanupFallback, LlmError},
     workflow::{PipelineFailureKind, PreparedTranscription},
 };
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{ErrorCategory, Phase, SetupTestResult};
-use whispernow_domain::{EntryStatus, NewHistoryEntry};
+use whispernow_domain::{CleanupTarget, EntryStatus, NewHistoryEntry};
 
 use super::{Recording, RecordingTrigger, Worker, capture::CaptureInterruption};
 use crate::services::{output::OutputNotice, state::CancelReason};
@@ -151,7 +151,7 @@ impl Worker {
         }
     }
 
-    /// Keeps a dictation that has no transcript, with its audio, when it heard anything.
+    /// Records a dictation that has no transcript, when it heard anything.
     pub(super) fn keep_untranscribed(
         &self,
         recording: &Recording,
@@ -229,15 +229,25 @@ impl OutputNotice {
     }
 }
 
-pub(super) fn cleanup_fallback_warning(prepared: &PreparedTranscription) -> Option<AppError> {
-    let (code, summary) = match prepared.fallback? {
-        CleanupFallback::Cancelled => return None,
-        CleanupFallback::ProviderFailed(_)
-        | CleanupFallback::EmptyOutput
-        | CleanupFallback::Truncated
-        | CleanupFallback::ContentFiltered => (
+pub(super) fn cleanup_fallback_warning(
+    prepared: &PreparedTranscription,
+    target: Option<&CleanupTarget>,
+) -> Option<AppError> {
+    let (code, summary) = match (prepared.fallback?, target) {
+        (CleanupFallback::Cancelled, _) => return None,
+        (
+            CleanupFallback::ProviderFailed(LlmError::ModelNotFound),
+            Some(CleanupTarget::Remote(target)),
+        ) => (
+            "cleanup_model_not_found",
+            format!(
+                "AI cleanup couldn't find the model \"{}\"; check its name in Settings → AI cleanup",
+                target.model
+            ),
+        ),
+        _ => (
             "cleanup_failed",
-            "AI cleanup was unavailable, so the transcript was kept as recognized",
+            "AI cleanup was unavailable, so the transcript was kept as recognized".to_owned(),
         ),
     };
     Some(AppError::new(ErrorCategory::Cleanup, code, summary))

@@ -149,10 +149,12 @@ impl VoiceActivity for Loudness {
     }
 }
 
-/// An LLM provider that answers with `reply`, or fails while it is unset.
+/// An LLM provider that answers with `reply`, or while it is unset fails with `failure`
+/// (`InvalidRequest` when that is unset too).
 #[derive(Default)]
 struct FakeProvider {
     reply: Mutex<Option<&'static str>>,
+    failure: Mutex<Option<LlmError>>,
     requests: Mutex<Vec<LlmRequest>>,
 }
 
@@ -160,13 +162,18 @@ impl LlmService for FakeProvider {
     fn complete(&self, request: LlmRequest) -> LlmFuture<'_> {
         self.requests.lock().expect("requests").push(request);
         let reply = *self.reply.lock().expect("reply");
+        let failure = self
+            .failure
+            .lock()
+            .expect("failure")
+            .unwrap_or(LlmError::InvalidRequest);
         Box::pin(async move {
             reply
                 .map(|text| LlmResponse {
                     text: text.to_owned(),
                     finish_reason: LlmFinishReason::Completed,
                 })
-                .ok_or(LlmError::InvalidRequest)
+                .ok_or(failure)
         })
     }
 }
@@ -736,6 +743,30 @@ fn a_failed_cleanup_pastes_the_recognized_text_and_says_so() {
     let history = fixture.history();
     assert_eq!(history[0].status, EntryStatus::Ok);
     assert_eq!(fixture.cleanup_models(), ["gpt-test"]);
+}
+
+#[test]
+fn a_missing_cleanup_model_is_named_in_the_warning() {
+    let fixture = Fixture::new();
+    fixture.enable_cleanup();
+    *fixture.provider.failure.lock().expect("failure") = Some(LlmError::ModelNotFound);
+    fixture.start();
+    fixture.dictation.stop().expect("stop");
+
+    assert_eq!(fixture.settled(), Phase::Idle);
+    assert_eq!(fixture.pasted(), [TRANSCRIPT]);
+    let warning = fixture
+        .state
+        .lock()
+        .last_error
+        .clone()
+        .expect("cleanup warning");
+    assert_eq!(warning.code, "cleanup_model_not_found");
+    assert_eq!(
+        warning.summary,
+        "AI cleanup couldn't find the model \"gpt-test\"; check its name in Settings → AI cleanup"
+    );
+    assert_eq!(warning.category, ErrorCategory::Cleanup);
 }
 
 #[test]
