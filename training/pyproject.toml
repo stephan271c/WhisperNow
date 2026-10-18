@@ -30,6 +30,7 @@ audio = [
 train = [
     "accelerate>=1.15.0",
     "bitsandbytes>=0.50.2",
+    "flash-linear-attention>=0.5.2",
     "liger-kernel>=0.8.3",
     "peft>=0.21.1",
     "sentencepiece>=0.2.2",

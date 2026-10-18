@@ -35,6 +35,8 @@ class TrainConfig:
     seed: int = 109
     # Stop after this many optimizer steps; 0 trains the full schedule.
     max_steps: int = 0
+    # Train on a fixed random sample of this many rows; 0 uses them all.
+    train_rows: int = 0
     # Recompute activations in the backward pass; TRL's default.
     gradient_checkpointing: bool = True
     # Memory savers for models that do not fit a 12 GB GPU otherwise: a transformers optimizer
@@ -51,6 +53,9 @@ class TrainConfig:
     # only the latest, and resume from it when the run starts again; 0 saves none. For preemptible
     # cloud GPUs (modal_train.py).
     checkpoint_minutes: float = 0
+    # Save a resumable checkpoint after this many optimizer steps of the full schedule and stop; the same
+    # config without it resumes and finishes the run, e.g. in another Modal workspace. 0 never pauses.
+    pause_at_step: int = 0
     # Fresh speech noise per epoch: train one pass over `epochs` noisy variants of the
     # train split (`datagen epochs`), so each row is seen once per epoch, each time with new noise.
     noise_per_epoch: bool = False

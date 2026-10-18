@@ -54,6 +54,10 @@ def train_files(config: TrainConfig) -> list[Path]:
 def load_tokenizer(base_model: str):
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     tokenizer.chat_template = prompt.chat_template()
+    # Qwen3.5 has no bos token. llama.cpp then takes token 11 (",") as the bos, and the template would
+    # render it when serving, so prompts start with the base model's end of document instead.
+    if tokenizer.bos_token is None:
+        tokenizer.bos_token = tokenizer.eos_token
     # Replies end at the end of the turn; MiniCPM's own eos is `</s>`.
     tokenizer.eos_token = prompt.END_OF_TURN
     return tokenizer
@@ -64,9 +68,15 @@ def checkpoint_dir(out: Path, epoch: int) -> Path:
 
 
 def _bf16_state_dict(model) -> dict[str, torch.Tensor]:
-    """The weights as bf16 copies on the CPU, with any LoRA adapter added in; the model is untouched."""
+    """The parameters as bf16 copies on the CPU, with any LoRA adapter added in; the model is untouched.
+
+    Buffers keep their dtype: LFM2-MoE's routing bias is fp32 in the base checkpoint, and rounding it
+    to bf16 changes which experts some tokens go to.
+    """
     if not hasattr(model, "get_base_model"):
-        return {name: tensor.detach().to("cpu", torch.bfloat16) for name, tensor in model.state_dict().items()}
+        buffers = {name for name, _ in model.named_buffers()}
+        return {name: tensor.detach().to("cpu", tensor.dtype if name in buffers else torch.bfloat16)
+                for name, tensor in model.state_dict().items()}
     base = model.get_base_model()
     merged = {}
     for name, tensor in base.state_dict().items():
@@ -109,6 +119,30 @@ class EpochCheckpoints(TrainerCallback):
         self.tokenizer.save_pretrained(target)
 
 
+class StopOnNonFiniteGradients(TrainerCallback):
+    """Stops at the first logged non-finite gradient norm: clipping turns it into NaN weights for the rest of the run.
+
+    fla 0.5.2's gated delta rule backward gave NaN gradients on a B200 (Triton 3.8.0) for some batches under 128
+    tokens, and the weights never recovered.
+    """
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs and "grad_norm" in logs and not math.isfinite(logs["grad_norm"]):
+            control.should_training_stop = True
+
+
+class Pause(TrainerCallback):
+    """Asks for a resumable checkpoint at `step`, then stops."""
+
+    def __init__(self, step: int) -> None:
+        self.step = step
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step == self.step:
+            control.should_save = True
+            control.should_training_stop = True
+
+
 class TimedCheckpoints(TrainerCallback):
     """Asks for a resumable checkpoint every `minutes` of training, but not at the last step."""
 
@@ -142,9 +176,14 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
     (out / "config.json").write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
     base_model = resolve(config.base_model)
     tokenizer = load_tokenizer(base_model)
+    resumed_from = latest_checkpoint(out)
+    # A resumed full fine-tune loads its weights here: the trainer reloads them with a non-strict
+    # `load_state_dict`, which matches no key when transformers saves another layout (Qwen3.5's
+    # `model.language_model.*`) and silently keeps the base weights.
+    weights = resumed_from if resumed_from and config.method == "full" else base_model
     # Full fine-tunes keep fp32 master weights under bf16 autocast; LoRA trains fp32 adapters on bf16 weights.
     model = AutoModelForCausalLM.from_pretrained(
-        base_model,
+        weights,
         dtype=torch.float32 if config.method == "full" else torch.bfloat16,
         attn_implementation="sdpa",
     )
@@ -164,7 +203,7 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
         )
 
     files = train_files(config)
-    train_rows, eval_rows = load_rows(files), load_split("val", VAL_ROWS)
+    train_rows, eval_rows = load_rows(files, config.train_rows or None), load_split("val", VAL_ROWS)
     # Noise variants are one pass over every epoch's rows; otherwise the trainer counts epochs.
     passes = 1 if config.noise_per_epoch else config.epochs
     common = dict(
@@ -193,9 +232,12 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
         seed=config.seed,
         dataloader_num_workers=2,
     )
-    callbacks = [*callbacks, *([] if config.max_steps else [EpochCheckpoints(out, config.epochs, tokenizer)])]
+    callbacks = [*callbacks, StopOnNonFiniteGradients(),
+                 *([] if config.max_steps else [EpochCheckpoints(out, config.epochs, tokenizer)])]
     if config.checkpoint_minutes:
         callbacks.append(TimedCheckpoints(config.checkpoint_minutes))
+    if config.pause_at_step:
+        callbacks.append(Pause(config.pause_at_step))
     args = SFTConfig(
         **common,
         completion_only_loss=True,
@@ -211,16 +253,20 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
         peft_config=peft_config,
         callbacks=callbacks,
     )
-    resumed_from = latest_checkpoint(out)
     torch.cuda.reset_peak_memory_stats()
     started = time.monotonic()
     trainer.train(resume_from_checkpoint=resumed_from)
     seconds = time.monotonic() - started
+    if config.pause_at_step and trainer.state.global_step == config.pause_at_step < trainer.state.max_steps:
+        return {"paused_at": trainer.state.global_step, "resumed_from": resumed_from, "seconds": round(seconds),
+                "peak_gpu_gb": round(torch.cuda.max_memory_allocated() / 1e9, 2)}
     final_eval = trainer.evaluate()
     trainable = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
 
     trained = trainer.model.merge_and_unload() if config.method == "lora" else trainer.model
-    trained = trained.to(torch.bfloat16)
+    # Buffers keep their dtype, as in `_bf16_state_dict`.
+    for parameter in trained.parameters():
+        parameter.data = parameter.data.to(torch.bfloat16)
     trained.generation_config.eos_token_id = tokenizer.eos_token_id
     trained.generation_config.pad_token_id = tokenizer.pad_token_id
     trained.save_pretrained(out / "model")

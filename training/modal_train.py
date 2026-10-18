@@ -45,7 +45,8 @@ hf_cache = modal.Volume.from_name("whispernow-hf-cache", create_if_missing=True)
 runs = modal.Volume.from_name("whispernow-runs", create_if_missing=True)
 
 app = modal.App("whispernow-train", image=image)
-CONTAINER = dict(volumes={str(HF_CACHE): hf_cache, str(RUNS): runs}, cpu=4.0, memory=32 * 1024)
+# LFM2.5-8B-A1B's fp32 weights take 33 GB of RAM while loading, and its resume checkpoint is about 100 GB.
+CONTAINER = dict(volumes={str(HF_CACHE): hf_cache, str(RUNS): runs}, cpu=4.0, memory=96 * 1024)
 
 
 def _callbacks(timings: list | None = None, save_at: int = 0) -> list:

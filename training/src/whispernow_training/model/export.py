@@ -9,6 +9,7 @@ into `draft-text/`, for speculative decoding drafted from the transcript (model/
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -85,16 +86,14 @@ def export(run_dir: Path, quants: list[str]) -> list[Path]:
     full = gguf_path(run_dir, "BF16")
     full.parent.mkdir(parents=True, exist_ok=True)
     if not full.exists():
+        convert = [sys.executable, str(LLAMA_CPP / "src" / "convert_hf_to_gguf.py"), str(run_dir / "model"),
+                   "--outfile", str(full), "--outtype", "bf16"]
+        # transformers loads Qwen3.5 without its multi-token-prediction block and saves it without
+        # one, but keeps the block in the config, so the converter would expect its weights.
+        if json.loads((run_dir / "model" / "config.json").read_text()).get("mtp_num_hidden_layers"):
+            convert.append("--no-mtp")
         subprocess.run(
-            [
-                sys.executable,
-                str(LLAMA_CPP / "src" / "convert_hf_to_gguf.py"),
-                str(run_dir / "model"),
-                "--outfile",
-                str(full),
-                "--outtype",
-                "bf16",
-            ],
+            convert,
             check=True,
             env={**os.environ, "PYTHONPATH": str(LLAMA_CPP / "src" / "gguf-py")},
         )
