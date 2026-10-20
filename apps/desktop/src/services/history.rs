@@ -8,7 +8,7 @@ use whispernow_domain::{ClearDataCategory, ErrorCategory, ipc::ClearDataItem};
 use whispernow_domain::{
     EntryId, HistoryLimit, HistoryPage, HistoryPageRequest, HistoryRetention, NewHistoryEntry,
 };
-use whispernow_platform::{AppPaths, SqliteHistoryRepository};
+use whispernow_platform::{AppPaths, ClearPlan, SqliteHistoryRepository};
 
 pub(crate) struct HistoryStore {
     paths: AppPaths,
@@ -113,7 +113,7 @@ impl HistoryStore {
         Ok(directory)
     }
 
-    pub(super) fn clear_data(&self) -> ClearDataItem {
+    pub(super) fn clear_data(&self, plan: &ClearPlan) -> ClearDataItem {
         let repository = self.lock();
         let cleared = repository
             .as_ref()
@@ -126,10 +126,10 @@ impl HistoryStore {
                 );
             });
         let deleted = cleared.is_ok()
-            && self
-                .paths
-                .clear_data(&[ClearDataCategory::History])
-                .is_ok_and(|items| items.iter().all(|item| item.deleted));
+            && plan
+                .remove(&[ClearDataCategory::History])
+                .iter()
+                .all(|item| item.deleted);
         ClearDataItem {
             category: ClearDataCategory::History,
             path: "History entries, recordings, and legacy files".to_owned(),

@@ -17,7 +17,6 @@ use whispernow_domain::AppError;
 
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use whispernow_domain::ClearDataCategory;
 use whispernow_domain::ipc::EventPayload;
 
 use super::ui::Tone;
@@ -209,10 +208,9 @@ impl UiContext {
     /// Removes every kind of application data, then reads everything again.
     pub(crate) fn clear_data(self) {
         let operation = UiOperation::ClearData;
-        let request = ClearDataCategory::ALL.to_vec();
         self.run(
             operation,
-            async move { client::invoke("clear_data", Some(&request)).await },
+            client::call("clear_data"),
             move |mut actions, answer| {
                 match answer {
                     Ok(result) => actions.management.write().apply_clear_result(result),

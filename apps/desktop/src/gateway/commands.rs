@@ -5,8 +5,8 @@ use whispernow_domain::ipc::{
     SaveSettingsResponse, SetApiKeyRequest, SettingsView, SetupStateView,
 };
 use whispernow_domain::{
-    ClearDataCategory, EntryId, HistoryPage, HistoryPageRequest, LlmProvider, ModelId,
-    RemoteProvider, Settings, SetupCheckpoint,
+    EntryId, HistoryPage, HistoryPageRequest, LlmProvider, ModelId, RemoteProvider, Settings,
+    SetupCheckpoint,
 };
 
 use super::{Failure, Gateway, run_blocking};
@@ -281,10 +281,9 @@ pub(crate) async fn clear_history(state: tauri::State<'_, Gateway>) -> Result<()
 
 #[tauri::command]
 pub(crate) async fn clear_data(
-    request: Vec<ClearDataCategory>,
     state: tauri::State<'_, Gateway>,
 ) -> Result<ClearDataResult, AppError> {
-    state.clear_data(request).await
+    state.clear_data().await
 }
 
 #[tauri::command]

@@ -1,139 +1,122 @@
 //! Locating and deleting the fixed application-data targets in [`AppPaths`].
 
-use std::{
-    fs, io,
-    path::{Path, PathBuf},
-};
+use std::{fs, io, iter, path::PathBuf};
 
-use thiserror::Error;
 use whispernow_domain::ClearDataCategory;
 use whispernow_domain::ipc::{ClearDataItem, DataLocation};
 
-use crate::AppPaths;
+use crate::{AppPaths, atomic_file::remove_path};
 
-#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
-#[error("could not inspect {category:?} data: {kind}")]
-pub struct ClearDataError {
-    pub category: ClearDataCategory,
-    pub kind: io::ErrorKind,
+#[derive(Debug)]
+struct Target {
+    location: DataLocation,
+    removable: bool,
 }
 
-impl AppPaths {
-    /// The fixed targets that currently exist.
-    pub fn data_locations(&self) -> Result<Vec<DataLocation>, ClearDataError> {
-        self.data_locations_for(&ClearDataCategory::ALL)
+impl Target {
+    fn new(category: ClearDataCategory, path: PathBuf) -> Self {
+        Self {
+            location: DataLocation { category, path },
+            removable: true,
+        }
     }
 
-    pub fn data_locations_for(
-        &self,
-        categories: &[ClearDataCategory],
-    ) -> Result<Vec<DataLocation>, ClearDataError> {
-        self.inspect_targets(categories)
+    fn listed(category: ClearDataCategory, path: PathBuf) -> Self {
+        Self {
+            removable: false,
+            ..Self::new(category, path)
+        }
+    }
+}
+
+/// The existing fixed targets of some categories, inspected once when the plan is made.
+#[derive(Debug)]
+pub struct ClearPlan {
+    targets: Vec<Target>,
+}
+
+impl ClearPlan {
+    #[must_use]
+    pub fn locations(&self) -> Vec<DataLocation> {
+        self.targets
+            .iter()
+            .map(|target| target.location.clone())
+            .collect()
     }
 
     /// The history database and recordings belong to the open history repository, and the
     /// CUDA pack to the model store; they are listed but left for those owners to clear.
-    pub fn clear_data(
-        &self,
-        categories: &[ClearDataCategory],
-    ) -> Result<Vec<ClearDataItem>, ClearDataError> {
-        let cuda_pack = self.cuda_pack_dir();
-        let targets = self
-            .inspect_targets(categories)?
-            .into_iter()
-            .filter(|location| {
-                location.path != cuda_pack
-                    && location.path != self.history_database_file()
-                    && location.path != self.recordings_dir()
-            });
-        let mut entries = Vec::new();
-        for DataLocation { category, path } in targets {
-            let deleted = remove_path(&path)
-                .map_or_else(|error| error.kind() == io::ErrorKind::NotFound, |()| true);
-            entries.push(ClearDataItem {
-                category,
-                path: path.to_string_lossy().into_owned(),
-                deleted,
-            });
-        }
-        Ok(entries)
-    }
-
-    fn inspect_targets(
-        &self,
-        categories: &[ClearDataCategory],
-    ) -> Result<Vec<DataLocation>, ClearDataError> {
-        let mut locations = Vec::new();
-        for (category, path) in self.fixed_targets(categories)? {
-            match fs::symlink_metadata(&path) {
-                Ok(_) => locations.push(DataLocation { category, path }),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(ClearDataError {
-                        category,
-                        kind: error.kind(),
-                    });
+    #[must_use]
+    pub fn remove(&self, categories: &[ClearDataCategory]) -> Vec<ClearDataItem> {
+        self.targets
+            .iter()
+            .filter(|target| target.removable && categories.contains(&target.location.category))
+            .map(|Target { location, .. }| {
+                let deleted = remove_path(&location.path)
+                    .map_or_else(|error| error.kind() == io::ErrorKind::NotFound, |()| true);
+                ClearDataItem {
+                    category: location.category,
+                    path: location.path.to_string_lossy().into_owned(),
+                    deleted,
                 }
-            }
-        }
-        Ok(locations)
-    }
-
-    fn fixed_targets(
-        &self,
-        categories: &[ClearDataCategory],
-    ) -> Result<Vec<(ClearDataCategory, PathBuf)>, ClearDataError> {
-        let mut targets = Vec::new();
-        if categories.contains(&ClearDataCategory::Settings) {
-            let backups = self
-                .settings_backup_files()
-                .map_err(|error| ClearDataError {
-                    category: ClearDataCategory::Settings,
-                    kind: error.kind(),
-                })?;
-            targets.push((ClearDataCategory::Settings, self.settings_file()));
-            targets.extend(
-                backups
-                    .into_iter()
-                    .map(|path| (ClearDataCategory::Settings, path)),
-            );
-            targets.push((ClearDataCategory::Settings, self.python_logs_dir()));
-        }
-        if categories.contains(&ClearDataCategory::History) {
-            let backups = self
-                .history_backup_files()
-                .map_err(|error| ClearDataError {
-                    category: ClearDataCategory::History,
-                    kind: error.kind(),
-                })?;
-            targets.push((ClearDataCategory::History, self.history_file()));
-            targets.extend(
-                backups
-                    .into_iter()
-                    .map(|path| (ClearDataCategory::History, path)),
-            );
-        }
-        targets.extend(
-            [
-                (ClearDataCategory::History, self.recordings_dir()),
-                (ClearDataCategory::History, self.history_database_file()),
-                (ClearDataCategory::Models, self.models_dir()),
-                (ClearDataCategory::Models, self.cuda_pack_dir()),
-            ]
-            .into_iter()
-            .filter(|(category, _)| categories.contains(category)),
-        );
-        Ok(targets)
+            })
+            .collect()
     }
 }
 
-pub(crate) fn remove_path(path: &Path) -> io::Result<()> {
-    // `symlink_metadata` keeps deletion from following the target of a symlink.
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_dir() {
-        fs::remove_dir_all(path)
-    } else {
-        fs::remove_file(path)
+impl AppPaths {
+    /// The fixed targets that currently exist.
+    pub fn data_locations(&self) -> io::Result<Vec<DataLocation>> {
+        Ok(self.clear_plan(&ClearDataCategory::ALL)?.locations())
+    }
+
+    pub fn clear_plan(&self, categories: &[ClearDataCategory]) -> io::Result<ClearPlan> {
+        let mut targets = Vec::new();
+        for target in self.fixed_targets(categories)? {
+            match fs::symlink_metadata(&target.location.path) {
+                Ok(_) => targets.push(target),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(ClearPlan { targets })
+    }
+
+    fn fixed_targets(&self, categories: &[ClearDataCategory]) -> io::Result<Vec<Target>> {
+        let mut targets = Vec::new();
+        if categories.contains(&ClearDataCategory::Settings) {
+            let backups = self.settings_backup_files()?;
+            targets.extend(
+                iter::once(self.settings_file())
+                    .chain(backups)
+                    .chain(iter::once(self.python_logs_dir()))
+                    .map(|path| Target::new(ClearDataCategory::Settings, path)),
+            );
+        }
+        if categories.contains(&ClearDataCategory::History) {
+            let backups = self.history_backup_files()?;
+            targets.extend(
+                iter::once(self.history_file())
+                    .chain(backups)
+                    .map(|path| Target::new(ClearDataCategory::History, path)),
+            );
+            targets.push(Target::listed(
+                ClearDataCategory::History,
+                self.recordings_dir(),
+            ));
+            targets.push(Target::listed(
+                ClearDataCategory::History,
+                self.history_database_file(),
+            ));
+        }
+        if categories.contains(&ClearDataCategory::Models) {
+            targets.push(Target::new(ClearDataCategory::Models, self.models_dir()));
+            targets.push(Target::listed(
+                ClearDataCategory::Models,
+                self.cuda_pack_dir(),
+            ));
+        }
+        Ok(targets)
     }
 }
 
@@ -145,6 +128,7 @@ mod tests {
 
     use super::ClearDataCategory;
     use crate::AppPaths;
+    use whispernow_domain::ipc::ClearDataItem;
 
     const EVERYTHING: [ClearDataCategory; 3] = [
         ClearDataCategory::Settings,
@@ -184,6 +168,13 @@ mod tests {
         }
     }
 
+    fn clear(paths: &AppPaths, categories: &[ClearDataCategory]) -> Vec<ClearDataItem> {
+        paths
+            .clear_plan(categories)
+            .expect("clear plan")
+            .remove(categories)
+    }
+
     fn create_file(path: &Path) {
         fs::create_dir_all(path.parent().expect("file parent")).expect("create file parent");
         fs::write(path, b"test data").expect("create file");
@@ -199,8 +190,8 @@ mod tests {
         let fixture = Fixture::separate_roots();
         let paths = fixture.paths;
 
-        assert_eq!(paths.data_locations(), Ok(Vec::new()));
-        assert_eq!(paths.clear_data(&EVERYTHING), Ok(Vec::new()));
+        assert!(paths.data_locations().expect("locations").is_empty());
+        assert!(clear(&paths, &EVERYTHING).is_empty());
     }
 
     #[test]
@@ -229,7 +220,7 @@ mod tests {
             .concat()
         );
 
-        let report = paths.clear_data(&EVERYTHING).expect("clear");
+        let report = clear(&paths, &EVERYTHING);
         assert_eq!(report.len(), 6);
         assert!(report.iter().all(|entry| entry.deleted));
         let remaining = paths.data_locations().expect("remaining targets");
@@ -262,8 +253,9 @@ mod tests {
         let paths = fixture.paths.clone();
 
         let report = paths
-            .clear_data(&[ClearDataCategory::Settings])
-            .expect("clear settings");
+            .clear_plan(&EVERYTHING)
+            .expect("clear plan")
+            .remove(&[ClearDataCategory::Settings]);
 
         assert_eq!(report.len(), 2);
         assert!(!fixture.paths.python_logs_dir().exists());
@@ -283,12 +275,11 @@ mod tests {
         create_dir(&fixture.paths.cuda_pack_dir());
         create_dir(&fixture.paths.python_logs_dir());
 
-        let error = fixture
+        fixture
             .paths
-            .clear_data(&EVERYTHING)
+            .clear_plan(&EVERYTHING)
             .expect_err("inspection failure");
 
-        assert_eq!(error.category, ClearDataCategory::Settings);
         for path in [
             fixture.paths.history_database_file(),
             fixture.paths.recordings_dir().join("content"),
@@ -298,6 +289,21 @@ mod tests {
         ] {
             assert_eq!(fs::read(path).expect("data preserved"), b"test data");
         }
+    }
+
+    #[test]
+    fn a_plan_removes_only_the_targets_it_inspected() {
+        let fixture = Fixture::separate_roots();
+        create_file(&fixture.paths.settings_file());
+        let plan = fixture.paths.clear_plan(&EVERYTHING).expect("clear plan");
+        let later = fixture.paths.unreadable_settings_file("20260926T120000Z");
+        create_file(&later);
+
+        let report = plan.remove(&EVERYTHING);
+
+        assert_eq!(report.len(), 1);
+        assert!(!fixture.paths.settings_file().exists());
+        assert!(later.exists());
     }
 
     #[test]
@@ -334,7 +340,7 @@ mod tests {
                 fixture.paths.python_logs_dir(),
             ]
         );
-        paths.clear_data(&EVERYTHING).expect("clear");
+        clear(&paths, &EVERYTHING);
         assert!(!fixture.paths.python_logs_dir().exists());
         for removed in [&earlier, &later, &python, &fixture.paths.settings_file()] {
             assert!(!removed.exists(), "{removed:?}");
@@ -361,17 +367,11 @@ mod tests {
             vec![earlier.clone(), later.clone(), imported.clone()]
         );
 
-        fixture
-            .paths
-            .clear_data(&[ClearDataCategory::Settings])
-            .expect("clear settings");
+        clear(&fixture.paths, &[ClearDataCategory::Settings]);
         for path in [&later, &earlier, &imported] {
             assert!(path.exists());
         }
-        let report = fixture
-            .paths
-            .clear_data(&[ClearDataCategory::History])
-            .expect("clear history");
+        let report = clear(&fixture.paths, &[ClearDataCategory::History]);
         assert_eq!(report.len(), 3);
         assert!(
             report
@@ -392,7 +392,7 @@ mod tests {
         create_file(&sentinel);
         let paths = fixture.paths.clone();
 
-        let report = paths.clear_data(&EVERYTHING).expect("clear");
+        let report = clear(&paths, &EVERYTHING);
 
         assert!(report.iter().all(|entry| entry.deleted));
         assert_eq!(fixture.paths.config_dir(), fixture.paths.data_dir());
@@ -419,7 +419,7 @@ mod tests {
         .expect("nested symlink");
         let paths = fixture.paths.clone();
 
-        let report = paths.clear_data(&EVERYTHING).expect("clear");
+        let report = clear(&paths, &EVERYTHING);
 
         assert!(report.iter().all(|entry| entry.deleted));
         assert!(outside.join("content").exists());

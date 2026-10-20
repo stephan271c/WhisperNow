@@ -78,8 +78,7 @@ pub(super) fn native_services_before_preload(
     let store = Arc::new(ModelStore::new(paths.clone()));
     let local_cleanup = Arc::new(LocalCleanupService::new(
         fixture.root.path().join("llama"),
-        Arc::new(|_| None),
-        Arc::new(|| None),
+        Arc::clone(&store),
     ));
     let services = NativeServices {
         settings: fixture.settings,

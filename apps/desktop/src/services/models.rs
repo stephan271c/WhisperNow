@@ -10,7 +10,7 @@ use whispernow_domain::ipc::{ActiveDownload, ErrorCategory, ModelSummary, Phase}
 use whispernow_domain::{DownloadPhase, ModelAvailability};
 use whispernow_domain::{ModelFamily, ModelId};
 use whispernow_platform::{
-    CudaPackState, DownloadProgress, Llama, LocalCleanupService, ModelStore, ModelStoreError,
+    CudaPackState, DownloadProgress, LocalCleanupService, ModelStore, ModelStoreError,
 };
 
 use super::{
@@ -276,15 +276,13 @@ impl ModelCoordinator {
     /// then only marked, and deleted at the next start.
     fn delete_cuda_pack(&self) -> Result<(), AppError> {
         self.state.lock().require_no_downloads()?;
-        self.store
-            .remove_cuda_pack(Llama::cuda_loaded())
-            .map_err(|_| {
-                AppError::new(
-                    ErrorCategory::Model,
-                    "model_delete",
-                    "The CUDA download could not be deleted",
-                )
-            })?;
+        self.store.remove_cuda_pack().map_err(|_| {
+            AppError::new(
+                ErrorCategory::Model,
+                "model_delete",
+                "The CUDA download could not be deleted",
+            )
+        })?;
         Ok(())
     }
 
@@ -470,8 +468,7 @@ mod tests {
             ));
             let local_cleanup = Arc::new(LocalCleanupService::new(
                 root.path().join("llama"),
-                Arc::new(|_| None),
-                Arc::new(|| None),
+                Arc::clone(&store),
             ));
             Self {
                 models: Arc::new(ModelCoordinator::new(

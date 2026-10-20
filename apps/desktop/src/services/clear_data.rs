@@ -1,7 +1,7 @@
 use whispernow_domain::AppError;
 use whispernow_domain::ClearDataCategory;
 use whispernow_domain::ipc::{ClearDataItem, ClearDataResult, DataLocation, ErrorCategory};
-use whispernow_platform::{ClearDataError, CudaPackRemovalOutcome, Llama, ModelStoreError};
+use whispernow_platform::{CudaPackRemovalOutcome, ModelStoreError};
 
 use super::{NativeServices, models::hold_cleanup_unloaded};
 
@@ -33,11 +33,9 @@ impl NativeServices {
         let clears_settings = categories.contains(&ClearDataCategory::Settings);
         let mut settings_lock = clears_settings.then(|| self.settings.lock());
         let cuda_path = self.paths.cuda_pack_dir();
-        self.paths
-            .data_locations_for(categories)
-            .map_err(inspect_error)?;
+        let plan = self.paths.clear_plan(categories).map_err(inspect_error)?;
         let history_item = categories.contains(&ClearDataCategory::History).then(|| {
-            let item = self.history.clear_data();
+            let item = self.history.clear_data(&plan);
             self.publish_history_changed();
             item
         });
@@ -46,10 +44,7 @@ impl NativeServices {
             .copied()
             .filter(|category| *category != ClearDataCategory::History)
             .collect();
-        let entries = self
-            .paths
-            .clear_data(&other_categories)
-            .map_err(inspect_error)?;
+        let entries = plan.remove(&other_categories);
         let mut reset_model_id = None;
         if let Some(saved) = &mut settings_lock
             && entries
@@ -70,10 +65,7 @@ impl NativeServices {
             ) && entry.deleted
         });
         let cuda_item = if clears_models {
-            let removal = self
-                .models
-                .model_store()
-                .remove_cuda_pack(Llama::cuda_loaded());
+            let removal = self.models.model_store().remove_cuda_pack();
             if removal == Err(ModelStoreError::NotInstalled) {
                 None
             } else {
@@ -125,7 +117,7 @@ impl NativeServices {
 
 pub(super) const CREDENTIAL_STORE_CLEAR_TARGET: &str = "OS credential store: saved LLM API keys";
 
-fn inspect_error(_: ClearDataError) -> AppError {
+fn inspect_error(_: std::io::Error) -> AppError {
     AppError::new(
         ErrorCategory::General,
         "clear_data_inspect",

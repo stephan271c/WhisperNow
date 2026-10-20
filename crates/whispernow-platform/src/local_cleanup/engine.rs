@@ -7,7 +7,7 @@ use whispernow_core::llm::{
     local::{self, DecodeContext, LocalDecodeError, LocalDecodeOutput, LocalDecodeRequest},
 };
 
-use crate::llama::{Backend, Llama, LlamaContext, LlamaError, LlamaModel};
+use crate::llama::{Llama, LlamaContext, LlamaError, LlamaModel};
 
 /// The server's context per slot; contexts are never smaller, so the app decodes in the
 /// same memory layout as the evaluation did.
@@ -52,11 +52,6 @@ impl LocalCleanupEngine {
             context: None,
             threads,
         })
-    }
-
-    #[must_use]
-    pub(crate) fn backend(&self) -> &Backend {
-        self.model.backend()
     }
 
     /// Decodes the reply to `prompt` speculatively from the draft.

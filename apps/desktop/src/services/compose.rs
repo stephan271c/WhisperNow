@@ -10,9 +10,8 @@ use whispernow_core::{
 };
 use whispernow_domain::ipc::ErrorCategory;
 use whispernow_platform::{
-    AppPaths, CleanupModelLocator, CpalAudioInput, CudaPackLocator, LocalCleanupService,
-    ModelStore, SettingsLoad, SettingsStore, SherpaAsrEngine, silero_vad_model_path,
-    silero_voice_activity,
+    AppPaths, CpalAudioInput, LocalCleanupService, ModelStore, SettingsLoad, SettingsStore,
+    SherpaAsrEngine, silero_vad_model_path, silero_voice_activity,
 };
 
 use super::{
@@ -78,11 +77,7 @@ impl NativeServices {
         settings.report_loaded(&persisted, settings_notice);
         let store = Arc::new(ModelStore::new(paths.clone()));
         store.finish_cuda_pack_removal();
-        let local_cleanup = Arc::new(LocalCleanupService::new(
-            llama_dir,
-            installed_cleanup_model(Arc::clone(&store)),
-            installed_cuda_pack(Arc::clone(&store)),
-        ));
+        let local_cleanup = Arc::new(LocalCleanupService::new(llama_dir, Arc::clone(&store)));
         local_cleanup.set_use_gpu(persisted.cleanup_uses_gpu);
         if persisted.uses_local_cleanup() {
             local_cleanup.preload(persisted.cleanup_model_id());
@@ -143,23 +138,6 @@ fn llama_dir(resource_dir: &Path) -> PathBuf {
     } else {
         resource_dir.join("llama")
     }
-}
-
-/// An installed cleanup model's GGUF, looked up by id when it is needed.
-fn installed_cleanup_model(store: Arc<ModelStore>) -> CleanupModelLocator {
-    Arc::new(move |model_id| {
-        let model = store.resolve(model_id).ok().flatten()?;
-        Some(
-            model
-                .root
-                .join(model.definition.layout.required_artifacts()[0]),
-        )
-    })
-}
-
-/// The installed CUDA pack's directory, looked up when a cleanup model loads.
-fn installed_cuda_pack(store: Arc<ModelStore>) -> CudaPackLocator {
-    Arc::new(move || store.cuda_pack_dir())
 }
 
 /// AI cleanup's providers: the local cleanup model in process, every other one through Rig.

@@ -284,6 +284,38 @@ fn a_single_file_model_is_downloaded_verified_installed_and_removed_as_is() {
 }
 
 #[test]
+fn an_installed_gguf_model_has_a_cleanup_model_path_and_nothing_else_does() {
+    let gguf = b"GGUF fixture weights".repeat(64);
+    let server = serve(Response::ok(gguf.clone()));
+    let (_root, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
+    assert_eq!(store.cleanup_model_path(&id), None);
+
+    let resolved = store
+        .download(&id, &CancellationToken::default(), &|_| {})
+        .expect("single-file download");
+
+    assert_eq!(
+        store.cleanup_model_path(&id),
+        Some(resolved.root.join("model-Q8_0.gguf"))
+    );
+    let unknown = ModelId::new(OTHER_MODEL_ID).expect("fixture ID");
+    assert_eq!(store.cleanup_model_path(&unknown), None);
+}
+
+#[test]
+fn an_installed_speech_model_has_no_cleanup_model_path() {
+    let archive = valid_archive();
+    let server = serve(Response::ok(archive.clone()));
+    let (_root, store, id) = make_store(&server, &archive);
+    store
+        .download(&id, &CancellationToken::default(), &|_| {})
+        .expect("fixture download");
+
+    assert!(store.resolve(&id).expect("resolve").is_some());
+    assert_eq!(store.cleanup_model_path(&id), None);
+}
+
+#[test]
 fn archive_directory_prefixes_and_case_do_not_change_the_installed_model_id() {
     for (directory, path) in [
         (format!("./{MODEL_ID}"), MODEL_PATH),

@@ -17,19 +17,38 @@ use whispernow_domain::{
     DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout, ModelRegistry,
 };
 
-use crate::{AppPaths, atomic_file::sync_directory, clear_data::remove_path};
+use crate::{
+    AppPaths,
+    atomic_file::{remove_path, sync_directory},
+};
 
 mod cuda_pack;
 
 pub use self::cuda_pack::{CudaPackArchive, CudaPackFormat, CudaPackRemovalOutcome, CudaPackState};
 
 const DOWNLOAD_BUFFER_BYTES: usize = 64 * 1024;
+const MODEL_DOWNLOAD_PREFIX: &str = ".model-download-";
+const MODEL_STAGE_PREFIX: &str = ".model-stage-";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DownloadProgress {
     pub phase: DownloadPhase,
     pub downloaded_bytes: u64,
     pub total_bytes: Option<u64>,
+}
+
+impl DownloadProgress {
+    fn new(phase: DownloadPhase, downloaded_bytes: u64, total_bytes: u64) -> Self {
+        Self {
+            phase,
+            downloaded_bytes,
+            total_bytes: Some(total_bytes),
+        }
+    }
+
+    fn after_transfer(phase: DownloadPhase, total_bytes: u64) -> Self {
+        Self::new(phase, total_bytes, total_bytes)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,18 +132,13 @@ impl ModelStore {
         paths: AppPaths,
         timeouts: DownloadTimeouts,
     ) -> Self {
-        if let Ok(entries) = fs::read_dir(paths.models_dir()) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if (name.starts_with(".model-stage-")
-                    || (name.starts_with(".model-download-") && name.ends_with(".part")))
-                    && let Err(error) = remove_path(&entry.path())
-                {
-                    tracing::warn!(%error, "model download staging could not be removed");
-                }
-            }
-        }
+        remove_stale(&paths.models_dir(), |name, _| {
+            name.starts_with(MODEL_STAGE_PREFIX)
+                || (name.starts_with(MODEL_DOWNLOAD_PREFIX)
+                    && Path::new(name)
+                        .extension()
+                        .is_some_and(|extension| extension == "part"))
+        });
         let client = reqwest::Client::builder()
             .connect_timeout(timeouts.connect)
             .read_timeout(timeouts.receive_body)
@@ -155,18 +169,31 @@ impl ModelStore {
             .ok_or(ModelStoreError::UnknownModel)
     }
 
-    fn resolve_unlocked(
+    fn model_root(&self, definition: &ModelDefinition) -> PathBuf {
+        self.paths.models_dir().join(definition.id.as_str())
+    }
+
+    fn download_to_temp(
         &self,
-        definition: &ModelDefinition,
-    ) -> Result<Option<ResolvedModel>, ModelStoreError> {
-        let downloaded_root = self.paths.models_dir().join(definition.id.as_str());
-        if validate_model_root(definition, &downloaded_root)? {
-            return Ok(Some(ResolvedModel {
-                definition: definition.clone(),
-                root: downloaded_root,
-            }));
-        }
-        Ok(None)
+        directory: &Path,
+        prefix: &str,
+        file: &PinnedFile<'_>,
+        cancellation: &CancellationToken,
+        observer: &dyn Fn(DownloadProgress),
+    ) -> Result<NamedTempFile, ModelStoreError> {
+        let mut download = Builder::new()
+            .prefix(prefix)
+            .suffix(".part")
+            .tempfile_in(directory)
+            .map_err(|_| filesystem("create download staging file"))?;
+        self.runtime.block_on(download_file(
+            &self.client,
+            file,
+            &mut download,
+            cancellation,
+            observer,
+        ))?;
+        Ok(download)
     }
 
     /// Extracts the required files, which the archive holds under a directory named after
@@ -227,14 +254,31 @@ impl ModelStore {
         cancellation: &CancellationToken,
     ) -> Result<PathBuf, ModelStoreError> {
         check_cancelled(cancellation)?;
-        let models_dir = self.paths.models_dir();
-        let destination = models_dir.join(definition.id.as_str());
-        if fs::symlink_metadata(&destination).is_ok() {
-            remove_path(&destination).map_err(|_| filesystem("replace installed model"))?;
-        }
-        fs::rename(staged_root, &destination).map_err(|_| filesystem("install staged model"))?;
-        sync_directory(&models_dir).map_err(|_| filesystem("sync models directory"))?;
+        let destination = self.model_root(definition);
+        replace_dir(staged_root, &destination, &self.paths.models_dir())?;
         Ok(destination)
+    }
+}
+
+fn replace_dir(staged: &Path, destination: &Path, parent: &Path) -> Result<(), ModelStoreError> {
+    if fs::symlink_metadata(destination).is_ok() {
+        remove_path(destination).map_err(|_| filesystem("replace installed files"))?;
+    }
+    fs::rename(staged, destination).map_err(|_| filesystem("install staged files"))?;
+    sync_directory(parent).map_err(|_| filesystem("sync install directory"))
+}
+
+fn remove_stale(directory: &Path, is_stale: impl Fn(&str, &fs::DirEntry) -> bool) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if is_stale(&name.to_string_lossy(), &entry)
+            && let Err(error) = remove_path(&entry.path())
+        {
+            tracing::warn!(%error, "stale download files could not be removed");
+        }
     }
 }
 
@@ -273,24 +317,23 @@ async fn download_file(
 
     let mut received = 0_u64;
     let mut hasher = Sha256::new();
-    observer(DownloadProgress {
-        phase: DownloadPhase::Downloading,
-        downloaded_bytes: 0,
-        total_bytes: Some(expected),
-    });
+    observer(DownloadProgress::new(
+        DownloadPhase::Downloading,
+        0,
+        expected,
+    ));
     loop {
         check_cancelled(cancellation)?;
         let chunk = match response.chunk().await {
             Ok(Some(chunk)) => chunk,
             Ok(None) => break,
-            Err(error) if error.is_timeout() => return Err(ModelStoreError::Timeout),
             Err(error) if ended_before_declared_length(&error) => {
                 return Err(ModelStoreError::ResponseLength {
                     expected,
                     actual: received,
                 });
             }
-            Err(_) => return Err(ModelStoreError::Transport),
+            Err(error) => return Err(map_reqwest_error(&error)),
         };
         received = received.saturating_add(chunk.len() as u64);
         if received > expected {
@@ -303,11 +346,11 @@ async fn download_file(
             .write_all(&chunk)
             .map_err(|_| filesystem("write download staging file"))?;
         hasher.update(&chunk);
-        observer(DownloadProgress {
-            phase: DownloadPhase::Downloading,
-            downloaded_bytes: received,
-            total_bytes: Some(expected),
-        });
+        observer(DownloadProgress::new(
+            DownloadPhase::Downloading,
+            received,
+            expected,
+        ));
     }
     if received != expected {
         return Err(ModelStoreError::ResponseLength {
@@ -328,8 +371,27 @@ async fn download_file(
 
 impl ModelStore {
     pub fn resolve(&self, model_id: &ModelId) -> Result<Option<ResolvedModel>, ModelStoreError> {
+        let definition = self.definition(model_id)?;
+        let root = self.model_root(definition);
         let _guard = self.lock_store();
-        self.resolve_unlocked(self.definition(model_id)?)
+        if !validate_model_root(definition, &root)? {
+            return Ok(None);
+        }
+        Ok(Some(ResolvedModel {
+            definition: definition.clone(),
+            root,
+        }))
+    }
+
+    /// An installed cleanup model's GGUF; `None` while it is not installed, or the id is not a
+    /// cleanup model's.
+    #[must_use]
+    pub fn cleanup_model_path(&self, model_id: &ModelId) -> Option<PathBuf> {
+        let model = self.resolve(model_id).ok().flatten()?;
+        let ModelLayout::Gguf { model: file } = &model.definition.layout else {
+            return None;
+        };
+        Some(model.root.join(file))
     }
 
     pub fn list(&self) -> Result<Vec<ModelListEntry>, ModelStoreError> {
@@ -338,11 +400,12 @@ impl ModelStore {
             .models()
             .iter()
             .map(|definition| {
-                let availability = self
-                    .resolve_unlocked(definition)?
-                    .map_or(ModelAvailability::NotInstalled, |_| {
-                        ModelAvailability::Downloaded
-                    });
+                let installed = validate_model_root(definition, &self.model_root(definition))?;
+                let availability = if installed {
+                    ModelAvailability::Downloaded
+                } else {
+                    ModelAvailability::NotInstalled
+                };
                 Ok(ModelListEntry {
                     definition: definition.clone(),
                     availability,
@@ -354,8 +417,7 @@ impl ModelStore {
     pub fn remove(&self, model_id: &ModelId) -> Result<(), ModelStoreError> {
         let _guard = self.lock_store();
         let definition = self.definition(model_id)?;
-        let destination = self.paths.models_dir().join(definition.id.as_str());
-        remove_path(&destination).map_err(|error| {
+        remove_path(&self.model_root(definition)).map_err(|error| {
             if error.kind() == io::ErrorKind::NotFound {
                 ModelStoreError::NotInstalled
             } else {
@@ -372,35 +434,29 @@ impl ModelStore {
     ) -> Result<ResolvedModel, ModelStoreError> {
         let definition = self.definition(model_id)?.clone();
         let report_phase = |phase| {
-            observer(DownloadProgress {
+            observer(DownloadProgress::after_transfer(
                 phase,
-                downloaded_bytes: definition.source.archive_size_bytes,
-                total_bytes: Some(definition.source.archive_size_bytes),
-            });
+                definition.source.archive_size_bytes,
+            ));
         };
-        fs::create_dir_all(self.paths.models_dir())
-            .map_err(|_| filesystem("create models directory"))?;
-        let mut download = Builder::new()
-            .prefix(".model-download-")
-            .suffix(".part")
-            .tempfile_in(self.paths.models_dir())
-            .map_err(|_| filesystem("create download staging file"))?;
-        self.runtime.block_on(download_file(
-            &self.client,
+        let models_dir = self.paths.models_dir();
+        fs::create_dir_all(&models_dir).map_err(|_| filesystem("create models directory"))?;
+        let download = self.download_to_temp(
+            &models_dir,
+            MODEL_DOWNLOAD_PREFIX,
             &PinnedFile {
                 url: &definition.source.url,
                 size_bytes: definition.source.archive_size_bytes,
                 sha256: &definition.source.sha256,
             },
-            &mut download,
             cancellation,
             observer,
-        ))?;
+        )?;
         report_phase(DownloadPhase::ValidatingArchive);
         check_cancelled(cancellation)?;
         let staging = Builder::new()
-            .prefix(".model-stage-")
-            .tempdir_in(self.paths.models_dir())
+            .prefix(MODEL_STAGE_PREFIX)
+            .tempdir_in(&models_dir)
             .map_err(|_| filesystem("create model staging directory"))?;
         report_phase(DownloadPhase::Extracting);
         let staged_root = match &definition.layout {

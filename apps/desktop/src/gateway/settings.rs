@@ -276,21 +276,17 @@ impl Gateway {
             .map_err(autostart_error)
     }
 
-    /// Clears application data; clearing settings also removes the start-on-login
-    /// registration. A registration that cannot be removed is published as an
-    /// error; the data is already gone.
-    pub(super) async fn clear_data(
-        &self,
-        request: Vec<ClearDataCategory>,
-    ) -> Result<ClearDataResult, AppError> {
+    /// Clears all application data, including the start-on-login registration. A
+    /// registration that cannot be removed is published as an error; the data is
+    /// already gone.
+    pub(super) async fn clear_data(&self) -> Result<ClearDataResult, AppError> {
         let _native_settings = self.native_settings.lock().await;
-        let clears_settings = request.contains(&ClearDataCategory::Settings);
         let result = self
-            .run_command("clear_data", Failure::Published, move |services| {
-                services.clear_data(&request)
+            .run_command("clear_data", Failure::Published, |services| {
+                services.clear_data(&ClearDataCategory::ALL)
             })
             .await?;
-        if clears_settings && let Err(warning) = self.apply_autostart(false).await {
+        if let Err(warning) = self.apply_autostart(false).await {
             self.publish_error(&warning);
         }
         Ok(result)

@@ -18,7 +18,10 @@ use whispernow_domain::{
     HistoryPageRequest, HistoryRetention, ModelId, NewHistoryEntry, UtcMillis,
 };
 
-use crate::AppPaths;
+use crate::{
+    AppPaths,
+    atomic_file::{TEMPORARY_PREFIX, remove_path, write_atomically},
+};
 
 mod legacy;
 
@@ -248,7 +251,7 @@ impl SqliteHistoryRepository {
 
     /// Removes the recordings before deleting rows, preserving their owners if removal fails.
     pub fn clear(&self) -> Result<bool, AppError> {
-        let recordings_removed = match crate::clear_data::remove_path(&self.audio_dir) {
+        let recordings_removed = match remove_path(&self.audio_dir) {
             Ok(()) => true,
             Err(error) if error.kind() == io::ErrorKind::NotFound => false,
             Err(_) => return Err(history_error("history_clear_audio")),
@@ -338,11 +341,10 @@ fn remove_orphan_audio(connection: &Connection, audio_dir: &Path) -> usize {
                 .ok()
                 .is_none_or(|id| !owned.contains(&id))
         });
-        let temporary = path.extension().is_some_and(|extension| extension == "tmp")
-            && path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".history-audio-"));
+        let temporary = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(TEMPORARY_PREFIX));
         if (orphan_wav || temporary)
             && file.file_type().is_ok_and(|kind| kind.is_file())
             && fs::remove_file(&path).is_ok()
@@ -388,40 +390,30 @@ fn parse_status(text: &str) -> Option<EntryStatus> {
     }
 }
 
-/// Writes normalized mono 16-kHz samples as a 16-bit WAV, through a temporary file renamed into
-/// place so a crash never leaves a partial file under an entry's name.
+/// Writes normalized mono 16-kHz samples as a 16-bit WAV, so a crash never leaves a partial
+/// file under an entry's name.
 fn write_wav(audio_dir: &Path, id: EntryId, samples: &[f32]) -> io::Result<()> {
-    fs::create_dir_all(audio_dir)?;
-    let temporary = tempfile::Builder::new()
-        .prefix(".history-audio-")
-        .suffix(".tmp")
-        .tempfile_in(audio_dir)?;
-    {
-        let mut writer = WavWriter::new(
-            io::BufWriter::new(temporary.as_file()),
-            WavSpec {
-                channels: 1,
-                sample_rate: TARGET_SAMPLE_RATE,
-                bits_per_sample: 16,
-                sample_format: SampleFormat::Int,
-            },
-        )
-        .map_err(io::Error::other)?;
-        for sample in samples {
-            #[allow(
-                clippy::cast_possible_truncation,
-                reason = "the clamped product is within the i16 range"
-            )]
-            let quantized = (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16;
-            writer.write_sample(quantized).map_err(io::Error::other)?;
-        }
-        writer.finalize().map_err(io::Error::other)?;
+    let mut wav = io::Cursor::new(Vec::new());
+    let mut writer = WavWriter::new(
+        &mut wav,
+        WavSpec {
+            channels: 1,
+            sample_rate: TARGET_SAMPLE_RATE,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        },
+    )
+    .map_err(io::Error::other)?;
+    for sample in samples {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the clamped product is within the i16 range"
+        )]
+        let quantized = (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16;
+        writer.write_sample(quantized).map_err(io::Error::other)?;
     }
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist(audio_path(audio_dir, id))
-        .map(drop)
-        .map_err(|error| error.error)
+    writer.finalize().map_err(io::Error::other)?;
+    write_atomically(&audio_path(audio_dir, id), &wav.into_inner())
 }
 
 fn remove_audio(audio_dir: &Path, id: EntryId) {

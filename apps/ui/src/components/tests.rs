@@ -1554,10 +1554,7 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
 
     open(&mut page, &["execute-clear-data"]);
     open(&mut page, &["execute-clear-data-confirm"]);
-    assert_eq!(
-        fake::requests::<Vec<ClearDataCategory>>("clear_data"),
-        [ClearDataCategory::ALL.to_vec()]
-    );
+    assert_eq!(fake::count("clear_data"), 1);
 
     fake::answer(
         "clear_data",

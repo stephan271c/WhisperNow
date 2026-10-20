@@ -56,37 +56,22 @@ const ALL_LAYERS: i32 = 99;
 /// of the same llama.cpp release's CUDA 13.4 build. The backend is added beside the bundled
 /// ones, so a GPU CUDA cannot run on still has Vulkan.
 #[derive(Clone, Copy, Debug)]
-pub struct CudaLibraries {
-    pub runtime: [&'static str; 3],
-    pub backend: &'static str,
+pub(crate) struct CudaLibraries {
+    pub(crate) runtime: [&'static str; 3],
+    pub(crate) backend: &'static str,
 }
 
-impl CudaLibraries {
-    pub fn files(&self) -> impl Iterator<Item = &'static str> {
-        self.runtime.into_iter().chain([self.backend])
-    }
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+/// Only `x86_64` Linux and Windows have a pack; other targets never load these names.
+#[cfg(not(target_os = "windows"))]
 pub(crate) const CUDA_PACK_LIBRARIES: CudaLibraries = CudaLibraries {
     runtime: ["libcudart.so.13", "libcublasLt.so.13", "libcublas.so.13"],
     backend: "libggml-cuda.so",
 };
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[cfg(target_os = "windows")]
 pub(crate) const CUDA_PACK_LIBRARIES: CudaLibraries = CudaLibraries {
     runtime: ["cudart64_13.dll", "cublasLt64_13.dll", "cublas64_13.dll"],
     backend: "ggml-cuda.dll",
 };
-#[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "windows", target_arch = "x86_64")
-))]
-pub const CUDA_LIBRARIES: Option<CudaLibraries> = Some(CUDA_PACK_LIBRARIES);
-#[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "windows", target_arch = "x86_64")
-)))]
-pub const CUDA_LIBRARIES: Option<CudaLibraries> = None;
 
 /// The oldest NVIDIA architecture the CUDA 13 build has code for (Turing, compute 7.5). On
 /// an older GPU its first kernel would fail, which aborts the process, so CUDA skips it.
@@ -117,7 +102,7 @@ pub(crate) enum LlamaError {
     Probe(i32),
 }
 
-pub struct Llama {
+pub(crate) struct Llama {
     api: ffi::Api,
     _libraries: Vec<Library>,
 }
@@ -180,8 +165,7 @@ impl Llama {
             directory: directory.to_owned(),
             message,
         };
-        let names =
-            CUDA_LIBRARIES.ok_or_else(|| failed("CUDA is not supported here".to_owned()))?;
+        let names = CUDA_PACK_LIBRARIES;
         let mut cuda = CUDA.lock().unwrap_or_else(PoisonError::into_inner);
         if cuda.is_some() {
             return Ok(());
@@ -211,15 +195,6 @@ impl Llama {
         std::mem::forget(libraries);
         *cuda = Some(device_attribute);
         Ok(())
-    }
-
-    /// Whether the CUDA pack is loaded in this process. Its files stay in use until the
-    /// process exits.
-    #[must_use]
-    pub fn cuda_loaded() -> bool {
-        CUDA.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some()
     }
 
     /// The GPUs to try, best first: CUDA devices, then other discrete GPUs, then integrated
@@ -271,6 +246,15 @@ impl Llama {
             .map(|(_, _, device, description)| (device, description))
             .collect()
     }
+}
+
+/// Whether the CUDA pack is loaded in this process. Its files stay in use until the process
+/// exits.
+#[must_use]
+pub(crate) fn cuda_loaded() -> bool {
+    CUDA.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_some()
 }
 
 /// Whether the CUDA build has code for the GPU at CUDA `ordinal`, as ggml numbers them.
@@ -330,18 +314,10 @@ unsafe extern "C" fn log(level: c_int, message: *const c_char, _data: *mut c_voi
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum Backend {
-    /// A GPU, by its backend's name and description.
-    Gpu(String),
-    Cpu,
-}
-
 pub(crate) struct LlamaModel {
     llama: &'static Llama,
     model: NonNull<ffi::Model>,
     vocab: *const ffi::Vocab,
-    backend: Backend,
 }
 
 impl LlamaModel {
@@ -359,11 +335,11 @@ impl LlamaModel {
             let mut devices = [device, std::ptr::null_mut()];
             match Self::load_on(llama, &path, devices.as_mut_ptr(), ALL_LAYERS) {
                 Ok((model, vocab)) => {
+                    tracing::info!(target: "whispernow::llama", backend = "gpu", device = description, "model loaded");
                     return Ok(Self {
                         llama,
                         model,
                         vocab,
-                        backend: Backend::Gpu(description),
                     });
                 }
                 Err(_) => {
@@ -374,11 +350,11 @@ impl LlamaModel {
         // An empty device list keeps everything, the KV cache included, on the CPU.
         let mut devices = [std::ptr::null_mut()];
         let (model, vocab) = Self::load_on(llama, &path, devices.as_mut_ptr(), 0)?;
+        tracing::info!(target: "whispernow::llama", backend = "cpu", "model loaded");
         Ok(Self {
             llama,
             model,
             vocab,
-            backend: Backend::Cpu,
         })
     }
 
@@ -404,11 +380,6 @@ impl LlamaModel {
             }
             Ok((model, vocab))
         }
-    }
-
-    #[must_use]
-    pub(crate) fn backend(&self) -> &Backend {
-        &self.backend
     }
 
     /// The BOS token as text, for the chat template; empty when the model has none.

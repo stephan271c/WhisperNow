@@ -16,9 +16,10 @@ use whispernow_core::CancellationToken;
 use whispernow_domain::DownloadPhase;
 
 use super::{
-    DownloadProgress, ModelStore, ModelStoreError, PinnedFile, check_cancelled, download_file,
-    extract_tar, filesystem, remove_path, sync_directory, validate_artifact_path, write_member,
+    DownloadProgress, ModelStore, ModelStoreError, PinnedFile, check_cancelled, extract_tar,
+    filesystem, remove_path, remove_stale, replace_dir, validate_artifact_path, write_member,
 };
+use crate::llama::cuda_loaded;
 #[cfg(any(
     all(target_os = "linux", target_arch = "x86_64"),
     all(target_os = "windows", target_arch = "x86_64")
@@ -27,6 +28,9 @@ use crate::llama::{CUDA_PACK_LIBRARIES, llama_cpp_build};
 
 /// Left in a pack that was removed while loaded; such a pack is deleted at the next start.
 const REMOVAL_MARKER: &str = ".whispernow-remove";
+const CUDA_PACK_PREFIX: &str = "llama-cuda";
+const CUDA_DOWNLOAD_PREFIX: &str = ".llama-cuda-download-";
+const CUDA_STAGE_PREFIX: &str = ".llama-cuda-stage-";
 
 #[derive(Clone, Copy, Debug)]
 pub struct CudaPackArchive {
@@ -244,10 +248,8 @@ impl ModelStore {
         }
         let root = self.paths.cuda_pack_dir();
         let total_bytes = self.cuda_pack_size();
-        let phase_progress = |phase| DownloadProgress {
-            phase,
-            downloaded_bytes: total_bytes,
-            total_bytes: Some(total_bytes),
+        let report_phase = |phase| {
+            observer(DownloadProgress::after_transfer(phase, total_bytes));
         };
         {
             let _guard = self.lock_store();
@@ -257,70 +259,65 @@ impl ModelStore {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(_) => return Err(filesystem("keep the CUDA pack")),
                 }
-                observer(phase_progress(DownloadPhase::Complete));
+                report_phase(DownloadPhase::Complete);
                 return Ok(());
             }
         }
         let data_dir = self.paths.data_dir();
         fs::create_dir_all(data_dir).map_err(|_| filesystem("create data directory"))?;
         let staging = Builder::new()
-            .prefix(".llama-cuda-stage-")
+            .prefix(CUDA_STAGE_PREFIX)
             .tempdir_in(data_dir)
             .map_err(|_| filesystem("create CUDA pack staging directory"))?;
         let mut downloaded_bytes = 0_u64;
         for archive in self.cuda_pack {
-            let mut download = Builder::new()
-                .prefix(".llama-cuda-download-")
-                .suffix(".part")
-                .tempfile_in(data_dir)
-                .map_err(|_| filesystem("create download staging file"))?;
             // Progress over the whole pack, not this one archive.
             let report_progress = |progress: DownloadProgress| {
-                observer(DownloadProgress {
-                    phase: progress.phase,
-                    downloaded_bytes: downloaded_bytes.saturating_add(progress.downloaded_bytes),
-                    total_bytes: Some(total_bytes),
-                });
+                observer(DownloadProgress::new(
+                    progress.phase,
+                    downloaded_bytes.saturating_add(progress.downloaded_bytes),
+                    total_bytes,
+                ));
             };
-            self.runtime.block_on(download_file(
-                &self.client,
+            let download = self.download_to_temp(
+                data_dir,
+                CUDA_DOWNLOAD_PREFIX,
                 &PinnedFile {
                     url: archive.url,
                     size_bytes: archive.size_bytes,
                     sha256: archive.sha256,
                 },
-                &mut download,
                 cancellation,
                 &report_progress,
-            ))?;
+            )?;
             downloaded_bytes = downloaded_bytes.saturating_add(archive.size_bytes);
-            observer(DownloadProgress {
-                phase: DownloadPhase::Extracting,
+            observer(DownloadProgress::new(
+                DownloadPhase::Extracting,
                 downloaded_bytes,
-                total_bytes: Some(total_bytes),
-            });
+                total_bytes,
+            ));
             extract(archive, download.path(), staging.path(), cancellation)?;
         }
         self.validate_cuda_pack(staging.path())?;
-        observer(phase_progress(DownloadPhase::Installing));
+        report_phase(DownloadPhase::Installing);
         check_cancelled(cancellation)?;
         {
             let _guard = self.lock_store();
-            if fs::symlink_metadata(&root).is_ok() {
-                remove_path(&root).map_err(|_| filesystem("replace the CUDA pack"))?;
-            }
-            fs::rename(staging.path(), &root).map_err(|_| filesystem("install the CUDA pack"))?;
+            replace_dir(staging.path(), &root, data_dir)?;
             // The directory moved; nothing is left for the guard to delete.
             let _moved = staging.keep();
-            sync_directory(data_dir).map_err(|_| filesystem("sync models directory"))?;
         }
-        observer(phase_progress(DownloadPhase::Complete));
+        report_phase(DownloadPhase::Complete);
         Ok(())
     }
 
-    /// Removes the pack, or, while `in_use` (loaded in this process), marks it so that it is
-    /// no longer used and is deleted at the next start.
-    pub fn remove_cuda_pack(
+    /// Removes the pack, or, while it is loaded in this process, marks it so that it is no
+    /// longer used and is deleted at the next start.
+    pub fn remove_cuda_pack(&self) -> Result<CudaPackRemovalOutcome, ModelStoreError> {
+        self.remove_cuda_pack_inner(cuda_loaded())
+    }
+
+    fn remove_cuda_pack_inner(
         &self,
         in_use: bool,
     ) -> Result<CudaPackRemovalOutcome, ModelStoreError> {
@@ -354,23 +351,14 @@ impl ModelStore {
         {
             tracing::warn!(%error, "the CUDA pack could not be removed");
         }
-        let Ok(entries) = fs::read_dir(self.paths.data_dir()) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let stale_pack = name.starts_with("llama-cuda")
+        remove_stale(self.paths.data_dir(), |name, entry| {
+            let stale_pack = name.starts_with(CUDA_PACK_PREFIX)
                 && entry.path() != root
                 && entry.file_type().is_ok_and(|kind| kind.is_dir());
-            if (stale_pack
-                || name.starts_with(".llama-cuda-stage-")
-                || name.starts_with(".llama-cuda-download-"))
-                && let Err(error) = remove_path(&entry.path())
-            {
-                tracing::warn!(%error, "CUDA pack files could not be removed");
-            }
-        }
+            stale_pack
+                || name.starts_with(CUDA_STAGE_PREFIX)
+                || name.starts_with(CUDA_DOWNLOAD_PREFIX)
+        });
     }
 }
 
@@ -412,4 +400,96 @@ fn extract(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use tempfile::tempdir;
+    use whispernow_domain::ClearDataCategory;
+
+    use super::*;
+    use crate::AppPaths;
+
+    const PACK: &[CudaPackArchive] = &[CudaPackArchive {
+        url: "http://127.0.0.1:1/unused",
+        size_bytes: 1,
+        sha256: "",
+        format: CudaPackFormat::TarGz,
+        members: &[
+            ("backend.lib", "backend.lib"),
+            ("runtime.lib", "runtime.lib"),
+        ],
+    }];
+
+    #[test]
+    fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
+        let root = tempdir().expect("temporary root");
+        let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+        let store = ModelStore::new(paths.clone()).with_cuda_pack(PACK);
+        let directory = paths.cuda_pack_dir();
+        fs::create_dir_all(&directory).expect("pack directory");
+        for &(_, name) in PACK[0].members {
+            fs::write(directory.join(name), name).expect("pack file");
+        }
+        assert_eq!(store.cuda_pack_state(), CudaPackState::Installed);
+
+        assert_eq!(
+            store.remove_cuda_pack_inner(true),
+            Ok(CudaPackRemovalOutcome::Deferred)
+        );
+        assert!(directory.exists(), "loaded files stay");
+        assert_eq!(store.cuda_pack_state(), CudaPackState::NotInstalled);
+        assert!(store.cuda_pack_dir().is_none(), "nothing loads it again");
+
+        let models = paths.models_dir();
+        fs::create_dir_all(&models).expect("models directory");
+        fs::write(models.join("weights"), b"model data").expect("model data");
+        assert!(
+            paths
+                .data_locations()
+                .expect("data locations")
+                .iter()
+                .any(|location| {
+                    location.category == ClearDataCategory::Models && location.path == directory
+                })
+        );
+        let cleared = paths
+            .clear_plan(&[ClearDataCategory::Models])
+            .expect("clear plan")
+            .remove(&[ClearDataCategory::Models]);
+        assert_eq!(cleared.len(), 1);
+        assert_eq!(cleared[0].path, models);
+        assert!(cleared[0].deleted);
+        assert!(directory.exists(), "loaded files survive data clearing");
+        assert!(
+            store.cuda_pack_dir().is_none(),
+            "the removal marker survives"
+        );
+
+        let phases = Mutex::new(Vec::new());
+        store
+            .download_cuda_pack(&CancellationToken::default(), &|event| {
+                phases.lock().expect("phases").push(event.phase);
+            })
+            .expect("kept");
+        assert_eq!(store.cuda_pack_state(), CudaPackState::Installed);
+        assert_eq!(
+            *phases.lock().expect("phases"),
+            [DownloadPhase::Complete],
+            "nothing downloaded"
+        );
+
+        assert_eq!(
+            store.remove_cuda_pack_inner(true),
+            Ok(CudaPackRemovalOutcome::Deferred)
+        );
+        store.finish_cuda_pack_removal();
+        assert!(!directory.exists());
+        assert_eq!(
+            store.remove_cuda_pack_inner(false),
+            Err(ModelStoreError::NotInstalled)
+        );
+    }
 }

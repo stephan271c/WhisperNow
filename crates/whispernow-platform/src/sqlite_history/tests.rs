@@ -8,7 +8,7 @@ use whispernow_domain::{
 };
 
 use super::SqliteHistoryRepository;
-use crate::AppPaths;
+use crate::{AppPaths, atomic_file::TEMPORARY_PREFIX};
 
 struct Fixture {
     _root: tempfile::TempDir,
@@ -529,7 +529,11 @@ fn startup_removes_audio_files_that_no_entry_owns() {
     drop(history);
     let audio_dir = fixture.paths.recordings_dir();
     fs::write(audio_dir.join("9999.wav"), b"orphan").expect("orphan");
-    fs::write(audio_dir.join(".history-audio-crash.tmp"), b"partial").expect("temporary");
+    fs::write(
+        audio_dir.join(format!("{TEMPORARY_PREFIX}crash")),
+        b"partial",
+    )
+    .expect("temporary");
     fs::write(audio_dir.join("20260101T000000.000000Z.wav"), b"old").expect("old name");
     fs::write(audio_dir.join("notes.txt"), b"keep").expect("user file");
 

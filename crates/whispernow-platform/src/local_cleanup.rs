@@ -23,15 +23,8 @@ use whispernow_core::llm::{
 };
 
 use self::engine::{EngineError, LocalCleanupEngine, default_threads};
-use crate::llama::{Backend, LlamaError};
+use crate::{llama::LlamaError, models::ModelStore};
 use whispernow_domain::ModelId;
-
-/// Finds a cleanup model's GGUF by its registry id when it is needed; `None` while it is not
-/// installed, or the id is not a cleanup model's.
-pub type CleanupModelLocator = Arc<dyn Fn(&ModelId) -> Option<PathBuf> + Send + Sync>;
-
-/// Finds the installed CUDA pack's directory when a model loads; `None` while there is none.
-pub type CudaPackLocator = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 
 enum Command {
     Load(ModelId),
@@ -61,20 +54,15 @@ pub struct LocalCleanupService {
 }
 
 impl LocalCleanupService {
-    /// The engine with llama.cpp's libraries from `library_directory`, the CUDA pack found by
-    /// `cuda` and the model found by `model`. Nothing loads until the first cleanup or
+    /// The engine with llama.cpp's libraries from `library_directory`, and the models and
+    /// CUDA pack installed in `store`. Nothing loads until the first cleanup or
     /// [`Self::preload`].
     #[must_use]
-    pub fn new(
-        library_directory: PathBuf,
-        model: CleanupModelLocator,
-        cuda: CudaPackLocator,
-    ) -> Self {
+    pub fn new(library_directory: PathBuf, store: Arc<ModelStore>) -> Self {
         Self {
             shared: Arc::new(Shared {
                 library_directory,
-                model_locator: model,
-                cuda_locator: cuda,
+                store,
                 use_gpu: AtomicBool::new(true),
                 shutdown: AtomicBool::new(false),
                 held: AtomicBool::new(false),
@@ -168,8 +156,7 @@ impl Drop for HeldUnloaded<'_> {
 
 struct Shared {
     library_directory: PathBuf,
-    model_locator: CleanupModelLocator,
-    cuda_locator: CudaPackLocator,
+    store: Arc<ModelStore>,
     use_gpu: AtomicBool,
     shutdown: AtomicBool,
     /// Prevents a model from loading while its file is being removed.
@@ -243,9 +230,12 @@ fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine
     if shared.held.load(Ordering::Acquire) {
         return Err(LlamaError::NotInstalled);
     }
-    let path = (shared.model_locator)(model_id).ok_or(LlamaError::NotInstalled)?;
+    let path = shared
+        .store
+        .cleanup_model_path(model_id)
+        .ok_or(LlamaError::NotInstalled)?;
     let use_gpu = shared.use_gpu.load(Ordering::Acquire);
-    let cuda = use_gpu.then(|| (shared.cuda_locator)()).flatten();
+    let cuda = use_gpu.then(|| shared.store.cuda_pack_dir()).flatten();
     let threads = default_threads();
     let loaded = LocalCleanupEngine::load(
         &shared.library_directory,
@@ -257,11 +247,7 @@ fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine
     .inspect_err(|error| {
         tracing::warn!(target: "whispernow::local_cleanup", %error, model = model_id.as_str(), "the cleanup model did not load");
     })?;
-    let (kind, device) = match loaded.backend() {
-        Backend::Gpu(device) => ("gpu", device.as_str()),
-        Backend::Cpu => ("cpu", ""),
-    };
-    tracing::info!(target: "whispernow::local_cleanup", model = model_id.as_str(), backend = kind, device, threads, "cleanup model loaded");
+    tracing::info!(target: "whispernow::local_cleanup", model = model_id.as_str(), threads, "cleanup model loaded");
     Ok(loaded)
 }
 
@@ -324,86 +310,96 @@ fn run(commands: &mpsc::Receiver<Command>, shared: &Shared) {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{fs, time::Duration};
+
+    use tempfile::TempDir;
+    use whispernow_domain::{ModelDefinition, ModelLayout, ModelRegistry, ModelSource};
 
     use super::*;
+    use crate::{AppPaths, DownloadTimeouts};
 
-    fn service(installed: bool) -> LocalCleanupService {
-        LocalCleanupService::new(
-            PathBuf::from("/nonexistent/llama"),
-            Arc::new(move |_| installed.then(|| PathBuf::from("/nonexistent/model.gguf"))),
-            Arc::new(|| None),
-        )
+    const MODEL_FILE: &str = "model.gguf";
+
+    fn cleanup_model(id: &str) -> ModelDefinition {
+        ModelDefinition {
+            id: ModelId::new(id).expect("model ID"),
+            display_name: id.to_owned(),
+            source: ModelSource {
+                url: String::new(),
+                archive_size_bytes: 0,
+                sha256: String::new(),
+            },
+            layout: ModelLayout::Gguf {
+                model: MODEL_FILE.to_owned(),
+            },
+            languages: Vec::new(),
+            benchmark: None,
+        }
     }
 
-    async fn complete(service: &LocalCleanupService, model: &str) -> Result<LlmResponse, LlmError> {
+    fn service(installed: &[&str]) -> (TempDir, LocalCleanupService) {
+        let root = tempfile::tempdir().expect("temporary root");
+        let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+        for id in installed {
+            let directory = paths.models_dir().join(id);
+            fs::create_dir_all(&directory).expect("model directory");
+            fs::write(directory.join(MODEL_FILE), b"GGUF").expect("model file");
+        }
+        let registry = ModelRegistry::new(["small", "large"].map(cleanup_model).to_vec());
+        let store =
+            ModelStore::with_registry_and_timeouts(registry, paths, DownloadTimeouts::default());
+        let service =
+            LocalCleanupService::new(PathBuf::from("/nonexistent/llama"), Arc::new(store));
+        (root, service)
+    }
+
+    fn model_id(model: &str) -> ModelId {
+        ModelId::new(model).expect("model ID")
+    }
+
+    fn complete(service: &LocalCleanupService, model: &str) -> Result<LlmResponse, LlmError> {
         let transcript = "um so the meeting is at three";
-        service
-            .complete(
-                ModelId::new(model).expect("model ID"),
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(service.complete(
+                model_id(model),
                 whispernow_core::llm::build_local_cleanup_prompt(transcript),
                 64,
                 DraftText::from_transcript(transcript),
-            )
-            .await
+            ))
     }
 
-    #[tokio::test]
-    async fn a_missing_model_or_library_is_an_invalid_request_and_never_a_hang() {
-        for installed in [false, true] {
-            let result = complete(&service(installed), "cleanup").await;
+    #[test]
+    fn a_missing_model_or_library_is_an_invalid_request_and_never_a_hang() {
+        for installed in [&[][..], &["small"][..]] {
+            let (_root, service) = service(installed);
+            let result = complete(&service, "small");
             assert!(matches!(result, Err(LlmError::InvalidRequest)));
         }
     }
 
-    #[tokio::test]
-    async fn nothing_loads_while_the_model_is_held_unloaded() {
-        let loads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counted = Arc::clone(&loads);
-        let service = LocalCleanupService::new(
-            PathBuf::from("/nonexistent/llama"),
-            Arc::new(move |_| {
-                counted.fetch_add(1, Ordering::SeqCst);
-                None
-            }),
-            Arc::new(|| None),
-        );
-        service.preload(ModelId::new("cleanup").expect("model ID"));
+    #[test]
+    fn nothing_loads_while_the_model_is_held_unloaded() {
+        let (_root, service) = service(&["small"]);
+        service.preload(model_id("small"));
         let held = service
             .hold_unloaded(Duration::from_secs(5))
             .expect("an idle model is freed at once");
-        let before = loads.load(Ordering::SeqCst);
-        let result = complete(&service, "cleanup").await;
+        let load = || load_engine(&service.shared, &model_id("small")).err();
+        assert!(matches!(load(), Some(LlamaError::NotInstalled)));
+        let result = complete(&service, "small");
         assert!(matches!(result, Err(LlmError::InvalidRequest)));
-        assert_eq!(loads.load(Ordering::SeqCst), before);
         drop(held);
-        let _ = complete(&service, "cleanup").await;
-        assert_eq!(loads.load(Ordering::SeqCst), before + 1);
+        // Past the model lookup; llama.cpp is not at the library directory.
+        assert!(matches!(load(), Some(LlamaError::Library { .. })));
     }
 
-    #[tokio::test]
-    async fn each_request_and_preload_looks_up_the_model_it_names() {
-        let looked_up = Arc::new(Mutex::new(Vec::new()));
-        let recorded = Arc::clone(&looked_up);
-        let service = LocalCleanupService::new(
-            PathBuf::from("/nonexistent/llama"),
-            Arc::new(move |model_id: &ModelId| {
-                recorded
-                    .lock()
-                    .expect("not poisoned")
-                    .push(model_id.as_str().to_owned());
-                None
-            }),
-            Arc::new(|| None),
-        );
-        service.preload(ModelId::new("small").expect("model ID"));
-        for model in ["large", "small"] {
-            let result = complete(&service, model).await;
-            assert!(matches!(result, Err(LlmError::InvalidRequest)));
-        }
-        assert_eq!(
-            *looked_up.lock().expect("not poisoned"),
-            ["small", "large", "small"]
-        );
+    #[test]
+    fn a_model_is_found_in_the_store_by_the_id_it_names() {
+        let (_root, service) = service(&["small"]);
+        let load = |model| load_engine(&service.shared, &model_id(model)).err();
+        assert!(matches!(load("small"), Some(LlamaError::Library { .. })));
+        assert!(matches!(load("large"), Some(LlamaError::NotInstalled)));
     }
 }

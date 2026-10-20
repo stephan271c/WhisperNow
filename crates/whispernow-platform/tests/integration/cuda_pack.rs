@@ -1,8 +1,4 @@
 //! The CUDA pack's installer, against fixture archives served locally.
-#![cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "windows", target_arch = "x86_64")
-))]
 
 use std::{
     fs,
@@ -16,12 +12,16 @@ use flate2::{Compression, write::GzEncoder};
 use tar::{Builder as TarBuilder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
 use whispernow_core::CancellationToken;
-use whispernow_domain::{ClearDataCategory, DownloadPhase};
+use whispernow_domain::DownloadPhase;
 use whispernow_platform::{
-    AppPaths, CUDA_LIBRARIES, CudaPackArchive, CudaPackFormat, CudaPackRemovalOutcome,
-    CudaPackState, DownloadProgress, DownloadTimeouts, ModelStore, ModelStoreError,
+    AppPaths, CudaPackArchive, CudaPackFormat, CudaPackRemovalOutcome, CudaPackState,
+    DownloadProgress, DownloadTimeouts, ModelStore, ModelStoreError,
 };
 use zip::write::SimpleFileOptions;
+
+const BACKEND: &str = "ggml-cuda-fixture";
+const RUNTIME: [&str; 3] = ["cudart-fixture", "cublasLt-fixture", "cublas-fixture"];
+const FILES: [&str; 4] = [RUNTIME[0], RUNTIME[1], RUNTIME[2], BACKEND];
 
 fn sha256(bytes: &[u8]) -> &'static str {
     common::sha256(bytes).leak()
@@ -78,10 +78,9 @@ struct Fixture {
 /// A store whose pack is the two fixture archives, the runtime's digest replaced when
 /// `runtime_sha256` is given.
 fn fixture(runtime_sha256: Option<&'static str>) -> (Fixture, FixtureServer, u64) {
-    let libraries = CUDA_LIBRARIES.expect("this platform has a CUDA pack");
     fixture_archives(
-        backend_archive(libraries.backend, &contents(libraries.backend)),
-        runtime_archive(&libraries.runtime),
+        backend_archive(BACKEND, &contents(BACKEND)),
+        runtime_archive(&RUNTIME),
         runtime_sha256,
     )
 }
@@ -91,7 +90,6 @@ fn fixture_archives(
     runtime: Vec<u8>,
     runtime_sha256: Option<&'static str>,
 ) -> (Fixture, FixtureServer, u64) {
-    let libraries = CUDA_LIBRARIES.expect("this platform has a CUDA pack");
     let backend_size = backend.len() as u64;
     let runtime_size = runtime.len() as u64;
     let backend_digest = sha256(&backend);
@@ -100,19 +98,16 @@ fn fixture_archives(
         ("/backend.tar.gz", Response::ok(backend)),
         ("/runtime.zip", Response::ok(runtime)),
     ]);
-    let backend_member: &'static str = format!("release/{}", libraries.backend).leak();
-    let runtime_members: Vec<(&'static str, &'static str)> = libraries
-        .runtime
-        .iter()
-        .map(|name| (*name, *name))
-        .collect();
+    let backend_member: &'static str = format!("release/{BACKEND}").leak();
+    let runtime_members: Vec<(&'static str, &'static str)> =
+        RUNTIME.iter().map(|name| (*name, *name)).collect();
     let archives = vec![
         CudaPackArchive {
             url: server.url("/backend.tar.gz").leak(),
             size_bytes: backend_size,
             sha256: backend_digest,
             format: CudaPackFormat::TarGz,
-            members: vec![(backend_member, libraries.backend)].leak(),
+            members: vec![(backend_member, BACKEND)].leak(),
         },
         CudaPackArchive {
             url: server.url("/runtime.zip").leak(),
@@ -167,8 +162,7 @@ fn the_pack_installs_its_files_flat_from_a_tar_gz_and_a_zip_with_progress_over_b
 
     assert_eq!(store.cuda_pack_state(), CudaPackState::Installed);
     let directory = store.cuda_pack_dir().expect("installed directory");
-    let libraries = CUDA_LIBRARIES.expect("pack");
-    for name in libraries.files() {
+    for name in FILES {
         assert_eq!(
             fs::read(directory.join(name)).expect(name),
             contents(name),
@@ -221,19 +215,15 @@ fn a_wrong_digest_installs_nothing() {
 
 #[test]
 fn a_missing_runtime_library_reports_the_archive_member_and_installs_nothing() {
-    let libraries = CUDA_LIBRARIES.expect("pack");
-    let runtime = runtime_archive(&[libraries.runtime[0], libraries.runtime[2]]);
-    let (fixture, _server, _) = fixture_archives(
-        backend_archive(libraries.backend, &contents(libraries.backend)),
-        runtime,
-        None,
-    );
+    let runtime = runtime_archive(&[RUNTIME[0], RUNTIME[2]]);
+    let (fixture, _server, _) =
+        fixture_archives(backend_archive(BACKEND, &contents(BACKEND)), runtime, None);
     assert_eq!(
         fixture
             .store
             .download_cuda_pack(&CancellationToken::default(), &|_| {}),
         Err(ModelStoreError::MissingArtifacts {
-            artifacts: vec![libraries.runtime[1].to_owned()],
+            artifacts: vec![RUNTIME[1].to_owned()],
         })
     );
     assert!(fixture.store.cuda_pack_dir().is_none());
@@ -242,10 +232,9 @@ fn a_missing_runtime_library_reports_the_archive_member_and_installs_nothing() {
 
 #[test]
 fn an_empty_backend_is_rejected_before_installation() {
-    let libraries = CUDA_LIBRARIES.expect("pack");
     let (fixture, _server, _) = fixture_archives(
-        backend_archive(libraries.backend, &[]),
-        runtime_archive(&libraries.runtime),
+        backend_archive(BACKEND, &[]),
+        runtime_archive(&RUNTIME),
         None,
     );
     assert_eq!(
@@ -259,8 +248,7 @@ fn an_empty_backend_is_rejected_before_installation() {
 
 #[test]
 fn a_link_cannot_supply_the_required_backend() {
-    let libraries = CUDA_LIBRARIES.expect("pack");
-    let member = format!("release/{}", libraries.backend);
+    let member = format!("release/{BACKEND}");
     for entry_type in [EntryType::symlink(), EntryType::hard_link()] {
         let mut archive = TarBuilder::new(GzEncoder::new(Vec::new(), Compression::default()));
         let mut header = Header::new_gnu();
@@ -272,8 +260,7 @@ fn a_link_cannot_supply_the_required_backend() {
             .append_data(&mut header, &member, &[][..])
             .expect("link member");
         let backend = archive.into_inner().expect("tar").finish().expect("gzip");
-        let (fixture, _server, _) =
-            fixture_archives(backend, runtime_archive(&libraries.runtime), None);
+        let (fixture, _server, _) = fixture_archives(backend, runtime_archive(&RUNTIME), None);
         assert_eq!(
             fixture
                 .store
@@ -284,77 +271,6 @@ fn a_link_cannot_supply_the_required_backend() {
         );
         assert!(!fixture.paths.cuda_pack_dir().exists());
     }
-}
-
-#[test]
-fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
-    let (fixture, _server, _) = fixture(None);
-    let store = &fixture.store;
-    let (_, observer) = recorded();
-    store
-        .download_cuda_pack(&CancellationToken::default(), &observer)
-        .expect("installed");
-    let directory = store.cuda_pack_dir().expect("installed");
-
-    assert_eq!(
-        store.remove_cuda_pack(true),
-        Ok(CudaPackRemovalOutcome::Deferred)
-    );
-    assert!(directory.exists(), "loaded files stay");
-    assert_eq!(store.cuda_pack_state(), CudaPackState::NotInstalled);
-    assert!(store.cuda_pack_dir().is_none(), "nothing loads it again");
-
-    let models = fixture.paths.models_dir();
-    fs::create_dir_all(&models).expect("models directory");
-    fs::write(models.join("weights"), b"model data").expect("model data");
-    assert!(
-        fixture
-            .paths
-            .data_locations()
-            .expect("data locations")
-            .iter()
-            .any(|location| {
-                location.category == ClearDataCategory::Models && location.path == directory
-            })
-    );
-    let cleared = fixture
-        .paths
-        .clear_data(&[ClearDataCategory::Models])
-        .expect("clear other model data");
-    assert_eq!(cleared.len(), 1);
-    assert_eq!(cleared[0].path, models);
-    assert!(cleared[0].deleted);
-    assert!(directory.exists(), "loaded files survive data clearing");
-    assert!(
-        store.cuda_pack_dir().is_none(),
-        "the removal marker survives"
-    );
-
-    // Downloading it again keeps the files there instead.
-    let (again, observer) = recorded();
-    store
-        .download_cuda_pack(&CancellationToken::default(), &observer)
-        .expect("kept");
-    assert_eq!(store.cuda_pack_state(), CudaPackState::Installed);
-    assert!(
-        again
-            .lock()
-            .expect("progress")
-            .iter()
-            .all(|event| event.phase == DownloadPhase::Complete),
-        "nothing downloaded"
-    );
-
-    assert_eq!(
-        store.remove_cuda_pack(true),
-        Ok(CudaPackRemovalOutcome::Deferred)
-    );
-    store.finish_cuda_pack_removal();
-    assert!(!directory.exists());
-    assert_eq!(
-        store.remove_cuda_pack(false),
-        Err(ModelStoreError::NotInstalled)
-    );
 }
 
 #[test]
@@ -375,14 +291,14 @@ fn startup_removes_old_pack_versions_and_interrupted_downloads_but_keeps_the_cur
     fs::write(&download, b"partial archive").expect("interrupted download");
     fs::write(&unrelated, b"notes").expect("unrelated file");
     for directory in [&previous, &unversioned] {
-        for name in CUDA_LIBRARIES.expect("pack").files() {
+        for name in FILES {
             fs::write(directory.join(name), contents(name)).expect("old library");
         }
     }
     assert_eq!(fixture.store.cuda_pack_state(), CudaPackState::NotInstalled);
     assert!(fixture.store.cuda_pack_dir().is_none());
     fs::create_dir_all(&current).expect("current build");
-    for name in CUDA_LIBRARIES.expect("pack").files() {
+    for name in FILES {
         fs::write(current.join(name), contents(name)).expect("current library");
     }
 
@@ -406,7 +322,7 @@ fn a_pack_not_in_use_is_removed_at_once() {
         .expect("installed");
     let directory = fixture.store.cuda_pack_dir().expect("installed");
     assert_eq!(
-        fixture.store.remove_cuda_pack(false),
+        fixture.store.remove_cuda_pack(),
         Ok(CudaPackRemovalOutcome::Removed)
     );
     assert!(!directory.exists());
