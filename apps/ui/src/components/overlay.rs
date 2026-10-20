@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use whispernow_domain::ipc::{Phase, RecordingTrigger};
 
 use super::ui::{Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
+use crate::management::replace_task;
 use crate::overlay::{LEVEL_BARS, format_elapsed};
 use crate::{Notice, OverlayView, UiContext, UiOperation, client};
 
@@ -104,15 +105,13 @@ pub fn RecordingBar() -> Element {
     };
     let mut closing = use_signal(|| None::<Task>);
     use_effect(use_reactive!(|failed, close_after| {
-        if let Some(pending) = closing.write().take() {
-            pending.cancel();
-        }
-        if failed {
-            closing.set(Some(spawn(async move {
+        let close = failed.then(|| {
+            spawn(async move {
                 client::delay(close_after).await;
                 context.dismiss_overlay();
-            })));
-        }
+            })
+        });
+        replace_task(&mut closing.write(), close);
     }));
 
     let blocked = |operation| context.blocked(operation).is_some();

@@ -1,3 +1,4 @@
+use whispernow_domain::ModelId;
 use whispernow_domain::ipc::ModelSummary;
 
 use super::ManagementState;
@@ -9,10 +10,10 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn model_display_name(&self, model_id: &str) -> String {
+    pub fn model_display_name(&self, model_id: &ModelId) -> String {
         self.models
             .iter()
-            .find(|model| model.id.as_str() == model_id)
+            .find(|model| model.id == *model_id)
             .map_or_else(
                 || "the speech model".to_owned(),
                 |model| model.display_name.clone(),

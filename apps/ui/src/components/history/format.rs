@@ -1,10 +1,12 @@
 //! Entries carry UTC milliseconds; everything here turns them into the viewer's local day and
 //! time. The clock is a context value so tests can pin both the time and the offset from UTC.
 
+use time::Date;
 use whispernow_domain::{HistoryEntry, HistoryLimit, HistoryRetention, UtcMillis};
 
 const MINUTE_MILLIS: i64 = 60_000;
 const DAY_MILLIS: i64 = 86_400_000;
+const UNIX_EPOCH_JULIAN_DAY: i64 = 2_440_588;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct LocalClock {
@@ -66,16 +68,11 @@ impl LocalClock {
         if day == today - 1 {
             return "Yesterday".to_owned();
         }
-        let date = CivilDate::from_days(day);
-        if date.year == CivilDate::from_days(today).year {
-            format!(
-                "{}, {} {}",
-                weekday_name(day),
-                date.day,
-                month_name(date.month)
-            )
+        let date = date_of(day);
+        if date.year() == date_of(today).year() {
+            format!("{}, {} {}", date.weekday(), date.day(), date.month())
         } else {
-            format!("{} {} {}", date.day, month_name(date.month), date.year)
+            format!("{} {} {}", date.day(), date.month(), date.year())
         }
     }
 
@@ -99,14 +96,13 @@ impl LocalClock {
 
     /// The local date and time of `at` in full, for a tooltip.
     pub(crate) fn full_time(self, at: UtcMillis) -> String {
-        let day = self.local_day(at);
-        let date = CivilDate::from_days(day);
+        let date = date_of(self.local_day(at));
         format!(
             "{}, {} {} {} at {}",
-            weekday_name(day),
-            date.day,
-            month_name(date.month),
-            date.year,
+            date.weekday(),
+            date.day(),
+            date.month(),
+            date.year(),
             self.clock_time(at)
         )
     }
@@ -114,14 +110,13 @@ impl LocalClock {
 
 /// `at` as an ISO 8601 UTC instant for a `<time datetime>` attribute.
 pub(crate) fn machine_time(at: UtcMillis) -> String {
-    let day = at.0.div_euclid(DAY_MILLIS);
-    let date = CivilDate::from_days(day);
+    let date = date_of(at.0.div_euclid(DAY_MILLIS));
     let seconds = at.0.rem_euclid(DAY_MILLIS) / 1_000;
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        date.year,
-        date.month,
-        date.day,
+        date.year(),
+        u8::from(date.month()),
+        date.day(),
         seconds / 3_600,
         seconds % 3_600 / 60,
         seconds % 60
@@ -175,64 +170,12 @@ pub(crate) fn retention_summary(
     format!("Keeping {transcripts}{window} and {audio}")
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct CivilDate {
-    year: i64,
-    month: i64,
-    day: i64,
-}
-
-impl CivilDate {
-    /// The proleptic Gregorian date `days` after 1970-01-01.
-    fn from_days(days: i64) -> Self {
-        let shifted = days + 719_468;
-        let era = shifted.div_euclid(146_097);
-        let day_of_era = shifted - era * 146_097;
-        let year_of_era =
-            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-        let month_piece = (5 * day_of_year + 2) / 153;
-        let month = if month_piece < 10 {
-            month_piece + 3
-        } else {
-            month_piece - 9
-        };
-        Self {
-            year: year_of_era + era * 400 + i64::from(month <= 2),
-            month,
-            day: day_of_year - (153 * month_piece + 2) / 5 + 1,
-        }
-    }
-}
-
-const fn weekday_name(day: i64) -> &'static str {
-    // 1970-01-01 was a Thursday.
-    match day.rem_euclid(7) {
-        0 => "Thursday",
-        1 => "Friday",
-        2 => "Saturday",
-        3 => "Sunday",
-        4 => "Monday",
-        5 => "Tuesday",
-        _ => "Wednesday",
-    }
-}
-
-const fn month_name(month: i64) -> &'static str {
-    match month {
-        1 => "January",
-        2 => "February",
-        3 => "March",
-        4 => "April",
-        5 => "May",
-        6 => "June",
-        7 => "July",
-        8 => "August",
-        9 => "September",
-        10 => "October",
-        11 => "November",
-        _ => "December",
-    }
+/// The date `days` after 1970-01-01, or the last date `time` holds when `days` is out of its range.
+fn date_of(days: i64) -> Date {
+    i32::try_from(days.saturating_add(UNIX_EPOCH_JULIAN_DAY))
+        .ok()
+        .and_then(|julian_day| Date::from_julian_day(julian_day).ok())
+        .unwrap_or(Date::MAX)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -285,26 +228,12 @@ mod tests {
     }
 
     #[test]
-    fn civil_dates_and_weekdays_match_the_calendar() {
-        assert_eq!(
-            CivilDate::from_days(0),
-            CivilDate {
-                year: 1970,
-                month: 1,
-                day: 1
-            }
-        );
+    fn dates_and_weekdays_match_the_calendar() {
+        assert_eq!(date_of(0).to_string(), "1970-01-01");
         let clock = LocalClock::fixed(NOW, 0);
         assert_eq!(clock.full_time(NOW), "Sunday, 27 September 2026 at 10:30");
         assert_eq!(machine_time(NOW), "2026-09-27T10:30:00Z");
-        assert_eq!(
-            CivilDate::from_days(-1),
-            CivilDate {
-                year: 1969,
-                month: 12,
-                day: 31
-            }
-        );
+        assert_eq!(date_of(-1).to_string(), "1969-12-31");
     }
 
     #[test]

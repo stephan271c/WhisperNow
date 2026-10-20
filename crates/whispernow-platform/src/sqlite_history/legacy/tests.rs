@@ -77,7 +77,7 @@ fn a_failed_import_commit_restores_the_legacy_document() {
 
     let error = import_legacy(&mut connection, &paths).expect_err("commit rejected");
 
-    assert_eq!(error.code, "history_import_commit");
+    assert_eq!(error, "history_import_commit");
     assert_eq!(
         fs::read(paths.history_file()).expect("source restored"),
         document

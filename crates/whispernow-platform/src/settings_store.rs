@@ -5,7 +5,6 @@ use whispernow_domain::AppError;
 
 use serde::Serialize;
 use serde_json::Value;
-use time::OffsetDateTime;
 use whispernow_domain::{ApiKey, ErrorCategory, LlmProvider, PythonSettings, Settings};
 
 use crate::{
@@ -43,6 +42,16 @@ pub struct SettingsLoad {
     pub enable_autostart: bool,
 }
 
+impl From<Settings> for SettingsLoad {
+    fn from(settings: Settings) -> Self {
+        Self {
+            settings,
+            notice: None,
+            enable_autostart: false,
+        }
+    }
+}
+
 pub struct SettingsStore {
     paths: AppPaths,
     credentials: Arc<dyn CredentialStore>,
@@ -67,11 +76,7 @@ impl SettingsStore {
         let document = match fs::read(&path) {
             Ok(document) => document,
             Err(error) if error.kind() == ErrorKind::NotFound => {
-                return Ok(SettingsLoad {
-                    settings: Settings::default(),
-                    notice: None,
-                    enable_autostart: false,
-                });
+                return Ok(Settings::default().into());
             }
             Err(_) => return Err(redacted("settings_read", "could not read settings")),
         };
@@ -80,17 +85,15 @@ impl SettingsStore {
                 return self.import_python(&value);
             }
             Ok(value) => {
-                if let Ok(settings) = serde_json::from_value(value) {
-                    return Ok(SettingsLoad {
-                        settings,
-                        notice: None,
-                        enable_autostart: false,
-                    });
+                if let Ok(settings) = serde_json::from_value::<Settings>(value) {
+                    return Ok(settings.into());
                 }
             }
             Err(_) => {}
         }
-        let bad = self.paths.unreadable_settings_file(&timestamp());
+        let bad = self
+            .paths
+            .unreadable_settings_file(&AppPaths::unreadable_stamp());
         fs::rename(&path, &bad).map_err(|_| {
             redacted(
                 "settings_unreadable",
@@ -102,9 +105,8 @@ impl SettingsStore {
             "unreadable settings were moved aside and the defaults loaded"
         );
         Ok(SettingsLoad {
-            settings: Settings::default(),
             notice: Some(SettingsNotice::Unreadable { path: bad }),
-            enable_autostart: false,
+            ..Settings::default().into()
         })
     }
 
@@ -182,19 +184,6 @@ impl SettingsStore {
 
 fn account(provider: LlmProvider) -> String {
     format!("llm-provider:{}", provider.as_str())
-}
-
-fn timestamp() -> String {
-    let now = OffsetDateTime::now_utc();
-    format!(
-        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
-        now.year(),
-        u8::from(now.month()),
-        now.day(),
-        now.hour(),
-        now.minute(),
-        now.second()
-    )
 }
 
 fn redacted(code: &'static str, summary: &'static str) -> AppError {

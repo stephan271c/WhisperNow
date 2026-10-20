@@ -41,7 +41,7 @@ use crate::shortcuts::{
 use crate::{
     activation::ActivationGate,
     autostart::{AutostartRegistration, TauriAutostart},
-    overlay::{RecordingOverlay, TauriOverlayWindow},
+    overlay::RecordingOverlay,
     tray::{TrayAction, TrayController},
 };
 
@@ -168,29 +168,20 @@ pub fn run() {
     };
     let application = builder
         .setup(move |app| {
-            let tray = Arc::new(TrayController::default());
-            tray.build(app, handle_tray_action)?;
-            let overlay = RecordingOverlay::new(
-                Arc::new(TauriOverlayWindow::new(app.handle().clone())),
-                floating_windows,
-            );
+            let overlay = RecordingOverlay::new(floating_windows);
             let (events, event_receiver) = services::Events::channel();
             let resource_dir = app.path().resource_dir()?;
             let (services, enable_autostart) =
                 NativeServices::compose(events, native_wayland, resource_dir).map_err(|error| {
                     io::Error::other(format!("desktop setup failed ({})", error.code))
                 })?;
-            if !services.output.can_copy() {
-                tray.mark_copy_unavailable();
-            }
+            let tray = TrayController::new(app, services.output.can_copy())?;
             let settings = services.settings.load();
             let start_minimized = settings.start_minimized;
             let autostart: Arc<dyn AutostartRegistration> =
                 Arc::new(TauriAutostart::new(app.handle().clone()));
             if enable_autostart && let Err(error) = autostart.set_enabled(true) {
-                services
-                    .state
-                    .publish_error(gateway::autostart_error(error));
+                services.state.publish_error(error);
             }
             if let Some(geometry) = settings.window_geometry {
                 restore_settings_geometry(app, geometry);
@@ -234,7 +225,7 @@ pub fn run() {
                 shortcuts,
                 autostart,
                 Arc::clone(&activation),
-                Arc::clone(&tray),
+                tray,
             ));
             NativeServices::spawn_retention_checks(Arc::clone(&app.state::<Gateway>().services));
             let updates_enabled = !cfg!(debug_assertions) && !public_key.is_empty();
@@ -419,18 +410,11 @@ fn handle_tray_action(app: &tauri::AppHandle, action: TrayAction) {
             show_settings_window(app);
         }
         TrayAction::CheckForUpdates => {
-            if let Err(error) = app
-                .state::<Gateway>()
-                .services
-                .state
-                .refuse_during_maintenance()
-            {
-                tracing::debug!(code = error.code, "update check was not admitted");
-                return;
-            }
             let controller = Arc::clone(app.state::<Arc<updater::UpdateController>>().inner());
             tauri::async_runtime::spawn(async move {
-                let _ = controller.check(true).await;
+                if let Err(error) = controller.check_manual().await {
+                    tracing::debug!(code = error.code, "update check was not admitted");
+                }
             });
         }
         TrayAction::CopyLastTranscript => {
@@ -486,21 +470,30 @@ fn apply_initial_window_policy(app: &tauri::App, start_minimized: bool) {
 /// Window changes are queued to the event-loop thread and never awaited. State
 /// publication runs on worker threads, and blocking native window getters there
 /// would wait on the event loop while it may itself wait on application state.
-pub(crate) fn show_settings_window(app: &tauri::AppHandle) {
+pub(crate) fn on_window(
+    app: &tauri::AppHandle,
+    label: &'static str,
+    operation: impl FnOnce(&tauri::WebviewWindow) + Send + 'static,
+) {
     let main_thread_app = app.clone();
     let scheduled = app.run_on_main_thread(move || {
-        let Some(window) = main_thread_app.get_webview_window(SETTINGS_WINDOW) else {
-            return;
-        };
+        if let Some(window) = main_thread_app.get_webview_window(label) {
+            operation(&window);
+        }
+    });
+    if scheduled.is_err() {
+        tracing::warn!(label, "window change could not be scheduled");
+    }
+}
+
+pub(crate) fn show_settings_window(app: &tauri::AppHandle) {
+    on_window(app, SETTINGS_WINDOW, |window| {
         if window.show().is_err() {
             tracing::warn!("the settings window could not be shown");
         } else if window.set_focus().is_err() {
             tracing::warn!("the settings window could not be focused");
         }
     });
-    if scheduled.is_err() {
-        tracing::warn!("the settings window show could not be scheduled");
-    }
 }
 
 pub(crate) fn hide_settings_window(app: &tauri::AppHandle) {
@@ -512,18 +505,11 @@ pub(crate) fn hide_recording_bar(app: &tauri::AppHandle) {
 }
 
 fn hide_window(app: &tauri::AppHandle, label: &'static str) {
-    let main_thread_app = app.clone();
-    let scheduled = app.run_on_main_thread(move || {
-        let Some(window) = main_thread_app.get_webview_window(label) else {
-            return;
-        };
+    on_window(app, label, move |window| {
         if window.hide().is_err() {
             tracing::warn!(label, "window could not be hidden");
         }
     });
-    if scheduled.is_err() {
-        tracing::warn!(label, "window hide could not be scheduled");
-    }
 }
 
 fn restore_settings_geometry(app: &tauri::App, geometry: WindowGeometry) {
@@ -550,15 +536,9 @@ fn clamp_geometry_to_monitors(
 ) -> WindowGeometry {
     geometry.width = geometry.width.clamp(720, 3_840);
     geometry.height = geometry.height.clamp(520, 2_160);
-    let bounds = overlay::PhysicalRect {
-        x: geometry.x,
-        y: geometry.y,
-        width: geometry.width,
-        height: geometry.height,
-    };
     let Some(monitor) = monitors
         .iter()
-        .find(|monitor| monitor.work_area.overlaps(&bounds))
+        .find(|monitor| overlay::overlaps(&monitor.work_area, &geometry))
         .or_else(|| monitors.first())
     else {
         return geometry;

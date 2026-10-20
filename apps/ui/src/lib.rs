@@ -42,11 +42,11 @@ impl UiContext {
 }
 
 pub fn app() -> Element {
-    let window_label = use_signal(current_window_label);
-    let mut state = use_signal(move || UiState {
-        recording_bar: window_label.peek().as_str() == "recording-bar",
+    let mut state = use_signal(|| UiState {
+        recording_bar: current_window_label() == "recording-bar",
         ..UiState::default()
     });
+    let recording_bar = state.peek().recording_bar;
     let management = use_signal(ManagementState::default);
     let navigator = Navigator::new(use_signal(|| Route::Home), use_signal(|| 0));
     let context = use_context_provider(|| UiContext {
@@ -55,10 +55,9 @@ pub fn app() -> Element {
         navigator,
     });
     // Follows a theme change at once; the recording bar uses theme-independent inverse colours.
-    use_effect(move || client::apply_theme(management.read().theme_attribute().map(str::to_owned)));
+    use_effect(move || client::apply_theme(management.read().theme_attribute()));
     let mut listeners = use_signal(|| None::<ListenerOwner>);
     use_future(move || async move {
-        let recording_bar = window_label() == "recording-bar";
         let mut event_state = state;
         // Tauri calls the listener from JavaScript with no Dioxus scope on the stack, so the
         // callback re-enters this component's scope before `spawn` looks it up.
@@ -101,7 +100,7 @@ pub fn app() -> Element {
         // Both windows share the tokens and primitives; the overlay remaps them to inverse colours.
         link { rel: "stylesheet", href: "/tokens.css" }
         link { rel: "stylesheet", href: "/ui.css" }
-        if window_label() == "recording-bar" {
+        if recording_bar {
             link { rel: "stylesheet", href: "/overlay.css" }
             RecordingBar {}
         } else {

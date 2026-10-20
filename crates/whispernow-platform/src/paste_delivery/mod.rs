@@ -20,7 +20,7 @@ mod windows;
 #[cfg(target_os = "linux")]
 mod x11;
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 mod macos;
 
 pub use clipboard::{ClipboardContents, NativeClipboard};

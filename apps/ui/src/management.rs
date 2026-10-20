@@ -18,6 +18,13 @@ use crate::{Notice, NoticeScope, UiOperation};
 pub(crate) use settings::SettingKey;
 pub(crate) use setup::SetupTest;
 
+/// Stores `next` in `slot`, cancelling the task it held.
+pub(crate) fn replace_task(slot: &mut Option<Task>, next: Option<Task>) {
+    if let Some(previous) = std::mem::replace(slot, next) {
+        previous.cancel();
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CopyTarget {
     LatestTranscript,

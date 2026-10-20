@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{collections::HashMap, rc::Rc};
 
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{ModelState, UpdatePhase};
@@ -210,24 +210,21 @@ fn Sidebar(route: Route) -> Element {
     let navigator = context.navigator;
     let entries = nav_entries(route);
     let count = entries.len();
-    // Mounted links by id; kept outside the reactive graph because mounting is not a change.
-    let links = use_hook(|| Rc::new(RefCell::new(HashMap::<&'static str, Rc<MountedData>>::new())));
+    // Mounted links by id; mounting is not a change, so nothing subscribes to it.
+    let mut links = use_signal(HashMap::<&'static str, Rc<MountedData>>::new);
     let ids = entries.iter().map(|entry| entry.id).collect::<Vec<_>>();
     let mut focused = use_signal(|| 0_usize);
     rsx! {
         nav { aria_label: "Main",
-            onkeydown: {
-                let links = links.clone();
-                move |event: KeyboardEvent| {
+            onkeydown: move |event: KeyboardEvent| {
                 let key = event.key().to_string();
                 let Some(target) = nav_keyboard_target(&key, focused(), count) else {
                     return;
                 };
                 event.prevent_default();
-                let link = ids.get(target).and_then(|id| links.borrow().get(id).cloned());
+                let link = ids.get(target).and_then(|id| links.peek().get(id).cloned());
                 if let Some(link) = link {
                     focus(link);
-                }
                 }
             },
             ul { class: "nav-list",
@@ -238,11 +235,8 @@ fn Sidebar(route: Route) -> Element {
                             id: entry.id,
                             class: nav_class(&entry, route),
                             aria_current: if is_current(&entry, route) { "page" } else { "false" },
-                            onmounted: {
-                                let links = links.clone();
-                                move |event: MountedEvent| {
-                                    links.borrow_mut().insert(entry.id, event.data());
-                                }
+                            onmounted: move |event: MountedEvent| {
+                                links.write().insert(entry.id, event.data());
                             },
                             onfocus: move |_| focused.set(index),
                             onclick: move |_| navigator.go(entry.route),
@@ -265,7 +259,7 @@ fn SidebarFooter() -> Element {
     let model_name = state
         .snapshot
         .as_ref()
-        .map(|snapshot| management.model_display_name(snapshot.selected_model_id.as_str()));
+        .map(|snapshot| management.model_display_name(&snapshot.selected_model_id));
     let model_state = state.snapshot.as_ref().map(|snapshot| snapshot.model_state);
     let dot = match model_state {
         Some(ModelState::Ready) => "status-dot",

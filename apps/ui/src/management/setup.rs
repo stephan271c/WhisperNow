@@ -5,7 +5,7 @@ use whispernow_domain::ipc::{
 };
 use whispernow_domain::{ModelAvailability, SetupCheckpoint, SetupStep};
 
-use super::ManagementState;
+use super::{ManagementState, replace_task};
 use crate::NoticeScope;
 use crate::components::ui::Tone;
 
@@ -182,9 +182,7 @@ impl ManagementState {
     }
 
     fn end_permission_watch(&mut self) {
-        if let Some(watch) = self.permission_watch.take() {
-            watch.cancel();
-        }
+        replace_task(&mut self.permission_watch, None);
     }
 
     fn on_permissions_step(&self) -> bool {

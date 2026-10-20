@@ -38,68 +38,28 @@ const MODIFIER_KEYS: [VIRTUAL_KEY; 8] = [
     VK_LWIN,
     VK_RWIN,
 ];
-const MAX_SHORTCUT_EVENTS: usize = 6;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct KeyStroke {
+#[derive(Clone, Copy)]
+struct Key {
     virtual_key: VIRTUAL_KEY,
-    key_up: bool,
     extended: bool,
 }
 
-impl KeyStroke {
-    const fn down(virtual_key: VIRTUAL_KEY) -> Self {
-        Self {
-            virtual_key,
-            key_up: false,
-            extended: false,
-        }
-    }
-
-    const fn down_extended(virtual_key: VIRTUAL_KEY) -> Self {
-        Self {
-            virtual_key,
-            key_up: false,
-            extended: true,
-        }
-    }
-
-    const fn up(virtual_key: VIRTUAL_KEY) -> Self {
-        Self {
-            virtual_key,
-            key_up: true,
-            extended: false,
-        }
-    }
-
-    const fn up_extended(virtual_key: VIRTUAL_KEY) -> Self {
-        Self {
-            virtual_key,
-            key_up: true,
-            extended: true,
-        }
+const fn plain(virtual_key: VIRTUAL_KEY) -> Key {
+    Key {
+        virtual_key,
+        extended: false,
     }
 }
 
-const CONTROL_V: [KeyStroke; 4] = [
-    KeyStroke::down(VK_CONTROL),
-    KeyStroke::down(VK_V),
-    KeyStroke::up(VK_V),
-    KeyStroke::up(VK_CONTROL),
-];
-const CONTROL_SHIFT_V: [KeyStroke; 6] = [
-    KeyStroke::down(VK_CONTROL),
-    KeyStroke::down(VK_SHIFT),
-    KeyStroke::down(VK_V),
-    KeyStroke::up(VK_V),
-    KeyStroke::up(VK_SHIFT),
-    KeyStroke::up(VK_CONTROL),
-];
-const SHIFT_INSERT: [KeyStroke; 4] = [
-    KeyStroke::down(VK_SHIFT),
-    KeyStroke::down_extended(VK_INSERT),
-    KeyStroke::up_extended(VK_INSERT),
-    KeyStroke::up(VK_SHIFT),
+const CONTROL_V: [Key; 2] = [plain(VK_CONTROL), plain(VK_V)];
+const CONTROL_SHIFT_V: [Key; 3] = [plain(VK_CONTROL), plain(VK_SHIFT), plain(VK_V)];
+const SHIFT_INSERT: [Key; 2] = [
+    plain(VK_SHIFT),
+    Key {
+        virtual_key: VK_INSERT,
+        extended: true,
+    },
 ];
 
 pub(super) fn inject_if_current(destination: NativeDestination) -> NativePasteInjection {
@@ -254,13 +214,8 @@ pub(super) fn physical_modifier_is_down() -> bool {
 }
 
 fn send_shortcut(keys: PasteKeys) -> NativePasteInjection {
-    let strokes = shortcut_strokes(keys);
-    let mut inputs = [INPUT::default(); MAX_SHORTCUT_EVENTS];
-    for (input, stroke) in inputs.iter_mut().zip(strokes) {
-        *input = native_input(*stroke);
-    }
-
-    let requested = u32::try_from(strokes.len()).expect("shortcut length fits u32");
+    let inputs = shortcut_inputs(shortcut_keys(keys));
+    let requested = u32::try_from(inputs.len()).expect("shortcut length fits u32");
     let input_size = i32::try_from(size_of::<INPUT>()).expect("INPUT size fits i32");
 
     // SAFETY: the slice contains exactly `requested` initialized INPUT values,
@@ -270,7 +225,7 @@ fn send_shortcut(keys: PasteKeys) -> NativePasteInjection {
     map_send_result(sent, requested)
 }
 
-const fn shortcut_strokes(keys: PasteKeys) -> &'static [KeyStroke] {
+const fn shortcut_keys(keys: PasteKeys) -> &'static [Key] {
     match keys {
         PasteKeys::ControlV => &CONTROL_V,
         PasteKeys::ControlShiftV => &CONTROL_SHIFT_V,
@@ -278,16 +233,22 @@ const fn shortcut_strokes(keys: PasteKeys) -> &'static [KeyStroke] {
     }
 }
 
-const fn native_input(stroke: KeyStroke) -> INPUT {
-    let mut flags = if stroke.key_up { KEYEVENTF_KEYUP } else { 0 };
-    if stroke.extended {
+fn shortcut_inputs(pressed: &[Key]) -> Vec<INPUT> {
+    let downs = pressed.iter().map(|key| native_input(*key, false));
+    let ups = pressed.iter().rev().map(|key| native_input(*key, true));
+    downs.chain(ups).collect()
+}
+
+const fn native_input(key: Key, key_up: bool) -> INPUT {
+    let mut flags = if key_up { KEYEVENTF_KEYUP } else { 0 };
+    if key.extended {
         flags |= KEYEVENTF_EXTENDEDKEY;
     }
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
-                wVk: stroke.virtual_key,
+                wVk: key.virtual_key,
                 wScan: 0,
                 dwFlags: flags,
                 time: 0,
@@ -312,36 +273,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_shortcuts_press_and_release_each_key_in_reverse_order() {
-        for (keys, expected) in [
-            (PasteKeys::ControlV, &[VK_CONTROL, VK_V][..]),
-            (PasteKeys::ControlShiftV, &[VK_CONTROL, VK_SHIFT, VK_V][..]),
-            (PasteKeys::ShiftInsert, &[VK_SHIFT, VK_INSERT][..]),
-        ] {
-            let strokes = shortcut_strokes(keys);
-            assert!(!strokes.is_empty());
-            assert_eq!(strokes.len() % 2, 0);
-            let (pressed, released) = strokes.split_at(strokes.len() / 2);
-            assert_eq!(
-                pressed
-                    .iter()
-                    .map(|stroke| stroke.virtual_key)
-                    .collect::<Vec<_>>(),
-                expected,
-                "{keys:?} pressed the wrong chord"
-            );
-            assert!(pressed.iter().all(|stroke| !stroke.key_up));
-            assert!(released.iter().all(|stroke| stroke.key_up));
-            for (down, up) in pressed.iter().zip(released.iter().rev()) {
-                assert_eq!(
-                    (down.virtual_key, down.extended),
-                    (up.virtual_key, up.extended)
-                );
-            }
-        }
-    }
-
-    #[test]
     fn send_input_count_has_explicit_mutation_semantics() {
         assert_eq!(map_send_result(4, 4), NativePasteInjection::Sent);
         assert_eq!(
@@ -356,21 +287,20 @@ mod tests {
 
     #[test]
     fn insert_events_carry_the_extended_key_flag() {
-        let insert_events: Vec<_> = shortcut_strokes(PasteKeys::ShiftInsert)
+        let insert_flags: Vec<_> = shortcut_inputs(&SHIFT_INSERT)
             .iter()
-            .filter(|stroke| stroke.virtual_key == VK_INSERT)
-            .map(|stroke| native_input(*stroke))
+            // SAFETY: `native_input` initialized the active union member as `ki`.
+            .filter(|input| unsafe { input.Anonymous.ki.wVk } == VK_INSERT)
+            // SAFETY: `native_input` initialized the active union member as `ki`.
+            .map(|input| unsafe { input.Anonymous.ki.dwFlags })
             .collect();
-        let [down, up] = insert_events.as_slice() else {
-            panic!("Shift+Insert must press and release Insert");
-        };
-
-        // SAFETY: `native_input` initialized the active union member as `ki`.
-        let down_flags = unsafe { down.Anonymous.ki.dwFlags };
-        // SAFETY: `native_input` initialized the active union member as `ki`.
-        let up_flags = unsafe { up.Anonymous.ki.dwFlags };
-        assert_eq!(down_flags, KEYEVENTF_EXTENDEDKEY);
-        assert_eq!(up_flags, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP);
+        assert_eq!(
+            insert_flags,
+            [
+                KEYEVENTF_EXTENDEDKEY,
+                KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP
+            ]
+        );
     }
 
     #[test]

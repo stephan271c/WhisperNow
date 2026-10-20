@@ -3,14 +3,14 @@ use whispernow_domain::AppError;
 
 use whispernow_core::audio::{AudioDeviceChoice, AudioDeviceId, AudioInput};
 use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest, SettingsView};
-use whispernow_domain::{ApiKey, LlmProvider, SettingsError};
+use whispernow_domain::{ApiKey, LlmProvider, RemoteProvider, SettingsError};
 use whispernow_domain::{ModelId, Settings, SetupCheckpoint, SetupStep, WindowGeometry};
 use whispernow_platform::{SettingsNotice, SettingsStore};
 
 use super::{
     audio_devices_unavailable,
     dictation::{CleanupPlan, DictationSettings, RecordingSettings},
-    lock, setup_already_complete,
+    lock, provider_models_unavailable, setup_already_complete,
     state::StateCell,
     unknown_model,
 };
@@ -56,8 +56,25 @@ impl SettingsCoordinator {
         Ok(result)
     }
 
-    pub(crate) fn api_key(&self, provider: LlmProvider) -> Result<Option<ApiKey>, AppError> {
+    pub(super) fn api_key(&self, provider: LlmProvider) -> Result<Option<ApiKey>, AppError> {
         self.persistence.api_key(provider)
+    }
+
+    /// `provider` at its saved endpoint, with its API key when one is saved.
+    pub(crate) fn provider_and_key(
+        &self,
+        provider: LlmProvider,
+    ) -> Result<(RemoteProvider, Option<ApiKey>), AppError> {
+        let settings = self.load();
+        let endpoint = settings.provider_settings(provider).api_base.clone();
+        let remote =
+            RemoteProvider::new(provider, endpoint).ok_or_else(provider_models_unavailable)?;
+        let api_key = if settings.api_keys.contains(&provider) {
+            self.api_key(provider)?
+        } else {
+            None
+        };
+        Ok((remote, api_key))
     }
 
     /// Deletes every provider's API key from the credential store. Returns whether the

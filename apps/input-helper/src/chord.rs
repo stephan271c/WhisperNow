@@ -2,25 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-// Linux input codes from `linux/input-event-codes.h`.
-const KEY_LEFTCTRL: u16 = 29;
-const KEY_RIGHTCTRL: u16 = 97;
-const KEY_LEFTALT: u16 = 56;
-const KEY_RIGHTALT: u16 = 100;
-const KEY_LEFTMETA: u16 = 125;
-const KEY_RIGHTMETA: u16 = 126;
-pub(crate) const MAX_KEY_CODE: u16 = 0x2ff;
+use crate::codes::{COMMAND_MODIFIERS, MAX_KEY_CODE};
 
-/// Ctrl, Alt and Super, left and right. A chord must hold one of these, so the
-/// helper can never report plain or shifted typing.
-const COMMAND_MODIFIERS: [u16; 6] = [
-    KEY_LEFTCTRL,
-    KEY_RIGHTCTRL,
-    KEY_LEFTALT,
-    KEY_RIGHTALT,
-    KEY_LEFTMETA,
-    KEY_RIGHTMETA,
-];
 const MAX_GROUPS: usize = 5;
 const MAX_ALTERNATIVES: usize = 8;
 
@@ -147,6 +130,7 @@ impl ChordTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codes::{KEY_LEFTCTRL, KEY_RIGHTCTRL};
 
     const SPACE: u16 = 57;
     const A: u16 = 30;

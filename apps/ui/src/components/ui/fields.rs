@@ -51,10 +51,9 @@ pub(crate) fn Field(
     id: String,
     label: String,
     description: Option<String>,
-    error: Option<String>,
     children: Element,
 ) -> Element {
-    use_field_wiring(&id, description.is_some(), error.is_some());
+    use_field_wiring(&id, description.is_some(), false);
     rsx! {
         div { class: "field",
             label { id: "{id}-label", class: "field-label", r#for: "{id}", "{label}" }
@@ -62,9 +61,6 @@ pub(crate) fn Field(
                 p { id: "{id}-description", class: "field-description", "{description}" }
             }
             {children}
-            if let Some(error) = error {
-                p { id: "{id}-error", class: "field-error-message", role: "alert", "{error}" }
-            }
         }
     }
 }
@@ -125,7 +121,7 @@ enum Draft {
 }
 
 /// Free text that saves itself. Typing edits a local draft; leaving the field, or pressing
-/// Enter in a single line, calls `oncommit` once with the draft if it differs from `value`.
+/// Enter, calls `oncommit` once with the draft if it differs from `value`.
 /// `oncommit` returns whether the change was taken; a refused one stays in the field. Inside a
 /// `Field` or `SettingRow` it takes the frame's id, and a taken change that later fails, shown
 /// by the frame's error, also keeps its text until the user edits it or presses Escape to go
@@ -134,7 +130,6 @@ enum Draft {
 pub(crate) fn DraftText(
     value: String,
     oncommit: Callback<String, bool>,
-    #[props(default)] multiline: bool,
     #[props(extends = GlobalAttributes, extends = input)] attributes: Vec<Attribute>,
 ) -> Element {
     let wiring = current_wiring();
@@ -174,21 +169,6 @@ pub(crate) fn DraftText(
             draft.set(None);
         }
     };
-    if multiline {
-        return rsx! {
-            textarea {
-                class: "text-input",
-                id,
-                aria_describedby: described_by,
-                aria_invalid,
-                value: shown,
-                oninput: move |event| draft.set(Some(Draft::Typing(event.value()))),
-                onchange: commit,
-                onkeydown: revert,
-                ..attributes,
-            }
-        };
-    }
     rsx! {
         input {
             class: "text-input",
@@ -204,35 +184,35 @@ pub(crate) fn DraftText(
     }
 }
 
-/// A choice between a few options shown side by side, one pressed. Inside a `Field` or
-/// `SettingRow` the group takes the frame's id and label, and each option's id is `{id}-{value}`;
-/// outside one it needs a `label`.
+/// A choice between a few options shown side by side, one pressed. Each option is (value, id
+/// suffix, label). It takes the id and label of the `Field` or `SettingRow` around it, and each
+/// option's id is `{id}-{suffix}`.
 #[component]
-pub(crate) fn Segmented(
-    value: &'static str,
-    options: Vec<(&'static str, &'static str)>,
-    onchange: EventHandler<&'static str>,
-    label: Option<String>,
+pub(crate) fn Segmented<T: Clone + PartialEq + 'static>(
+    value: T,
+    options: Vec<(T, &'static str, &'static str)>,
+    onchange: EventHandler<T>,
     #[props(default)] disabled: bool,
 ) -> Element {
-    let wiring = current_wiring();
-    let id = wiring.as_ref().map(|wiring| wiring.id.clone());
+    let wiring = current_wiring().expect("a Segmented is inside a Field or SettingRow");
     rsx! {
         div {
             class: "segmented",
-            id: id.clone(),
+            id: "{wiring.id}",
             role: "group",
-            aria_label: label,
-            aria_labelledby: wiring.as_ref().map(FieldWiring::label_id),
-            aria_describedby: wiring.as_ref().and_then(|wiring| wiring.described_by.clone()),
-            for (option, label) in options {
+            aria_labelledby: wiring.label_id(),
+            aria_describedby: wiring.described_by.clone(),
+            for (option, suffix, label) in options {
                 button {
                     r#type: "button",
                     class: "segmented-option",
-                    id: id.as_ref().map(|id| format!("{id}-{option}")),
+                    id: "{wiring.id}-{suffix}",
                     aria_pressed: if option == value { "true" } else { "false" },
                     disabled,
-                    onclick: move |_| if option != value { onchange.call(option) },
+                    onclick: {
+                        let pressed = option == value;
+                        move |_| if !pressed { onchange.call(option.clone()) }
+                    },
                     "{label}"
                 }
             }
@@ -240,25 +220,23 @@ pub(crate) fn Segmented(
     }
 }
 
-/// An on/off switch. Outside a `Field` or `SettingRow` it needs a `label`.
+/// An on/off switch named by the `Field` or `SettingRow` around it.
 #[component]
 pub(crate) fn Toggle(
     checked: bool,
     onchange: EventHandler<bool>,
-    label: Option<String>,
     #[props(default)] disabled: bool,
 ) -> Element {
-    let wiring = current_wiring();
+    let wiring = current_wiring().expect("a Toggle is inside a Field or SettingRow");
     rsx! {
         button {
             r#type: "button",
             role: "switch",
             class: "toggle",
-            id: wiring.as_ref().map(|wiring| wiring.id.clone()),
+            id: "{wiring.id}",
             aria_checked: if checked { "true" } else { "false" },
-            aria_label: label,
-            aria_labelledby: wiring.as_ref().map(FieldWiring::label_id),
-            aria_describedby: wiring.as_ref().and_then(|wiring| wiring.described_by.clone()),
+            aria_labelledby: wiring.label_id(),
+            aria_describedby: wiring.described_by.clone(),
             disabled,
             onclick: move |_| onchange.call(!checked),
             span { class: "toggle-thumb", aria_hidden: "true" }

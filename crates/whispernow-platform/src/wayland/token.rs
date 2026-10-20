@@ -15,8 +15,8 @@ pub struct RemoteDesktopRestoreTokenStore {
 
 impl RemoteDesktopRestoreTokenStore {
     #[must_use]
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
     }
 
     /// Whether a valid restore token is saved, so the next `RemoteDesktop`
@@ -56,7 +56,7 @@ mod tests {
     fn a_replaced_token_is_the_only_one_kept_and_is_private() {
         let root = tempdir().expect("temporary directory");
         let path = root.path().join("token");
-        let store = RemoteDesktopRestoreTokenStore::new(&path);
+        let store = RemoteDesktopRestoreTokenStore::new(path.clone());
         assert_eq!(store.load().expect("missing token"), None);
         assert!(!store.has_token());
 
@@ -82,7 +82,7 @@ mod tests {
     fn a_damaged_token_does_not_count_as_consent() {
         let root = tempdir().expect("temporary directory");
         let path = root.path().join("token");
-        let store = RemoteDesktopRestoreTokenStore::new(&path);
+        let store = RemoteDesktopRestoreTokenStore::new(path.clone());
         fs::write(&path, "bad\ntoken").expect("invalid token");
         assert_eq!(store.load(), Err(WaylandPortalError::TokenStore));
         assert!(!store.has_token());

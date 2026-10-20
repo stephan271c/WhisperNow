@@ -115,6 +115,36 @@ static DEFAULT_PROVIDER_SETTINGS: ProviderSettings = ProviderSettings {
     saved_models: Vec::new(),
 };
 
+impl ProviderSettings {
+    /// The saved models, after the active model if it was never saved.
+    #[must_use]
+    pub fn listed_models(&self) -> Vec<String> {
+        let mut models = self.saved_models.clone();
+        if !self.model.is_empty() && !models.contains(&self.model) {
+            models.insert(0, self.model.clone());
+        }
+        models
+    }
+
+    /// Makes `model` the active model, saving it if it is new.
+    pub fn choose_model(&mut self, model: String) {
+        self.saved_models = self.listed_models();
+        if !self.saved_models.contains(&model) {
+            self.saved_models.push(model.clone());
+        }
+        self.model = model;
+    }
+
+    /// Forgets the saved model `removed`; if it was active, the first saved model takes over.
+    pub fn remove_model(&mut self, removed: &str) {
+        self.saved_models = self.listed_models();
+        self.saved_models.retain(|saved| saved != removed);
+        if self.model == removed {
+            self.model = self.saved_models.first().cloned().unwrap_or_default();
+        }
+    }
+}
+
 /// A literal vocabulary replacement, stored as a `[source, replacement]` pair.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(from = "(String, String)", into = "(String, String)")]

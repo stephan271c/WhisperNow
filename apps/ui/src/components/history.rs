@@ -13,6 +13,7 @@ use row::HistoryRow;
 use super::ui::{
     Button, ButtonSize, ConfirmButton, EmptyState, Icon, IconName, ShortcutLabel, TextInput,
 };
+use crate::management::replace_task;
 use crate::{Route, SettingsRoute, UiContext, UiOperation};
 
 // Page-level control ids; as expressions they render as attributes tests can locate.
@@ -98,14 +99,12 @@ pub(super) fn HistoryScreen() -> Element {
                     aria_invalid: search_error.as_ref().map(|_| "true"),
                     oninput: move |event: FormEvent| {
                         management.write().history_search = event.value();
-                        if let Some(waiting) = search_task.take() {
-                            waiting.cancel();
-                        }
-                        search_task.set(Some(spawn(async move {
+                        let waiting = spawn(async move {
                             crate::client::delay(SEARCH_PAUSE_MS).await;
                             search_task.set(None);
                             context.search_history();
-                        })));
+                        });
+                        replace_task(&mut search_task.write(), Some(waiting));
                     },
                 }
                 button { r#type: "button", id: FAILED_FILTER_ID,

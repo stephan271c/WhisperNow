@@ -3,6 +3,15 @@
 
 use std::process;
 
+#[cfg(target_os = "linux")]
+use x11rb::{
+    connection::Connection as _,
+    protocol::xproto::{AtomEnum, ConnectionExt as _, InputFocus, Window},
+    rust_connection::RustConnection,
+};
+
+#[cfg(target_os = "macos")]
+use crate::paste_delivery::accessibility_trusted;
 use crate::{PasteKeys, paste_delivery::NativePasteError};
 
 #[cfg(target_os = "windows")]
@@ -22,18 +31,9 @@ pub(crate) struct NativeDestination {
 }
 
 impl NativeDestination {
+    #[cfg(target_os = "windows")]
     pub(crate) const fn process_id(self) -> u32 {
         self.process_id
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) const fn window(self) -> NativeWindow {
-        self.window
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) const fn focused_element(self) -> u64 {
-        self.focused_element
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -70,10 +70,9 @@ pub(crate) fn still_focused(expected: NativeDestination) -> Result<(), NativePas
 #[cfg(target_os = "macos")]
 fn capture_system_destination() -> Result<Option<NativeDestination>, NativePasteError> {
     use objc2_app_kit::NSWorkspace;
-    use objc2_application_services::{AXIsProcessTrusted, AXUIElement};
+    use objc2_application_services::AXUIElement;
 
-    // SAFETY: this query has no pointer preconditions and does not prompt.
-    if !unsafe { AXIsProcessTrusted() } {
+    if !accessibility_trusted() {
         return Err(NativePasteError::PermissionDenied);
     }
     let application = NSWorkspace::sharedWorkspace()
@@ -196,11 +195,12 @@ fn windows_paste_keys(class_name: &[u16]) -> PasteKeys {
 
 #[cfg(target_os = "linux")]
 fn capture_system_destination() -> Result<Option<NativeDestination>, NativePasteError> {
-    use x11rb::{
-        connection::Connection,
-        protocol::xproto::{AtomEnum, ConnectionExt as _, InputFocus},
-    };
+    let (connection, root) = connect_x11()?;
+    capture_on(&connection, root)
+}
 
+#[cfg(target_os = "linux")]
+pub(crate) fn connect_x11() -> Result<(RustConnection, Window), NativePasteError> {
     let (connection, screen_number) =
         x11rb::connect(None).map_err(|_| NativePasteError::Unavailable)?;
     let root = connection
@@ -209,11 +209,19 @@ fn capture_system_destination() -> Result<Option<NativeDestination>, NativePaste
         .get(screen_number)
         .ok_or(NativePasteError::Unavailable)?
         .root;
-    let window = x11_property_u32(&connection, root, b"_NET_ACTIVE_WINDOW", AtomEnum::WINDOW)?;
+    Ok((connection, root))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn capture_on(
+    connection: &RustConnection,
+    root: Window,
+) -> Result<Option<NativeDestination>, NativePasteError> {
+    let window = x11_property_u32(connection, root, b"_NET_ACTIVE_WINDOW", AtomEnum::WINDOW)?;
     if window == 0 || window == root {
         return Ok(None);
     }
-    let process_id = x11_property_u32(&connection, window, b"_NET_WM_PID", AtomEnum::CARDINAL)?;
+    let process_id = x11_property_u32(connection, window, b"_NET_WM_PID", AtomEnum::CARDINAL)?;
     if process_id == 0 {
         return Err(NativePasteError::Unavailable);
     }
@@ -230,20 +238,18 @@ fn capture_system_destination() -> Result<Option<NativeDestination>, NativePaste
         window,
         process_id,
         focused_element: u64::from(focus),
-        keys: x11_paste_keys(&connection, window).unwrap_or(PasteKeys::ControlV),
+        keys: x11_paste_keys(connection, window).unwrap_or(PasteKeys::ControlV),
     }))
 }
 
 /// A window property holding exactly one 32-bit value of `expected_type`.
 #[cfg(target_os = "linux")]
-pub(crate) fn x11_property_u32(
-    connection: &impl x11rb::connection::Connection,
-    window: u32,
+fn x11_property_u32(
+    connection: &RustConnection,
+    window: Window,
     name: &[u8],
-    expected_type: x11rb::protocol::xproto::AtomEnum,
+    expected_type: AtomEnum,
 ) -> Result<u32, NativePasteError> {
-    use x11rb::protocol::xproto::ConnectionExt as _;
-
     let property = connection
         .intern_atom(false, name)
         .ok()
@@ -272,12 +278,7 @@ pub(crate) fn x11_property_u32(
 /// The keys for the window's `WM_CLASS`, whose instance and class names are
 /// separated by NUL bytes.
 #[cfg(target_os = "linux")]
-fn x11_paste_keys(
-    connection: &impl x11rb::connection::Connection,
-    window: u32,
-) -> Option<PasteKeys> {
-    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
-
+fn x11_paste_keys(connection: &RustConnection, window: Window) -> Option<PasteKeys> {
     let reply = connection
         .get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 64)
         .ok()?

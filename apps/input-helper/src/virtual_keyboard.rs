@@ -8,16 +8,12 @@ use std::{
     time::Duration,
 };
 
+use crate::codes::{EV_KEY, EV_SYN, KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_V};
+
 /// The device name, which the key readers skip so its own keys are not mistaken
 /// for the user's.
 pub const NAME: &str = "WhisperNow paste keyboard";
 
-const KEY_LEFTCTRL: u16 = 29;
-const KEY_LEFTSHIFT: u16 = 42;
-/// The V key's position. QWERTY, QWERTZ, AZERTY and Colemak keep V there.
-const KEY_V: u16 = 47;
-const EV_SYN: u16 = 0;
-const EV_KEY: u16 = 1;
 const BUS_VIRTUAL: u16 = 0x06;
 
 const UINPUT_IOCTL_BASE: u32 = b'U' as u32;

@@ -556,10 +556,6 @@ small {
   gap: var(--space-1);
 }
 
-.shortcut-capture-empty {
-  color: var(--color-text-secondary);
-}
-
 .shortcut-capture-help {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);

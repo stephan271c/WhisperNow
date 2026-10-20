@@ -2,7 +2,7 @@ use super::clear_data::ReleaseOnDrop;
 use super::*;
 use crate::{
     activation::ActivationGate,
-    autostart::{AutostartError, AutostartRegistration},
+    autostart::AutostartRegistration,
     gateway::Gateway,
     services::{
         NativeServices, models::ModelCoordinator, output::OutputCoordinator,
@@ -53,11 +53,11 @@ struct Autostart {
 }
 
 impl AutostartRegistration for Autostart {
-    fn is_enabled(&self) -> Result<bool, AutostartError> {
-        Ok(self.enabled.load(Ordering::SeqCst))
+    fn is_enabled(&self) -> Option<bool> {
+        Some(self.enabled.load(Ordering::SeqCst))
     }
 
-    fn set_enabled(&self, enabled: bool) -> Result<(), AutostartError> {
+    fn set_enabled(&self, enabled: bool) -> Result<(), AppError> {
         self.enabled.store(enabled, Ordering::SeqCst);
         Ok(())
     }
@@ -127,7 +127,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         shortcuts,
         autostart.clone(),
         Arc::new(ActivationGate::default()),
-        Arc::new(TrayController::default()),
+        TrayController::headless(true),
     ));
     let (entered, registering) = mpsc::channel();
     let (release, released) = mpsc::channel();
@@ -248,7 +248,7 @@ fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
         shortcuts,
         Arc::new(Autostart::default()),
         Arc::new(ActivationGate::default()),
-        Arc::new(TrayController::default()),
+        TrayController::headless(true),
     );
     let standing = runtime
         .block_on(gateway.settings_view())

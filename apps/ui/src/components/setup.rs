@@ -7,10 +7,11 @@ use whispernow_domain::ipc::{
     ModelSummary, Permission, PermissionKind, PermissionStatus, SetupTestResult,
 };
 use whispernow_domain::{
-    ModelAvailability, ModelId, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
+    ErrorCategory, ModelAvailability, ModelId, RecordingMode, SetupCheckpoint, SetupStep, Shortcut,
+    ShortcutKey, ShortcutModifier,
 };
 
-use super::configuration::{RECORDING_MODES, choice_value, chosen, device_options};
+use super::configuration::{RECORDING_MODES, device_options};
 use super::labels::{self, format_bytes};
 use super::microphone_test::percent;
 use super::models::{DownloadProgress, ModelLanguages};
@@ -27,23 +28,6 @@ mod tests;
 
 /// The step heading's id; focus moves to it on each new step.
 const STEP_HEADING: &str = "setup-step-heading";
-
-/// The step before `step`; the first step has none and stays.
-fn previous_step(step: SetupStep) -> SetupStep {
-    SetupStep::ALL
-        .into_iter()
-        .rev()
-        .find(|earlier| *earlier < step)
-        .unwrap_or(step)
-}
-
-/// The step after `step`; the last step has none and stays.
-fn next_step(step: SetupStep) -> SetupStep {
-    SetupStep::ALL
-        .into_iter()
-        .find(|later| *later > step)
-        .unwrap_or(step)
-}
 
 /// The step heading; `None` is the finished setup.
 const fn step_title(step: Option<SetupStep>) -> &'static str {
@@ -143,7 +127,12 @@ fn SetupFooter(step: SetupStep) -> Element {
     let complete_blocked = context
         .blocked(UiOperation::CompleteSetup)
         .or(context.settings_blocked());
-    let finishing = step == SetupStep::TryIt;
+    let earlier = SetupStep::ALL
+        .into_iter()
+        .rev()
+        .find(|earlier| *earlier < step);
+    let later = SetupStep::ALL.into_iter().find(|later| *later > step);
+    let finishing = later.is_none();
     let primary_blocked = if finishing {
         complete_blocked
     } else {
@@ -162,8 +151,12 @@ fn SetupFooter(step: SetupStep) -> Element {
         div { class: "wizard-actions",
             Button {
                 id: "setup-back",
-                disabled: step == SetupStep::Welcome || save_blocked.is_some(),
-                onclick: move |_| context.move_setup(previous_step(step)),
+                disabled: earlier.is_none() || save_blocked.is_some(),
+                onclick: move |_| {
+                    if let Some(earlier) = earlier {
+                        context.move_setup(earlier);
+                    }
+                },
                 "Back"
             }
             Button {
@@ -181,12 +174,9 @@ fn SetupFooter(step: SetupStep) -> Element {
                 variant: ButtonVariant::Primary,
                 disabled: !ready || primary_blocked.is_some(),
                 aria_describedby: describedby,
-                onclick: move |_| {
-                    if finishing {
-                        context.complete_setup();
-                    } else {
-                        context.move_setup(next_step(step));
-                    }
+                onclick: move |_| match later {
+                    Some(later) => context.move_setup(later),
+                    None => context.complete_setup(),
                 },
                 match step {
                     SetupStep::Welcome => "Get started",
@@ -206,7 +196,7 @@ const fn step_hint(step: SetupStep) -> Option<&'static str> {
         SetupStep::Permissions => Some("Allow microphone access to continue."),
         SetupStep::Model => Some("Download a model, or choose one that is installed."),
         SetupStep::Shortcuts => {
-            Some("Turn on at least one shortcut, complete it, and use different keys for each.")
+            Some("Choose a recording shortcut that includes Control, Alt, Shift, or Meta.")
         }
     }
 }
@@ -376,7 +366,7 @@ fn ModelStep(selected: ModelId) -> Element {
     let management = context.management;
     let mut show_all = use_signal(|| false);
     let download_blocked = context
-        .blocked(UiOperation::DownloadModel)
+        .model_download_blocked()
         .or(context.settings_pending());
     let models = management
         .read()
@@ -509,14 +499,14 @@ fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
             Field { id: "setup-recording-mode", label: "Recording mode",
                 Segmented {
                     disabled,
-                    value: choice_value(&RECORDING_MODES, &checkpoint.recording_mode),
-                    options: RECORDING_MODES.iter().map(|(_, value, label)| (*value, *label)).collect::<Vec<_>>(),
-                    onchange: move |value: &'static str| if let Some(mode) = chosen(&RECORDING_MODES, value) {
+                    value: checkpoint.recording_mode,
+                    options: RECORDING_MODES.to_vec(),
+                    onchange: move |mode: RecordingMode| {
                         management.write().edit_setup(|setup| setup.recording_mode = mode);
                     },
                 }
             }
-            ShortcutCapture { id: "setup-recording-shortcut-capture", label: "recording shortcut", shortcut: Some(checkpoint.recording_shortcut.clone()),
+            ShortcutCapture { id: "setup-recording-shortcut-capture", label: "recording shortcut", shortcut: checkpoint.recording_shortcut.clone(),
                 disabled,
                 oncapture: move |shortcut| { management.write().edit_setup(|setup| setup.recording_shortcut = shortcut); } }
             if let Some(conflict) = conflict {
@@ -531,9 +521,7 @@ fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
 fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
     let context = use_context::<UiContext>();
     let management = context.management;
-    let model_name = management
-        .read()
-        .model_display_name(checkpoint.model_id.as_str());
+    let model_name = management.read().model_display_name(&checkpoint.model_id);
     let model_ready = management.read().setup_model_ready();
     let download = context.active_download(&checkpoint.model_id);
     let devices = management.read().devices.clone();
@@ -554,7 +542,8 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
             }
         }
         Field { id: "setup-microphone", label: "Microphone",
-            Select { value: selected,
+            Select { value: selected.clone(),
+                placeholder: selected,
                 options: device_options(&devices),
                 disabled: running || settings_pending,
                 onchange: move |value: String| {
@@ -631,9 +620,7 @@ fn TestDictationResult(outcome: SetupTestResult) -> Element {
     }
 }
 
-fn setup_fix(category: whispernow_domain::ErrorCategory) -> &'static str {
-    use whispernow_domain::ErrorCategory;
-    let fix = crate::home_status::category_fix(category);
+fn setup_fix(category: ErrorCategory) -> &'static str {
     match category {
         ErrorCategory::Audio => "Choose another microphone above, then test again.",
         ErrorCategory::Model | ErrorCategory::Recognition => {
@@ -642,10 +629,7 @@ fn setup_fix(category: whispernow_domain::ErrorCategory) -> &'static str {
         ErrorCategory::Permission => {
             "Check WhisperNow's permissions in your system settings, then test again."
         }
-        _ => fix.map_or(
-            "Test again. If it keeps failing, restart WhisperNow.",
-            |(label, _)| label,
-        ),
+        _ => "Test again. If it keeps failing, restart WhisperNow.",
     }
 }
 

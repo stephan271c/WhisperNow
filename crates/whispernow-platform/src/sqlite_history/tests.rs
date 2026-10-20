@@ -3,8 +3,8 @@ use std::fs;
 use rusqlite::Connection;
 use serde_json::json;
 use whispernow_domain::{
-    EntryStatus, ErrorCategory, HistoryFilter, HistoryLimit, HistoryPageRequest, HistoryRetention,
-    ModelId, NewHistoryEntry, UtcMillis,
+    EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryFilter, HistoryLimit,
+    HistoryPageRequest, HistoryRetention, ModelId, NewHistoryEntry, UtcMillis,
 };
 
 use super::SqliteHistoryRepository;
@@ -56,7 +56,7 @@ fn entry(created_at: i64, status: EntryStatus, text: &str) -> NewHistoryEntry {
 
 const SPEECH: [f32; 4] = [0.0, 0.5, -0.5, 0.25];
 
-fn all(repository: &SqliteHistoryRepository) -> Vec<whispernow_domain::HistoryEntry> {
+fn all(repository: &SqliteHistoryRepository) -> Vec<HistoryEntry> {
     repository
         .list(&HistoryPageRequest {
             limit: 100,
@@ -64,6 +64,13 @@ fn all(repository: &SqliteHistoryRepository) -> Vec<whispernow_domain::HistoryEn
         })
         .expect("list")
         .entries
+}
+
+fn find(repository: &SqliteHistoryRepository, id: EntryId) -> HistoryEntry {
+    all(repository)
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .expect("entry")
 }
 
 #[test]
@@ -82,7 +89,7 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
             HistoryRetention::Forever,
         )
         .expect("insert");
-    let spoken = history.get(spoken).expect("get").expect("entry");
+    let spoken = find(&history, spoken);
     assert_eq!(spoken.raw_text.as_deref(), Some("hello"));
     assert_eq!(spoken.text(), Some("Hello."));
     assert!(!spoken.audio_kept);
@@ -97,12 +104,12 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
             HistoryRetention::Forever,
         )
         .expect("insert");
-    let kept = history.get(kept).expect("get").expect("entry");
+    let kept = find(&history, kept);
     assert!(kept.audio_kept);
     let wav = history.audio(kept.id).expect("audio").expect("kept audio");
     assert_eq!(&wav[..4], b"RIFF");
     assert_eq!(fixture.wav_names(), vec![format!("{}.wav", kept.id.0)]);
-    assert_eq!(history.get(kept.id).expect("get"), Some(kept));
+    assert_eq!(all(&history).first(), Some(&kept));
 }
 
 #[test]
@@ -135,9 +142,10 @@ fn history_reads_do_not_parse_the_asr_model_id_saved_for_training() {
         )
         .expect("unrecognized stored model id");
 
-    let saved = history.get(id).expect("read history").expect("entry");
-    assert_eq!(saved.text(), Some("dictation"));
-    assert_eq!(all(&history), vec![saved]);
+    let saved = all(&history);
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].id, id);
+    assert_eq!(saved[0].text(), Some("dictation"));
 }
 
 #[test]
@@ -154,7 +162,7 @@ fn failed_and_cancelled_entries_keep_audio_only_when_keep_audio_is_on() {
                 HistoryRetention::Forever,
             )
             .expect("insert");
-        history.get(id).expect("get").expect("entry")
+        find(&history, id)
     };
     for status in [EntryStatus::Failed, EntryStatus::Cancelled] {
         assert!(!insert(status, false).audio_kept, "{status:?}");
@@ -393,7 +401,7 @@ fn delivery_failure_delete_and_clear_update_entries_and_audio() {
     history
         .mark_not_delivered(first, "The paste failed")
         .expect("mark");
-    let first = history.get(first).expect("get").expect("entry");
+    let first = find(&history, first);
     assert_eq!(first.status, EntryStatus::NotDelivered);
     assert_eq!(first.error.as_deref(), Some("The paste failed"));
 
@@ -501,15 +509,7 @@ fn a_recordings_removal_failure_keeps_history_rows() {
         result.expect_err("recordings kept").code,
         "history_clear_audio"
     );
-    assert_eq!(
-        history
-            .get(id)
-            .expect("entry")
-            .expect("retained")
-            .raw_text
-            .as_deref(),
-        Some("recoverable")
-    );
+    assert_eq!(find(&history, id).raw_text.as_deref(), Some("recoverable"));
     assert!(history.audio(id).expect("audio").is_some());
 }
 
@@ -552,7 +552,7 @@ fn startup_removes_audio_files_that_no_entry_owns() {
 fn an_entry_with_an_unknown_status_fails_to_load() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    let stored = history
+    history
         .insert(
             entry(1, EntryStatus::Ok, "one"),
             &[],
@@ -566,7 +566,10 @@ fn an_entry_with_an_unknown_status_fails_to_load() {
         .expect("database")
         .execute("UPDATE entries SET status = 'lost'", [])
         .expect("unknown status");
-    let error = fixture.open().get(stored).expect_err("unknown status");
+    let error = fixture
+        .open()
+        .list(&HistoryPageRequest::first_page(HistoryFilter::default()))
+        .expect_err("unknown status");
     assert_eq!(error.category, ErrorCategory::General);
 }
 

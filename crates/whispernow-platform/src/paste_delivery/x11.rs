@@ -12,8 +12,8 @@ use x11rb::{
     protocol::{
         xkb::{self, ConnectionExt as _},
         xproto::{
-            AtomEnum, ConnectionExt as _, GetKeyboardMappingReply, GetModifierMappingReply,
-            KEY_PRESS_EVENT, KEY_RELEASE_EVENT, Window,
+            ConnectionExt as _, GetKeyboardMappingReply, GetModifierMappingReply, KEY_PRESS_EVENT,
+            KEY_RELEASE_EVENT, Window,
         },
         xtest::ConnectionExt as _,
     },
@@ -24,7 +24,7 @@ use x11rb::{
 use super::{NativePasteError, NativePasteInjection, wait_until_modifiers_released};
 use crate::{
     PasteKeys,
-    destination::{NativeDestination, x11_property_u32},
+    destination::{NativeDestination, capture_on, connect_x11},
 };
 
 const XK_V_LOWER: u32 = 0x0076;
@@ -41,16 +41,9 @@ struct Keys {
 }
 
 pub(super) fn inject_if_current(target: NativeDestination) -> NativePasteInjection {
-    let Ok((connection, screen)) = x11rb::connect(None) else {
-        return NativePasteInjection::NotSent(NativePasteError::Unavailable);
-    };
-    let Some(root) = connection
-        .setup()
-        .roots
-        .get(screen)
-        .map(|screen| screen.root)
-    else {
-        return NativePasteInjection::NotSent(NativePasteError::Unavailable);
+    let (connection, root) = match connect_x11() {
+        Ok(connected) => connected,
+        Err(error) => return NativePasteInjection::NotSent(error),
     };
     let prepared = reply(connection.xkb_use_extension(1, 0))
         .and_then(|_| read_keys(&connection))
@@ -163,27 +156,14 @@ fn any_pressed(connection: &RustConnection, keycodes: &[u8]) -> Result<bool, Nat
         .any(|keycode| bitmap[usize::from(keycode / 8)] & (1 << (keycode % 8)) != 0))
 }
 
-/// Runs under the server grab: the focused window, its process and its
-/// focused child must be unchanged and no modifier may be down.
+/// Runs under the server grab: the destination must be unchanged and no
+/// modifier may be down.
 fn revalidate(
     connection: &RustConnection,
     root: Window,
     expected: NativeDestination,
 ) -> Result<Keys, NativePasteError> {
-    let window = expected.window();
-    let active_window =
-        x11_property_u32(connection, root, b"_NET_ACTIVE_WINDOW", AtomEnum::WINDOW)?;
-    let process_id = x11_property_u32(
-        connection,
-        active_window,
-        b"_NET_WM_PID",
-        AtomEnum::CARDINAL,
-    )?;
-    let focus = reply(connection.get_input_focus())?.focus;
-    if active_window != window
-        || process_id != expected.process_id()
-        || u64::from(focus) != expected.focused_element()
-    {
+    if capture_on(connection, root)? != Some(expected) {
         return Err(NativePasteError::Unavailable);
     }
     let keys = read_keys(connection)?;

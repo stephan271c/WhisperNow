@@ -22,6 +22,7 @@ use whispernow_domain::ipc::EventPayload;
 use super::ui::Tone;
 use crate::client;
 
+use crate::management::replace_task;
 use crate::{Copied, CopyTarget, NoticeScope, Route, UiContext, UiOperation};
 
 /// How long the level meter stays up after a microphone test.
@@ -129,9 +130,7 @@ impl UiContext {
     /// newer copy replaces it.
     pub(crate) fn copy_text(mut self, text: String, target: CopyTarget) {
         let copy_task = spawn_forever(async move {
-            let succeeded = client::invoke::<_, ()>("copy_text", Some(&text))
-                .await
-                .is_ok();
+            let succeeded = client::invoke::<_, ()>("copy_text", text).await.is_ok();
             self.management.write().copied = Some(Copied { target, succeeded });
             client::delay(COPIED_MS).await;
             let mut management = self.management;
@@ -142,9 +141,7 @@ impl UiContext {
         let mut management = self.management;
         let mut management = management.write();
         management.copied = None;
-        if let Some(previous) = management.copy_task.replace(copy_task) {
-            previous.cancel();
-        }
+        replace_task(&mut management.copy_task, Some(copy_task));
     }
 
     pub(crate) fn test_microphone(self) {
@@ -153,9 +150,7 @@ impl UiContext {
             let mut management = self.management;
             let mut management = management.write();
             management.microphone_test = None;
-            if let Some(previous) = management.microphone_test_task.take() {
-                previous.cancel();
-            }
+            replace_task(&mut management.microphone_test_task, None);
             management.clear_notice_scope(NoticeScope::Home);
         }
         self.run(
@@ -181,9 +176,10 @@ impl UiContext {
             management.microphone_test = None;
             management.microphone_test_task = None;
         });
-        if let Some(previous) = management.write().microphone_test_task.replace(hide_task) {
-            previous.cancel();
-        }
+        replace_task(
+            &mut management.write().microphone_test_task,
+            Some(hide_task),
+        );
     }
 
     pub(crate) fn review_data(mut self) {

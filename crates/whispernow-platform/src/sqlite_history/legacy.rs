@@ -6,7 +6,7 @@ use serde::Deserialize;
 use time::{OffsetDateTime, PrimitiveDateTime, format_description::well_known::Rfc3339};
 use whispernow_domain::{EntryStatus, ErrorCategory, UtcMillis};
 
-use super::{history_error, status_text};
+use super::status_text;
 use crate::AppPaths;
 
 /// One record of the Python release's `history.json`; its other fields are not kept.
@@ -23,16 +23,18 @@ struct LegacyRecord {
 pub(super) fn import_legacy(
     connection: &mut Connection,
     paths: &AppPaths,
-) -> Result<Option<AppError>, AppError> {
+) -> Result<Option<AppError>, &'static str> {
     let document = match fs::read_to_string(paths.history_file()) {
         Ok(document) => document,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(history_error("history_import_read")),
+        Err(_) => return Err("history_import_read"),
     };
     let Ok(records) = serde_json::from_str::<Vec<LegacyRecord>>(&document) else {
-        let stamp = OffsetDateTime::now_utc().unix_timestamp_nanos().to_string();
-        fs::rename(paths.history_file(), paths.unreadable_history_file(&stamp))
-            .map_err(|_| history_error("history_import_invalid_backup"))?;
+        fs::rename(
+            paths.history_file(),
+            paths.unreadable_history_file(&AppPaths::unreadable_stamp()),
+        )
+        .map_err(|_| "history_import_invalid_backup")?;
         tracing::warn!(
             code = "history_import_invalid",
             "malformed legacy transcription history was moved aside"
@@ -45,14 +47,14 @@ pub(super) fn import_legacy(
     };
     let transaction = connection
         .transaction()
-        .map_err(|_| history_error("history_import_begin"))?;
+        .map_err(|_| "history_import_begin")?;
     for record in records {
         import_record(&transaction, record)?;
     }
     if fs::rename(paths.history_file(), paths.migrated_history_file()).is_err() {
         transaction
             .rollback()
-            .map_err(|_| history_error("history_import_rollback"))?;
+            .map_err(|_| "history_import_rollback")?;
         tracing::warn!(
             code = "history_import_rename",
             "legacy transcription history was not imported because it could not be renamed"
@@ -65,14 +67,14 @@ pub(super) fn import_legacy(
     }
     if transaction.commit().is_err() {
         fs::rename(paths.migrated_history_file(), paths.history_file())
-            .map_err(|_| history_error("history_import_restore"))?;
-        return Err(history_error("history_import_commit"));
+            .map_err(|_| "history_import_restore")?;
+        return Err("history_import_commit");
     }
     Ok(None)
 }
 
 /// Imports one Python record as an entry. A record whose recognition failed keeps no transcript.
-fn import_record(transaction: &Transaction<'_>, record: LegacyRecord) -> Result<(), AppError> {
+fn import_record(transaction: &Transaction<'_>, record: LegacyRecord) -> Result<(), &'static str> {
     let created_at = parse_legacy_timestamp(&record.timestamp).unwrap_or(UtcMillis(0));
     let failed = record.raw_text == "[ERROR]";
     let (status, raw_text, error) = if failed {
@@ -96,7 +98,7 @@ fn import_record(transaction: &Transaction<'_>, record: LegacyRecord) -> Result<
                 error,
             ],
         )
-        .map_err(|_| history_error("history_import_record"))?;
+        .map_err(|_| "history_import_record")?;
     Ok(())
 }
 

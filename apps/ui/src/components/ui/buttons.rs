@@ -42,7 +42,7 @@ impl ButtonSize {
 pub(crate) fn Button(
     #[props(default)] variant: ButtonVariant,
     #[props(default)] size: ButtonSize,
-    onclick: Option<EventHandler<MouseEvent>>,
+    onclick: EventHandler<MouseEvent>,
     #[props(extends = GlobalAttributes, extends = button)] attributes: Vec<Attribute>,
     children: Element,
 ) -> Element {
@@ -50,11 +50,7 @@ pub(crate) fn Button(
         button {
             r#type: "button",
             class: "btn {variant.class()} {size.class()}",
-            onclick: move |event| {
-                if let Some(handler) = onclick {
-                    handler.call(event);
-                }
-            },
+            onclick: move |event| onclick.call(event),
             ..attributes,
             {children}
         }
@@ -68,7 +64,7 @@ pub(crate) fn IconButton(
     label: String,
     #[props(default = ButtonVariant::Ghost)] variant: ButtonVariant,
     #[props(default)] size: ButtonSize,
-    onclick: Option<EventHandler<MouseEvent>>,
+    onclick: EventHandler<MouseEvent>,
     #[props(extends = GlobalAttributes, extends = button)] attributes: Vec<Attribute>,
 ) -> Element {
     rsx! {
@@ -77,11 +73,7 @@ pub(crate) fn IconButton(
             class: "btn btn-icon {variant.class()} {size.class()}",
             aria_label: "{label}",
             title: "{label}",
-            onclick: move |event| {
-                if let Some(handler) = onclick {
-                    handler.call(event);
-                }
-            },
+            onclick: move |event| onclick.call(event),
             ..attributes,
             Icon { name: icon }
         }

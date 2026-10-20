@@ -43,6 +43,15 @@ impl UiContext {
         }
     }
 
+    pub(crate) fn model_download_blocked(self) -> Option<BlockedReason> {
+        self.blocked(UiOperation::DownloadModel)
+    }
+
+    pub(crate) fn model_delete_blocked(self) -> Option<BlockedReason> {
+        self.blocked(UiOperation::ModelDelete)
+            .or(self.phase_blocked())
+    }
+
     pub(crate) fn settings_pending(self) -> Option<BlockedReason> {
         self.management
             .read()

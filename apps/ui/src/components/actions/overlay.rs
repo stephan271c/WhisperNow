@@ -53,8 +53,9 @@ impl UiContext {
 
     /// Runs a failure's action; the desktop then dismisses the failure.
     pub(crate) fn overlay_action(self, section: MainWindowSection) {
-        self.overlay_command(UiOperation::OverlayAction, async move {
-            client::invoke("open_main_window", Some(&section)).await
-        });
+        self.overlay_command(
+            UiOperation::OverlayAction,
+            client::invoke("open_main_window", section),
+        );
     }
 }

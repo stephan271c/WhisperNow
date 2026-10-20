@@ -1,7 +1,7 @@
 use std::{
     os::fd::OwnedFd,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 
@@ -73,13 +73,27 @@ enum ClipboardSignal {
 }
 
 struct OutputSession {
-    remote: Arc<RemoteDesktop>,
+    remote: RemoteDesktop,
     clipboard: Arc<Clipboard>,
     session: Arc<Session<RemoteDesktop>>,
     signals: mpsc::UnboundedReceiver<ClipboardSignal>,
     listener: JoinHandle<()>,
     clipboard_state: Arc<Mutex<PortalClipboardState>>,
     advertised_mime_types: Option<Vec<String>>,
+}
+
+impl OutputSession {
+    /// Records the clipboard types a signal advertises; false when the signal
+    /// says the session closed.
+    fn note(&mut self, signal: ClipboardSignal) -> bool {
+        match signal {
+            ClipboardSignal::OwnerChanged { mime_types } => {
+                self.advertised_mime_types = Some(mime_types);
+                true
+            }
+            ClipboardSignal::Closed => false,
+        }
+    }
 }
 
 /// Pastes through the `RemoteDesktop` and clipboard portals: offers the
@@ -104,7 +118,7 @@ impl WaylandOutput {
         reason = "portal consent setup and listener ownership stay together for auditability"
     )]
     async fn create_output_session(&self) -> Result<OutputSession, WaylandPortalError> {
-        let remote = Arc::new(RemoteDesktop::new().await.map_err(map_portal_error)?);
+        let remote = RemoteDesktop::new().await.map_err(map_portal_error)?;
         if remote.version() < 2 {
             return Err(WaylandPortalError::ClipboardUnavailable);
         }
@@ -148,9 +162,10 @@ impl WaylandOutput {
                 tokio::select! {
                     owner = owner_stream.next() => {
                         let Some((_session, owner)) = owner else { break };
-                        if let Ok(mut state) = listener_state.lock() {
-                            state.owner_changed(owner.session_is_owner());
-                        }
+                        listener_state
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .owner_changed(owner.session_is_owner());
                         if signal_tx.send(ClipboardSignal::OwnerChanged {
                             mime_types: owner.mime_types().to_vec(),
                         }).is_err() { break; }
@@ -242,12 +257,7 @@ impl WaylandOutput {
         let closed = self.output.as_mut().is_some_and(|output| {
             let mut closed = false;
             while let Ok(signal) = output.signals.try_recv() {
-                match signal {
-                    ClipboardSignal::Closed => closed = true,
-                    ClipboardSignal::OwnerChanged { mime_types } => {
-                        output.advertised_mime_types = Some(mime_types);
-                    }
-                }
+                closed |= !output.note(signal);
             }
             closed
         });
@@ -342,7 +352,8 @@ async fn restore_if_current(
     if !output
         .clipboard_state
         .lock()
-        .is_ok_and(|state| state.can_restore())
+        .unwrap_or_else(PoisonError::into_inner)
+        .can_restore()
     {
         return PasteOutcome::RestoreSkippedClipboardChanged;
     }
@@ -358,22 +369,18 @@ async fn restore_if_current(
 async fn snapshot_clipboard(
     output: &mut OutputSession,
 ) -> Result<PortalClipboardSnapshot, WaylandPortalError> {
-    if output.advertised_mime_types.is_none() {
+    let advertised = loop {
+        if let Some(advertised) = output.advertised_mime_types.clone() {
+            break advertised;
+        }
         let signal = tokio::time::timeout(READ_TIMEOUT, output.signals.recv())
             .await
             .map_err(|_| WaylandPortalError::ClipboardUnavailable)?
             .ok_or(WaylandPortalError::Disconnected)?;
-        match signal {
-            ClipboardSignal::OwnerChanged { mime_types } => {
-                output.advertised_mime_types = Some(mime_types);
-            }
-            ClipboardSignal::Closed => return Err(WaylandPortalError::Disconnected),
+        if !output.note(signal) {
+            return Err(WaylandPortalError::Disconnected);
         }
-    }
-    let advertised = output
-        .advertised_mime_types
-        .clone()
-        .ok_or(WaylandPortalError::ClipboardUnavailable)?;
+    };
     let mut formats = Vec::new();
     for mime_type in SNAPSHOT_MIME_TYPES {
         if advertised
@@ -434,8 +441,9 @@ async fn set_offer(
     output
         .clipboard_state
         .lock()
-        .map(|mut state| state.replace_offer(offer))
-        .map_err(|_| WaylandPortalError::Backend)
+        .unwrap_or_else(PoisonError::into_inner)
+        .replace_offer(offer);
+    Ok(())
 }
 
 async fn serve_for(
@@ -446,11 +454,11 @@ async fn serve_for(
     loop {
         match tokio::time::timeout_at(deadline, output.signals.recv()).await {
             Err(_) => return Ok(()),
-            Ok(None | Some(ClipboardSignal::Closed)) => {
-                return Err(WaylandPortalError::Disconnected);
-            }
-            Ok(Some(ClipboardSignal::OwnerChanged { mime_types })) => {
-                output.advertised_mime_types = Some(mime_types);
+            Ok(None) => return Err(WaylandPortalError::Disconnected),
+            Ok(Some(signal)) => {
+                if !output.note(signal) {
+                    return Err(WaylandPortalError::Disconnected);
+                }
             }
         }
     }
@@ -465,8 +473,8 @@ async fn serve_transfer(
 ) {
     let bytes = state
         .lock()
-        .ok()
-        .and_then(|state| state.transfer(mime_type));
+        .unwrap_or_else(PoisonError::into_inner)
+        .transfer(mime_type);
     let Some(bytes) = bytes else {
         let _ignored = clipboard.selection_write_done(session, serial, false).await;
         return;

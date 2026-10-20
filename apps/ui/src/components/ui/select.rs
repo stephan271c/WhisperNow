@@ -1,12 +1,10 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
 
-use super::fields::current_wiring;
+use super::fields::{FieldWiring, current_wiring};
 use super::focus::focus;
-use super::listbox::{Placement, place, reveal};
+use super::listbox::{OptionList, use_open};
 use super::{Icon, IconName};
 
 /// The next option after `current`, wrapping, whose lowercase label starts with `typed`.
@@ -18,79 +16,40 @@ fn typeahead(labels: &[String], current: usize, typed: &str) -> Option<usize> {
 }
 
 /// A dropdown of `options`, each (value, label), showing the label of `value`, or `placeholder`
-/// while `value` is empty.
+/// when no option has that value.
 ///
 /// It follows the ARIA select-only combobox pattern: focus stays on the trigger, which names the
 /// highlighted option with `aria-activedescendant`, and option `n` has the id `{id}-option-{n}`.
-/// Inside a `Field` or `SettingRow` it takes the frame's id and label; outside one it needs an
-/// `id` and a `label`.
+/// It takes the id and label of the `Field` or `SettingRow` around it.
 #[component]
-pub(crate) fn Select(
-    #[props(into)] value: String,
-    options: Vec<(String, String)>,
-    onchange: EventHandler<String>,
-    #[props(into)] id: Option<String>,
-    #[props(into)] label: Option<String>,
-    #[props(into)] aria_describedby: Option<String>,
+pub(crate) fn Select<T: Clone + PartialEq + 'static>(
+    value: T,
+    options: Vec<(T, String)>,
+    onchange: EventHandler<T>,
     #[props(into)] placeholder: Option<String>,
     #[props(default)] disabled: bool,
 ) -> Element {
-    let wiring = current_wiring();
-    let id = wiring
-        .as_ref()
-        .map(|wiring| wiring.id.clone())
-        .or(id)
-        .expect("a Select outside a Field or SettingRow has an id");
-    let described_by = wiring
-        .as_ref()
-        .and_then(|wiring| wiring.described_by.clone())
-        .or(aria_describedby);
-    let invalid = wiring.as_ref().is_some_and(|wiring| wiring.invalid);
-    let mut open = use_signal(|| false);
+    let FieldWiring {
+        id,
+        described_by,
+        invalid,
+    } = current_wiring().expect("a Select is inside a Field or SettingRow");
+    let mut open = use_open(disabled);
     let mut active = use_signal(|| 0_usize);
-    let mut placement = use_signal(|| None::<Placement>);
     let mut trigger = use_signal(|| None::<Rc<MountedData>>);
-    let mut listbox = use_signal(|| None::<Rc<MountedData>>);
-    // Mounted options by index; kept outside the reactive graph because mounting is not a change.
-    let rows = use_hook(|| Rc::new(RefCell::new(HashMap::<usize, Rc<MountedData>>::new())));
-    use_effect(use_reactive!(|disabled| {
-        if disabled {
-            open.set(false);
-            placement.set(None);
-        }
-    }));
-    use_effect({
-        let rows = rows.clone();
-        move || {
-            let index = active();
-            if !open() {
-                return;
-            }
-            let list = listbox.peek().clone();
-            if let (Some(list), Some(row)) = (list, rows.borrow().get(&index).cloned()) {
-                spawn(reveal(list, row));
-            }
-        }
-    });
 
     let selected = options.iter().position(|(option, _)| *option == value);
-    let unset = selected.is_none() && value.is_empty();
-    let shown = match selected {
-        Some(index) => options[index].1.clone(),
-        None if unset => placeholder.unwrap_or_default(),
-        None => value.clone(),
-    };
+    let shown = selected.map_or_else(
+        || placeholder.unwrap_or_default(),
+        |index| options[index].1.clone(),
+    );
     let count = options.len();
     let expanded = open() && !disabled;
     let mut show = move |index: usize| {
         active.set(index);
         open.set(true);
     };
-    let mut close = move || {
-        open.set(false);
-        placement.set(None);
-        listbox.set(None);
-    };
+    let mut close = move || open.set(false);
     let choose = use_callback({
         let options = options.clone();
         move |index: usize| {
@@ -157,9 +116,6 @@ pub(crate) fn Select(
 
     rsx! {
         div { class: "select-field",
-            if let Some(label) = label {
-                span { id: "{id}-label", class: "visually-hidden", "{label}" }
-            }
             button {
                 r#type: "button",
                 class: "select",
@@ -187,57 +143,24 @@ pub(crate) fn Select(
                 },
                 onkeydown,
                 onblur: move |_| close(),
-                span { class: if unset { "select-value select-placeholder" } else { "select-value" }, "{shown}" }
+                span { class: if selected.is_none() { "select-value select-placeholder" } else { "select-value" }, "{shown}" }
                 Icon { name: IconName::ChevronDown }
             }
             if expanded {
-                ul {
-                    id: "{id}-listbox",
-                    class: "select-listbox",
-                    role: "listbox",
-                    aria_labelledby: "{id}-label",
-                    "data-placement": placement().map(Placement::side_name),
-                    style: placement().and_then(Placement::room_style),
-                    // Keeps focus, and so the highlighted option, on the trigger.
-                    onmousedown: move |event| event.prevent_default(),
-                    onmounted: {
-                        let rows = rows.clone();
-                        move |event: MountedEvent| {
-                            let list = event.data();
-                            listbox.set(Some(list.clone()));
-                            let rows = rows.clone();
-                            spawn(async move {
-                                placement.set(Some(place(trigger.peek().clone(), list.clone()).await));
-                                let row = rows.borrow().get(&*active.peek()).cloned();
-                                if let Some(row) = row {
-                                    reveal(list, row).await;
-                                }
-                            });
+                OptionList {
+                    id: id.clone(),
+                    labelled_by: format!("{id}-label"),
+                    anchor: trigger,
+                    options: options.iter().map(|(_, label)| label.clone()).collect::<Vec<_>>(),
+                    active: Some(active()),
+                    selected,
+                    check: true,
+                    onhover: move |index| {
+                        if *active.peek() != index {
+                            active.set(index);
                         }
                     },
-                    for (index, (option, text)) in options.iter().enumerate() {
-                        li {
-                            key: "{option}",
-                            id: "{id}-option-{index}",
-                            class: if index == active() { "select-option active" } else { "select-option" },
-                            role: "option",
-                            aria_selected: if Some(index) == selected { "true" } else { "false" },
-                            onmounted: {
-                                let rows = rows.clone();
-                                move |event: MountedEvent| {
-                                    rows.borrow_mut().insert(index, event.data());
-                                }
-                            },
-                            onmousemove: move |_| {
-                                if *active.peek() != index {
-                                    active.set(index);
-                                }
-                            },
-                            onclick: move |_| choose.call(index),
-                            span { class: "select-option-label", "{text}" }
-                            Icon { name: IconName::Check }
-                        }
-                    }
+                    onchoose: choose,
                 }
             }
         }

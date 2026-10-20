@@ -14,16 +14,14 @@ use std::{
 };
 
 use crate::{
-    chord::{ChordTracker, ChordTransition, MAX_KEY_CODE},
+    chord::{Chord, ChordTracker, ChordTransition},
+    codes::{EV_KEY, EV_SYN, MAX_KEY_CODE, MODIFIERS, SYN_DROPPED},
     virtual_keyboard::{self, PasteShortcut, VirtualKeyboard},
 };
 
 /// `struct input_event` on 64-bit Linux: a `timeval`, then type, code, value.
 const EVENT_SIZE: usize = 24;
 const _: () = assert!(size_of::<libc::input_event>() == EVENT_SIZE);
-const EV_SYN: u16 = 0;
-const EV_KEY: u16 = 1;
-const SYN_DROPPED: u16 = 3;
 const EVDEV_IOCTL_BASE: u32 = b'E' as u32;
 const EVIOCSCLOCKID: libc::Ioctl = libc::_IOW::<libc::c_int>(EVDEV_IOCTL_BASE, 0xa0);
 const EVIOCGNAME: libc::Ioctl = libc::_IOR::<[u8; 256]>(EVDEV_IOCTL_BASE, 0x06);
@@ -33,9 +31,6 @@ const EVIOCGKEY: libc::Ioctl = libc::_IOR::<[u8; KEY_STATE_BYTES]>(EVDEV_IOCTL_B
 const EVIOCGBIT_KEY: libc::Ioctl =
     libc::_IOR::<[u8; KEY_STATE_BYTES]>(EVDEV_IOCTL_BASE, 0x20 + EV_KEY as u32);
 const RESCAN_INTERVAL: Duration = Duration::from_secs(2);
-/// Shift, Ctrl, Alt and Super, left and right. A paste waits until none is
-/// physically held, because a held one would combine with the shortcut.
-const MODIFIERS: [u16; 8] = [29, 97, 42, 54, 56, 100, 125, 126];
 const MODIFIER_WAIT: Duration = Duration::from_secs(1);
 
 enum Message {
@@ -55,7 +50,16 @@ enum Message {
     InputClosed,
 }
 
-pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> ExitCode {
+pub enum Mode {
+    Watch(Chord),
+    Paste(VirtualKeyboard),
+}
+
+pub fn run(mode: Mode) -> ExitCode {
+    let (mut tracker, mut keyboard) = match mode {
+        Mode::Watch(chord) => (ChordTracker::new(Some(chord)), None),
+        Mode::Paste(keyboard) => (ChordTracker::new(None), Some(keyboard)),
+    };
     let (sender, messages) = mpsc::channel();
     let stdin_sender = sender.clone();
     thread::spawn(move || read_commands(&stdin_sender));
@@ -89,23 +93,12 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
             }
         }
         devices_changed = false;
-        if let (Some(keyboard), Some((shortcut, deadline))) = (&mut keyboard, pending_paste) {
-            let answer = if !tracker.holds_any(&MODIFIERS) {
-                Some(if keyboard.press(shortcut).is_ok() {
-                    "sent"
-                } else {
-                    "failed"
-                })
-            } else if Instant::now() >= deadline {
-                Some("held")
-            } else {
-                None
-            };
-            if let Some(answer) = answer {
-                pending_paste = None;
-                if reply(&mut stdout, answer).is_err() {
-                    return ExitCode::SUCCESS;
-                }
+        if let (Some(keyboard), Some((shortcut, deadline))) = (&mut keyboard, pending_paste)
+            && let Some(answer) = paste_answer(keyboard, &tracker, shortcut, deadline)
+        {
+            pending_paste = None;
+            if reply(&mut stdout, answer).is_err() {
+                return ExitCode::SUCCESS;
             }
         }
         let wake = pending_paste.map_or(next_scan, |(_, deadline)| deadline.min(next_scan));
@@ -157,6 +150,25 @@ pub fn run(mut tracker: ChordTracker, mut keyboard: Option<VirtualKeyboard>) -> 
                 return ExitCode::SUCCESS;
             }
         }
+    }
+}
+
+fn paste_answer(
+    keyboard: &mut VirtualKeyboard,
+    tracker: &ChordTracker,
+    shortcut: PasteShortcut,
+    deadline: Instant,
+) -> Option<&'static str> {
+    if !tracker.holds_any(&MODIFIERS) {
+        Some(if keyboard.press(shortcut).is_ok() {
+            "sent"
+        } else {
+            "failed"
+        })
+    } else if Instant::now() >= deadline {
+        Some("held")
+    } else {
+        None
     }
 }
 

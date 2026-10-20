@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Mutex;
 
 use tauri::{
     image::Image,
@@ -173,28 +170,13 @@ impl NativeTray {
 }
 
 pub(crate) struct TrayController {
-    native: Mutex<Option<NativeTray>>,
-    /// Locked before `native`.
+    native: Option<NativeTray>,
     desired: Mutex<TrayDesired>,
-    /// Cleared once when this session turns out unable to copy transcripts.
-    copy_capable: AtomicBool,
-}
-
-impl Default for TrayController {
-    fn default() -> Self {
-        Self {
-            native: Mutex::new(None),
-            desired: Mutex::new(TrayDesired::LOADING),
-            copy_capable: AtomicBool::new(true),
-        }
-    }
+    copy_capable: bool,
 }
 
 impl TrayController {
-    pub(crate) fn build<F>(self: &Arc<Self>, app: &tauri::App, on_action: F) -> tauri::Result<()>
-    where
-        F: Fn(&tauri::AppHandle, TrayAction) + Send + Sync + 'static,
-    {
+    pub(crate) fn new(app: &tauri::App, copy_capable: bool) -> tauri::Result<Self> {
         let presentation = TrayState::Loading.presentation();
         let status = menu_item(app, "tray-status", presentation.status_text, false)?;
         let copy_last = menu_item(app, COPY_LAST_MENU_ID, "Copy Last Transcript", false)?;
@@ -218,20 +200,17 @@ impl TrayController {
                 &quit,
             ],
         )?;
-        let action = Arc::new(on_action);
-        let menu_action = Arc::clone(&action);
-        let tray_action = Arc::clone(&action);
         let icon = TrayIconBuilder::with_id("whispernow-tray")
             .menu(&menu)
             .icon(state_icon(TrayState::Loading))
             .tooltip(presentation.tooltip)
             .show_menu_on_left_click(false)
-            .on_menu_event(move |app, event| {
+            .on_menu_event(|app, event| {
                 if let Some(action) = TrayAction::from_menu_id(event.id().0.as_str()) {
-                    menu_action(app, action);
+                    crate::handle_tray_action(app, action);
                 }
             })
-            .on_tray_icon_event(move |tray, event| {
+            .on_tray_icon_event(|tray, event| {
                 if matches!(
                     event,
                     TrayIconEvent::Click {
@@ -243,40 +222,39 @@ impl TrayController {
                         ..
                     }
                 ) {
-                    tray_action(tray.app_handle(), TrayAction::Settings);
+                    crate::handle_tray_action(tray.app_handle(), TrayAction::Settings);
                 }
             })
             .build(app)?;
-        let desired = self.desired.lock().expect("tray desired lock poisoned");
-        *self.native.lock().expect("tray native lock poisoned") = Some(NativeTray {
-            icon,
-            status,
-            copy_last,
-            cancel,
-            pause,
-        });
-        // A state applied before the icon existed has not been rendered yet.
-        if *desired != TrayDesired::LOADING {
-            self.render(*desired);
+        Ok(Self::with(
+            Some(NativeTray {
+                icon,
+                status,
+                copy_last,
+                cancel,
+                pause,
+            }),
+            copy_capable,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn headless(copy_capable: bool) -> Self {
+        Self::with(None, copy_capable)
+    }
+
+    fn with(native: Option<NativeTray>, copy_capable: bool) -> Self {
+        Self {
+            native,
+            desired: Mutex::new(TrayDesired::LOADING),
+            copy_capable,
         }
-        Ok(())
     }
 
     /// Derives the tray from a published snapshot. Snapshots arrive in
     /// publication order, so the latest one always wins.
     pub(crate) fn apply_snapshot(&self, snapshot: &AppState) {
-        self.apply(tray_desired(
-            snapshot,
-            self.copy_capable.load(Ordering::Acquire),
-        ));
-    }
-
-    /// Disables "Copy Last Transcript" for good: this session cannot copy transcripts.
-    pub(crate) fn mark_copy_unavailable(&self) {
-        self.copy_capable.store(false, Ordering::Release);
-        let mut desired = *self.desired.lock().expect("tray desired lock poisoned");
-        desired.copy_last = false;
-        self.apply(desired);
+        self.apply(tray_desired(snapshot, self.copy_capable));
     }
 
     /// Records the desired tray and, when it differs from the last one,
@@ -292,12 +270,7 @@ impl TrayController {
     }
 
     fn render(&self, desired: TrayDesired) {
-        let Some(native) = self
-            .native
-            .lock()
-            .expect("tray native lock poisoned")
-            .clone()
-        else {
+        let Some(native) = self.native.clone() else {
             return;
         };
         let app = native.icon.app_handle().clone();
@@ -453,21 +426,17 @@ mod tests {
 
     #[test]
     fn a_session_that_cannot_copy_keeps_copy_last_transcript_disabled() {
-        let tray = TrayController::default();
         let copied = AppState {
             last_transcript: Some("hello".to_owned()),
             ..snapshot(Phase::Idle)
         };
-        tray.apply_snapshot(&copied);
-        assert!(tray.desired.lock().expect("desired").copy_last);
+        let able = TrayController::headless(true);
+        able.apply_snapshot(&copied);
+        assert!(able.desired.lock().expect("desired").copy_last);
 
-        tray.mark_copy_unavailable();
-        assert!(!tray.desired.lock().expect("desired").copy_last);
-        tray.apply_snapshot(&AppState {
-            last_transcript: Some("again".to_owned()),
-            ..snapshot(Phase::Idle)
-        });
-        let desired = *tray.desired.lock().expect("desired");
+        let unable = TrayController::headless(false);
+        unable.apply_snapshot(&copied);
+        let desired = *unable.desired.lock().expect("desired");
         assert!(!desired.copy_last);
         assert_eq!(desired.state, TrayState::Idle, "nothing became an error");
     }

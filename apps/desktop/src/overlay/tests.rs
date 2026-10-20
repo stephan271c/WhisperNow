@@ -1,38 +1,11 @@
-use std::sync::{Arc, Mutex};
-use whispernow_domain::AppError;
-
 use whispernow_domain::ipc::{AppState, ErrorCategory, Phase};
+use whispernow_domain::{AppError, WindowGeometry};
 
 use crate::tests::{recording, snapshot};
 
 use super::{
-    MonitorArea, OverlayWindow, PhysicalRect, RecordingOverlay, monitor_under_cursor,
-    overlay_origin,
+    MonitorArea, OverlayAction, RecordingOverlay, monitor_under_cursor, overlaps, overlay_origin,
 };
-
-#[derive(Default)]
-struct FakeWindow(Mutex<Vec<String>>);
-
-impl FakeWindow {
-    fn calls(&self) -> Vec<String> {
-        self.0.lock().expect("window log").clone()
-    }
-}
-
-impl OverlayWindow for FakeWindow {
-    fn show(&self) {
-        self.0.lock().expect("window log").push("show".to_owned());
-    }
-
-    fn hide(&self) {
-        self.0.lock().expect("window log").push("hide".to_owned());
-    }
-
-    fn notify(&self, message: String) {
-        self.0.lock().expect("window log").push("notify".to_owned());
-        assert!(!message.is_empty());
-    }
-}
 
 fn failed(category: ErrorCategory) -> AppState {
     AppState {
@@ -45,55 +18,72 @@ fn failed(category: ErrorCategory) -> AppState {
     }
 }
 
-fn overlay(can_float: bool) -> (RecordingOverlay, Arc<FakeWindow>) {
-    let window = Arc::new(FakeWindow::default());
-    (RecordingOverlay::new(window.clone(), can_float), window)
-}
-
 #[test]
 fn a_dictation_shows_the_window_once_until_it_ends() {
-    let (mut overlay, window) = overlay(true);
-    for phase in [
+    let mut overlay = RecordingOverlay::new(true);
+    let actions: Vec<_> = [
         recording(),
         Phase::Processing { cleaning_up: false },
         Phase::Processing { cleaning_up: true },
         Phase::Idle,
-    ] {
-        overlay.observe(&snapshot(phase));
-    }
-    assert_eq!(window.calls(), ["show", "hide"]);
+    ]
+    .into_iter()
+    .map(|phase| overlay.observe(&snapshot(phase)))
+    .collect();
+    assert_eq!(
+        actions,
+        [
+            Some(OverlayAction::Show),
+            None,
+            None,
+            Some(OverlayAction::Hide)
+        ]
+    );
 }
 
 #[test]
 fn a_failure_stays_until_the_phase_leaves_it() {
-    let (mut overlay, window) = overlay(true);
-    overlay.observe(&snapshot(recording()));
-    overlay.observe(&failed(ErrorCategory::Output));
-    assert_eq!(window.calls(), ["show"]);
-    overlay.observe(&snapshot(Phase::Idle));
-    assert_eq!(window.calls(), ["show", "hide"]);
+    let mut overlay = RecordingOverlay::new(true);
+    assert_eq!(
+        overlay.observe(&snapshot(recording())),
+        Some(OverlayAction::Show)
+    );
+    assert_eq!(overlay.observe(&failed(ErrorCategory::Output)), None);
+    assert_eq!(
+        overlay.observe(&snapshot(Phase::Idle)),
+        Some(OverlayAction::Hide)
+    );
 }
 
 #[test]
 fn native_wayland_notifies_each_failure_once_instead_of_showing_a_window() {
-    let (mut overlay, window) = overlay(false);
-    overlay.observe(&snapshot(recording()));
-    overlay.observe(&failed(ErrorCategory::Output));
-    overlay.observe(&failed(ErrorCategory::Output));
-    overlay.observe(&snapshot(Phase::Idle));
-    overlay.observe(&failed(ErrorCategory::General));
-    assert_eq!(window.calls(), ["notify", "notify"]);
+    let mut overlay = RecordingOverlay::new(false);
+    assert_eq!(overlay.observe(&snapshot(recording())), None);
+    assert_eq!(
+        overlay.observe(&failed(ErrorCategory::Output)),
+        Some(OverlayAction::Notify(
+            "The text was not pasted. Open History in WhisperNow to copy it.".to_owned()
+        ))
+    );
+    assert_eq!(overlay.observe(&failed(ErrorCategory::Output)), None);
+    assert_eq!(overlay.observe(&snapshot(Phase::Idle)), None);
+    assert_eq!(
+        overlay.observe(&failed(ErrorCategory::General)),
+        Some(OverlayAction::Notify(
+            "The text was not pasted; copy it instead".to_owned()
+        ))
+    );
 }
 
 fn monitor(x: i32, width: u32, scale_factor: f64) -> MonitorArea {
     MonitorArea {
-        bounds: PhysicalRect {
+        bounds: WindowGeometry {
             x,
             y: 0,
             width,
             height: 1_080,
         },
-        work_area: PhysicalRect {
+        work_area: WindowGeometry {
             x,
             y: 0,
             width,
@@ -140,15 +130,15 @@ fn placement_is_centred_on_the_bottom_edge_at_the_monitor_scale() {
 
 #[test]
 fn rectangles_overlap_only_when_they_share_area() {
-    let rect = PhysicalRect {
+    let rect = WindowGeometry {
         x: 0,
         y: 0,
         width: 100,
         height: 100,
     };
-    let at = |x, y| PhysicalRect { x, y, ..rect };
-    assert!(rect.overlaps(&at(99, 99)));
-    assert!(rect.overlaps(&at(-99, 0)));
-    assert!(!rect.overlaps(&at(100, 0)));
-    assert!(!rect.overlaps(&at(0, -100)));
+    let at = |x, y| WindowGeometry { x, y, ..rect };
+    assert!(overlaps(&rect, &at(99, 99)));
+    assert!(overlaps(&rect, &at(-99, 0)));
+    assert!(!overlaps(&rect, &at(100, 0)));
+    assert!(!overlaps(&rect, &at(0, -100)));
 }

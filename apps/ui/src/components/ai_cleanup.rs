@@ -1,11 +1,11 @@
 use dioxus::prelude::*;
 use whispernow_domain::{
-    ApiKey, LlmProvider, ModelAvailability, ModelFamily, ProviderEndpoint, ProviderSettings,
-    Settings,
+    ApiKey, LlmProvider, ModelAvailability, ModelFamily, ModelId, ProviderEndpoint,
+    ProviderSettings,
 };
 
 use super::NoticeRegion;
-use super::configuration::{AutosaveRow, SettingsLoading, choice_value, chosen};
+use super::configuration::{AutosaveRow, SettingsLoading};
 use super::models::{ModelRow, ModelRowKind};
 use super::ui::{
     Button, ButtonVariant, Combobox, ConfirmButton, DraftText, Section, Segmented, Select,
@@ -91,21 +91,17 @@ pub(super) fn AiCleanupPage() -> Element {
             SettingRow { id: "cleanup-source", title: "Run with",
                 Segmented {
                     disabled,
-                    value: choice_value(&SOURCES, &source),
-                    options: SOURCES.iter().map(|(_, value, label)| (*value, *label)).collect::<Vec<_>>(),
-                    onchange: move |value: &'static str| if let Some(source) = chosen(&SOURCES, value) {
-                        pick(source.providers()[0]);
-                    },
+                    value: source,
+                    options: SOURCES.to_vec(),
+                    onchange: move |source: CleanupSource| pick(source.providers()[0]),
                 }
             }
             if source.providers().len() > 1 {
                 AutosaveRow { id: "provider-name", title: "Provider", setting: SettingKey::ActiveProvider,
-                    Select { value: provider.as_str(),
-                        options: source.providers().iter().map(|item| (item.as_str().to_owned(), item.label().to_owned())).collect::<Vec<_>>(),
+                    Select { value: provider,
+                        options: source.providers().iter().map(|item| (*item, item.label().to_owned())).collect::<Vec<_>>(),
                         disabled,
-                        onchange: move |value: String| if let Some(provider) = LlmProvider::from_name(&value) {
-                            pick(provider);
-                        },
+                        onchange: pick,
                     }
                 }
             }
@@ -123,11 +119,11 @@ pub(super) fn AiCleanupPage() -> Element {
                     }
                 }
             } else {
-                ProviderRows { settings: settings.clone(), provider, disabled }
+                ProviderRows { provider, provider_settings: settings.provider_settings(provider).clone(), disabled }
             }
         }
         if source == CleanupSource::WhisperNow {
-            CleanupModels { chosen_model: settings.cleanup_model_id().as_str().to_owned(), disabled }
+            CleanupModels { chosen_model: settings.cleanup_model_id(), disabled }
         }
     } }
 }
@@ -136,18 +132,12 @@ pub(super) fn AiCleanupPage() -> Element {
 const MODEL_FORM: &str = "provider-model-form";
 const MODEL_NAME: &str = "provider-model-name";
 
-/// The names the model picker lists: the saved ones, after the active model if it was never
-/// saved. A change from the picker saves this list.
-fn listed_models(settings: &ProviderSettings) -> Vec<String> {
-    let mut models = settings.saved_models.clone();
-    if !settings.model.is_empty() && !models.contains(&settings.model) {
-        models.insert(0, settings.model.clone());
-    }
-    models
-}
-
 #[component]
-fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> Element {
+fn ProviderRows(
+    provider: LlmProvider,
+    provider_settings: ProviderSettings,
+    disabled: bool,
+) -> Element {
     let context = use_context::<UiContext>();
     let mut management = context.management;
     let credential_blocked = context
@@ -155,8 +145,7 @@ fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> El
         .or(context.settings_pending());
     let mut credential = use_signal(String::new);
     let mut new_model = use_signal(String::new);
-    let provider_settings = settings.provider_settings(provider);
-    let models = listed_models(provider_settings);
+    let models = provider_settings.listed_models();
     let active = provider_settings.model.clone();
     let key_saved = management
         .read()
@@ -174,7 +163,7 @@ fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> El
     let offered = use_resource(use_reactive(
         (&provider, &saved_endpoint, &key_saved),
         |(provider, _, _)| async move {
-            client::invoke::<_, Vec<String>>("list_provider_models", Some(&provider))
+            client::invoke::<_, Vec<String>>("list_provider_models", provider)
                 .await
                 .unwrap_or_default()
         },
@@ -188,12 +177,7 @@ fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> El
                     let model = new_model().trim().to_owned();
                     if !model.is_empty() {
                         context.change_setting(SettingKey::ProviderModel, move |settings| {
-                            let entry = settings.provider_settings_mut(provider);
-                            entry.saved_models = listed_models(entry);
-                            if !entry.saved_models.contains(&model) {
-                                entry.saved_models.push(model.clone());
-                            }
-                            entry.model = model;
+                            settings.provider_settings_mut(provider).choose_model(model);
                         });
                         new_model.set(String::new());
                     }
@@ -204,9 +188,7 @@ fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> El
                         disabled,
                         onchange: move |model: String| {
                             context.change_setting(SettingKey::ProviderModel, move |settings| {
-                                let entry = settings.provider_settings_mut(provider);
-                                entry.saved_models = listed_models(entry);
-                                entry.model = model;
+                                settings.provider_settings_mut(provider).choose_model(model);
                             });
                         },
                     }
@@ -216,12 +198,7 @@ fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> El
                         onclick: move |_| {
                             let removed = active.clone();
                             context.change_setting(SettingKey::ProviderModel, move |settings| {
-                                let entry = settings.provider_settings_mut(provider);
-                                entry.saved_models = listed_models(entry);
-                                entry.saved_models.retain(|saved| *saved != removed);
-                                if entry.model == removed {
-                                    entry.model = entry.saved_models.first().cloned().unwrap_or_default();
-                                }
+                                settings.provider_settings_mut(provider).remove_model(&removed);
                             });
                         },
                         "Remove"
@@ -291,7 +268,7 @@ fn ProviderRows(settings: Settings, provider: LlmProvider, disabled: bool) -> El
 /// The app's own cleanup models, which run on this computer, and the CUDA pack that speeds them
 /// up on NVIDIA graphics cards.
 #[component]
-fn CleanupModels(chosen_model: String, disabled: bool) -> Element {
+fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
     let context = use_context::<UiContext>();
     let management = context.management;
     let models = management
@@ -308,11 +285,9 @@ fn CleanupModels(chosen_model: String, disabled: bool) -> Element {
         .find(|model| model.family == ModelFamily::CudaPack)
         .cloned();
     let loaded = management.read().models_loaded;
-    let download_blocked = context.blocked(UiOperation::DownloadModel);
-    let delete_blocked = context
-        .blocked(UiOperation::ModelDelete)
-        .or(context.phase_blocked());
-    let reason = download_blocked.clone().or(delete_blocked.clone());
+    let reason = context
+        .model_download_blocked()
+        .or(context.model_delete_blocked());
     rsx! {
         Section { id: "cleanup-models", title: "WhisperNow models",
             div { class: "section-note",
@@ -326,12 +301,10 @@ fn CleanupModels(chosen_model: String, disabled: bool) -> Element {
                     ModelRow {
                         key: "{model.id.as_str()}",
                         kind: ModelRowKind::Cleanup {
-                            chosen: model.id.as_str() == chosen_model
+                            chosen: model.id == chosen_model
                                 && model.availability == ModelAvailability::Downloaded,
                         },
                         settings_disabled: disabled,
-                        download_blocked: download_blocked.clone(),
-                        delete_blocked: delete_blocked.clone(),
                         model,
                     }
                 }
@@ -341,10 +314,7 @@ fn CleanupModels(chosen_model: String, disabled: bool) -> Element {
             Section { id: "cuda-pack", title: "NVIDIA CUDA",
                 description: "Faster cleanup on GeForce RTX 20, GTX 16 and newer cards.",
                 ul { class: "model-list",
-                    ModelRow {
-                        key: "{pack.id.as_str()}", kind: ModelRowKind::Runtime, model: pack,
-                        download_blocked: download_blocked.clone(), delete_blocked: delete_blocked.clone(),
-                    }
+                    ModelRow { key: "{pack.id.as_str()}", kind: ModelRowKind::Runtime, model: pack }
                 }
             }
         }

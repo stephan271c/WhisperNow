@@ -372,7 +372,11 @@ fn theme_attribute_follows_a_theme_change_at_once_and_its_rollback() {
     );
     assert_eq!(management.theme_attribute(), Some("light"));
 
-    management.finish_settings_update(Err("refused".to_owned()));
+    management.finish_settings_update(Err(AppError::new(
+        ErrorCategory::Settings,
+        "settings_refused",
+        "refused",
+    )));
     assert_eq!(management.theme_attribute(), Some("dark"));
 
     assert!(

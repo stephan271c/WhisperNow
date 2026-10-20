@@ -7,12 +7,8 @@ use whispernow_domain::ipc::{
 use whispernow_domain::{ClearDataCategory, LlmProvider, Settings, SetupCheckpoint};
 
 use super::{Failure, Gateway, run_blocking};
-use crate::{
-    autostart::AutostartError,
-    shortcuts::{
-        RecordingBinding, ShortcutBinding, ShortcutRegistrationError, cancel_binding,
-        recording_binding,
-    },
+use crate::shortcuts::{
+    RecordingBinding, ShortcutBinding, ShortcutRegistrationError, cancel_binding, recording_binding,
 };
 
 impl Gateway {
@@ -49,8 +45,8 @@ impl Gateway {
             view.warnings.push("The cancel shortcut could not be activated during the last dictation; choose another key, or cancel from the recording bar or the tray".to_owned());
         }
         match self.autostart.is_enabled() {
-            Ok(enabled) => view.start_on_login = enabled,
-            Err(_) => view
+            Some(enabled) => view.start_on_login = enabled,
+            None => view
                 .warnings
                 .push("The OS startup registration could not be inspected".to_owned()),
         }
@@ -294,9 +290,7 @@ impl Gateway {
 
     async fn apply_autostart(&self, enabled: bool) -> Result<(), AppError> {
         let registration = Arc::clone(&self.autostart);
-        run_blocking(move || registration.set_enabled(enabled))
-            .await?
-            .map_err(autostart_error)
+        run_blocking(move || registration.set_enabled(enabled)).await?
     }
 
     /// Clears all application data, including the start-on-login registration. A
@@ -313,18 +307,6 @@ impl Gateway {
             self.publish_error(&warning);
         }
         Ok(result)
-    }
-}
-
-pub(crate) fn autostart_error(error: AutostartError) -> AppError {
-    AppError {
-        category: ErrorCategory::Settings,
-        code: match error {
-            AutostartError::Query => "autostart_query_failed",
-            AutostartError::Update => "autostart_update_failed",
-        }
-        .to_owned(),
-        summary: "The start-on-login registration could not be updated".to_owned(),
     }
 }
 

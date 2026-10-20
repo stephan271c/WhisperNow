@@ -1,8 +1,6 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{ActiveDownload, ModelState, ModelSummary};
-use whispernow_domain::{
-    LlmProvider, ModelAvailability, ModelId, Rating, SpeechBenchmark, WerSource,
-};
+use whispernow_domain::{LlmProvider, ModelAvailability, Rating, SpeechBenchmark, WerSource};
 
 use super::NoticeRegion;
 use super::labels::{self, format_bytes};
@@ -23,33 +21,27 @@ pub(super) fn ModelsPage() -> Element {
     let active_state = snapshot
         .as_ref()
         .map_or(ModelState::Unloaded, |snapshot| snapshot.model_state);
-    let models = ordered_models(
-        &management
-            .read()
-            .speech_models()
-            .cloned()
-            .collect::<Vec<_>>(),
-        active_id.as_ref(),
-    );
+    let mut models = management
+        .read()
+        .speech_models()
+        .cloned()
+        .collect::<Vec<_>>();
+    models.sort_by_key(|model| active_id.as_ref() != Some(&model.id));
     let loaded = management.read().models_loaded;
     let switch_blocked = context
         .blocked(UiOperation::ModelSwitch)
         .or(context.settings_blocked());
-    let download_blocked = context.blocked(UiOperation::DownloadModel);
-    let delete_blocked = context
-        .blocked(UiOperation::ModelDelete)
-        .or(context.phase_blocked());
     let reason = switch_blocked
         .clone()
-        .or(download_blocked.clone())
-        .or(delete_blocked.clone());
+        .or(context.model_download_blocked())
+        .or(context.model_delete_blocked());
     let failed_active = (active_state == ModelState::Failed)
         .then(|| active_id.clone())
         .flatten();
     rsx! { div { class: "settings-stack",
         NoticeRegion { scope: NoticeScope::Models }
         if let Some(model_id) = failed_active {
-            Banner { tone: Tone::Error, title: "{management.read().model_display_name(model_id.as_str())} could not be loaded",
+            Banner { tone: Tone::Error, title: "{management.read().model_display_name(&model_id)} could not be loaded",
                 p { "Dictation needs a working model. Reload it, or choose another one below." }
                 Button {
                     id: "reload-model",
@@ -76,21 +68,12 @@ pub(super) fn ModelsPage() -> Element {
                             state: (active_id.as_ref() == Some(&model.id)).then_some(active_state),
                         },
                         switch_blocked: switch_blocked.clone(),
-                        download_blocked: download_blocked.clone(),
-                        delete_blocked: delete_blocked.clone(),
                         model,
                     }
                 }
             }
         }
     } }
-}
-
-/// The model in use first, then the others in catalogue order.
-fn ordered_models(models: &[ModelSummary], active_id: Option<&ModelId>) -> Vec<ModelSummary> {
-    let mut ordered = models.to_vec();
-    ordered.sort_by_key(|model| Some(&model.id) != active_id);
-    ordered
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -108,11 +91,11 @@ pub(super) fn ModelRow(
     model: ModelSummary,
     kind: ModelRowKind,
     switch_blocked: Option<BlockedReason>,
-    download_blocked: Option<BlockedReason>,
-    delete_blocked: Option<BlockedReason>,
     #[props(default)] settings_disabled: bool,
 ) -> Element {
     let context = use_context::<UiContext>();
+    let download_blocked = context.model_download_blocked();
+    let delete_blocked = context.model_delete_blocked();
     let id = model.id.clone();
     let slug = id.as_str().replace('.', "-");
     let name = model.display_name.clone();

@@ -25,7 +25,10 @@
 //! a paste is pending, gets `refused`. It reads keyboards only to see held
 //! modifiers.
 
+#[cfg(target_os = "linux")]
 mod chord;
+#[cfg(target_os = "linux")]
+mod codes;
 #[cfg(target_os = "linux")]
 mod devices;
 #[cfg(target_os = "linux")]
@@ -33,6 +36,7 @@ mod virtual_keyboard;
 
 use std::process::ExitCode;
 
+#[cfg(target_os = "linux")]
 fn main() -> ExitCode {
     let specs = std::env::args().skip(1).collect::<Vec<_>>();
     if specs == ["--paste"] {
@@ -42,25 +46,19 @@ fn main() -> ExitCode {
         eprintln!("expected one recording shortcut chord");
         return ExitCode::from(64);
     };
-    let chord = match chord::Chord::parse(spec) {
-        Ok(chord) => chord,
+    match chord::Chord::parse(spec) {
+        Ok(chord) => devices::run(devices::Mode::Watch(chord)),
         Err(error) => {
             eprintln!("{error}");
-            return ExitCode::from(64);
+            ExitCode::from(64)
         }
-    };
-    run(chord)
-}
-
-#[cfg(target_os = "linux")]
-fn run(chord: chord::Chord) -> ExitCode {
-    devices::run(chord::ChordTracker::new(Some(chord)), None)
+    }
 }
 
 #[cfg(target_os = "linux")]
 fn paste() -> ExitCode {
     match virtual_keyboard::VirtualKeyboard::create() {
-        Ok(keyboard) => devices::run(chord::ChordTracker::new(None), Some(keyboard)),
+        Ok(keyboard) => devices::run(devices::Mode::Paste(keyboard)),
         Err(error) => {
             eprintln!("the paste keyboard could not be created: {error}");
             ExitCode::from(3)
@@ -69,13 +67,7 @@ fn paste() -> ExitCode {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn run(_chord: chord::Chord) -> ExitCode {
-    eprintln!("only Linux keyboards are supported");
-    ExitCode::FAILURE
-}
-
-#[cfg(not(target_os = "linux"))]
-fn paste() -> ExitCode {
+fn main() -> ExitCode {
     eprintln!("only Linux keyboards are supported");
     ExitCode::FAILURE
 }

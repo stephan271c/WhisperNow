@@ -1,68 +1,46 @@
 use tauri::Manager as _;
+use whispernow_domain::WindowGeometry;
 
 use super::{
-    MonitorArea, OVERLAY_LOGICAL_SIZE, OverlayWindow, PhysicalRect, monitor_under_cursor,
-    overlay_origin,
+    MonitorArea, OVERLAY_LOGICAL_SIZE, OverlayAction, monitor_under_cursor, overlay_origin,
 };
 use crate::RECORDING_BAR_WINDOW;
 
-pub(crate) struct TauriOverlayWindow {
-    app: tauri::AppHandle,
-}
-
-impl TauriOverlayWindow {
-    pub(crate) const fn new(app: tauri::AppHandle) -> Self {
-        Self { app }
+pub(crate) fn apply(app: &tauri::AppHandle, action: OverlayAction) {
+    match action {
+        OverlayAction::Show => crate::on_window(app, RECORDING_BAR_WINDOW, place_and_show),
+        OverlayAction::Hide => crate::hide_recording_bar(app),
+        OverlayAction::Notify(message) => notify(message),
     }
 }
 
-impl OverlayWindow for TauriOverlayWindow {
-    fn show(&self) {
-        let app = self.app.clone();
-        if self
-            .app
-            .run_on_main_thread(move || place_and_show(&app))
-            .is_err()
-        {
-            tracing::warn!("recording overlay show could not be scheduled");
+#[cfg(target_os = "linux")]
+fn notify(message: String) {
+    use ashpd::desktop::notification::{Notification, NotificationProxy, Priority};
+    tauri::async_runtime::spawn(async move {
+        let sent = async {
+            NotificationProxy::new()
+                .await?
+                .add_notification(
+                    "whispernow-dictation",
+                    Notification::new("WhisperNow")
+                        .body(message.as_str())
+                        .priority(Priority::High),
+                )
+                .await
+        };
+        if sent.await.is_err() {
+            tracing::warn!("dictation failure notification could not be shown");
         }
-    }
-
-    fn hide(&self) {
-        crate::hide_recording_bar(&self.app);
-    }
-
-    #[cfg(target_os = "linux")]
-    fn notify(&self, message: String) {
-        use ashpd::desktop::notification::{Notification, NotificationProxy, Priority};
-        tauri::async_runtime::spawn(async move {
-            let sent = async {
-                NotificationProxy::new()
-                    .await?
-                    .add_notification(
-                        "whispernow-dictation",
-                        Notification::new("WhisperNow")
-                            .body(message.as_str())
-                            .priority(Priority::High),
-                    )
-                    .await
-            };
-            if sent.await.is_err() {
-                tracing::warn!("dictation failure notification could not be shown");
-            }
-        });
-    }
-
-    /// Only native Wayland sessions ask for notifications.
-    #[cfg(not(target_os = "linux"))]
-    fn notify(&self, _message: String) {}
+    });
 }
 
-/// Runs on the event-loop thread.
-fn place_and_show(app: &tauri::AppHandle) {
-    let Some(window) = app.get_webview_window(RECORDING_BAR_WINDOW) else {
-        return;
-    };
+/// Only native Wayland sessions ask for notifications.
+#[cfg(not(target_os = "linux"))]
+fn notify(_message: String) {}
+
+fn place_and_show(window: &tauri::WebviewWindow) {
+    let app = window.app_handle();
     let primary = app
         .primary_monitor()
         .ok()
@@ -103,13 +81,13 @@ fn place_and_show(app: &tauri::AppHandle) {
 pub(crate) fn monitor_area(monitor: &tauri::window::Monitor) -> MonitorArea {
     let work_area = monitor.work_area();
     MonitorArea {
-        bounds: PhysicalRect {
+        bounds: WindowGeometry {
             x: monitor.position().x,
             y: monitor.position().y,
             width: monitor.size().width,
             height: monitor.size().height,
         },
-        work_area: PhysicalRect {
+        work_area: WindowGeometry {
             x: work_area.position.x,
             y: work_area.position.y,
             width: work_area.size.width,

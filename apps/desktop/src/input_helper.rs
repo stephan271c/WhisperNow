@@ -252,16 +252,12 @@ impl PastePlatform for HelperPastePlatform {
         {
             return KeystrokeOutcome::NotSent(NativePasteError::Unavailable);
         }
-        #[allow(
-            clippy::match_same_arms,
-            reason = "keep the helper protocol replies explicit"
-        )]
         match self.answers.recv_timeout(ANSWER_TIMEOUT).as_deref() {
             Ok("sent") => KeystrokeOutcome::Sent,
             Ok("held") => KeystrokeOutcome::NotSent(NativePasteError::ModifierStillHeld),
             Ok("refused") => KeystrokeOutcome::NotSent(NativePasteError::InjectionFailed),
-            // The helper can fail after emitting part of the shortcut.
-            Ok("failed") => KeystrokeOutcome::Uncertain(NativePasteError::InjectionFailed),
+            // "failed", a timeout or a closed pipe: the helper can fail after emitting part of
+            // the shortcut.
             _ => KeystrokeOutcome::Uncertain(NativePasteError::InjectionFailed),
         }
     }

@@ -20,27 +20,6 @@ fn deleting_retained_audio_updates_list_results_and_playback() {
 }
 
 #[test]
-fn an_old_database_with_an_audio_flag_accepts_new_entries() {
-    let fixture = Fixture::new();
-    let mut history = fixture.open();
-    history
-        .connection
-        .execute_batch("ALTER TABLE entries ADD COLUMN has_audio INTEGER NOT NULL DEFAULT 0")
-        .expect("old column");
-    let id = history
-        .insert(
-            entry(1, EntryStatus::Ok, "spoken"),
-            &SPEECH,
-            true,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
-    assert!(all(&history)[0].audio_kept);
-    assert!(history.audio(id).expect("audio").is_some());
-}
-
-#[test]
 fn a_failed_commit_rolls_back_the_entry_and_removes_audio_before_id_reuse() {
     let fixture = Fixture::new();
     let mut history = fixture.open();

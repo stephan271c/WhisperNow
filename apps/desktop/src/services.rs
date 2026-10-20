@@ -336,6 +336,14 @@ pub(crate) fn shutting_down() -> AppError {
     )
 }
 
+pub(crate) fn provider_models_unavailable() -> AppError {
+    AppError::new(
+        ErrorCategory::Cleanup,
+        "provider_models_unavailable",
+        "The provider's models could not be listed",
+    )
+}
+
 fn audio_devices_unavailable() -> AppError {
     AppError::new(
         ErrorCategory::Audio,

@@ -1,3 +1,4 @@
+use serde::Serialize;
 use whispernow_domain::ipc::SetApiKeyRequest;
 use whispernow_domain::{ApiKey, LlmProvider, Settings};
 
@@ -13,36 +14,30 @@ impl UiContext {
         let Some(request) = self.management.write().begin_settings_update(key, edit) else {
             return;
         };
-        spawn_forever(async move {
-            let answer = client::invoke("update_settings", Some(&request)).await;
-            self.management
-                .write()
-                .finish_settings_update(answer.map_err(|error| error.summary.clone()));
-        });
+        self.save_setting("update_settings", request);
     }
 
     pub(crate) fn set_start_on_login(mut self, enabled: bool) {
-        if self
+        let begun = self
             .management
             .write()
-            .begin_settings_update(SettingKey::StartOnLogin, |_| {})
-            .is_none()
-        {
-            return;
+            .begin_settings_update(SettingKey::StartOnLogin, |_| {});
+        if begun.is_some() {
+            self.save_setting("set_start_on_login", enabled);
         }
+    }
+
+    fn save_setting(mut self, command: &'static str, request: impl Serialize + 'static) {
         spawn_forever(async move {
-            let answer = client::invoke("set_start_on_login", Some(&enabled)).await;
-            self.management
-                .write()
-                .finish_settings_update(answer.map_err(|error| error.summary));
+            let answer = client::invoke(command, request).await;
+            self.management.write().finish_settings_update(answer);
         });
     }
 
     pub(crate) fn set_credential(self, provider: LlmProvider, key: ApiKey) {
-        let request = SetApiKeyRequest { provider, key };
         self.run(
             UiOperation::CredentialMutation,
-            async move { client::invoke("set_api_key", Some(&request)).await },
+            client::invoke("set_api_key", SetApiKeyRequest { provider, key }),
             |mut actions, answer| match answer {
                 Ok(settings) => actions.management.write().install_settings(settings),
                 Err(error) => actions.report(NoticeScope::Settings, &error),
@@ -53,7 +48,7 @@ impl UiContext {
     pub(crate) fn clear_credential(self, provider: LlmProvider) {
         self.run(
             UiOperation::CredentialMutation,
-            async move { client::invoke("clear_api_key", Some(&provider)).await },
+            client::invoke("clear_api_key", provider),
             |mut actions, answer| match answer {
                 Ok(settings) => actions.management.write().install_settings(settings),
                 Err(error) => actions.report(NoticeScope::Settings, &error),

@@ -19,12 +19,12 @@ const OPENER: &str = if cfg!(target_os = "macos") {
 
 /// Opens `directory` in the desktop's file manager without waiting for it.
 pub fn open_in_file_manager(directory: &Path) -> io::Result<()> {
-    spawn_opener(OPENER, directory.as_os_str())
+    spawn_opener(directory.as_os_str())
 }
 
 /// Opens `url` in the desktop's default browser without waiting for it.
 pub fn open_url(url: &str) -> io::Result<()> {
-    spawn_opener(OPENER, OsStr::new(url))
+    spawn_opener(OsStr::new(url))
 }
 
 /// Opens the system settings `kind` without waiting for it.
@@ -34,29 +34,26 @@ pub fn open_url(url: &str) -> io::Result<()> {
 /// Returns [`io::ErrorKind::Unsupported`] where the platform has no such page (Linux, and
 /// Accessibility outside macOS), and the spawn error when the opener cannot be started.
 pub fn open_privacy_settings(kind: PermissionKind) -> io::Result<()> {
-    let (program, uri) = privacy_settings_uri(kind).ok_or(io::ErrorKind::Unsupported)?;
-    spawn_opener(program, OsStr::new(uri))
+    let uri = privacy_settings_uri(kind).ok_or(io::ErrorKind::Unsupported)?;
+    spawn_opener(OsStr::new(uri))
 }
 
-const fn privacy_settings_uri(kind: PermissionKind) -> Option<(&'static str, &'static str)> {
+const fn privacy_settings_uri(kind: PermissionKind) -> Option<&'static str> {
     if cfg!(target_os = "macos") {
-        Some((
-            "open",
-            match kind {
-                PermissionKind::Microphone => {
-                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-                }
-                PermissionKind::Accessibility => {
-                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-                }
-                PermissionKind::GlobalShortcuts
-                | PermissionKind::RemoteDesktop
-                | PermissionKind::PasteSupport => return None,
-            },
-        ))
+        match kind {
+            PermissionKind::Microphone => {
+                Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            }
+            PermissionKind::Accessibility => Some(
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            ),
+            PermissionKind::GlobalShortcuts
+            | PermissionKind::RemoteDesktop
+            | PermissionKind::PasteSupport => None,
+        }
     } else if cfg!(target_os = "windows") {
         match kind {
-            PermissionKind::Microphone => Some(("explorer", "ms-settings:privacy-microphone")),
+            PermissionKind::Microphone => Some("ms-settings:privacy-microphone"),
             PermissionKind::Accessibility
             | PermissionKind::GlobalShortcuts
             | PermissionKind::RemoteDesktop
@@ -67,8 +64,8 @@ const fn privacy_settings_uri(kind: PermissionKind) -> Option<(&'static str, &'s
     }
 }
 
-fn spawn_opener(program: &str, argument: &OsStr) -> io::Result<()> {
-    let mut opener = Command::new(program)
+fn spawn_opener(argument: &OsStr) -> io::Result<()> {
+    let mut opener = Command::new(OPENER)
         .arg(argument)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

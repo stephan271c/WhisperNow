@@ -11,11 +11,10 @@ use super::{PasteHelperNotice, ShortcutCapture};
 use crate::blocked_reason::DisabledReason;
 use crate::{Route, SettingKey, UiContext, UiOperation};
 
-/// Theme choices as (setting, select value, label).
-const THEMES: [(ThemePreference, &str, &str); 3] = [
-    (ThemePreference::System, "system", "Match system"),
-    (ThemePreference::Light, "light", "Light"),
-    (ThemePreference::Dark, "dark", "Dark"),
+const THEMES: [(ThemePreference, &str); 3] = [
+    (ThemePreference::System, "Match system"),
+    (ThemePreference::Light, "Light"),
+    (ThemePreference::Dark, "Dark"),
 ];
 
 pub(super) const RECORDING_MODES: [(RecordingMode, &str, &str); 2] = [
@@ -23,7 +22,8 @@ pub(super) const RECORDING_MODES: [(RecordingMode, &str, &str); 2] = [
     (RecordingMode::Toggle, "toggle", "Toggle"),
 ];
 
-/// Input device choices for a select: the system default (`""`), then each device.
+/// Input device choices for a select: the system default (`""`), then each device. Give the select
+/// the saved device as its placeholder, so one that is no longer connected still shows.
 pub(super) fn device_options(devices: &[AudioDevice]) -> Vec<(String, String)> {
     std::iter::once((String::new(), "System default".to_owned()))
         .chain(
@@ -32,37 +32,6 @@ pub(super) fn device_options(devices: &[AudioDevice]) -> Vec<(String, String)> {
                 .map(|device| (device.id.clone(), device.display_name.clone())),
         )
         .collect()
-}
-
-/// The select value for a history limit: its entry count, or `"unlimited"`.
-fn history_limit_value(limit: HistoryLimit) -> String {
-    limit
-        .max_entries()
-        .map_or_else(|| "unlimited".to_owned(), |entries| entries.to_string())
-}
-
-/// The select value for a retention: its day count, or `"forever"`.
-fn history_retention_value(retention: HistoryRetention) -> String {
-    retention
-        .days()
-        .map_or_else(|| "forever".to_owned(), |days| days.to_string())
-}
-
-pub(super) fn choice_value<T: PartialEq>(
-    choices: &[(T, &'static str, &str)],
-    current: &T,
-) -> &'static str {
-    choices
-        .iter()
-        .find(|(value, _, _)| value == current)
-        .map_or("", |(_, value, _)| value)
-}
-
-pub(super) fn chosen<T: Copy>(choices: &[(T, &str, &str)], value: &str) -> Option<T> {
-    choices
-        .iter()
-        .find(|(_, candidate, _)| *candidate == value)
-        .map(|(setting, _, _)| *setting)
 }
 
 #[component]
@@ -145,15 +114,15 @@ pub(super) fn GeneralPage() -> Element {
                 div { class: "shortcut-control",
                     Segmented {
                         disabled,
-                        value: choice_value(&RECORDING_MODES, &settings.recording_mode),
-                        options: RECORDING_MODES.iter().map(|(_, value, label)| (*value, *label)).collect::<Vec<_>>(),
-                        onchange: move |value: &'static str| if let Some(mode) = chosen(&RECORDING_MODES, value) {
+                        value: settings.recording_mode,
+                        options: RECORDING_MODES.to_vec(),
+                        onchange: move |mode: RecordingMode| {
                             context.change_setting(SettingKey::RecordingShortcut, move |settings| settings.recording_mode = mode);
                         },
                     }
                     ShortcutCapture { id: "recording-shortcut", label: "recording shortcut",
                         disabled,
-                        shortcut: Some(settings.recording_shortcut.clone()),
+                        shortcut: settings.recording_shortcut.clone(),
                         oncapture: move |shortcut: Shortcut| { context.change_setting(SettingKey::RecordingShortcut, move |settings| settings.recording_shortcut = shortcut.clone()); } }
                 }
             }
@@ -168,10 +137,10 @@ pub(super) fn GeneralPage() -> Element {
                             });
                         }
                     }
-                    if settings.cancel_shortcut.is_some() {
+                    if let Some(cancel) = settings.cancel_shortcut.clone() {
                         ShortcutCapture { id: "cancel-shortcut", label: "cancel-dictation shortcut",
                             disabled,
-                            shortcut: settings.cancel_shortcut.clone(),
+                            shortcut: cancel,
                             lone_keys: true,
                             oncapture: move |shortcut: Shortcut| { context.change_setting(SettingKey::CancelShortcut, move |settings| settings.cancel_shortcut = Some(shortcut.clone())); } }
                     }
@@ -180,10 +149,10 @@ pub(super) fn GeneralPage() -> Element {
         }
         Section { id: "appearance", title: "Appearance",
             AutosaveRow { id: "theme", title: "Theme", setting: SettingKey::Theme,
-                Select { value: choice_value(&THEMES, &settings.theme),
-                    options: THEMES.iter().map(|(_, value, label)| ((*value).to_owned(), (*label).to_owned())).collect::<Vec<_>>(),
+                Select { value: settings.theme,
+                    options: THEMES.map(|(theme, label)| (theme, label.to_owned())).to_vec(),
                     disabled,
-                    onchange: move |value: String| if let Some(theme) = chosen(&THEMES, &value) {
+                    onchange: move |theme: ThemePreference| {
                         context.change_setting(SettingKey::Theme, move |settings| settings.theme = theme);
                     },
                 }
@@ -238,6 +207,7 @@ pub(super) fn AudioPage() -> Element {
         return rsx! { SettingsLoading {} };
     };
     let devices = management.read().devices.clone();
+    let saved_device = settings.input_device.clone().unwrap_or_default();
     let permission = management
         .read()
         .permission_status(PermissionKind::Microphone);
@@ -249,7 +219,8 @@ pub(super) fn AudioPage() -> Element {
             }
             AutosaveRow { id: "input-device", title: "Input device",
                 setting: SettingKey::InputDevice,
-                Select { value: settings.input_device.clone().unwrap_or_default(),
+                Select { value: saved_device.clone(),
+                    placeholder: saved_device,
                     options: device_options(&devices),
                     disabled,
                     onchange: move |value: String| {
@@ -285,32 +256,22 @@ pub(super) fn PrivacyPage() -> Element {
         p { id: "privacy-summary", "{summary}" }
         Section { id: "transcript-history", title: "History",
             AutosaveRow { id: "history-limit", title: "Keep", setting: SettingKey::HistoryLimit,
-                Select { value: history_limit_value(settings.history_limit),
-                    options: HistoryLimit::ALL.map(|limit| (history_limit_value(limit), limit.label().to_owned())).to_vec(),
+                Select { value: settings.history_limit,
+                    options: HistoryLimit::ALL.map(|limit| (limit, limit.label().to_owned())).to_vec(),
                     disabled,
-                    onchange: move |value: String| {
-                        if let Some(limit) = HistoryLimit::ALL
-                            .into_iter()
-                            .find(|limit| history_limit_value(*limit) == value)
-                        {
-                            context.change_setting(SettingKey::HistoryLimit, move |settings| settings.history_limit = limit);
-                        }
+                    onchange: move |limit: HistoryLimit| {
+                        context.change_setting(SettingKey::HistoryLimit, move |settings| settings.history_limit = limit);
                     },
                 }
             }
             AutosaveRow { id: "history-retention", title: "For",
                 description: "Older entries are deleted.",
                 setting: SettingKey::HistoryRetention,
-                Select { value: history_retention_value(settings.history_retention),
-                    options: HistoryRetention::ALL.map(|retention| (history_retention_value(retention), retention.label().to_owned())).to_vec(),
+                Select { value: settings.history_retention,
+                    options: HistoryRetention::ALL.map(|retention| (retention, retention.label().to_owned())).to_vec(),
                     disabled,
-                    onchange: move |value: String| {
-                        if let Some(retention) = HistoryRetention::ALL
-                            .into_iter()
-                            .find(|retention| history_retention_value(*retention) == value)
-                        {
-                            context.change_setting(SettingKey::HistoryRetention, move |settings| settings.history_retention = retention);
-                        }
+                    onchange: move |retention: HistoryRetention| {
+                        context.change_setting(SettingKey::HistoryRetention, move |settings| settings.history_retention = retention);
                     },
                 }
             }

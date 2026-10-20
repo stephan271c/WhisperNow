@@ -6,7 +6,7 @@ use whispernow_domain::{Settings, VocabularyReplacement};
 
 use super::CopyButton;
 use super::configuration::SettingsLoading;
-use super::ui::focus::{neighbour, take_focus};
+use super::ui::focus::take_focus;
 use super::ui::{
     Button, ButtonVariant, DraftText, Field, IconButton, IconName, Section, TextInput,
 };
@@ -37,11 +37,9 @@ enum RuleFocus {
     AddForm,
 }
 
+/// Whether either text holds `query`, which is trimmed and lowercased.
 fn matches(entry: &VocabularyReplacement, query: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    query.is_empty()
-        || entry.source.to_lowercase().contains(&query)
-        || entry.replacement.to_lowercase().contains(&query)
+    entry.source.to_lowercase().contains(query) || entry.replacement.to_lowercase().contains(query)
 }
 
 #[component]
@@ -64,22 +62,24 @@ pub(super) fn VocabularyPage() -> Element {
         return rsx! { SettingsLoading {} };
     };
     let error = management.read().setting_error(SettingKey::Vocabulary);
-    let filtering = !search().trim().is_empty();
+    let query = search().trim().to_lowercase();
+    let filtering = !query.is_empty();
     let total = settings.vocabulary_replacements.len();
     let shown = settings
         .vocabulary_replacements
         .iter()
         .cloned()
         .enumerate()
-        .filter(|(_, entry)| matches(entry, &search()))
+        .filter(|(_, entry)| matches(entry, &query))
         .collect::<Vec<_>>();
     let shown_indices = shown.iter().map(|(index, _)| *index).collect::<Vec<_>>();
-    // The rule focus moves to once the rule at `index` is gone and those after it moved up.
-    let after_delete = |position: usize, index: usize| {
-        neighbour(&shown_indices, position).map_or(RuleFocus::AddForm, |next| {
-            RuleFocus::Rule(if next > index { next - 1 } else { next })
-        })
-    };
+    // The shown rule after the deleted one, which has moved up, else the one before it.
+    let after_delete =
+        |position: usize| match (shown_indices.get(position + 1), position.checked_sub(1)) {
+            (Some(next), _) => RuleFocus::Rule(next - 1),
+            (None, Some(before)) => RuleFocus::Rule(shown_indices[before]),
+            (None, None) => RuleFocus::AddForm,
+        };
     rsx! { div { class: "settings-stack",
         DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
         Section { id: "vocabulary", title: "Vocabulary",
@@ -125,7 +125,7 @@ pub(super) fn VocabularyPage() -> Element {
                     for (position, (index, entry)) in shown.into_iter().enumerate() {
                         VocabularyRow { key: "{index}", index, entry, last: index + 1 == total, reorder: !filtering,
                             disabled,
-                            focus, after_delete: after_delete(position, index) }
+                            focus, after_delete: after_delete(position) }
                     }
                 }
             }
@@ -211,22 +211,22 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>, disabled: bool) -> Elem
     let context = use_context::<UiContext>();
     let mut management = context.management;
     let mut pasted = use_signal(String::new);
-    let export = serde_json::to_string_pretty(
-        &rules
+    let export = (!rules.is_empty()).then(|| {
+        let rules = rules
             .iter()
             .map(|rule| TransferRule {
                 source: rule.source.clone(),
                 replacement: rule.replacement.clone(),
             })
-            .collect::<Vec<_>>(),
-    )
-    .unwrap_or_default();
+            .collect::<Vec<_>>();
+        serde_json::to_string_pretty(&rules).expect("a list of text pairs serializes")
+    });
     rsx! {
         Section { id: "vocabulary-transfer", title: "Import and export",
             description: "A JSON list of {{\"source\": …, \"replacement\": …}} pairs.",
             div { class: "card-actions",
                 CopyButton { id: "vocabulary-export", target: CopyTarget::VocabularyRules,
-                    text: (!rules.is_empty()).then_some(export), label: "Copy rules as JSON",
+                    text: export, label: "Copy rules as JSON",
                 }
             }
             Field { id: "vocabulary-import", label: "Paste rules to import",

@@ -323,6 +323,16 @@ impl UpdateController {
         self.snapshot()
     }
 
+    /// A check the user asked for, refused while data is being cleared or an update installs.
+    pub(crate) async fn check_manual(&self) -> Result<UpdateState, AppError> {
+        self.app
+            .state::<crate::gateway::Gateway>()
+            .services
+            .state
+            .refuse_during_maintenance()?;
+        Ok(self.check(true).await)
+    }
+
     async fn check_and_download(&self) -> Result<(), UpdateError> {
         let route = update_route(
             std::env::consts::OS,
@@ -516,14 +526,9 @@ pub(crate) fn get_update_state(controller: tauri::State<'_, Arc<UpdateController
 
 #[tauri::command]
 pub(crate) async fn check_for_updates(
-    app: AppHandle,
     controller: tauri::State<'_, Arc<UpdateController>>,
 ) -> Result<UpdateState, AppError> {
-    app.state::<crate::gateway::Gateway>()
-        .services
-        .state
-        .refuse_during_maintenance()?;
-    Ok(controller.inner().check(true).await)
+    controller.check_manual().await
 }
 
 #[tauri::command]

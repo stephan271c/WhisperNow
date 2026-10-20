@@ -22,7 +22,7 @@ impl UiContext {
 
     fn read_history(self, request_id: u64, request: HistoryPageRequest) {
         spawn_forever(async move {
-            let answer = client::invoke("get_history", Some(&request)).await;
+            let answer = client::invoke("get_history", request).await;
             let mut management = self.management;
             match answer {
                 Ok(page) => management.write().finish_history_refresh(request_id, page),
@@ -55,7 +55,7 @@ impl UiContext {
     }
 
     pub(crate) fn delete_history_entry(self, id: EntryId) {
-        self.change_history(async move { client::invoke("delete_history_entry", Some(&id)).await });
+        self.change_history(client::invoke("delete_history_entry", id));
     }
 
     pub(crate) fn clear_history(self) {

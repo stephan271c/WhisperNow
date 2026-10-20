@@ -33,7 +33,9 @@ fn observe(
     state: &AppState,
     shortcuts_enabled: &mut bool,
 ) {
-    overlay.observe(state);
+    if let Some(action) = overlay.observe(state) {
+        crate::overlay::apply(app, action);
+    }
     let gateway = app.state::<Gateway>();
     gateway.tray.apply_snapshot(state);
     gateway.observe_dictation(state.phase.is_busy());

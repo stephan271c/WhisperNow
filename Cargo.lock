@@ -7638,6 +7638,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "time",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",

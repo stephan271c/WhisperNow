@@ -5,6 +5,7 @@ use whispernow_domain::ipc::{PermissionKind, PermissionsResponse, SettingsView};
 use whispernow_domain::{SetupCheckpoint, SetupStep};
 
 use crate::client;
+use crate::management::replace_task;
 use crate::{ManagementState, UiContext};
 
 use crate::{NoticeScope, SetupTest, UiOperation};
@@ -32,7 +33,7 @@ impl UiContext {
         let operation = UiOperation::SaveSetup;
         self.run(
             operation,
-            async move { client::invoke("save_setup_checkpoint", Some(&request)).await },
+            client::invoke("save_setup_checkpoint", request),
             move |mut actions, answer| match answer {
                 Ok(view) => {
                     install(&mut actions.management.write(), view);
@@ -55,7 +56,7 @@ impl UiContext {
         let request = self.management.peek().checkpoint();
         self.run(
             operation,
-            async move { client::invoke("complete_setup", Some(&request)).await },
+            client::invoke("complete_setup", request),
             move |mut actions, answer| match answer {
                 Ok(saved) => actions.management.write().finish_setup(saved),
                 Err(error) => actions.report(NoticeScope::Setup, &error),
@@ -136,15 +137,11 @@ impl UiContext {
     pub(crate) fn request_permission(mut self, kind: PermissionKind) {
         self.management.write().requested_permission = Some(kind);
         spawn_forever(async move {
-            let answer = client::invoke("request_permission", Some(&kind)).await;
+            let answer = client::invoke("request_permission", kind).await;
             self.management.write().requested_permission = None;
             match answer {
                 Ok(permissions) => self.install_permissions(permissions),
-                Err(error) => self.management.write().notify(
-                    super::Tone::Error,
-                    crate::NoticeScope::Setup,
-                    error.summary,
-                ),
+                Err(error) => self.report(NoticeScope::Setup, &error),
             }
         });
         self.watch_permissions();
@@ -155,7 +152,7 @@ impl UiContext {
         let operation = UiOperation::OpenPermissionSettings;
         self.run(
             operation,
-            async move { client::invoke::<_, ()>("open_permission_settings", Some(&kind)).await },
+            client::invoke::<_, ()>("open_permission_settings", kind),
             move |actions, answer| {
                 if let Err(error) = answer {
                     actions.report(NoticeScope::Setup, &error);
@@ -178,10 +175,7 @@ impl UiContext {
             }
             self.management.write().permission_watch = None;
         });
-        let previous = self.management.write().permission_watch.replace(watch);
-        if let Some(previous) = previous {
-            previous.cancel();
-        }
+        replace_task(&mut self.management.write().permission_watch, Some(watch));
     }
 
     /// Starts setup's test dictation; the overlay's stop, a shortcut or [`Self::stop_setup_test`]

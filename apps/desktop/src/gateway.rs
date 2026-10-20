@@ -19,7 +19,7 @@ use crate::{
 };
 
 pub(crate) use events::{emit, forward_events};
-pub(crate) use settings::{autostart_error, shortcut_error};
+pub(crate) use settings::shortcut_error;
 
 pub(crate) struct Gateway {
     pub(crate) services: Arc<NativeServices>,
@@ -36,7 +36,7 @@ pub(crate) struct Gateway {
     /// It is held across awaits only; native calls run on blocking workers.
     native_settings: tokio::sync::Mutex<()>,
     activation: Arc<ActivationGate>,
-    tray: Arc<TrayController>,
+    tray: TrayController,
     shutdown_begun: AtomicBool,
     shutdown_complete: AtomicBool,
 }
@@ -47,7 +47,7 @@ impl Gateway {
         shortcuts: Arc<ShortcutCoordinator>,
         autostart: Arc<dyn AutostartRegistration>,
         activation: Arc<ActivationGate>,
-        tray: Arc<TrayController>,
+        tray: TrayController,
     ) -> Self {
         Self {
             services,

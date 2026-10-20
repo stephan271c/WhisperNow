@@ -9,7 +9,7 @@ use whispernow_domain::AppError;
 
 use hound::{SampleFormat, WavSpec, WavWriter};
 use rusqlite::{
-    Connection, OptionalExtension, Row, params, params_from_iter,
+    Connection, Row, params, params_from_iter,
     types::{Type, Value},
 };
 use whispernow_core::audio::TARGET_SAMPLE_RATE;
@@ -69,8 +69,7 @@ impl SqliteHistoryRepository {
         connection
             .execute_batch(SCHEMA)
             .map_err(|_| open_error("history_schema"))?;
-        let diagnostic = legacy::import_legacy(&mut connection, paths)
-            .map_err(|error| open_error(&error.code))?;
+        let diagnostic = legacy::import_legacy(&mut connection, paths).map_err(open_error)?;
         let audio_dir = paths.recordings_dir();
         remove_orphan_audio(&connection, &audio_dir);
         Ok((
@@ -124,17 +123,7 @@ impl SqliteHistoryRepository {
             .map_err(|_| history_error("history_insert"))?;
         let id = EntryId(transaction.last_insert_rowid());
         // Cleanup of a prior rolled-back insert may have failed for this reused id.
-        let pending_audio = audio_path(&self.audio_dir, id);
-        match fs::symlink_metadata(&pending_audio) {
-            Ok(_) => fs::remove_file(&pending_audio)
-                .map_err(|_| history_error("history_audio_delete"))?,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-                ) => {}
-            Err(_) => return Err(history_error("history_audio_delete")),
-        }
+        remove_audio(&self.audio_dir, id).map_err(|_| history_error("history_audio_delete"))?;
         let wrote_audio = if keep_audio && !audio.is_empty() {
             if write_wav(&self.audio_dir, id, audio).is_ok() {
                 true
@@ -159,13 +148,13 @@ impl SqliteHistoryRepository {
             Err(error) => {
                 // A rolled-back id can be reused by the next insert.
                 if wrote_audio {
-                    remove_audio(&self.audio_dir, id);
+                    discard_audio(&self.audio_dir, id);
                 }
                 return Err(error);
             }
         };
         for id in pruned {
-            remove_audio(&self.audio_dir, id);
+            discard_audio(&self.audio_dir, id);
         }
         Ok(id)
     }
@@ -219,17 +208,6 @@ impl SqliteHistoryRepository {
         Ok(HistoryPage { entries, has_more })
     }
 
-    pub fn get(&self, id: EntryId) -> Result<Option<HistoryEntry>, AppError> {
-        self.connection
-            .query_row(
-                &format!("SELECT {COLUMNS} FROM entries WHERE id = ?1"),
-                [id.0],
-                |row| entry_from_row(row, &self.audio_dir),
-            )
-            .optional()
-            .map_err(|_| history_error("history_read"))
-    }
-
     /// Reads an entry's audio as a playable WAV file, or `None` when it has none.
     pub fn audio(&self, id: EntryId) -> Result<Option<Vec<u8>>, AppError> {
         match fs::read(audio_path(&self.audio_dir, id)) {
@@ -245,7 +223,7 @@ impl SqliteHistoryRepository {
             .connection
             .execute("DELETE FROM entries WHERE id = ?1", [id.0])
             .map_err(|_| history_error("history_delete"))?;
-        remove_audio(&self.audio_dir, id);
+        discard_audio(&self.audio_dir, id);
         Ok(deleted > 0)
     }
 
@@ -275,7 +253,7 @@ impl SqliteHistoryRepository {
     ) -> Result<usize, AppError> {
         let pruned = prune(&self.connection, limit, retention)?;
         for id in &pruned {
-            remove_audio(&self.audio_dir, *id);
+            discard_audio(&self.audio_dir, *id);
         }
         Ok(pruned.len())
     }
@@ -289,46 +267,47 @@ fn prune(
     let mut pruned = Vec::new();
     if let Some(days) = retention.days() {
         let cutoff = UtcMillis::now().get() - sql_u64(days) * 86_400_000;
-        let expired: Vec<EntryId> = connection
-            .prepare("DELETE FROM entries WHERE created_at_ms < ?1 RETURNING id")
-            .and_then(|mut statement| {
-                statement
-                    .query_map([cutoff], |row| row.get(0).map(EntryId))?
-                    .collect()
-            })
-            .map_err(|_| history_error("history_prune"))?;
-        pruned.extend(expired);
+        pruned = delete_returning_ids(
+            connection,
+            "DELETE FROM entries WHERE created_at_ms < ?1 RETURNING id",
+            cutoff,
+        )?;
     }
-    let Some(kept) = limit.max_entries() else {
-        return Ok(pruned);
-    };
-    connection
-        .prepare(
+    if let Some(kept) = limit.max_entries() {
+        pruned.extend(delete_returning_ids(
+            connection,
             "DELETE FROM entries WHERE id IN (
-            SELECT id FROM entries ORDER BY created_at_ms DESC, id DESC LIMIT -1 OFFSET ?1
-        ) RETURNING id",
-        )
+                SELECT id FROM entries ORDER BY created_at_ms DESC, id DESC LIMIT -1 OFFSET ?1
+            ) RETURNING id",
+            i64::from(kept),
+        )?);
+    }
+    Ok(pruned)
+}
+
+fn delete_returning_ids(
+    connection: &Connection,
+    sql: &str,
+    parameter: i64,
+) -> Result<Vec<EntryId>, AppError> {
+    connection
+        .prepare(sql)
         .and_then(|mut statement| {
             statement
-                .query_map([i64::from(kept)], |row| row.get(0).map(EntryId))?
+                .query_map([parameter], |row| row.get(0).map(EntryId))?
                 .collect()
         })
         .map_err(|_| history_error("history_prune"))
-        .map(|ids: Vec<EntryId>| {
-            pruned.extend(ids);
-            pruned
-        })
 }
 
 /// Removes unowned numeric WAVs and unfinished writes before the first insert.
-fn remove_orphan_audio(connection: &Connection, audio_dir: &Path) -> usize {
+fn remove_orphan_audio(connection: &Connection, audio_dir: &Path) {
     let owned: Result<HashSet<i64>, _> = connection
         .prepare("SELECT id FROM entries")
         .and_then(|mut statement| statement.query_map([], |row| row.get(0))?.collect());
     let (Ok(owned), Ok(files)) = (owned, fs::read_dir(audio_dir)) else {
-        return 0;
+        return;
     };
-    let mut removed = 0;
     for file in files.flatten() {
         let path = file.path();
         let wav_id = path
@@ -345,14 +324,10 @@ fn remove_orphan_audio(connection: &Connection, audio_dir: &Path) -> usize {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with(TEMPORARY_PREFIX));
-        if (orphan_wav || temporary)
-            && file.file_type().is_ok_and(|kind| kind.is_file())
-            && fs::remove_file(&path).is_ok()
-        {
-            removed += 1;
+        if (orphan_wav || temporary) && file.file_type().is_ok_and(|kind| kind.is_file()) {
+            drop(fs::remove_file(&path));
         }
     }
-    removed
 }
 
 fn entry_from_row(row: &Row<'_>, audio_dir: &Path) -> rusqlite::Result<HistoryEntry> {
@@ -416,14 +391,19 @@ fn write_wav(audio_dir: &Path, id: EntryId, samples: &[f32]) -> io::Result<()> {
     write_atomically(&audio_path(audio_dir, id), &wav.into_inner())
 }
 
-fn remove_audio(audio_dir: &Path, id: EntryId) {
-    match fs::remove_file(audio_path(audio_dir, id)) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(_) => tracing::warn!(
+fn remove_audio(audio_dir: &Path, id: EntryId) -> io::Result<()> {
+    fs::remove_file(audio_path(audio_dir, id)).or_else(|error| match error.kind() {
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => Ok(()),
+        _ => Err(error),
+    })
+}
+
+fn discard_audio(audio_dir: &Path, id: EntryId) {
+    if remove_audio(audio_dir, id).is_err() {
+        tracing::warn!(
             code = "history_audio_delete",
             "a deleted entry's audio could not be removed; it is removed at the next start"
-        ),
+        );
     }
 }
 

@@ -20,8 +20,8 @@ pub(crate) fn connection_error() -> AppError {
 
 type Answer<R> = Result<R, AppError>;
 
-/// Invokes `command` with `request`, or with no input when it takes none.
-pub(crate) async fn invoke<Q, R>(command: &'static str, request: Option<&Q>) -> Answer<R>
+/// Invokes `command` with `request`; `()` sends no argument.
+pub(crate) async fn invoke<Q, R>(command: &'static str, request: Q) -> Answer<R>
 where
     Q: Serialize,
     R: DeserializeOwned,
@@ -32,17 +32,14 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let request = request
-            .map(serde_json::to_value)
-            .transpose()
-            .map_err(|_| connection_error())?;
+        let request = serde_json::to_value(request).map_err(|_| connection_error())?;
         let answer = fake::invoke(command, request).await?;
         serde_json::from_value(answer).map_err(|_| connection_error())
     }
 }
 
 pub(crate) async fn call<R: DeserializeOwned>(command: &'static str) -> Answer<R> {
-    invoke::<(), R>(command, None).await
+    invoke(command, ()).await
 }
 
 /// Waits `ms` milliseconds; native tests run every waiting timer with [`fake::run_timers`].
@@ -89,7 +86,7 @@ pub(crate) fn current_window_label() -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn apply_theme(_theme: Option<String>) {}
+pub(crate) fn apply_theme(_theme: Option<&str>) {}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const fn reset_settings_scroll() {}
@@ -167,7 +164,7 @@ mod wasm {
         async fn delay_js(ms: u32) -> JsValue;
 
         #[wasm_bindgen(js_name = applyTheme)]
-        pub fn apply_theme(theme: Option<String>);
+        pub fn apply_theme(theme: Option<&str>);
 
         #[wasm_bindgen(catch, js_name = hasCustomTitlebar)]
         async fn has_custom_titlebar_js() -> Result<JsValue, JsValue>;
@@ -189,17 +186,12 @@ mod wasm {
         serde_wasm_bindgen::from_value(value).unwrap_or_else(|_| connection_error())
     }
 
-    pub(super) async fn invoke<Q, R>(command: &str, request: Option<&Q>) -> Answer<R>
+    pub(super) async fn invoke<Q, R>(command: &str, request: Q) -> Answer<R>
     where
         Q: Serialize,
         R: DeserializeOwned,
     {
-        let request = match request {
-            Some(request) => {
-                serde_wasm_bindgen::to_value(request).map_err(|_| connection_error())?
-            }
-            None => JsValue::UNDEFINED,
-        };
+        let request = serde_wasm_bindgen::to_value(&request).map_err(|_| connection_error())?;
         let response = invoke_typed(command, request).await.map_err(from_js)?;
         serde_wasm_bindgen::from_value(response).map_err(|_| connection_error())
     }

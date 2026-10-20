@@ -4,6 +4,7 @@ use std::{
 };
 
 use directories::BaseDirs;
+use time::OffsetDateTime;
 
 const APP_DIRECTORY: &str = "WhisperNow";
 const SETTINGS_FILE: &str = "settings.json";
@@ -67,6 +68,19 @@ impl AppPaths {
     #[must_use]
     pub fn settings_file(&self) -> PathBuf {
         self.config_dir.join(SETTINGS_FILE)
+    }
+
+    pub(crate) fn unreadable_stamp() -> String {
+        let now = OffsetDateTime::now_utc();
+        format!(
+            "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+            now.year(),
+            u8::from(now.month()),
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second()
+        )
     }
 
     /// Where an unreadable `settings.json` is moved: `settings.json.bad-<stamp>`.
@@ -191,6 +205,20 @@ mod tests {
             Path::new("test-config/WhisperNow/history.json")
         );
         assert_eq!(paths.models_dir(), Path::new("test-data/WhisperNow/models"));
+    }
+
+    #[test]
+    fn unreadable_stamps_are_compact_utc_times() {
+        let stamp = AppPaths::unreadable_stamp();
+
+        let (date, time) = stamp.split_once('T').expect("date and time");
+        let time = time.strip_suffix('Z').expect("UTC marker");
+        assert!(date.len() == 8 && time.len() == 6);
+        assert!(
+            date.bytes()
+                .chain(time.bytes())
+                .all(|byte| byte.is_ascii_digit())
+        );
     }
 
     #[test]

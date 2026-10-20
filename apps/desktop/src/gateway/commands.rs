@@ -1,16 +1,15 @@
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    AppState, AudioDevice, ClearDataResult, DataLocation, ErrorCategory, EventPayload,
-    MainWindowSection, MicrophoneTestResponse, ModelSummary, PermissionKind, PermissionsResponse,
+    AppState, AudioDevice, ClearDataResult, DataLocation, EventPayload, MainWindowSection,
+    MicrophoneTestResponse, ModelSummary, PermissionKind, PermissionsResponse,
     SaveSettingsResponse, SetApiKeyRequest, SettingsView,
 };
 use whispernow_domain::{
-    EntryId, HistoryPage, HistoryPageRequest, LlmProvider, ModelId, RemoteProvider, Settings,
-    SetupCheckpoint,
+    EntryId, HistoryPage, HistoryPageRequest, LlmProvider, ModelId, Settings, SetupCheckpoint,
 };
 
 use super::{Failure, Gateway, run_blocking};
-use crate::services::{NativeServices, RecordingTrigger};
+use crate::services::{NativeServices, RecordingTrigger, provider_models_unavailable};
 
 #[tauri::command]
 pub(crate) async fn get_settings(
@@ -69,16 +68,7 @@ pub(crate) async fn list_provider_models(
 ) -> Result<Vec<String>, AppError> {
     let (provider, api_key) = state
         .run_command("list_provider_models", Failure::Local, move |services| {
-            let settings = services.settings.load();
-            let endpoint = settings.provider_settings(request).api_base.clone();
-            let provider =
-                RemoteProvider::new(request, endpoint).ok_or_else(provider_models_unavailable)?;
-            let api_key = if settings.api_keys.contains(&request) {
-                services.settings.api_key(request)?
-            } else {
-                None
-            };
-            Ok((provider, api_key))
+            services.settings.provider_and_key(request)
         })
         .await?;
     whispernow_platform::list_models(&provider, api_key.as_ref())
@@ -87,14 +77,6 @@ pub(crate) async fn list_provider_models(
             tracing::warn!(?error, "the provider's models could not be listed");
             provider_models_unavailable()
         })
-}
-
-fn provider_models_unavailable() -> AppError {
-    AppError::new(
-        ErrorCategory::Cleanup,
-        "provider_models_unavailable",
-        "The provider's models could not be listed",
-    )
 }
 
 #[tauri::command]

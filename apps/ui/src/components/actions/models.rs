@@ -10,10 +10,10 @@ use dioxus::prelude::*;
 impl UiContext {
     pub(crate) fn download_model(self, model_id: ModelId) {
         let operation = UiOperation::DownloadModel;
-        let name = self.management.peek().model_display_name(model_id.as_str());
+        let name = self.management.peek().model_display_name(&model_id);
         self.run(
             operation,
-            async move { client::invoke("download_model", Some(&model_id)).await },
+            client::invoke("download_model", model_id),
             move |mut actions, answer| match answer {
                 Ok(()) => actions.management.write().notify(
                     Tone::Info,
@@ -29,7 +29,7 @@ impl UiContext {
         let operation = UiOperation::CancelDownload;
         self.run(
             operation,
-            async move { client::invoke::<_, ()>("cancel_download", Some(&model_id)).await },
+            client::invoke::<_, ()>("cancel_download", model_id),
             move |actions, answer| {
                 if let Err(error) = answer {
                     actions.report(NoticeScope::Models, &error);
@@ -43,7 +43,7 @@ impl UiContext {
         let operation = UiOperation::ModelSwitch;
         self.run(
             operation,
-            async move { client::invoke::<_, ()>("select_model", Some(&model_id)).await },
+            client::invoke::<_, ()>("select_model", model_id),
             move |actions, answer| {
                 if let Err(error) = answer {
                     actions.report(NoticeScope::Models, &error);
@@ -56,7 +56,7 @@ impl UiContext {
         let operation = UiOperation::ModelDelete;
         self.run(
             operation,
-            async move { client::invoke("delete_model", Some(&model_id)).await },
+            client::invoke("delete_model", model_id),
             move |actions, answer| match answer {
                 Ok(()) => actions.reload_models(),
                 Err(error) => actions.report(NoticeScope::Models, &error),

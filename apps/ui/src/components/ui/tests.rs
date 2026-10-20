@@ -16,10 +16,10 @@ fn render(app: fn() -> Element) -> String {
 }
 
 #[test]
-fn field_describes_its_control_with_the_description_and_error() {
+fn a_frame_describes_its_control_with_the_description_and_error() {
     let html = render(|| {
         rsx! {
-            Field { id: "endpoint", label: "API endpoint", description: "HTTPS only.", error: "Not HTTPS.",
+            SettingRow { id: "endpoint", title: "API endpoint", description: "HTTPS only.", error: "Not HTTPS.",
                 TextInput { value: "http://example.com", oninput: |_| {} }
             }
         }
@@ -40,13 +40,13 @@ fn field_describes_its_control_with_the_description_and_error() {
 
     let valid = render(|| {
         rsx! {
-            Field { id: "name", label: "Name",
+            Field { id: "name", label: "Name", description: "Shown in history.",
                 TextInput { value: "", oninput: |_| {} }
             }
         }
     });
     let input = tag(&valid, "name").expect("element");
-    assert!(!input.contains("aria-describedby"));
+    assert!(input.contains("aria-describedby=\"name-description\""));
     assert!(!input.contains("aria-invalid"));
     assert!(!valid.contains("role=\"alert\""));
 }
@@ -72,14 +72,16 @@ fn setting_row_toggle_is_a_labelled_switch() {
             .contains("for=\"start-login\"")
     );
 
-    let standalone = render(|| {
+    let disabled = render(|| {
         rsx! {
-            Toggle { checked: false, label: "Mute", disabled: true, onchange: |_| {} }
+            SettingRow { id: "mute", title: "Mute",
+                Toggle { checked: false, disabled: true, onchange: |_| {} }
+            }
         }
     });
-    let switch = element(&standalone, "role=\"switch\"").expect("element");
+    let switch = element(&disabled, "role=\"switch\"").expect("element");
     assert!(switch.contains("aria-checked=\"false\""));
-    assert!(switch.contains("aria-label=\"Mute\""));
+    assert!(switch.contains("aria-labelledby=\"mute-label\""));
     assert!(switch.contains("disabled"));
 }
 
@@ -139,7 +141,8 @@ fn banners_announce_warnings_and_errors_assertively() {
 
 #[test]
 fn icon_buttons_are_named_by_their_label() {
-    let html = render(|| rsx! { IconButton { icon: IconName::Close, label: "Dismiss" } });
+    let html =
+        render(|| rsx! { IconButton { icon: IconName::Close, label: "Dismiss", onclick: |_| {} } });
     let button = element(&html, "<button").expect("element");
     assert!(button.contains("aria-label=\"Dismiss\""));
     assert!(button.contains("type=\"button\""));
@@ -237,8 +240,8 @@ fn SelectSurface(log: ChoiceLog) -> Element {
     .to_vec();
     rsx! {
         Field { id: "theme", label: "Theme",
-            Select { value: "light", options,
-                onchange: move |value| log.0.lock().expect("choice log").push(value),
+            Select { value: "light".to_owned(), options,
+                onchange: move |value: String| log.0.lock().expect("choice log").push(value),
             }
         }
     }
@@ -336,6 +339,23 @@ fn choosing_the_current_option_closes_the_list_without_a_change() {
     page.click("theme").click("theme-option-1");
     assert!(log.chosen().is_empty());
     assert!(tag(&page.html(), "theme-listbox").is_none());
+}
+
+#[test]
+fn select_shows_its_placeholder_when_no_option_has_the_value() {
+    let html = render(|| {
+        rsx! {
+            Field { id: "device", label: "Input device",
+                Select { value: "usb-mic".to_owned(), placeholder: "usb-mic",
+                    options: vec![(String::new(), "System default".to_owned())],
+                    onchange: |_: String| {},
+                }
+            }
+        }
+    });
+    let shown = element(&html, "select-value").expect("shown value");
+    assert!(shown.contains("select-placeholder"));
+    assert!(text(&html, "device").contains("usb-mic"));
 }
 
 #[component]

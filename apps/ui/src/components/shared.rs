@@ -104,7 +104,7 @@ pub(super) fn PasteHelperNotice(setup: PasteHelperSetup) -> Element {
 pub(super) fn ShortcutCapture(
     id: String,
     label: String,
-    shortcut: Option<Shortcut>,
+    shortcut: Shortcut,
     oncapture: EventHandler<Shortcut>,
     #[props(default)] disabled: bool,
     #[props(default)] lone_keys: bool,
@@ -120,7 +120,7 @@ pub(super) fn ShortcutCapture(
         crate::client::request_shortcut_capture(capturing && !disabled);
     }));
     use_drop(|| crate::client::request_shortcut_capture(false));
-    let parts = shortcut.as_ref().map_or_else(Vec::new, shortcut_parts);
+    let parts = shortcut_parts(&shortcut);
     let help_id = format!("{id}-help");
     let keys_id = format!("{id}-keys");
     let guidance = match status() {
@@ -144,19 +144,13 @@ pub(super) fn ShortcutCapture(
     let capturing = status().is_capturing();
     let visible = if capturing {
         "Press shortcut…"
-    } else if parts.is_empty() {
-        "Choose shortcut"
     } else {
         "Change"
     };
     rsx! {
         div { class: "shortcut-capture-field",
             span { id: "{keys_id}", class: "shortcut-capture-keys",
-                if parts.is_empty() {
-                    span { class: "shortcut-capture-empty", "Not set" }
-                } else {
-                    for part in parts { Kbd { "{part}" } }
-                }
+                for part in parts { Kbd { "{part}" } }
             }
             button {
                 id: "{id}",

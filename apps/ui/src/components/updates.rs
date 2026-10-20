@@ -45,19 +45,12 @@ pub(super) fn UpdateStatus() -> Element {
     let context = use_context::<UiContext>();
     let state = context.state;
     let restart_blocked = context.blocked(UiOperation::UpdateInstallRestart);
-    let check_blocked = context.blocked(UiOperation::CheckForUpdates);
     let dismiss_blocked = context.blocked(UiOperation::DismissUpdate);
     let open_page_blocked = context.blocked(UiOperation::OpenUpdateReleasePage);
     let snapshot = state.read().update_snapshot.clone();
     let command_error = state.read().update_command_error.clone();
     if let Some(message) = command_error {
-        return rsx! { section { class: "update-banner update-error", role: "alert",
-            h3 { "Update check failed" }
-            p { "{message}" }
-            Button { disabled: check_blocked.is_some(),
-                onclick: move |_| context.check_for_updates(), "Try again" }
-            DisabledReason { id: "update-retry-disabled-reason", reason: check_blocked }
-        } };
+        return rsx! { UpdateFailure { title: "Update check failed", message, retryable: true } };
     }
     let Some(snapshot) = snapshot else {
         return rsx! {};
@@ -181,19 +174,29 @@ pub(super) fn UpdateStatus() -> Element {
                 p { "No newer stable release is available." }
             } }
         }
-        UpdatePhase::Error { error } => {
-            let message = update_error_message(error);
-            rsx! { section { class: "update-banner update-error", role: "alert",
-                h3 { "Update needs attention" }
-                p { "{message}" }
-                if error.is_recoverable() {
-                    Button { disabled: check_blocked.is_some(),
-                        onclick: move |_| context.check_for_updates(), "Try again" }
-                    DisabledReason { id: "update-retry-disabled-reason", reason: check_blocked }
-                }
-            } }
-        }
+        UpdatePhase::Error { error } => rsx! {
+            UpdateFailure {
+                title: "Update needs attention",
+                message: update_error_message(error),
+                retryable: error.is_recoverable(),
+            }
+        },
     }
+}
+
+#[component]
+fn UpdateFailure(title: &'static str, message: String, retryable: bool) -> Element {
+    let context = use_context::<UiContext>();
+    let check_blocked = context.blocked(UiOperation::CheckForUpdates);
+    rsx! { section { class: "update-banner update-error", role: "alert",
+        h3 { "{title}" }
+        p { "{message}" }
+        if retryable {
+            Button { disabled: check_blocked.is_some(),
+                onclick: move |_| context.check_for_updates(), "Try again" }
+            DisabledReason { id: "update-retry-disabled-reason", reason: check_blocked }
+        }
+    } }
 }
 
 const fn manual_package_label(package: ManualUpdatePackage) -> &'static str {

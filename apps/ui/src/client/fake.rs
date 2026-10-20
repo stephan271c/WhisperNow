@@ -24,13 +24,8 @@ struct Slot {
 
 struct Call {
     command: &'static str,
-    request: Option<Value>,
+    request: Value,
     slot: Rc<RefCell<Slot>>,
-}
-
-#[derive(Default)]
-struct Desktop {
-    calls: Vec<Call>,
 }
 
 #[derive(Default)]
@@ -40,7 +35,7 @@ struct Timers {
 }
 
 thread_local! {
-    static DESKTOP: RefCell<Desktop> = RefCell::new(Desktop::default());
+    static CALLS: RefCell<Vec<Call>> = const { RefCell::new(Vec::new()) };
     static TIMERS: RefCell<Timers> = RefCell::new(Timers::default());
 }
 
@@ -69,14 +64,14 @@ pub(crate) fn run_timers() {
     }
 }
 
-pub(super) async fn invoke(command: &'static str, request: Option<Value>) -> Reply {
+pub(super) async fn invoke(command: &'static str, request: Value) -> Reply {
     assert!(
         COMMAND_NAMES.contains(&command),
         "the desktop has no {command} command"
     );
     let slot = Rc::new(RefCell::new(Slot::default()));
-    DESKTOP.with_borrow_mut(|desktop| {
-        desktop.calls.push(Call {
+    CALLS.with_borrow_mut(|calls| {
+        calls.push(Call {
             command,
             request,
             slot: Rc::clone(&slot),
@@ -98,15 +93,14 @@ fn reply(answer: Result<impl Serialize, AppError>) -> Reply {
 }
 
 pub(crate) fn reset() {
-    DESKTOP.with_borrow_mut(|desktop| *desktop = Desktop::default());
+    CALLS.with_borrow_mut(Vec::clear);
     TIMERS.with_borrow_mut(|timers| *timers = Timers::default());
 }
 
 /// Answers the oldest unanswered call of `command`.
 pub(crate) fn answer(command: &str, answer: Result<impl Serialize, AppError>) {
-    let index = DESKTOP.with_borrow(|desktop| {
-        desktop
-            .calls
+    let index = CALLS.with_borrow(|calls| {
+        calls
             .iter()
             .filter(|call| call.command == command)
             .position(|call| !call.slot.borrow().answered)
@@ -117,9 +111,8 @@ pub(crate) fn answer(command: &str, answer: Result<impl Serialize, AppError>) {
 
 pub(crate) fn answer_nth(command: &str, index: usize, answer: Result<impl Serialize, AppError>) {
     let answer = reply(answer);
-    let waker = DESKTOP.with_borrow(|desktop| {
-        let call = desktop
-            .calls
+    let waker = CALLS.with_borrow(|calls| {
+        let call = calls
             .iter()
             .filter(|call| call.command == command)
             .nth(index)
@@ -137,32 +130,24 @@ pub(crate) fn answer_nth(command: &str, index: usize, answer: Result<impl Serial
 
 /// Every command called so far, oldest first.
 pub(crate) fn commands() -> Vec<&'static str> {
-    DESKTOP.with_borrow(|desktop| desktop.calls.iter().map(|call| call.command).collect())
+    CALLS.with_borrow(|calls| calls.iter().map(|call| call.command).collect())
 }
 
 /// The requests of every call of `command` so far, oldest first.
 pub(crate) fn requests<T: serde::de::DeserializeOwned>(command: &str) -> Vec<T> {
-    DESKTOP.with_borrow(|desktop| {
-        desktop
-            .calls
+    CALLS.with_borrow(|calls| {
+        calls
             .iter()
             .filter(|call| call.command == command)
             .map(|call| {
-                serde_json::from_value(call.request.clone().unwrap_or_default())
-                    .expect("request of the asked type")
+                serde_json::from_value(call.request.clone()).expect("request of the asked type")
             })
             .collect()
     })
 }
 
 pub(crate) fn count(command: &str) -> usize {
-    DESKTOP.with_borrow(|desktop| {
-        desktop
-            .calls
-            .iter()
-            .filter(|call| call.command == command)
-            .count()
-    })
+    CALLS.with_borrow(|calls| calls.iter().filter(|call| call.command == command).count())
 }
 
 /// Fails the oldest unanswered call of `command` as if the bridge had dropped it.

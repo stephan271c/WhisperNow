@@ -1,10 +1,8 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
 
-use super::listbox::{Placement, place, reveal};
+use super::listbox::{OptionList, use_open};
 
 /// How a suggestion matches the typed text, best first.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -63,71 +61,54 @@ pub(crate) fn Combobox(
     #[props(into)] placeholder: Option<String>,
     #[props(default)] disabled: bool,
 ) -> Element {
-    let mut open = use_signal(|| false);
+    let mut open = use_open(disabled);
     let mut active = use_signal(|| None::<usize>);
-    let mut placement = use_signal(|| None::<Placement>);
     let mut field = use_signal(|| None::<Rc<MountedData>>);
-    let mut listbox = use_signal(|| None::<Rc<MountedData>>);
-    // Mounted rows by suggestion; kept outside the reactive graph because mounting is not a change.
-    let rows = use_hook(|| Rc::new(RefCell::new(HashMap::<String, Rc<MountedData>>::new())));
-    use_effect(use_reactive!(|disabled| {
-        if disabled {
-            open.set(false);
-            placement.set(None);
-        }
-    }));
 
     let matches = matching(&suggestions, &value);
-    let expanded = open() && !disabled && !matches.is_empty();
-    let current = active().filter(|index| expanded && *index < matches.len());
-    let highlighted = current.map(|index| matches[index].clone());
+    let count = matches.len();
+    let expanded = open() && !disabled && count > 0;
+    let current = active().filter(|index| expanded && *index < count);
     let mut close = move || {
         open.set(false);
         active.set(None);
-        placement.set(None);
-        listbox.set(None);
     };
-    let choose = use_callback(move |suggestion: String| {
-        oninput.call(suggestion);
-        close();
-    });
-    let onkeydown = {
-        let rows = rows.clone();
+    let choose = use_callback({
         let matches = matches.clone();
-        move |event: KeyboardEvent| match event.key() {
-            Key::Enter => match current {
-                Some(index) => {
-                    event.prevent_default();
-                    choose.call(matches[index].clone());
-                }
-                None => close(),
-            },
-            Key::Escape if expanded => {
-                event.prevent_default();
-                event.stop_propagation();
-                close();
-            }
-            Key::Tab => close(),
-            key @ (Key::ArrowDown | Key::ArrowUp) => {
-                let Some(last) = matches.len().checked_sub(1) else {
-                    return;
-                };
-                event.prevent_default();
-                let next = match (key, current) {
-                    (Key::ArrowDown, None) => 0,
-                    (Key::ArrowDown, Some(index)) => (index + 1).min(last),
-                    (_, None) => last,
-                    (_, Some(index)) => index.saturating_sub(1),
-                };
-                open.set(true);
-                active.set(Some(next));
-                let row = rows.borrow().get(&matches[next]).cloned();
-                if let (Some(list), Some(row)) = (listbox.peek().clone(), row) {
-                    spawn(reveal(list, row));
-                }
-            }
-            _ => {}
+        move |index: usize| {
+            oninput.call(matches[index].clone());
+            close();
         }
+    });
+    let onkeydown = move |event: KeyboardEvent| match event.key() {
+        Key::Enter => match current {
+            Some(index) => {
+                event.prevent_default();
+                choose.call(index);
+            }
+            None => close(),
+        },
+        Key::Escape if expanded => {
+            event.prevent_default();
+            event.stop_propagation();
+            close();
+        }
+        Key::Tab => close(),
+        key @ (Key::ArrowDown | Key::ArrowUp) => {
+            let Some(last) = count.checked_sub(1) else {
+                return;
+            };
+            event.prevent_default();
+            let next = match (key, current) {
+                (Key::ArrowDown, None) => 0,
+                (Key::ArrowDown, Some(index)) => (index + 1).min(last),
+                (_, None) => last,
+                (_, Some(index)) => index.saturating_sub(1),
+            };
+            open.set(true);
+            active.set(Some(next));
+        }
+        _ => {}
     };
 
     rsx! {
@@ -159,58 +140,19 @@ pub(crate) fn Combobox(
                 onblur: move |_| close(),
             }
             if expanded {
-                ul {
-                    id: "{id}-listbox",
-                    class: "select-listbox",
-                    role: "listbox",
-                    aria_label: "{label}",
-                    "data-placement": placement().map(Placement::side_name),
-                    style: placement().and_then(Placement::room_style),
-                    // Keeps focus, and so the highlighted suggestion, in the field.
-                    onmousedown: move |event| event.prevent_default(),
-                    onmounted: {
-                        let rows = rows.clone();
-                        move |event: MountedEvent| {
-                            let list = event.data();
-                            listbox.set(Some(list.clone()));
-                            let rows = rows.clone();
-                            let highlighted = highlighted.clone();
-                            spawn(async move {
-                                placement.set(Some(place(field.peek().clone(), list.clone()).await));
-                                let row = highlighted
-                                    .and_then(|suggestion| rows.borrow().get(&suggestion).cloned());
-                                if let Some(row) = row {
-                                    reveal(list, row).await;
-                                }
-                            });
+                OptionList {
+                    id: id.clone(),
+                    label: label.clone(),
+                    anchor: field,
+                    options: matches,
+                    active: current,
+                    selected: current,
+                    onhover: move |index| {
+                        if *active.peek() != Some(index) {
+                            active.set(Some(index));
                         }
                     },
-                    for (index, suggestion) in matches.into_iter().enumerate() {
-                        li {
-                            key: "{suggestion}",
-                            id: "{id}-option-{index}",
-                            class: if Some(index) == current { "select-option active" } else { "select-option" },
-                            role: "option",
-                            aria_selected: if Some(index) == current { "true" } else { "false" },
-                            onmounted: {
-                                let rows = rows.clone();
-                                let suggestion = suggestion.clone();
-                                move |event: MountedEvent| {
-                                    rows.borrow_mut().insert(suggestion.clone(), event.data());
-                                }
-                            },
-                            onmousemove: move |_| {
-                                if *active.peek() != Some(index) {
-                                    active.set(Some(index));
-                                }
-                            },
-                            onclick: {
-                                let suggestion = suggestion.clone();
-                                move |_| choose.call(suggestion.clone())
-                            },
-                            span { class: "select-option-label", "{suggestion}" }
-                        }
-                    }
+                    onchoose: choose,
                 }
             }
         }

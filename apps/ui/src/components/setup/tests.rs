@@ -762,6 +762,24 @@ fn try_it_reports_a_failed_start() {
 }
 
 #[test]
+fn try_it_offers_no_missing_button_for_a_failure_it_cannot_fix() {
+    let mut setup = at(SetupStep::TryIt);
+    start_test(&mut setup);
+    setup.answer(
+        "start_test_dictation",
+        Err::<(), _>(error(
+            "settings_invalid",
+            "The settings could not be read",
+            ErrorCategory::Settings,
+        )),
+    );
+    let result = text(&setup.html(), "setup-test-result");
+    assert!(result.contains("The settings could not be read"));
+    assert!(result.contains("Test again. If it keeps failing, restart WhisperNow."));
+    assert!(!result.contains("Open settings"));
+}
+
+#[test]
 fn finishing_setup_shows_a_refusal_then_saves_the_checkpoint_and_stops_permission_watch() {
     let management = setup_at(SetupStep::TryIt, ModelAvailability::NotInstalled);
     let checkpoint = management.checkpoint();

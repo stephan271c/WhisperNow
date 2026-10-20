@@ -1,7 +1,7 @@
 use whispernow_domain::{
     ApiKey, CLEANUP_MODEL_IDS, CleanupTarget, DEFAULT_CLEANUP_MODEL_ID, InvalidApiKey, LlmProvider,
-    MissingCleanupField, ProviderEndpoint, RemoteProvider, Settings, SettingsError,
-    SetupCheckpoint, Shortcut, ShortcutKey, ShortcutModifier, VocabularyReplacement,
+    MissingCleanupField, ProviderEndpoint, ProviderSettings, RemoteProvider, Settings,
+    SettingsError, SetupCheckpoint, Shortcut, ShortcutKey, ShortcutModifier, VocabularyReplacement,
 };
 
 fn shortcut(modifiers: &[ShortcutModifier], key: &str) -> Shortcut {
@@ -83,6 +83,33 @@ fn model_names_are_checked_for_every_provider() {
             })
         );
     }
+}
+
+#[test]
+fn the_model_list_keeps_the_active_model_and_follows_choices_and_removals() {
+    let mut openai = ProviderSettings {
+        model: "gpt-5".to_owned(),
+        ..ProviderSettings::default()
+    };
+    assert_eq!(openai.listed_models(), ["gpt-5"]);
+
+    openai.choose_model("gpt-5-mini".to_owned());
+    assert_eq!(openai.saved_models, ["gpt-5", "gpt-5-mini"]);
+    assert_eq!(openai.model, "gpt-5-mini");
+
+    openai.choose_model("gpt-5".to_owned());
+    assert_eq!(openai.saved_models, ["gpt-5", "gpt-5-mini"]);
+
+    openai.remove_model("gpt-5");
+    assert_eq!(openai.saved_models, ["gpt-5-mini"]);
+    assert_eq!(
+        openai.model, "gpt-5-mini",
+        "the first saved model takes over"
+    );
+
+    openai.remove_model("gpt-5-mini");
+    assert_eq!(openai.listed_models(), Vec::<String>::new());
+    assert_eq!(openai.model, "");
 }
 
 #[test]

@@ -57,22 +57,12 @@ impl fmt::Debug for PortalClipboardSnapshot {
 }
 
 /// What the session offers on the clipboard and whether it still owns it.
-/// `lost_since_offer` is sticky, so copying identical visible text still
-/// prevents restoration.
+/// Once another owner has taken the clipboard only a new offer makes it ours
+/// again, so copying identical visible text still prevents restoration.
+#[derive(Default)]
 pub(crate) struct PortalClipboardState {
     offer: BTreeMap<String, SecretBytes>,
-    session_is_owner: bool,
-    lost_since_offer: bool,
-}
-
-impl Default for PortalClipboardState {
-    fn default() -> Self {
-        Self {
-            offer: BTreeMap::new(),
-            session_is_owner: false,
-            lost_since_offer: true,
-        }
-    }
+    owns_offer: bool,
 }
 
 impl PortalClipboardState {
@@ -81,16 +71,12 @@ impl PortalClipboardState {
             .into_iter()
             .map(|(mime, bytes)| (mime.to_owned(), Zeroizing::new(bytes.to_vec())))
             .collect();
-        self.session_is_owner = true;
-        self.lost_since_offer = false;
+        self.owns_offer = true;
     }
 
     pub(crate) fn owner_changed(&mut self, session_is_owner: Option<bool>) {
-        if session_is_owner == Some(true) {
-            self.session_is_owner = true;
-        } else {
-            self.session_is_owner = false;
-            self.lost_since_offer = true;
+        if session_is_owner != Some(true) {
+            self.owns_offer = false;
         }
     }
 
@@ -99,7 +85,7 @@ impl PortalClipboardState {
     }
 
     pub(crate) const fn can_restore(&self) -> bool {
-        self.session_is_owner && !self.lost_since_offer
+        self.owns_offer
     }
 }
 
@@ -139,6 +125,14 @@ mod tests {
         state.replace_offer(vec![("text/plain", b"same")]);
         assert!(state.can_restore());
         state.owner_changed(Some(false));
+        state.owner_changed(Some(true));
+        assert!(!state.can_restore());
+    }
+
+    #[test]
+    fn a_session_that_has_offered_nothing_cannot_restore() {
+        let mut state = PortalClipboardState::default();
+        assert!(!state.can_restore());
         state.owner_changed(Some(true));
         assert!(!state.can_restore());
     }

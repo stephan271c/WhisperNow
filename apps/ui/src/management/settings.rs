@@ -1,7 +1,7 @@
 //! One control saves at a time; its edit is shown until the desktop confirms or refuses it.
 
 use whispernow_domain::ipc::{SaveSettingsResponse, SettingsView};
-use whispernow_domain::{Settings, ThemePreference};
+use whispernow_domain::{AppError, Settings, ThemePreference};
 
 use super::ManagementState;
 use crate::NoticeScope;
@@ -91,7 +91,7 @@ impl ManagementState {
         self.setting_errors.get(&key).cloned()
     }
 
-    pub fn finish_settings_update(&mut self, answer: Result<SaveSettingsResponse, String>) {
+    pub fn finish_settings_update(&mut self, answer: Result<SaveSettingsResponse, AppError>) {
         let key = self.saving.take().expect("a settings save is pending");
         match answer {
             Ok(SaveSettingsResponse { settings, warnings }) => {
@@ -100,9 +100,7 @@ impl ManagementState {
                     self.notify_saved(NoticeScope::Settings, "Saved", &warnings);
                 }
             }
-            Err(message) => {
-                self.reject_setting(key, message);
-            }
+            Err(error) => self.reject_setting(key, error.summary),
         }
         self.edited = None;
     }

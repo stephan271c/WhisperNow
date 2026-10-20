@@ -41,20 +41,12 @@ impl Fixture {
     }
 }
 
-fn load_result(settings: Settings) -> SettingsLoad {
-    SettingsLoad {
-        settings,
-        notice: None,
-        enable_autostart: false,
-    }
-}
-
 #[test]
 fn settings_round_trip() {
     let fixture = fixture();
     assert_eq!(
         fixture.persistence.load().expect("no file"),
-        load_result(Settings::default())
+        SettingsLoad::from(Settings::default())
     );
 
     let settings = Settings {
@@ -69,7 +61,7 @@ fn settings_round_trip() {
     fixture.persistence.save(&settings).expect("save");
     assert_eq!(
         fixture.persistence.load().expect("load"),
-        load_result(settings)
+        SettingsLoad::from(settings)
     );
     assert_eq!(fixture.saved()["settings_version"], 2);
 }
@@ -107,7 +99,7 @@ fn an_unreadable_file_is_renamed_and_the_defaults_load() {
         );
         assert_eq!(
             fixture.persistence.load().expect("reload"),
-            load_result(Settings::default())
+            SettingsLoad::from(Settings::default())
         );
     }
 }
@@ -165,7 +157,7 @@ fn python_settings_are_imported_once_with_their_keys_moved_to_the_store() {
     assert_eq!(notice, None);
     assert_eq!(
         fixture.persistence.load().expect("reload"),
-        load_result(imported)
+        SettingsLoad::from(imported)
     );
 }
 
@@ -270,5 +262,8 @@ fn a_partial_python_import_keeps_only_the_refused_key() {
             path: fixture.paths.python_settings_file()
         })
     );
-    assert_eq!(persistence.load().expect("reload"), load_result(imported));
+    assert_eq!(
+        persistence.load().expect("reload"),
+        SettingsLoad::from(imported)
+    );
 }

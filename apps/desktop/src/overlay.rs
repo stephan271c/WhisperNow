@@ -1,14 +1,12 @@
 //! The pill renders the published state snapshot itself; this module only decides where the
 //! window is and whether it shows.
 
-use std::sync::Arc;
-use whispernow_domain::AppError;
-
 use whispernow_domain::ipc::{AppState, ErrorCategory, Phase};
+use whispernow_domain::{AppError, WindowGeometry};
 
 mod tauri_window;
 
-pub(crate) use tauri_window::{TauriOverlayWindow, monitor_area};
+pub(crate) use tauri_window::{apply, monitor_area};
 
 /// Logical size of the transparent overlay window; the pill grows inside it.
 pub(crate) const OVERLAY_LOGICAL_SIZE: (f64, f64) = (360.0, 132.0);
@@ -27,47 +25,34 @@ pub(crate) enum OverlayPresentation {
     Notification,
 }
 
-pub(crate) trait OverlayWindow: Send + Sync {
-    /// Places the window on the monitor under the cursor and shows it without focus.
-    fn show(&self);
-    fn hide(&self);
-    fn notify(&self, message: String);
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OverlayAction {
+    Show,
+    Hide,
+    Notify(String),
 }
 
 /// Physical monitor geometry. The work area excludes docks and panels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MonitorArea {
-    pub(crate) bounds: PhysicalRect,
-    pub(crate) work_area: PhysicalRect,
+    pub(crate) bounds: WindowGeometry,
+    pub(crate) work_area: WindowGeometry,
     pub(crate) scale_factor: f64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PhysicalRect {
-    pub(crate) x: i32,
-    pub(crate) y: i32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
+pub(crate) fn overlaps(first: &WindowGeometry, second: &WindowGeometry) -> bool {
+    let (left, top) = (i64::from(first.x), i64::from(first.y));
+    let (other_left, other_top) = (i64::from(second.x), i64::from(second.y));
+    left < other_left + i64::from(second.width)
+        && top < other_top + i64::from(second.height)
+        && other_left < left + i64::from(first.width)
+        && other_top < top + i64::from(first.height)
 }
 
-impl PhysicalRect {
-    pub(crate) fn overlaps(&self, other: &Self) -> bool {
-        let (left, top) = (i64::from(self.x), i64::from(self.y));
-        let (other_left, other_top) = (i64::from(other.x), i64::from(other.y));
-        left < other_left + i64::from(other.width)
-            && top < other_top + i64::from(other.height)
-            && other_left < left + i64::from(self.width)
-            && other_top < top + i64::from(self.height)
-    }
-
-    fn contains(&self, (x, y): (f64, f64)) -> bool {
-        let left = f64::from(self.x);
-        let top = f64::from(self.y);
-        x >= left
-            && x < left + f64::from(self.width)
-            && y >= top
-            && y < top + f64::from(self.height)
-    }
+fn contains(rect: &WindowGeometry, (x, y): (f64, f64)) -> bool {
+    let left = f64::from(rect.x);
+    let top = f64::from(rect.y);
+    x >= left && x < left + f64::from(rect.width) && y >= top && y < top + f64::from(rect.height)
 }
 
 /// The monitor containing the cursor. Without a cursor position (native Wayland) or when it is
@@ -80,7 +65,7 @@ pub(crate) fn monitor_under_cursor(
         .and_then(|cursor| {
             monitors
                 .iter()
-                .find(|monitor| monitor.bounds.contains(cursor))
+                .find(|monitor| contains(&monitor.bounds, cursor))
         })
         .or_else(|| monitors.first())
 }
@@ -126,39 +111,35 @@ fn notification(error: &AppError) -> String {
 }
 
 pub(crate) struct RecordingOverlay {
-    window: Arc<dyn OverlayWindow>,
     can_float: bool,
-    window_shown: bool,
-    notified: bool,
+    presented: OverlayPresentation,
 }
 
 impl RecordingOverlay {
-    pub(crate) fn new(window: Arc<dyn OverlayWindow>, can_float: bool) -> Self {
+    pub(crate) const fn new(can_float: bool) -> Self {
         Self {
-            window,
             can_float,
-            window_shown: false,
-            notified: false,
+            presented: OverlayPresentation::None,
         }
     }
 
-    pub(crate) fn observe(&mut self, snapshot: &AppState) {
+    /// The action `snapshot` calls for; none while the presentation is unchanged.
+    pub(crate) fn observe(&mut self, snapshot: &AppState) -> Option<OverlayAction> {
         let presentation = overlay_presentation(&snapshot.phase, self.can_float);
-        let show = presentation == OverlayPresentation::Window;
-        if show && !self.window_shown {
-            self.window.show();
-        } else if !show && self.window_shown {
-            self.window.hide();
+        let previous = std::mem::replace(&mut self.presented, presentation);
+        if presentation == previous {
+            return None;
         }
-        self.window_shown = show;
-        let notify = presentation == OverlayPresentation::Notification;
-        if notify
-            && !self.notified
-            && let Some(error) = &snapshot.error
-        {
-            self.window.notify(notification(error));
+        match presentation {
+            OverlayPresentation::Window => Some(OverlayAction::Show),
+            OverlayPresentation::None => {
+                (previous == OverlayPresentation::Window).then_some(OverlayAction::Hide)
+            }
+            OverlayPresentation::Notification => snapshot
+                .error
+                .as_ref()
+                .map(|error| OverlayAction::Notify(notification(error))),
         }
-        self.notified = notify;
     }
 }
 
