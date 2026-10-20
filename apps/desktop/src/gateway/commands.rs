@@ -2,7 +2,7 @@ use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
     AppState, AudioDevice, ClearDataResult, DataLocation, ErrorCategory, EventPayload,
     MainWindowSection, MicrophoneTestResponse, ModelSummary, PermissionKind, PermissionsResponse,
-    SaveSettingsResponse, SetApiKeyRequest, SettingsView, SetupStateView,
+    SaveSettingsResponse, SetApiKeyRequest, SettingsView,
 };
 use whispernow_domain::{
     EntryId, HistoryPage, HistoryPageRequest, LlmProvider, ModelId, RemoteProvider, Settings,
@@ -74,7 +74,7 @@ pub(crate) async fn list_provider_models(
             let provider =
                 RemoteProvider::new(request, endpoint).ok_or_else(provider_models_unavailable)?;
             let api_key = if settings.api_keys.contains(&request) {
-                services.settings.api_keys().api_key(request)?
+                services.settings.api_key(request)?
             } else {
                 None
             };
@@ -131,17 +131,6 @@ pub(crate) async fn list_models(
 }
 
 #[tauri::command]
-pub(crate) async fn get_setup_state(
-    state: tauri::State<'_, Gateway>,
-) -> Result<SetupStateView, AppError> {
-    state
-        .run_command("get_setup_state", Failure::Published, |services| {
-            Ok(services.settings.get_setup_state())
-        })
-        .await
-}
-
-#[tauri::command]
 pub(crate) async fn data_locations(
     state: tauri::State<'_, Gateway>,
 ) -> Result<Vec<DataLocation>, AppError> {
@@ -161,19 +150,6 @@ pub(crate) async fn dismiss_recording_overlay(
     Ok(())
 }
 
-/// Copies the last transcript for a manual paste and dismisses the "not pasted" failure it
-/// recovers from.
-#[tauri::command]
-pub(crate) async fn copy_last_transcript(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
-    state
-        .run_command("copy_last_transcript", Failure::Published, |services| {
-            services.copy_last_transcript()
-        })
-        .await?;
-    state.services.state.dismiss_error();
-    Ok(())
-}
-
 #[tauri::command]
 pub(crate) async fn copy_text(
     request: String,
@@ -181,13 +157,7 @@ pub(crate) async fn copy_text(
 ) -> Result<(), AppError> {
     state
         .run_command("copy_text", Failure::Local, move |services| {
-            services.output.copy(&request).map_err(|_| {
-                AppError::new(
-                    ErrorCategory::Output,
-                    "copy_unavailable",
-                    "The text could not be copied",
-                )
-            })
+            services.output.copy(&request)
         })
         .await
 }
@@ -317,9 +287,7 @@ pub(crate) async fn select_model(
 ) -> Result<(), AppError> {
     state
         .run_command("select_model", Failure::Published, move |services| {
-            services
-                .models
-                .select(request, &services.settings, &services.dictation)
+            services.select_model(request)
         })
         .await
 }
@@ -340,18 +308,8 @@ pub(crate) async fn delete_model(
 pub(crate) async fn save_setup_checkpoint(
     request: SetupCheckpoint,
     state: tauri::State<'_, Gateway>,
-) -> Result<SetupStateView, AppError> {
-    state
-        .run_command(
-            "save_setup_checkpoint",
-            Failure::Published,
-            move |services| {
-                services
-                    .settings
-                    .save_setup_checkpoint(request, services.models.model_store())
-            },
-        )
-        .await
+) -> Result<SettingsView, AppError> {
+    state.save_setup_checkpoint(request).await
 }
 
 #[tauri::command]
@@ -365,12 +323,8 @@ pub(crate) async fn complete_setup(
 #[tauri::command]
 pub(crate) async fn restart_setup(
     state: tauri::State<'_, Gateway>,
-) -> Result<SetupStateView, AppError> {
-    state
-        .run_command("restart_setup", Failure::Local, |services| {
-            services.settings.restart_setup()
-        })
-        .await
+) -> Result<SettingsView, AppError> {
+    state.restart_setup().await
 }
 
 #[tauri::command]
@@ -398,10 +352,7 @@ pub(crate) async fn open_permission_settings(request: PermissionKind) -> Result<
 pub(crate) async fn start_test_dictation(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
         .run_command("start_test_dictation", Failure::Local, |services| {
-            services
-                .dictation
-                .start(RecordingTrigger::SetupTest)
-                .map(drop)
+            services.dictation.start(RecordingTrigger::SetupTest)
         })
         .await
 }

@@ -62,10 +62,7 @@ pub(super) fn SetupScreen() -> Element {
     let context = use_context::<UiContext>();
     let management = context.management;
     let setup = management.read().setup.clone();
-    let step = setup
-        .as_ref()
-        .filter(|setup| !setup.first_run_complete)
-        .map(|setup| setup.checkpoint.step);
+    let step = management.read().unfinished_setup_step();
     let mut heading = use_signal(|| None::<Rc<MountedData>>);
     let mut focused_step = use_signal(|| step);
     // A new step, whether moved to here or by another window, takes focus to its heading.
@@ -95,9 +92,9 @@ pub(super) fn SetupScreen() -> Element {
         match step {
             Some(SetupStep::Welcome) => rsx! { WelcomeStep {} },
             Some(SetupStep::Permissions) => rsx! { PermissionsStep {} },
-            Some(SetupStep::Model) => rsx! { ModelStep { selected: setup.checkpoint.model_id.clone() } },
-            Some(SetupStep::Shortcuts) => rsx! { ShortcutsStep { checkpoint: setup.checkpoint.clone() } },
-            Some(SetupStep::TryIt) => rsx! { TryItStep { checkpoint: setup.checkpoint.clone() } },
+            Some(SetupStep::Model) => rsx! { ModelStep { selected: setup.model_id.clone() } },
+            Some(SetupStep::Shortcuts) => rsx! { ShortcutsStep { checkpoint: setup.clone() } },
+            Some(SetupStep::TryIt) => rsx! { TryItStep { checkpoint: setup.clone() } },
             None => rsx! { DoneStep {} },
         }
         if let Some(step) = step {
@@ -136,7 +133,8 @@ fn SetupFooter(step: SetupStep) -> Element {
     let management = context.management;
     let model_downloading = management
         .read()
-        .setup_checkpoint()
+        .setup
+        .as_ref()
         .is_some_and(|checkpoint| context.active_download(&checkpoint.model_id).is_some());
     let ready = management.read().setup_step_ready(model_downloading);
     let save_blocked = context
@@ -446,7 +444,7 @@ fn ModelChoice(
             input { id: "setup-model-{slug}", r#type: "radio", name: "setup-model", value: model.id.as_str(), checked,
                 disabled: edit_blocked.is_some(),
                 aria_describedby: describedby,
-                onchange: { let model_id = model.id.clone(); move |_| management.write().edit_setup(|setup| setup.model_id = model_id.clone()) }
+                onchange: { let model_id = model.id.clone(); move |_| { management.write().edit_setup(|setup| setup.model_id = model_id.clone()); } }
             }
             span { class: "model-name",
                 strong { "{name}" }
@@ -467,11 +465,9 @@ fn ModelChoice(
                     disabled: download_blocked.is_some(),
                     aria_describedby: download_blocked.as_ref().map(|_| "setup-models-disabled-reason"),
                     onclick: move |_| {
-                        if management.peek().settings_pending() {
-                            return;
+                        if management.write().edit_setup(|setup| setup.model_id = id.clone()).is_some() {
+                            context.download_model(id.clone());
                         }
-                        management.write().edit_setup(|setup| setup.model_id = id.clone());
-                        context.download_model(id.clone());
                     },
                     "Download"
                 }
@@ -522,7 +518,7 @@ fn ShortcutsStep(checkpoint: SetupCheckpoint) -> Element {
             }
             ShortcutCapture { id: "setup-recording-shortcut-capture", label: "recording shortcut", shortcut: Some(checkpoint.recording_shortcut.clone()),
                 disabled,
-                oncapture: move |shortcut| management.write().edit_setup(|setup| setup.recording_shortcut = shortcut) }
+                oncapture: move |shortcut| { management.write().edit_setup(|setup| setup.recording_shortcut = shortcut); } }
             if let Some(conflict) = conflict {
                 Banner { tone: Tone::Warning, p { "{conflict}" } }
             }
@@ -658,21 +654,10 @@ fn DoneStep() -> Element {
     let context = use_context::<UiContext>();
     let navigator = context.navigator;
     let management = context.management;
-    // The saved settings, or the checkpoint setup finished with until they load.
-    let shortcut = {
-        let management = management.read();
-        if let Some(view) = management.settings.as_ref() {
-            let settings = &view.settings;
-            Some((settings.recording_mode, settings.recording_shortcut.clone()))
-        } else {
-            management.setup_checkpoint().map(|checkpoint| {
-                (
-                    checkpoint.recording_mode,
-                    checkpoint.recording_shortcut.clone(),
-                )
-            })
-        }
-    };
+    let shortcut = management.read().settings.as_ref().map(|view| {
+        let settings = &view.settings;
+        (settings.recording_mode, settings.recording_shortcut.clone())
+    });
     rsx! { div { class: "setup-hero",
         div { class: "setup-hero-icon complete", Icon { name: IconName::CheckCircle } }
         dl { id: "setup-done-shortcuts", class: "setup-summary",

@@ -130,7 +130,7 @@ fn emit(event: &EventPayload) {
     let payload = serde_json::to_string(event).expect("event payload");
     js_sys::eval(&format!(
         "window.__whispernowListeners.get({:?})({{payload: {payload}}})",
-        event.event_name()
+        whispernow_domain::ipc::EVENT
     ))
     .expect("deliver Tauri event");
 }

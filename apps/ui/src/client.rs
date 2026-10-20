@@ -70,26 +70,14 @@ pub(crate) enum WindowAction {
     Close,
 }
 
-pub(crate) fn run_window_action(action: WindowAction) {
-    #[cfg(target_arch = "wasm32")]
-    dioxus::prelude::spawn(async move {
-        // A refused window action leaves the window as it was, which the user can see.
-        let _ = match action {
-            WindowAction::Minimize => minimize_window().await,
-            WindowAction::ToggleMaximize => toggle_maximize_window().await,
-            WindowAction::Close => close_window().await,
-        };
-    });
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = action;
-}
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn run_window_action(_action: WindowAction) {}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ListenerOwner;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn listen_all(
-    _event_names: &[&str],
+pub(crate) fn listen_events(
     _callback: impl FnMut(whispernow_domain::ipc::EventPayload) + 'static,
 ) -> std::future::Ready<Answer<ListenerOwner>> {
     std::future::ready(Ok(ListenerOwner))
@@ -141,7 +129,7 @@ mod wasm {
     use whispernow_domain::EntryId;
     use whispernow_domain::ipc::EventPayload;
 
-    use super::{Answer, AppError, connection_error};
+    use super::{Answer, AppError, WindowAction, connection_error};
 
     #[wasm_bindgen]
     extern "C" {
@@ -225,8 +213,7 @@ mod wasm {
         Ok(object_url(&audio))
     }
 
-    pub async fn listen_all(
-        event_names: &[&str],
+    pub async fn listen_events(
         callback: impl FnMut(EventPayload) + 'static,
     ) -> Result<ListenerOwner, AppError> {
         let mut callback = callback;
@@ -236,17 +223,16 @@ mod wasm {
                 Err(error) => console_error(&format!("Desktop event contract failed: {error}")),
             }
         }) as Box<dyn FnMut(JsValue)>);
-        let mut owner = ListenerOwner::new(closure);
-        for event_name in event_names {
-            let listener_id = listen_typed(
-                event_name,
-                owner.callback.as_ref().unchecked_ref::<Function>(),
-            )
-            .await
-            .map_err(from_js)?;
-            owner.listener_ids.push(listener_id);
-        }
-        Ok(owner)
+        let listener_id = listen_typed(
+            whispernow_domain::ipc::EVENT,
+            closure.as_ref().unchecked_ref::<Function>(),
+        )
+        .await
+        .map_err(from_js)?;
+        Ok(ListenerOwner {
+            listener_id,
+            _callback: closure,
+        })
     }
 
     /// Whether this window is undecorated and so draws its own titlebar. A window whose
@@ -259,17 +245,15 @@ mod wasm {
             .unwrap_or(false)
     }
 
-    pub(crate) async fn minimize_window() -> Answer<()> {
-        minimize_window_js().await.map_err(from_js)
-    }
-
-    pub(crate) async fn toggle_maximize_window() -> Answer<()> {
-        toggle_maximize_window_js().await.map_err(from_js)
-    }
-
-    /// Asks to close this window; the desktop hides it to the tray.
-    pub(crate) async fn close_window() -> Answer<()> {
-        close_window_js().await.map_err(from_js)
+    pub(crate) fn run_window_action(action: WindowAction) {
+        dioxus::prelude::spawn(async move {
+            // A refused window action leaves the window as it was, which the user can see.
+            let _ = match action {
+                WindowAction::Minimize => minimize_window_js().await,
+                WindowAction::ToggleMaximize => toggle_maximize_window_js().await,
+                WindowAction::Close => close_window_js().await,
+            };
+        });
     }
 
     /// Reports whether this window is maximized, now and after each resize.
@@ -282,34 +266,24 @@ mod wasm {
                 callback(maximized);
             }
         }) as Box<dyn FnMut(JsValue)>);
-        let mut owner = ListenerOwner::new(closure);
-        let listener_id = listen_maximized_js(owner.callback.as_ref().unchecked_ref::<Function>())
+        let listener_id = listen_maximized_js(closure.as_ref().unchecked_ref::<Function>())
             .await
             .map_err(from_js)?;
-        owner.listener_ids.push(listener_id);
-        Ok(owner)
+        Ok(ListenerOwner {
+            listener_id,
+            _callback: closure,
+        })
     }
 
-    /// Desktop listeners and their callback; dropping it unregisters each listener.
+    /// A desktop listener and its callback; dropping it unregisters the listener.
     pub struct ListenerOwner {
-        listener_ids: Vec<u32>,
-        callback: Closure<dyn FnMut(JsValue)>,
-    }
-
-    impl ListenerOwner {
-        const fn new(callback: Closure<dyn FnMut(JsValue)>) -> Self {
-            Self {
-                listener_ids: Vec::new(),
-                callback,
-            }
-        }
+        listener_id: u32,
+        _callback: Closure<dyn FnMut(JsValue)>,
     }
 
     impl Drop for ListenerOwner {
         fn drop(&mut self) {
-            for listener_id in &self.listener_ids {
-                unlisten_typed(*listener_id);
-            }
+            unlisten_typed(self.listener_id);
         }
     }
 

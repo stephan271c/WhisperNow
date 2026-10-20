@@ -8,18 +8,12 @@ use super::{
 use crate::ModelId;
 
 #[test]
-fn phase_carries_the_recording_trigger_and_the_failure() {
+fn phase_carries_the_recording_trigger() {
     let recording = Phase::Recording {
         trigger: RecordingTrigger::Hold,
         session: 3,
     };
-    let failed = Phase::Error {
-        error: AppError {
-            category: ErrorCategory::Output,
-            code: "paste_failed".to_owned(),
-            summary: "Text was not pasted".to_owned(),
-        },
-    };
+    let failed = Phase::Error;
     assert!(recording.is_busy());
     assert!(!failed.is_busy());
     for phase in [recording, failed] {
@@ -39,7 +33,11 @@ fn state_changed_event_carries_the_whole_snapshot() {
             selected_model_id: ModelId::new("model").expect("fixture model id"),
             model_state: ModelState::Ready,
             last_transcript: Some("final".to_owned()),
-            error: None,
+            error: Some(AppError {
+                category: ErrorCategory::Output,
+                code: "paste_failed".to_owned(),
+                summary: "Text was not pasted".to_owned(),
+            }),
             active_downloads: Vec::new(),
             setup_test: Some(super::SetupTestResult::Heard {
                 text: "hello".to_owned(),
@@ -68,11 +66,58 @@ fn update_changed_event_round_trips() {
         restart_deferred: false,
     };
     let event = EventPayload::UpdateChanged { state };
-    assert_eq!(event.event_name(), super::UPDATE_CHANGED_EVENT);
 
     let value = to_value(&event).expect("serialize update event");
     assert_eq!(
         serde_json::from_value::<EventPayload>(value).expect("round-trip update event"),
         event
     );
+}
+
+#[test]
+fn every_event_carries_its_variant_in_the_type_tag() {
+    let state = AppState {
+        phase: Phase::Idle,
+        selected_model_id: ModelId::new("model").expect("fixture model id"),
+        model_state: ModelState::Ready,
+        last_transcript: None,
+        error: None,
+        active_downloads: Vec::new(),
+        setup_test: None,
+    };
+    let update = UpdateState {
+        phase: UpdatePhase::Idle,
+        notification_dismissed: false,
+        restart_deferred: false,
+    };
+    let events = [
+        (EventPayload::StateChanged { state }, "state_changed"),
+        (
+            EventPayload::AudioLevel {
+                rms: 0.25,
+                peak: 0.5,
+                elapsed_ms: 300,
+            },
+            "audio_level",
+        ),
+        (
+            EventPayload::UpdateChanged { state: update },
+            "update_changed",
+        ),
+        (EventPayload::HistoryChanged, "history_changed"),
+        (
+            EventPayload::NavigationRequested {
+                section: super::MainWindowSection::History,
+            },
+            "navigation_requested",
+        ),
+    ];
+    for (event, tag) in events {
+        let value = to_value(&event).expect("serialize event");
+        assert_eq!(value["type"], tag);
+        assert_eq!(
+            serde_json::from_value::<EventPayload>(value).expect("round-trip event"),
+            event
+        );
+    }
 }

@@ -24,6 +24,10 @@ impl Events {
     pub(crate) fn publish(&self, payload: EventPayload) {
         let _closed = self.0.send(payload);
     }
+
+    pub(crate) fn history_changed(&self) {
+        self.publish(EventPayload::HistoryChanged);
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,7 +64,7 @@ pub(crate) struct State {
     /// `last_error`.
     pub(crate) setup_test: Option<SetupTestResult>,
     pub(crate) active_downloads: BTreeMap<ModelId, DownloadTask>,
-    pub(crate) download_failures: usize,
+    pub(crate) download_failed: bool,
     /// Set with `cancellation` when the dictation in flight is asked to end early.
     pub(crate) cancel: Option<CancelReason>,
     /// The dictation in flight's cancellation; the worker replaces it for each recording.
@@ -77,9 +81,41 @@ impl State {
             last_error: None,
             setup_test: None,
             active_downloads: BTreeMap::new(),
-            download_failures: 0,
+            download_failed: false,
             cancel: None,
             cancellation: CancellationToken::default(),
+        }
+    }
+
+    pub(crate) fn request_cancel(&mut self, reason: CancelReason) {
+        self.cancel = Some(reason);
+        self.cancellation.cancel();
+    }
+
+    /// Ends the dictation in flight in `next`, or in `Paused` when a pause asked it to end.
+    pub(crate) fn end_dictation(&mut self, next: Phase) {
+        let reason = self.cancel.take();
+        self.phase = if reason == Some(CancelReason::Pause) {
+            Phase::Paused
+        } else {
+            next
+        };
+    }
+
+    pub(crate) fn require_quiescent(&self) -> Result<(), AppError> {
+        self.phase.require_idle()?;
+        self.require_no_downloads()
+    }
+
+    pub(crate) fn enter(&mut self, phase: Phase) -> Result<Phase, AppError> {
+        self.require_quiescent()?;
+        Ok(std::mem::replace(&mut self.phase, phase))
+    }
+
+    pub(crate) fn require_not_in_maintenance(&self) -> Result<(), AppError> {
+        match self.phase {
+            Phase::ClearingData | Phase::Updating => self.phase.require_idle(),
+            _ => Ok(()),
         }
     }
 
@@ -105,7 +141,7 @@ impl State {
             }
             LoadedModel::Loading => ModelState::Loading,
             LoadedModel::Failed => ModelState::Failed,
-            LoadedModel::Unloaded | LoadedModel::Ready(_) if self.download_failures > 0 => {
+            LoadedModel::Unloaded | LoadedModel::Ready(_) if self.download_failed => {
                 ModelState::Failed
             }
             LoadedModel::Unloaded | LoadedModel::Ready(_) => ModelState::Unloaded,
@@ -144,11 +180,7 @@ impl StateCell {
     }
 
     pub(crate) fn refuse_during_maintenance(&self) -> Result<(), AppError> {
-        let phase = &self.lock().phase;
-        if matches!(phase, Phase::ClearingData | Phase::Updating) {
-            return phase.require_idle();
-        }
-        Ok(())
+        self.lock().require_not_in_maintenance()
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, State> {
@@ -192,7 +224,7 @@ impl StateCell {
     /// is left alone, so a dismissal that raced a new dictation does nothing.
     pub(crate) fn dismiss_error(&self) {
         let mut state = self.lock();
-        if matches!(state.phase, Phase::Error { .. }) {
+        if state.phase == Phase::Error {
             state.phase = Phase::Idle;
             state.last_error = None;
             self.events.publish(EventPayload::StateChanged {

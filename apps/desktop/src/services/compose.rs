@@ -17,6 +17,7 @@ use whispernow_platform::{
 use super::{
     Dictation, Events, NativeServices, StateCell,
     dictation::{AiCleanup, DictationParts},
+    follow_cleanup_provider,
     history::HistoryStore,
     models::ModelCoordinator,
     output::OutputCoordinator,
@@ -39,7 +40,6 @@ impl NativeServices {
             )
         })?;
         let wayland_token_path = native_wayland.then(|| paths.wayland_remote_desktop_token_file());
-        let paste_helper_setup_dir = paths.paste_helper_setup_dir();
         let output = Arc::new(OutputCoordinator::native(wayland_token_path));
         let audio: Arc<dyn AudioInput> = Arc::new(CpalAudioInput::new());
         let persistence = Arc::new(SettingsStore::new(paths.clone()));
@@ -78,10 +78,7 @@ impl NativeServices {
         let store = Arc::new(ModelStore::new(paths.clone()));
         store.finish_cuda_pack_removal();
         let local_cleanup = Arc::new(LocalCleanupService::new(llama_dir, Arc::clone(&store)));
-        local_cleanup.set_use_gpu(persisted.cleanup_uses_gpu);
-        if persisted.uses_local_cleanup() {
-            local_cleanup.preload(persisted.cleanup_model_id());
-        }
+        follow_cleanup_provider(&local_cleanup, &persisted);
         let models = Arc::new(ModelCoordinator::new(
             Arc::clone(&store),
             Arc::clone(&state),
@@ -92,7 +89,7 @@ impl NativeServices {
                 local: Arc::clone(&local_cleanup),
             }),
             runtime: Arc::new(cleanup_runtime),
-            api_keys: settings.api_keys(),
+            api_keys: persistence,
         });
         let dictation = Dictation::spawn(DictationParts {
             state: Arc::clone(&state),
@@ -115,7 +112,6 @@ impl NativeServices {
                 dictation,
                 paths,
                 output,
-                paste_helper_setup_dir,
                 microphone_access: MicrophoneAccess::default(),
                 local_cleanup,
             },

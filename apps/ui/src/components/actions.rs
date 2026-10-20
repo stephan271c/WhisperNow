@@ -69,9 +69,9 @@ impl UiContext {
             .notify(Tone::Error, scope, error.summary.clone());
     }
 
-    /// Reads everything this window shows: the state snapshot, settings, setup, models and
-    /// history. Used at startup and after clearing data.
-    pub(crate) fn refresh_all(mut self) {
+    /// Reads everything this window shows: the state snapshot, settings and the setup they
+    /// hold, models and history. Used at startup and after clearing data.
+    pub(crate) fn refresh_all(self) {
         spawn_forever(async move {
             self.hydrate_state().await;
         });
@@ -79,21 +79,15 @@ impl UiContext {
             UiOperation::LoadSettings,
             client::call("get_settings"),
             |mut actions, answer| match answer {
-                Ok(settings) => actions.management.write().install_settings(settings),
+                Ok(settings) => {
+                    actions.management.write().install_setup(settings);
+                    if actions.management.peek().may_list_devices() {
+                        actions.list_devices();
+                    }
+                }
                 Err(error) => actions.load_failed("Settings", &error),
             },
         );
-        spawn_forever(async move {
-            match client::call("get_setup_state").await {
-                Ok(setup) => {
-                    self.management.write().setup = Some(setup);
-                    if self.management.peek().may_list_devices() {
-                        self.list_devices();
-                    }
-                }
-                Err(error) => self.load_failed("Setup state", &error),
-            }
-        });
         self.reload_models();
         self.refresh_history();
     }

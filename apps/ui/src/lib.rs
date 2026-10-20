@@ -64,7 +64,7 @@ pub fn app() -> Element {
         // callback re-enters this component's scope before `spawn` looks it up.
         let runtime = dioxus::core::Runtime::current();
         let scope = dioxus::core::current_scope_id();
-        match client::listen_all(&whispernow_domain::ipc::EVENT_NAMES, move |event| {
+        match client::listen_events(move |event| {
             runtime.in_scope(scope, || {
                 if recording_bar {
                     event_state.write().apply_event(event);

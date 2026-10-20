@@ -3,7 +3,7 @@ use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
     ActiveDownload, ErrorCategory, EventPayload, PasteHelperSetup, Permission, PermissionKind,
     PermissionStatus, PermissionsResponse, Phase, SaveSettingsResponse, SettingsView,
-    SetupStateView, SetupTestResult,
+    SetupTestResult,
 };
 use whispernow_domain::{
     DownloadPhase, ModelAvailability, ModelId, RecordingMode, SetupCheckpoint, SetupStep, Shortcut,
@@ -11,34 +11,40 @@ use whispernow_domain::{
 };
 
 use super::super::actions::PERMISSION_POLLS;
-use super::super::tests::{loaded, model, shell};
+use super::super::tests::{model, shell, unfinished_setup};
 use crate::ManagementState;
 use crate::client::fake;
-use crate::test_support::{Page, element, focused, snapshot, state_event, tag, text};
+use crate::test_support::{
+    Page, editable_settings, element, focused, snapshot, state_event, tag, text,
+};
 
 /// Setup saved at `step`, with its model in `availability`.
 fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState {
-    let mut management = loaded();
+    let mut management = unfinished_setup(SetupCheckpoint {
+        step,
+        model_id: whispernow_domain::ModelId::new("base").expect("fixture model id"),
+        input_device: None,
+        recording_shortcut: Shortcut {
+            modifiers: [
+                ShortcutModifier::Meta,
+                ShortcutModifier::Shift,
+                ShortcutModifier::Control,
+            ]
+            .into(),
+            key: ShortcutKey::R,
+        },
+        recording_mode: RecordingMode::Toggle,
+    });
     management.models = vec![model("base", "Base", availability)];
     management.models_loaded = true;
-    management.setup = Some(SetupStateView {
-        first_run_complete: false,
-        checkpoint: SetupCheckpoint {
-            step,
-            model_id: whispernow_domain::ModelId::new("base").expect("fixture model id"),
-            input_device: None,
-            recording_shortcut: Shortcut {
-                modifiers: [
-                    ShortcutModifier::Meta,
-                    ShortcutModifier::Shift,
-                    ShortcutModifier::Control,
-                ]
-                .into(),
-                key: ShortcutKey::R,
-            },
-            recording_mode: RecordingMode::Toggle,
-        },
-    });
+    management
+}
+
+fn finished(mut management: ManagementState) -> ManagementState {
+    let mut view = management.settings.clone().expect("settings loaded");
+    view.settings.first_run_complete = true;
+    view.settings.setup = None;
+    management.install_settings(view);
     management
 }
 
@@ -57,12 +63,29 @@ fn at(step: SetupStep) -> Page {
     opened(setup_at(step, ModelAvailability::Downloaded))
 }
 
-/// The desktop's answer to a checkpoint save that moved setup to `step`.
-fn saved_at(page: &Page, step: SetupStep) -> SetupStateView {
+fn saved_with(page: &Page, checkpoint: SetupCheckpoint) -> SettingsView {
     let management = page.context().management;
-    let mut setup = management.read().setup.clone().expect("setup loaded");
-    setup.checkpoint.step = step;
-    setup
+    let mut view = management.read().settings.clone().expect("settings loaded");
+    view.settings.setup = Some(checkpoint);
+    view
+}
+
+/// The desktop's answer to a checkpoint save that moved setup to `step`.
+fn saved_at(page: &Page, step: SetupStep) -> SettingsView {
+    let checkpoint = page.context().management.read().checkpoint();
+    saved_with(page, SetupCheckpoint { step, ..checkpoint })
+}
+
+fn settings_checkpoint(page: &Page) -> Option<SetupCheckpoint> {
+    let management = page.context().management;
+    let management = management.read();
+    management
+        .settings
+        .as_ref()
+        .expect("settings loaded")
+        .settings
+        .setup
+        .clone()
 }
 
 fn start_test(page: &mut Page) {
@@ -115,6 +138,29 @@ fn setup_resumes_at_the_step_saved_before_a_restart() {
     assert_eq!(html.matches("aria-current=\"step\"").count(), 1);
     assert!(tag(&html, "setup-recording-shortcut-capture").is_some());
     assert!(tag(&html, "setup-finish-later").is_some());
+}
+
+#[test]
+fn a_window_resumes_setup_from_the_settings_it_reads() {
+    let checkpoint = SetupCheckpoint {
+        step: SetupStep::Shortcuts,
+        ..SetupCheckpoint::default()
+    };
+    let mut settings = editable_settings();
+    settings.first_run_complete = false;
+    settings.setup = Some(checkpoint.clone());
+    let mut window = home(ManagementState::default());
+    window.act(crate::UiContext::refresh_all);
+    assert_eq!(
+        fake::count("get_settings"),
+        1,
+        "the settings carry the setup"
+    );
+    window.answer("get_settings", Ok(SettingsView::new(&settings)));
+
+    window.click("continue-setup");
+    assert_eq!(current_step(&window.html()), 4);
+    assert_eq!(window.context().management.read().setup, Some(checkpoint));
 }
 
 #[test]
@@ -189,6 +235,11 @@ fn granted_permissions_move_setup_on_after_a_request() {
     let saved = saved_at(&setup, SetupStep::Model);
     setup.answer("save_setup_checkpoint", Ok(saved));
     assert_eq!(current_step(&setup.html()), 3);
+    assert_eq!(
+        settings_checkpoint(&setup).map(|checkpoint| checkpoint.step),
+        Some(SetupStep::Model),
+        "the settings hold the checkpoint setup moved to"
+    );
     assert_eq!(
         setup.sent(),
         ["list_audio_devices"],
@@ -353,13 +404,7 @@ fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cance
     setup.click_named("Download Large");
     assert_eq!(fake::count("download_model"), 0);
     assert_eq!(
-        setup
-            .context()
-            .management
-            .read()
-            .setup_checkpoint()
-            .expect("checkpoint")
-            .model_id,
+        setup.context().management.read().checkpoint().model_id,
         submitted.model_id,
     );
     setup.click_named("Cancel download Stream");
@@ -369,18 +414,14 @@ fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cance
     );
     assert!(setup.context().management.read().settings_pending());
 
-    setup.answer(
-        "save_setup_checkpoint",
-        Ok(SetupStateView {
-            first_run_complete: false,
-            checkpoint: submitted.clone(),
-        }),
-    );
+    let saved = saved_with(&setup, submitted.clone());
+    setup.answer("save_setup_checkpoint", Ok(saved));
     assert_eq!(current_step(&setup.html()), 4);
     assert_eq!(
-        setup.context().management.read().setup_checkpoint(),
-        Some(&submitted),
+        setup.context().management.read().setup,
+        Some(submitted.clone())
     );
+    assert_eq!(settings_checkpoint(&setup), Some(submitted));
 }
 
 #[test]
@@ -399,7 +440,7 @@ fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
     );
     setup.answer(
         "save_setup_checkpoint",
-        Err::<SetupStateView, _>(error(
+        Err::<SettingsView, _>(error(
             "setup_save_failed",
             "Setup could not be saved",
             ErrorCategory::Settings,
@@ -430,8 +471,7 @@ fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
             .context()
             .management
             .read()
-            .setup_checkpoint()
-            .expect("checkpoint")
+            .checkpoint()
             .model_id
             .as_str(),
         "small"
@@ -442,8 +482,7 @@ fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
             .context()
             .management
             .read()
-            .setup_checkpoint()
-            .expect("checkpoint")
+            .checkpoint()
             .model_id
             .as_str(),
         "base"
@@ -513,8 +552,7 @@ fn a_pending_shortcut_checkpoint_keeps_the_submitted_keys_and_mode_and_ends_capt
             .context()
             .management
             .read()
-            .setup_checkpoint()
-            .expect("checkpoint")
+            .checkpoint()
             .recording_shortcut,
         submitted.recording_shortcut
     );
@@ -523,23 +561,18 @@ fn a_pending_shortcut_checkpoint_keeps_the_submitted_keys_and_mode_and_ends_capt
             .context()
             .management
             .read()
-            .setup_checkpoint()
-            .expect("checkpoint")
+            .checkpoint()
             .recording_mode,
         submitted.recording_mode
     );
-    setup.answer(
-        "save_setup_checkpoint",
-        Ok(SetupStateView {
-            first_run_complete: false,
-            checkpoint: submitted.clone(),
-        }),
-    );
+    let saved = saved_with(&setup, submitted.clone());
+    setup.answer("save_setup_checkpoint", Ok(saved));
     assert_eq!(current_step(&setup.html()), 5);
     assert_eq!(
-        setup.context().management.read().setup_checkpoint(),
-        Some(&submitted)
+        setup.context().management.read().setup,
+        Some(submitted.clone())
     );
+    assert_eq!(settings_checkpoint(&setup), Some(submitted));
     assert!(text(&setup.html(), "setup-summary").contains("Hold to record"));
 }
 
@@ -549,7 +582,7 @@ fn a_refused_shortcut_checkpoint_unlocks_keys_and_mode_for_the_next_save() {
     setup.click("setup-continue");
     setup.answer(
         "save_setup_checkpoint",
-        Err::<SetupStateView, _>(error(
+        Err::<SettingsView, _>(error(
             "setup_save_failed",
             "Setup could not be saved",
             ErrorCategory::Settings,
@@ -612,20 +645,16 @@ fn a_pending_microphone_checkpoint_rejects_a_later_change_and_unlocks_after_succ
     });
     assert_eq!(fake::count("save_setup_checkpoint"), 1);
     assert_eq!(
-        setup.context().management.read().setup_checkpoint(),
-        Some(&submitted)
+        setup.context().management.read().setup,
+        Some(submitted.clone())
     );
-    setup.answer(
-        "save_setup_checkpoint",
-        Ok(SetupStateView {
-            first_run_complete: false,
-            checkpoint: submitted.clone(),
-        }),
-    );
+    let saved = saved_with(&setup, submitted.clone());
+    setup.answer("save_setup_checkpoint", Ok(saved));
     assert_eq!(
-        setup.context().management.read().setup_checkpoint(),
-        Some(&submitted)
+        setup.context().management.read().setup,
+        Some(submitted.clone())
     );
+    assert_eq!(settings_checkpoint(&setup), Some(submitted));
     assert!(
         !tag(&setup.html(), "setup-microphone")
             .expect("microphone")
@@ -734,12 +763,13 @@ fn try_it_reports_a_failed_start() {
 
 #[test]
 fn finishing_setup_shows_a_refusal_then_saves_the_checkpoint_and_stops_permission_watch() {
-    let mut management = setup_at(SetupStep::TryIt, ModelAvailability::NotInstalled);
-    let checkpoint = management.setup.as_ref().expect("setup").checkpoint.clone();
-    let mut settings = crate::test_support::editable_settings();
-    settings.first_run_complete = false;
-    settings.setup = Some(checkpoint.clone());
-    management.install_settings(SettingsView::new(&settings));
+    let management = setup_at(SetupStep::TryIt, ModelAvailability::NotInstalled);
+    let checkpoint = management.checkpoint();
+    let mut settings = management
+        .settings
+        .clone()
+        .expect("settings loaded")
+        .settings;
     let mut setup = opened(management);
     assert!(tag(&setup.html(), "setup-test-start").is_none());
 
@@ -796,6 +826,7 @@ fn finishing_setup_shows_a_refusal_then_saves_the_checkpoint_and_stops_permissio
         }),
     );
     assert!(tag(&setup.html(), "setup-continue").is_none());
+    assert!(setup.context().management.read().first_run_complete());
     setup.click("setup-done-home");
     assert_eq!(text(&setup.html(), "page-heading"), "Home");
     assert!(tag(&setup.html(), "setup-wizard").is_none());
@@ -821,6 +852,10 @@ fn finish_later_keeps_the_progress_and_returns_home() {
     assert_eq!(text(&setup.html(), "page-heading"), "Home");
     let saved = saved_at(&setup, SetupStep::Shortcuts);
     setup.answer("save_setup_checkpoint", Ok(saved));
+    assert_eq!(
+        settings_checkpoint(&setup).map(|checkpoint| checkpoint.step),
+        Some(SetupStep::Shortcuts)
+    );
 
     setup.click("continue-setup");
     assert_eq!(
@@ -832,10 +867,7 @@ fn finish_later_keeps_the_progress_and_returns_home() {
 
 #[test]
 fn settings_runs_setup_again_after_it_finished() {
-    let mut management = setup_at(SetupStep::TryIt, ModelAvailability::Downloaded);
-    let mut finished = management.setup.clone().expect("setup");
-    finished.first_run_complete = true;
-    management.setup = Some(finished);
+    let management = finished(setup_at(SetupStep::TryIt, ModelAvailability::Downloaded));
     let mut window = home(management);
     assert!(
         tag(&window.html(), "continue-setup").is_none(),
@@ -845,22 +877,23 @@ fn settings_runs_setup_again_after_it_finished() {
     window.click("nav-settings");
     window.click("run-setup-again");
     assert_eq!(fake::count("restart_setup"), 1);
-    let management = window.context().management;
-    let mut restarted = management.read().setup.clone().expect("setup");
-    restarted.first_run_complete = false;
-    restarted.checkpoint.step = SetupStep::Welcome;
+    let welcome = SetupCheckpoint {
+        step: SetupStep::Welcome,
+        ..window.context().management.read().checkpoint()
+    };
+    let mut restarted = saved_with(&window, welcome.clone());
+    restarted.settings.first_run_complete = false;
     window.answer("restart_setup", Ok(restarted));
     let html = window.html();
     assert_eq!(text(&html, "page-heading"), "Set up WhisperNow");
     assert_eq!(current_step(&html), 1);
+    assert!(!window.context().management.read().first_run_complete());
+    assert_eq!(settings_checkpoint(&window), Some(welcome));
 }
 
 #[test]
 fn settings_explain_how_to_paste_without_the_portal_indicator() {
-    let mut management = setup_at(SetupStep::TryIt, ModelAvailability::Downloaded);
-    let mut finished = management.setup.clone().expect("setup");
-    finished.first_run_complete = true;
-    management.setup = Some(finished);
+    let management = finished(setup_at(SetupStep::TryIt, ModelAvailability::Downloaded));
     let mut window = home(management);
     window.click("nav-settings");
     assert!(window.sent().contains(&"get_permissions"));

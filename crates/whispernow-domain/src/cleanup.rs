@@ -86,8 +86,12 @@ pub enum MissingCleanupField {
 
 impl Settings {
     #[must_use]
-    pub fn uses_local_cleanup(&self) -> bool {
-        self.cleanup_enabled && self.llm_provider == LlmProvider::LocalCleanup
+    pub fn active_cleanup_target(&self) -> Option<CleanupTarget> {
+        if self.cleanup_enabled {
+            self.cleanup_target().ok()
+        } else {
+            None
+        }
     }
 
     pub fn cleanup_target(&self) -> Result<CleanupTarget, MissingCleanupField> {

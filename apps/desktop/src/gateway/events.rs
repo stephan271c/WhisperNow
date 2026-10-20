@@ -1,7 +1,7 @@
 use std::sync::mpsc;
 
 use tauri::{Emitter as _, Manager as _};
-use whispernow_domain::ipc::{AppState, EventPayload};
+use whispernow_domain::ipc::{AppState, EVENT, EventPayload};
 
 use super::Gateway;
 use crate::overlay::RecordingOverlay;
@@ -34,11 +34,9 @@ fn observe(
     shortcuts_enabled: &mut bool,
 ) {
     overlay.observe(state);
-    let Some(app_state) = app.try_state::<Gateway>() else {
-        return;
-    };
-    app_state.tray.apply_snapshot(state);
-    app_state.observe_dictation(state.phase.is_busy());
+    let gateway = app.state::<Gateway>();
+    gateway.tray.apply_snapshot(state);
+    gateway.observe_dictation(state.phase.is_busy());
     let enabled = state.phase.shortcuts_enabled();
     if enabled != *shortcuts_enabled {
         *shortcuts_enabled = enabled;
@@ -47,17 +45,13 @@ fn observe(
             app.state::<Gateway>().sync_shortcuts();
         });
     }
-    if app_state
-        .activation
-        .release_deferred_activation(&state.phase)
-    {
+    if gateway.activation.release_deferred_activation(&state.phase) {
         crate::show_settings_window(app);
     }
 }
 
 pub(crate) fn emit(app: &tauri::AppHandle, event: EventPayload) {
-    let event_name = event.event_name();
-    if app.emit(event_name, event).is_err() {
-        tracing::error!(event_name, "desktop event emission failed");
+    if app.emit(EVENT, event).is_err() {
+        tracing::error!("desktop event emission failed");
     }
 }

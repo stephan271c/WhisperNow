@@ -105,7 +105,7 @@ impl HomeStatus {
                 None,
                 None,
             ),
-            Phase::Idle | Phase::Error { .. } => status(HomeStatusKind::Ready, "Ready", None, None),
+            Phase::Idle | Phase::Error => status(HomeStatusKind::Ready, "Ready", None, None),
         }
     }
 }

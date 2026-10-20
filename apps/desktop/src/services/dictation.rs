@@ -24,10 +24,9 @@ use whispernow_core::{
         has_microphone_audio, prepare_segmented,
     },
 };
-use whispernow_domain::ipc::{ErrorCategory, EventPayload, MicrophoneTestResponse};
+use whispernow_domain::ipc::{ErrorCategory, MicrophoneTestResponse};
 use whispernow_domain::{
-    EntryStatus, HistoryLimit, HistoryRetention, ModelId, NewHistoryEntry, UtcMillis,
-    VocabularyReplacement,
+    EntryStatus, HistoryLimit, HistoryRetention, ModelId, UtcMillis, VocabularyReplacement,
 };
 use whispernow_platform::ModelStore;
 
@@ -49,9 +48,7 @@ mod outcome;
 
 use capture::{CapturedSpeech, RecordingSink};
 pub(crate) use cleanup::{AiCleanup, CleanupPlan};
-use outcome::{
-    DecodeFailure, Outcome, capture_duration_millis, cleanup_fallback_warning, interruption_warning,
-};
+use outcome::{DecodeFailure, Outcome, cleanup_fallback_warning, interruption_warning};
 
 const MAX_RECORDING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 60 * 30;
 
@@ -90,7 +87,7 @@ type Reply<T> = mpsc::Sender<Result<T, AppError>>;
 pub(super) enum Message {
     Start {
         trigger: RecordingTrigger,
-        reply: Reply<u64>,
+        reply: Reply<()>,
     },
     Stop {
         session: u64,
@@ -139,8 +136,14 @@ pub(super) struct DataClear<'a> {
 
 impl Drop for DataClear<'_> {
     fn drop(&mut self) {
-        self.state
-            .apply(|state| state.phase = self.previous_phase.clone());
+        self.state.apply(|state| {
+            // `Phase::Error` always has `last_error`; a clear that reset it ended the failure.
+            state.phase = if self.previous_phase == Phase::Error && state.last_error.is_none() {
+                Phase::Idle
+            } else {
+                self.previous_phase.clone()
+            };
+        });
     }
 }
 
@@ -190,10 +193,10 @@ impl Dictation {
         answer.recv().map_err(|_| worker_stopped())?
     }
 
-    /// Starts capturing a dictation and returns its session. A start while the previous
-    /// dictation is transcribed and pasted, a fraction of a second, waits for it in the
-    /// worker's queue, so a quick re-press is not lost; one during a slower cleanup is refused.
-    pub(crate) fn start(&self, trigger: RecordingTrigger) -> Result<u64, AppError> {
+    /// Starts capturing a dictation. A start while the previous dictation is transcribed and
+    /// pasted, a fraction of a second, waits for it in the worker's queue, so a quick re-press is
+    /// not lost; one during a slower cleanup is refused.
+    pub(crate) fn start(&self, trigger: RecordingTrigger) -> Result<(), AppError> {
         {
             let state = self.state.lock();
             if !matches!(
@@ -216,7 +219,7 @@ impl Dictation {
         let accepted = matches!(
             self.state.lock().phase,
             Phase::Idle
-                | Phase::Error { .. }
+                | Phase::Error
                 | Phase::Recording { .. }
                 | Phase::Processing {
                     cleaning_up: false,
@@ -251,8 +254,7 @@ impl Dictation {
             ) {
                 return Err(not_recording());
             }
-            state.cancel = Some(CancelReason::User);
-            state.cancellation.cancel();
+            state.request_cancel(CancelReason::User);
         }
         self.send(Message::Cancel)
     }
@@ -261,13 +263,12 @@ impl Dictation {
     /// becomes `Paused` when it has.
     pub(crate) fn pause(&self) -> Result<(), AppError> {
         let busy = self.state.update(|state| match state.phase {
-            Phase::Idle | Phase::Error { .. } => {
+            Phase::Idle | Phase::Error => {
                 state.phase = Phase::Paused;
                 Ok(false)
             }
             Phase::Recording { .. } | Phase::Processing { .. } => {
-                state.cancel = Some(CancelReason::Pause);
-                state.cancellation.cancel();
+                state.request_cancel(CancelReason::Pause);
                 Ok(true)
             }
             Phase::Paused => Err(AppError::new(
@@ -306,11 +307,9 @@ impl Dictation {
     }
 
     pub(super) fn begin_data_clear(&self) -> Result<DataClear<'_>, AppError> {
-        let previous_phase = self.state.update(|state| {
-            state.phase.require_idle()?;
-            state.require_no_downloads()?;
-            Ok(std::mem::replace(&mut state.phase, Phase::ClearingData))
-        })?;
+        let previous_phase = self
+            .state
+            .update(|state| state.enter(Phase::ClearingData))?;
         let clear = DataClear {
             state: &self.state,
             previous_phase,
@@ -354,8 +353,7 @@ impl Dictation {
         {
             let mut state = self.state.lock();
             if state.phase.is_busy() {
-                state.cancel = Some(CancelReason::Shutdown);
-                state.cancellation.cancel();
+                state.request_cancel(CancelReason::Shutdown);
             }
         }
         let _worker_stopped = self.sender.send(Message::Shutdown);
@@ -422,7 +420,7 @@ impl Worker {
             match message {
                 Message::Start { trigger, reply } => match self.start(trigger) {
                     Ok(recording) => {
-                        let _caller_left = reply.send(Ok(recording.session));
+                        let _caller_left = reply.send(Ok(()));
                         self.prepare_model(recording);
                     }
                     Err(error) => {
@@ -463,7 +461,6 @@ impl Worker {
     }
 
     fn start(&mut self, trigger: RecordingTrigger) -> Result<Recording, AppError> {
-        self.parts.state.lock().phase.require_idle()?;
         let RecordingSettings {
             input_device: device,
             dictation: settings,
@@ -476,13 +473,6 @@ impl Worker {
         self.next_session += 1;
         let session = self.next_session;
         let cancellation = CancellationToken::default();
-        let sink = Arc::new(RecordingSink::new(
-            session,
-            self.sender.clone(),
-            self.parts.state.events().clone(),
-            MAX_RECORDING_SAMPLES,
-            SpeechSegmenter::new((self.parts.voice_activity)(), model.definition.family()),
-        ));
         let previous_phase = self.parts.state.update(|state| {
             state.phase.require_idle()?;
             let previous_phase =
@@ -491,6 +481,13 @@ impl Worker {
             state.cancellation = cancellation.clone();
             Ok(previous_phase)
         })?;
+        let sink = Arc::new(RecordingSink::new(
+            session,
+            self.sender.clone(),
+            self.parts.state.events().clone(),
+            MAX_RECORDING_SAMPLES,
+            SpeechSegmenter::new((self.parts.voice_activity)(), model.definition.family()),
+        ));
         let capture = match self
             .parts
             .audio
@@ -498,20 +495,15 @@ impl Worker {
         {
             Ok(capture) => capture,
             Err(error) => {
-                self.parts.state.apply(|state| {
-                    state.phase = if state.cancel == Some(CancelReason::Pause) {
-                        Phase::Paused
-                    } else {
-                        previous_phase
-                    };
-                    state.cancel = None;
-                });
+                self.parts
+                    .state
+                    .apply(|state| state.end_dictation(previous_phase));
                 return Err(capture_start_error(&error));
             }
         };
         self.parts.state.apply(|state| {
             state.last_error = None;
-            state.download_failures = 0;
+            state.download_failed = false;
             // A setup test reports to setup alone and leaves the last transcript.
             if trigger.is_setup_test() {
                 state.setup_test = None;
@@ -597,7 +589,7 @@ impl Worker {
             tracing::warn!("audio capture could not be stopped cleanly");
         }
         let CapturedSpeech { samples, .. } = recording.sink.take();
-        let outcome = self.cancelled(&recording, &samples, has_microphone_audio(&samples));
+        let outcome = self.cancelled(&recording, &samples);
         self.finish(recording.trigger, outcome);
         tracing::info!(trigger = ?recording.trigger, "recording cancelled");
     }
@@ -606,12 +598,10 @@ impl Worker {
         let stopped = recording.stop_capture();
         let CapturedSpeech { samples, segments } = recording.sink.take();
         let samples = Arc::<[f32]>::from(samples);
-        let has_audio = has_microphone_audio(&samples);
         if stopped.is_err() {
             return self.failed_with_audio(
                 recording,
                 &samples,
-                has_audio,
                 AppError::new(
                     ErrorCategory::Audio,
                     "audio_stop",
@@ -620,32 +610,26 @@ impl Worker {
             );
         }
         if recording.cancellation.is_cancelled() {
-            return self.cancelled(recording, &samples, has_audio);
+            return self.cancelled(recording, &samples);
         }
-        if !has_audio {
-            return self.pipeline_failure(
-                recording,
-                &samples,
-                has_audio,
-                PipelineFailureKind::NoAudio,
-            );
+        if !has_microphone_audio(&samples) {
+            return self.pipeline_failure(recording, &samples, PipelineFailureKind::NoAudio);
         }
         // Every segment decodes or the dictation fails: a transcript never has a silent gap.
         let decoded = match self.decode_rest(recording, &samples, &segments) {
             Ok(decoded) => decoded,
-            Err(DecodeFailure::Cancelled) => return self.cancelled(recording, &samples, has_audio),
+            Err(DecodeFailure::Cancelled) => return self.cancelled(recording, &samples),
             Err(DecodeFailure::Failed) => {
                 tracing::warn!("speech recognition failed; retrying once on the same audio");
                 match self.decode_all(recording, &samples, &segments) {
                     Ok(decoded) => decoded,
                     Err(DecodeFailure::Cancelled) => {
-                        return self.cancelled(recording, &samples, has_audio);
+                        return self.cancelled(recording, &samples);
                     }
                     Err(DecodeFailure::Failed) => {
                         return self.pipeline_failure(
                             recording,
                             &samples,
-                            has_audio,
                             PipelineFailureKind::RecognitionFailed,
                         );
                     }
@@ -655,7 +639,7 @@ impl Worker {
         let settings = recording.settings.clone();
         let mut prepared = match prepare_segmented(&decoded, &settings.vocabulary) {
             Ok(prepared) => prepared,
-            Err(kind) => return self.pipeline_failure(recording, &samples, has_audio, kind),
+            Err(kind) => return self.pipeline_failure(recording, &samples, kind),
         };
         if let Some(plan) = &settings.cleanup {
             self.parts.state.apply(|state| {
@@ -666,7 +650,7 @@ impl Worker {
                 .apply(&mut prepared, plan, &recording.cancellation);
         }
         if recording.cancellation.is_cancelled() {
-            return self.cancelled(recording, &samples, has_audio);
+            return self.cancelled(recording, &samples);
         }
         if recording.trigger.is_setup_test() {
             return Outcome::Heard(prepared.final_text);
@@ -681,23 +665,7 @@ impl Worker {
         samples: &[f32],
         prepared: PreparedTranscription,
     ) -> Outcome {
-        let history = self.parts.history.insert(
-            NewHistoryEntry {
-                created_at: recording.started_at,
-                duration_millis: Some(capture_duration_millis(samples)),
-                raw_text: Some(prepared.raw_text.clone()),
-                cleaned_text: (prepared.final_text != prepared.raw_text)
-                    .then(|| prepared.final_text.clone()),
-                status: EntryStatus::Ok,
-                error: None,
-                asr_model_id: Some(recording.settings.model_id.clone()),
-            },
-            samples,
-            recording.settings.keep_audio,
-            recording.settings.history_limit,
-            recording.settings.history_retention,
-        );
-        self.history_changed();
+        let history = self.save_entry(recording, samples, EntryStatus::Ok, None, Some(&prepared));
         let notice = self
             .parts
             .output
@@ -705,7 +673,7 @@ impl Worker {
         let (delivery_failure, delivery_error) = notice.failure();
         if let (Some(reason), Ok(entry)) = (delivery_failure, &history) {
             match self.parts.history.mark_not_delivered(*entry, reason) {
-                Ok(()) => self.history_changed(),
+                Ok(()) => self.parts.state.events().history_changed(),
                 Err(error) => {
                     tracing::warn!(code = error.code, "the paste failure was not recorded");
                 }
@@ -726,13 +694,6 @@ impl Worker {
             failure: delivery_error,
             warning,
         }
-    }
-
-    fn history_changed(&self) {
-        self.parts
-            .state
-            .events()
-            .publish(EventPayload::HistoryChanged);
     }
 
     /// Decodes the segments a pause ended while capture continues.
@@ -896,12 +857,10 @@ impl Worker {
             self.deferred_update = Some(reply);
             return;
         }
-        let begun = self.parts.state.update(|state| {
-            state.phase.require_idle()?;
-            state.require_no_downloads()?;
-            state.phase = Phase::Updating;
-            Ok(())
-        });
+        let begun = self
+            .parts
+            .state
+            .update(|state| state.enter(Phase::Updating).map(drop));
         let _caller_left = reply.send(begun);
     }
 }

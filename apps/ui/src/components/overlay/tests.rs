@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use whispernow_domain::AppError;
 use whispernow_domain::RecordingMode;
 use whispernow_domain::ipc::{
-    ErrorCategory, EventPayload, MainWindowSection, Phase, RecordingTrigger,
+    AppState, ErrorCategory, EventPayload, MainWindowSection, Phase, RecordingTrigger,
 };
 
 use serde_json::Value;
@@ -21,10 +21,8 @@ fn Surface(initial_state: UiState, probe: Probe) -> Element {
     rsx! { RecordingBar {} }
 }
 
-fn phase_event(phase: Phase) -> EventPayload {
-    EventPayload::StateChanged {
-        state: snapshot(phase),
-    }
+fn state_changed(state: AppState) -> EventPayload {
+    EventPayload::StateChanged { state }
 }
 
 fn level(rms: f32, peak: f32, elapsed_ms: u64) -> EventPayload {
@@ -35,40 +33,49 @@ fn level(rms: f32, peak: f32, elapsed_ms: u64) -> EventPayload {
     }
 }
 
-const fn listening(mode: RecordingMode) -> Phase {
-    Phase::Recording {
+fn listening(mode: RecordingMode) -> AppState {
+    snapshot(Phase::Recording {
         trigger: match mode {
             RecordingMode::Hold => RecordingTrigger::Hold,
             RecordingMode::Toggle => RecordingTrigger::Toggle,
         },
         session: 1,
-    }
+    })
 }
 
 const TRANSCRIBING: Phase = Phase::Processing { cleaning_up: false };
 
-fn failed(category: ErrorCategory) -> Phase {
-    Phase::Error {
-        error: AppError::new(category, "fixture", "The microphone stopped responding"),
+fn transcribing() -> AppState {
+    snapshot(TRANSCRIBING)
+}
+
+fn failed(category: ErrorCategory) -> AppState {
+    AppState {
+        error: Some(AppError::new(
+            category,
+            "fixture",
+            "The microphone stopped responding",
+        )),
+        ..snapshot(Phase::Error)
     }
 }
 
-/// The overlay in `phase`; a recording has delivered samples when `levels`.
-fn state_with(phase: Phase, levels: bool) -> UiState {
+/// The overlay showing `shown`; a recording has delivered samples when `levels`.
+fn state_with(shown: AppState, levels: bool) -> UiState {
     let mut state = UiState {
         recording_bar: true,
         ..UiState::default()
     };
-    let recording = matches!(phase, Phase::Recording { .. });
-    state.hydrate(snapshot(phase));
+    let recording = matches!(shown.phase, Phase::Recording { .. });
+    state.hydrate(shown);
     if recording && levels {
         state.apply_event(level(0.0, 0.0, 0));
     }
     state
 }
 
-fn state_in(phase: Phase) -> UiState {
-    state_with(phase, true)
+fn state_in(shown: AppState) -> UiState {
+    state_with(shown, true)
 }
 
 fn render(state: UiState) -> String {
@@ -188,10 +195,10 @@ const OUTCOME: Expected = Expected {
     meter: false,
 };
 
-fn phase_cases() -> [(Phase, bool, Expected); 9] {
+fn phase_cases() -> [(AppState, bool, Expected); 9] {
     [
         (
-            Phase::Idle,
+            snapshot(Phase::Idle),
             true,
             Expected {
                 status: "",
@@ -210,10 +217,10 @@ fn phase_cases() -> [(Phase, bool, Expected); 9] {
         ),
         (listening(RecordingMode::Hold), true, CAPTURING),
         (
-            Phase::Recording {
+            snapshot(Phase::Recording {
                 trigger: RecordingTrigger::SetupTest,
                 session: 1,
-            },
+            }),
             true,
             Expected {
                 stop: true,
@@ -229,7 +236,7 @@ fn phase_cases() -> [(Phase, bool, Expected); 9] {
             },
         ),
         (
-            TRANSCRIBING,
+            transcribing(),
             true,
             Expected {
                 status: "Transcribing…",
@@ -238,7 +245,7 @@ fn phase_cases() -> [(Phase, bool, Expected); 9] {
             },
         ),
         (
-            Phase::Processing { cleaning_up: true },
+            snapshot(Phase::Processing { cleaning_up: true }),
             true,
             Expected {
                 status: "Cleaning up…",
@@ -260,8 +267,9 @@ fn phase_cases() -> [(Phase, bool, Expected); 9] {
 
 #[test]
 fn each_phase_renders_its_status_and_only_its_own_actions() {
-    for (phase, levels, expected) in phase_cases() {
-        let html = render(state_with(phase.clone(), levels));
+    for (shown, levels, expected) in phase_cases() {
+        let phase = (shown.phase.clone(), shown.error.clone());
+        let html = render(state_with(shown, levels));
         assert_eq!(announcement(&html), expected.status, "{phase:?}");
         assert_eq!(
             accessible_name(&html, "overlay-close").as_deref(),
@@ -322,7 +330,7 @@ fn levels_jump_up_settle_down_and_stay_bounded_only_while_capturing() {
     state.apply_event(level(1.0, 1.0, 10));
     assert!(!render(state.clone()).contains("role=\"timer\""));
 
-    state.apply_event(phase_event(listening(RecordingMode::Hold)));
+    state.apply_event(state_changed(listening(RecordingMode::Hold)));
     state.apply_event(level(1.0, 1.0, 33));
     let first = state.overlay.levels[8];
     assert!(first > 0.0, "one loud reading shows at once: {first}");
@@ -349,7 +357,7 @@ fn levels_jump_up_settle_down_and_stay_bounded_only_while_capturing() {
     state.apply_event(level(0.0, 0.0, 65_000));
     assert_eq!(format_elapsed(state.overlay.elapsed_ms), "1:05");
 
-    state.apply_event(phase_event(TRANSCRIBING));
+    state.apply_event(state_changed(transcribing()));
     let frozen = state.overlay.levels.map(f32::to_bits);
     state.apply_event(level(1.0, 1.0, 70_000));
     assert_eq!(
@@ -392,7 +400,7 @@ fn a_late_hydration_never_replaces_a_newer_phase() {
         recording_bar: true,
         ..UiState::default()
     };
-    state.apply_event(phase_event(TRANSCRIBING));
+    state.apply_event(state_changed(transcribing()));
     state.hydrate(snapshot(Phase::Idle));
     assert_eq!(
         state.snapshot.as_ref().map(|snapshot| &snapshot.phase),
@@ -436,7 +444,7 @@ fn last_request(command: &str) -> Value {
 
 #[test]
 fn a_pending_settings_save_leaves_recording_cancellation_available() {
-    let mut bar = mount_bar(state_in(Phase::Idle));
+    let mut bar = mount_bar(state_in(snapshot(Phase::Idle)));
     bar.act(|mut actions| {
         actions
             .management
@@ -448,7 +456,7 @@ fn a_pending_settings_save_leaves_recording_cancellation_available() {
             settings.theme = whispernow_domain::ThemePreference::Dark;
         });
     });
-    show(&mut bar, phase_event(listening(RecordingMode::Toggle)));
+    show(&mut bar, state_changed(listening(RecordingMode::Toggle)));
     assert!(bar.context().management.read().settings_pending());
     assert!(enabled(&bar, "overlay-close"));
     bar.click("overlay-close");
@@ -472,7 +480,7 @@ fn controls_send_the_overlay_commands_and_wait_for_them() {
             Value::Null,
         ),
         (
-            TRANSCRIBING,
+            transcribing(),
             "overlay-close",
             "cancel_recording",
             Value::Null,
@@ -508,8 +516,9 @@ fn controls_send_the_overlay_commands_and_wait_for_them() {
             open(MainWindowSection::AiCleanup),
         ),
     ];
-    for (phase, target, command, request) in cases {
-        let mut bar = mount_bar(state_in(phase.clone()));
+    for (shown, target, command, request) in cases {
+        let phase = (shown.phase.clone(), shown.error.clone());
+        let mut bar = mount_bar(state_in(shown));
         bar.click(target);
         assert_eq!(fake::commands(), [command], "{phase:?} {target}");
         assert_eq!(last_request(command), request, "{phase:?} {target}");
@@ -524,13 +533,13 @@ fn controls_send_the_overlay_commands_and_wait_for_them() {
 fn a_pending_stop_leaves_cancel_and_the_published_failure_usable() {
     let mut bar = mount_bar(state_in(listening(RecordingMode::Toggle)));
     bar.click("overlay-stop");
-    show(&mut bar, phase_event(TRANSCRIBING));
+    show(&mut bar, state_changed(transcribing()));
     assert!(enabled(&bar, "overlay-close"), "cancel stays usable");
     bar.click("overlay-close");
     assert_eq!(fake::commands(), ["stop_recording", "cancel_recording"]);
     assert!(!enabled(&bar, "overlay-close"), "one cancel at a time");
 
-    show(&mut bar, phase_event(failed(ErrorCategory::Output)));
+    show(&mut bar, state_changed(failed(ErrorCategory::Output)));
     assert!(enabled(&bar, "overlay-action"));
     assert!(enabled(&bar, "overlay-close"));
     bar.click("overlay-action");
@@ -603,7 +612,7 @@ fn a_failed_overlay_action_is_announced_until_the_next_phase() {
     );
     assert_eq!(announced(&bar), "History could not be opened");
 
-    show(&mut bar, phase_event(listening(RecordingMode::Toggle)));
+    show(&mut bar, state_changed(listening(RecordingMode::Toggle)));
     assert_eq!(announced(&bar), "Starting…");
 }
 
@@ -614,10 +623,10 @@ fn a_failure_closes_on_its_own_unless_a_newer_phase_came_first() {
     assert_eq!(fake::commands(), ["dismiss_recording_overlay"]);
 
     let mut bar = mount_bar(state_in(failed(ErrorCategory::General)));
-    show(&mut bar, phase_event(listening(RecordingMode::Hold)));
+    show(&mut bar, state_changed(listening(RecordingMode::Hold)));
     bar.wait();
     assert!(fake::commands().is_empty(), "a new recording keeps its bar");
-    show(&mut bar, phase_event(failed(ErrorCategory::General)));
+    show(&mut bar, state_changed(failed(ErrorCategory::General)));
     bar.wait();
     assert_eq!(fake::commands(), ["dismiss_recording_overlay"]);
 }

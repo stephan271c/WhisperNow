@@ -36,7 +36,7 @@ impl NativeServices {
         let plan = self.paths.clear_plan(categories).map_err(inspect_error)?;
         let history_item = categories.contains(&ClearDataCategory::History).then(|| {
             let item = self.history.clear_data(&plan);
-            self.publish_history_changed();
+            self.state.events().history_changed();
             item
         });
         let other_categories: Vec<_> = categories
@@ -106,7 +106,7 @@ impl NativeServices {
             }
             state.last_transcript = None;
             state.last_error = credential_warning;
-            state.download_failures = 0;
+            state.download_failed = false;
         });
         Ok(ClearDataResult {
             items: result_items,

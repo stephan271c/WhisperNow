@@ -166,8 +166,7 @@ fn select_another_speech_model(services: &NativeServices) -> ModelId {
         fs::write(path, b"fixture").expect("model artifact");
     }
     services
-        .models
-        .select(model.id.clone(), &services.settings, &services.dictation)
+        .select_model(model.id.clone())
         .expect("select model");
     model.id.clone()
 }
@@ -317,7 +316,6 @@ fn clearing_every_category_reports_files_and_unavailable_credentials_separately(
         assert_eq!(
             services
                 .settings
-                .api_keys()
                 .api_key(LlmProvider::OpenAi)
                 .expect("read key")
                 .is_some(),
@@ -364,16 +362,14 @@ fn inspection_failure_preserves_history_and_restores_the_previous_phase() {
     let saved_config = services.paths.config_dir().with_extension("kept");
     fs::rename(services.paths.config_dir(), &saved_config).expect("move configuration aside");
     fs::write(services.paths.config_dir(), b"not a directory").expect("obstruct inspection");
-    let previous_phase = Phase::Error {
-        error: whispernow_domain::AppError::new(
+    services.state.apply(|state| {
+        state.phase = Phase::Error;
+        state.last_error = Some(whispernow_domain::AppError::new(
             ErrorCategory::Output,
             "paste_failed",
             "Copy from History",
-        ),
-    };
-    services
-        .state
-        .apply(|state| state.phase = previous_phase.clone());
+        ));
+    });
 
     let result = services.clear_data(&[ClearDataCategory::History]);
 
@@ -383,8 +379,34 @@ fn inspection_failure_preserves_history_and_restores_the_previous_phase() {
         result.expect_err("inspection refused").code,
         "clear_data_inspect"
     );
-    assert_eq!(services.state.snapshot().phase, previous_phase);
+    let snapshot = services.state.snapshot();
+    assert_eq!(snapshot.phase, Phase::Error);
+    assert_eq!(
+        snapshot.error.map(|error| error.code),
+        Some("paste_failed".to_owned())
+    );
     assert_retained(&services, &entry, &audio);
+    services.request_shutdown();
+    services.shutdown();
+}
+
+#[test]
+fn a_clear_that_resets_the_last_error_ends_the_failed_phase() {
+    let (services, _root) = native_services(Fixture::new());
+    services.state.apply(|state| {
+        state.phase = Phase::Error;
+        state.last_error = Some(whispernow_domain::AppError::new(
+            ErrorCategory::Output,
+            "paste_failed",
+            "Copy from History",
+        ));
+    });
+
+    services.clear_data(&[]).expect("clear selected data");
+
+    let snapshot = services.state.snapshot();
+    assert_eq!(snapshot.phase, Phase::Idle);
+    assert_eq!(snapshot.error, None);
     services.request_shutdown();
     services.shutdown();
 }

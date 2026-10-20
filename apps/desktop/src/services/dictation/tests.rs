@@ -21,12 +21,12 @@ use whispernow_core::{
 };
 use whispernow_domain::ipc::{AudioDevice, ErrorCategory, SetApiKeyRequest};
 use whispernow_domain::{
-    ApiKey, EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, LlmProvider, ModelId,
-    ModelRegistry, Settings,
+    ApiKey, AppError, EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, LlmProvider,
+    ModelId, ModelRegistry, Settings,
 };
 use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore, SettingsStore};
 
-use super::{AiCleanup, Dictation, DictationParts};
+use super::{AiCleanup, Dictation, DictationParts, Message};
 
 mod clear_data;
 mod lifecycle;
@@ -320,6 +320,14 @@ impl Fixture {
         (started, release)
     }
 
+    fn settled_error(&self) -> AppError {
+        assert_eq!(self.settled(), Phase::Error);
+        self.state
+            .snapshot()
+            .error
+            .expect("a failed dictation shows its error")
+    }
+
     /// Waits until no dictation is in flight and returns the phase it ended in.
     fn settled(&self) -> Phase {
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -346,12 +354,28 @@ impl Fixture {
     fn pasted(&self) -> Vec<String> {
         self.output.pasted.lock().expect("pasted").clone()
     }
-}
 
-fn error_code(phase: &Phase) -> &str {
-    match phase {
-        Phase::Error { error } => &error.code,
-        other => panic!("expected an error phase, got {other:?}"),
+    fn remove_models(&self) {
+        let paths = AppPaths::from_base_dirs(
+            self.root.path().join("config"),
+            self.root.path().join("data"),
+        );
+        fs::remove_dir_all(paths.models_dir()).expect("remove the models");
+    }
+
+    fn queued_start_error(&self) -> AppError {
+        let (reply, answer) = mpsc::channel();
+        self.dictation
+            .sender
+            .send(Message::Start {
+                trigger: RecordingTrigger::Toggle,
+                reply,
+            })
+            .expect("queue the start");
+        answer
+            .recv_timeout(Duration::from_secs(10))
+            .expect("start replied")
+            .expect_err("start refused")
     }
 }
 
@@ -379,13 +403,14 @@ fn a_dictation_is_transcribed_saved_and_pasted() {
 fn vocabulary_that_empties_a_transcript_clears_the_last_transcript() {
     let fixture = Fixture::new();
     fixture.state.lock().last_transcript = Some("earlier dictation".to_owned());
-    let mut settings = fixture.settings.load();
-    settings.vocabulary_replacements = vec![whispernow_domain::VocabularyReplacement::new(
-        TRANSCRIPT, " ",
-    )];
     fixture
         .settings
-        .save(&mut fixture.settings.lock(), settings)
+        .edit(|settings| {
+            settings.vocabulary_replacements = vec![whispernow_domain::VocabularyReplacement::new(
+                TRANSCRIPT, " ",
+            )];
+            Ok(())
+        })
         .expect("save vocabulary");
     fixture.start();
     fixture.dictation.stop().expect("stop");
@@ -539,6 +564,40 @@ fn a_start_during_transcription_waits_and_records_next() {
 }
 
 #[test]
+fn a_start_while_paused_is_refused_even_when_the_model_is_missing() {
+    let fixture = Fixture::new();
+    fixture.flush();
+    fixture.remove_models();
+    fixture.dictation.pause().expect("pause");
+
+    let refused = fixture
+        .dictation
+        .start(RecordingTrigger::Toggle)
+        .expect_err("paused");
+    assert_eq!(refused.code, "application_paused");
+    fixture
+        .dictation
+        .shortcut_pressed(RecordingTrigger::Toggle)
+        .expect("a dropped press");
+    fixture.flush();
+    let snapshot = fixture.state.snapshot();
+    assert_eq!(snapshot.phase, Phase::Paused);
+    assert!(snapshot.error.is_none());
+}
+
+#[test]
+fn a_queued_start_that_reaches_a_paused_worker_reports_a_missing_model_before_the_pause() {
+    let fixture = Fixture::new();
+    fixture.flush();
+    fixture.dictation.pause().expect("pause");
+
+    assert_eq!(fixture.queued_start_error().code, "application_paused");
+    fixture.remove_models();
+    assert_eq!(fixture.queued_start_error().code, "model_not_installed");
+    assert_eq!(fixture.state.snapshot().phase, Phase::Paused);
+}
+
+#[test]
 fn a_failed_decode_is_retried_once_on_the_same_audio() {
     let fixture = Fixture::new();
     fixture.script.failures.store(1, Ordering::SeqCst);
@@ -558,8 +617,7 @@ fn a_decode_that_fails_twice_keeps_the_audio_as_a_failed_entry() {
     fixture.start();
     fixture.dictation.stop().expect("stop");
 
-    let phase = fixture.settled();
-    assert_eq!(error_code(&phase), "transcription_failed");
+    assert_eq!(fixture.settled_error().code, "transcription_failed");
     assert!(fixture.pasted().is_empty());
     let history = fixture.history();
     assert_eq!(history.len(), 1);
@@ -578,12 +636,12 @@ fn a_decode_that_fails_twice_keeps_the_audio_as_a_failed_entry() {
 
 impl Fixture {
     fn enable_cleanup(&self) {
-        let mut current = self.settings.lock();
-        let mut saved = current.clone();
-        saved.cleanup_enabled = true;
-        saved.provider_settings_mut(LlmProvider::OpenAi).model = "gpt-test".to_owned();
         self.settings
-            .save(&mut current, saved)
+            .edit(|settings| {
+                settings.cleanup_enabled = true;
+                settings.provider_settings_mut(LlmProvider::OpenAi).model = "gpt-test".to_owned();
+                Ok(())
+            })
             .expect("save settings");
     }
 
@@ -656,21 +714,18 @@ fn a_saved_remote_api_key_reaches_the_cleanup_request() {
 #[test]
 fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
     let fixture = Fixture::new();
-    let saved = {
-        let mut current = fixture.settings.lock();
-        let mut saved = current.clone();
-        saved.cleanup_enabled = true;
-        saved.llm_provider = LlmProvider::LocalCleanup;
-        saved.vocabulary_replacements = vec![whispernow_domain::VocabularyReplacement::new(
-            "worker",
-            "WhisperNow team",
-        )];
-        fixture
-            .settings
-            .save(&mut current, saved.clone())
-            .expect("save settings");
-        saved
-    };
+    let saved = fixture
+        .settings
+        .edit(|settings| {
+            settings.cleanup_enabled = true;
+            settings.llm_provider = LlmProvider::LocalCleanup;
+            settings.vocabulary_replacements = vec![whispernow_domain::VocabularyReplacement::new(
+                "worker",
+                "WhisperNow team",
+            )];
+            Ok(settings.clone())
+        })
+        .expect("save settings");
     *fixture.provider.reply.lock().expect("reply") = Some("Hello from the WhisperNow team.");
     fixture.start();
     fixture.dictation.stop().expect("stop");
@@ -777,11 +832,8 @@ fn a_failed_paste_is_recorded_and_points_to_history() {
     fixture.start();
     fixture.dictation.stop().expect("stop");
 
-    let phase = fixture.settled();
-    assert_eq!(error_code(&phase), "paste_failed");
-    let Phase::Error { error } = &phase else {
-        unreachable!("checked above")
-    };
+    let error = fixture.settled_error();
+    assert_eq!(error.code, "paste_failed");
     assert_eq!(error.category, ErrorCategory::Output);
 
     assert_eq!(
@@ -862,8 +914,7 @@ fn a_recording_without_speech_pastes_and_saves_nothing() {
         fixture.start();
         fixture.dictation.stop().expect("stop");
 
-        let phase = fixture.settled();
-        assert_eq!(error_code(&phase), code);
+        assert_eq!(fixture.settled_error().code, code);
         assert!(fixture.pasted().is_empty(), "{code}");
         assert!(fixture.history().is_empty(), "{code}");
         assert_eq!(fixture.script.decodes.load(Ordering::SeqCst), 0, "{code}");
@@ -876,10 +927,11 @@ fn a_paste_without_permission_points_to_the_settings() {
     fixture.start();
     fixture.dictation.stop().expect("stop");
 
-    let Phase::Error { error } = fixture.settled() else {
-        panic!("a refused paste is an error")
-    };
-    assert_eq!(error.category, ErrorCategory::Settings);
+    assert_eq!(
+        fixture.settled_error().category,
+        ErrorCategory::Settings,
+        "a refused paste is an error"
+    );
 
     assert_eq!(
         fixture.state.lock().last_transcript.as_deref(),

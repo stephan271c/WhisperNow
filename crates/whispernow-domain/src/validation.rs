@@ -55,17 +55,25 @@ impl Settings {
     /// block the edit: settings saved by an older version, or before a provider changed its
     /// rules, still accept other changes and the change that repairs them.
     pub fn validate_update(&self, before: &Self) -> Result<(), SettingsError> {
+        let problems = self.problems();
+        if problems.is_empty() {
+            return Ok(());
+        }
         let existing = before.problems();
-        self.problems()
+        problems
             .into_iter()
             .find(|problem| !existing.contains(problem))
             .map_or(Ok(()), Err)
     }
 
-    /// Every rule the recording and cancel shortcuts break; none may be registered while
+    /// Whether the recording and cancel shortcuts break no rule; none may be registered while
     /// they break one.
     #[must_use]
-    pub fn shortcut_problems(&self) -> Vec<SettingsError> {
+    pub fn shortcuts_valid(&self) -> bool {
+        self.shortcut_problems().is_empty()
+    }
+
+    fn shortcut_problems(&self) -> Vec<SettingsError> {
         let mut problems = Vec::new();
         if !self.recording_shortcut.is_recording_shortcut() {
             problems.push(SettingsError::RecordingShortcut);

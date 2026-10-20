@@ -2,15 +2,17 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use whispernow_domain::AppError;
 
 use whispernow_core::audio::{AudioDeviceChoice, AudioDeviceId, AudioInput};
-use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest, SettingsView, SetupStateView};
-use whispernow_domain::{LlmProvider, SettingsError};
+use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest, SettingsView};
+use whispernow_domain::{ApiKey, LlmProvider, SettingsError};
 use whispernow_domain::{ModelId, Settings, SetupCheckpoint, SetupStep, WindowGeometry};
-use whispernow_platform::{ModelStore, SettingsNotice, SettingsStore};
+use whispernow_platform::{SettingsNotice, SettingsStore};
 
 use super::{
+    audio_devices_unavailable,
     dictation::{CleanupPlan, DictationSettings, RecordingSettings},
-    lock,
+    lock, setup_already_complete,
     state::StateCell,
+    unknown_model,
 };
 
 /// Owns settings persistence and serializes its writers.
@@ -38,20 +40,24 @@ impl SettingsCoordinator {
         lock(&self.current)
     }
 
-    pub(super) fn save(
+    /// Applies `change` to a copy of the saved settings. An edit that changed them is saved and
+    /// becomes the saved settings; a failed edit or save leaves them as they were.
+    pub(super) fn edit<R>(
         &self,
-        saved: &mut MutexGuard<'_, Settings>,
-        edited: Settings,
-    ) -> Result<(), AppError> {
-        self.persistence.save(&edited)?;
-        **saved = edited;
-        Ok(())
+        change: impl FnOnce(&mut Settings) -> Result<R, AppError>,
+    ) -> Result<R, AppError> {
+        let mut saved = self.lock();
+        let mut edited = saved.clone();
+        let result = change(&mut edited)?;
+        if edited != *saved {
+            self.persistence.save(&edited)?;
+            *saved = edited;
+        }
+        Ok(result)
     }
 
-    /// Where an LLM call reads its provider's API key when it is prepared, so settings
-    /// snapshots and recording start never wait on the OS credential store.
-    pub(crate) fn api_keys(&self) -> Arc<SettingsStore> {
-        Arc::clone(&self.persistence)
+    pub(crate) fn api_key(&self, provider: LlmProvider) -> Result<Option<ApiKey>, AppError> {
+        self.persistence.api_key(provider)
     }
 
     /// Deletes every provider's API key from the credential store. Returns whether the
@@ -103,6 +109,10 @@ impl SettingsCoordinator {
             .publish_error(AppError::new(ErrorCategory::General, code, summary));
     }
 
+    pub(super) fn input_device(&self) -> Result<AudioDeviceChoice, AppError> {
+        device_choice(self.lock().input_device.as_deref())
+    }
+
     /// Provider configurations in the snapshot carry no API key.
     pub(super) fn recording_settings(&self) -> Result<RecordingSettings, AppError> {
         let settings = self.load();
@@ -140,13 +150,10 @@ impl SettingsCoordinator {
     }
 
     pub(crate) fn save_window_geometry(&self, geometry: WindowGeometry) -> Result<(), AppError> {
-        let mut saved = self.lock();
-        let mut settings = saved.clone();
-        if settings.window_geometry == Some(geometry) {
-            return Ok(());
-        }
-        settings.window_geometry = Some(geometry);
-        self.save(&mut saved, settings)
+        self.edit(|settings| {
+            settings.window_geometry = Some(geometry);
+            Ok(())
+        })
     }
 
     /// Saves the settings the window edited, keeping what it does not edit: the providers
@@ -155,25 +162,25 @@ impl SettingsCoordinator {
     /// must be connected. Returns the settings before the edit with the saved view.
     pub(super) fn update(
         &self,
-        mut edited: Settings,
+        edited: Settings,
         audio: &dyn AudioInput,
     ) -> Result<(Settings, SettingsView), AppError> {
         let choice = device_choice(edited.input_device.as_deref())?;
-        let mut saved = self.lock();
-        let before = saved.clone();
-        edited.model_id.clone_from(&before.model_id);
-        edited.first_run_complete = before.first_run_complete;
-        edited.setup.clone_from(&before.setup);
-        edited.window_geometry = before.window_geometry;
-        edited.api_keys.clone_from(&before.api_keys);
-        edited
-            .validate_update(&before)
-            .map_err(|error| settings_error(&error))?;
-        if edited.input_device != before.input_device {
-            require_connected_device(audio, &choice)?;
-        }
-        self.save(&mut saved, edited)?;
-        Ok((before, SettingsView::new(&saved)))
+        self.edit(|settings| {
+            let before = std::mem::replace(settings, edited);
+            settings.model_id.clone_from(&before.model_id);
+            settings.first_run_complete = before.first_run_complete;
+            settings.setup.clone_from(&before.setup);
+            settings.window_geometry = before.window_geometry;
+            settings.api_keys.clone_from(&before.api_keys);
+            settings
+                .validate_update(&before)
+                .map_err(|error| settings_error(&error))?;
+            if settings.input_device != before.input_device {
+                require_connected_device(audio, &choice)?;
+            }
+            Ok((before, SettingsView::new(settings)))
+        })
     }
 
     pub(crate) fn set_api_key(&self, request: &SetApiKeyRequest) -> Result<SettingsView, AppError> {
@@ -186,11 +193,10 @@ impl SettingsCoordinator {
                     "The OS credential store is unavailable, so the API key was not saved",
                 )
             })?;
-        let mut saved = self.lock();
-        let mut settings = saved.clone();
-        settings.api_keys.insert(request.provider);
-        self.save(&mut saved, settings)?;
-        Ok(SettingsView::new(&saved))
+        self.edit(|settings| {
+            settings.api_keys.insert(request.provider);
+            Ok(SettingsView::new(settings))
+        })
     }
 
     pub(crate) fn clear_api_key(&self, provider: LlmProvider) -> Result<SettingsView, AppError> {
@@ -201,78 +207,53 @@ impl SettingsCoordinator {
                 "The OS credential store is unavailable, so the API key was not removed",
             )
         })?;
-        let mut saved = self.lock();
-        let mut settings = saved.clone();
-        settings.api_keys.remove(&provider);
-        self.save(&mut saved, settings)?;
-        Ok(SettingsView::new(&saved))
+        self.edit(|settings| {
+            settings.api_keys.remove(&provider);
+            Ok(SettingsView::new(settings))
+        })
     }
 
-    pub(crate) fn get_setup_state(&self) -> SetupStateView {
-        let settings = self.load();
-        SetupStateView {
-            first_run_complete: settings.first_run_complete,
-            checkpoint: settings.setup.unwrap_or_default(),
-        }
-    }
-
-    pub(crate) fn save_setup_checkpoint(
+    pub(super) fn save_setup_checkpoint(
         &self,
         checkpoint: SetupCheckpoint,
-        models: &ModelStore,
-    ) -> Result<SetupStateView, AppError> {
-        let mut saved = self.lock();
-        let mut settings = saved.clone();
-        if settings.first_run_complete {
-            return Err(AppError::new(
-                ErrorCategory::General,
-                "setup_already_complete",
-                "Setup has already finished",
-            ));
-        }
-        if models.definition(&checkpoint.model_id).is_err() {
-            return Err(AppError::new(
-                ErrorCategory::Model,
-                "unknown_model",
-                "The model is not supported",
-            ));
-        }
-        device_choice(checkpoint.input_device.as_deref())?;
-        settings.setup = Some(checkpoint.clone());
-        self.save(&mut saved, settings)?;
-        Ok(SetupStateView {
-            first_run_complete: saved.first_run_complete,
-            checkpoint,
+        model_supported: bool,
+    ) -> Result<SettingsView, AppError> {
+        self.edit(|settings| {
+            if settings.first_run_complete {
+                return Err(setup_already_complete());
+            }
+            if !model_supported {
+                return Err(unknown_model());
+            }
+            device_choice(checkpoint.input_device.as_deref())?;
+            settings.setup = Some(checkpoint);
+            Ok(SettingsView::new(settings))
         })
     }
 
     /// Starts first-run setup again from its first step. The checkpoint begins
     /// with the saved choices, and the saved settings stay in effect until setup
     /// finishes again.
-    pub(crate) fn restart_setup(&self) -> Result<SetupStateView, AppError> {
-        let mut saved = self.lock();
-        let mut settings = saved.clone();
-        if !settings.first_run_complete {
-            return Err(AppError::new(
-                ErrorCategory::General,
-                "setup_incomplete",
-                "Finish the remaining setup steps first",
-            ));
-        }
-        self.state.lock().phase.require_idle()?;
-        let checkpoint = SetupCheckpoint {
-            step: SetupStep::Welcome,
-            model_id: settings.model_id.clone(),
-            input_device: settings.input_device.clone(),
-            recording_shortcut: settings.recording_shortcut.clone(),
-            recording_mode: settings.recording_mode,
-        };
-        settings.setup = Some(checkpoint.clone());
-        settings.first_run_complete = false;
-        self.save(&mut saved, settings)?;
-        Ok(SetupStateView {
-            first_run_complete: false,
-            checkpoint,
+    pub(crate) fn restart_setup(&self) -> Result<SettingsView, AppError> {
+        self.edit(|settings| {
+            if !settings.first_run_complete {
+                return Err(AppError::new(
+                    ErrorCategory::General,
+                    "setup_incomplete",
+                    "Finish the remaining setup steps first",
+                ));
+            }
+            self.state.lock().phase.require_idle()?;
+            let checkpoint = SetupCheckpoint {
+                step: SetupStep::Welcome,
+                model_id: settings.model_id.clone(),
+                input_device: settings.input_device.clone(),
+                recording_shortcut: settings.recording_shortcut.clone(),
+                recording_mode: settings.recording_mode,
+            };
+            settings.setup = Some(checkpoint);
+            settings.first_run_complete = false;
+            Ok(SettingsView::new(settings))
         })
     }
 }
@@ -331,13 +312,9 @@ pub(super) fn require_connected_device(
     let AudioDeviceChoice::Device(id) = choice else {
         return Ok(());
     };
-    let devices = audio.list_input_devices().map_err(|_| {
-        AppError::new(
-            ErrorCategory::Audio,
-            "audio_devices",
-            "Audio input devices could not be listed",
-        )
-    })?;
+    let devices = audio
+        .list_input_devices()
+        .map_err(|_| audio_devices_unavailable())?;
     if devices.iter().any(|device| device.id == id.as_str()) {
         Ok(())
     } else {
@@ -350,10 +327,7 @@ pub(super) fn require_connected_device(
 }
 
 fn cleanup_plan(settings: &Settings) -> Option<CleanupPlan> {
-    if !settings.cleanup_enabled {
-        return None;
-    }
-    settings.cleanup_target().ok().map(|target| CleanupPlan {
+    settings.active_cleanup_target().map(|target| CleanupPlan {
         key_saved: settings.api_keys.contains(&settings.llm_provider),
         target,
     })
@@ -368,9 +342,10 @@ mod tests {
     };
     use whispernow_domain::ipc::{AudioDevice, SetApiKeyRequest};
     use whispernow_domain::{
-        ApiKey, ErrorCategory, LlmProvider, SetupCheckpoint, ThemePreference, VocabularyReplacement,
+        ApiKey, AppError, ErrorCategory, LlmProvider, SetupCheckpoint, ThemePreference,
+        VocabularyReplacement,
     };
-    use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore, SettingsStore};
+    use whispernow_platform::{AppPaths, MemoryCredentialStore, SettingsStore};
 
     use whispernow_domain::WindowGeometry;
 
@@ -440,7 +415,6 @@ mod tests {
 
         fn stored_key(&self) -> Option<String> {
             self.settings
-                .api_keys()
                 .api_key(LlmProvider::OpenAi)
                 .expect("readable key")
                 .map(|key| key.expose_secret().to_owned())
@@ -549,7 +523,6 @@ mod tests {
     #[test]
     fn malformed_explicit_microphone_updates_and_checkpoints_are_not_saved() {
         let fixture = Fixture::start();
-        let models = ModelStore::new(fixture.paths.clone());
         let before = fixture.settings.get();
         let mut edited = before.settings.clone();
         edited.input_device = Some(" ".to_owned());
@@ -568,7 +541,7 @@ mod tests {
         assert_eq!(
             fixture
                 .settings
-                .save_setup_checkpoint(checkpoint, &models)
+                .save_setup_checkpoint(checkpoint, true)
                 .expect_err("invalid checkpoint microphone")
                 .code,
             "audio_device_invalid"
@@ -627,6 +600,10 @@ mod tests {
                 .input_device,
             AudioDeviceChoice::SystemDefault
         );
+        assert_eq!(
+            fixture.settings.input_device().expect("input device"),
+            AudioDeviceChoice::SystemDefault
+        );
     }
 
     #[test]
@@ -642,12 +619,13 @@ mod tests {
             } else {
                 saved.input_device = Some(" ".to_owned());
             }
-            let mut current = fixture.settings.lock();
             fixture
                 .settings
-                .save(&mut current, saved)
+                .edit(|settings| {
+                    *settings = saved;
+                    Ok(())
+                })
                 .expect("hand-edited settings");
-            drop(current);
             let snapshot = if setup {
                 fixture.settings.setup_test_settings()
             } else {
@@ -657,52 +635,50 @@ mod tests {
                 panic!("invalid saved microphone accepted");
             };
             assert_eq!(error.code, "audio_device_invalid");
+            if !setup {
+                assert_eq!(
+                    fixture
+                        .settings
+                        .input_device()
+                        .expect_err("invalid saved microphone")
+                        .code,
+                    "audio_device_invalid"
+                );
+            }
         }
     }
 
-    #[cfg(unix)]
     #[test]
-    fn setup_checkpoints_do_not_scan_unrelated_installed_artifacts() {
-        use std::os::unix::fs::PermissionsExt as _;
-        use whispernow_domain::{ModelId, ModelRegistry};
-
+    fn an_edit_is_saved_only_when_it_changes_the_settings() {
         let fixture = Fixture::start();
-        let registry = ModelRegistry::builtin();
-        let other = registry
-            .speech_models()
-            .find(|model| model.id != ModelId::default())
-            .expect("another model");
-        let inaccessible = fixture.paths.models_dir().join(other.id.as_str());
-        fs::create_dir_all(&inaccessible).expect("unrelated installation");
-        fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o000))
-            .expect("inaccessible artifacts");
-        let models = ModelStore::new(fixture.paths.clone());
-        let scan = models.list();
-        let checkpoint = SetupCheckpoint::default();
-        let saved = fixture
-            .settings
-            .save_setup_checkpoint(checkpoint.clone(), &models);
-        fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o700))
-            .expect("restore artifacts access");
+        fixture.settings.edit(|_| Ok(())).expect("no change");
+        assert!(!fixture.paths.settings_file().exists());
 
-        assert!(
-            scan.is_err(),
-            "the unrelated installation cannot be scanned"
-        );
-        assert_eq!(saved.expect("supported checkpoint").checkpoint, checkpoint);
-        assert_eq!(fixture.settings.get().settings.setup, Some(checkpoint));
-        let unknown = SetupCheckpoint {
-            model_id: ModelId::new("unknown-model").expect("model id"),
-            ..SetupCheckpoint::default()
-        };
-        assert_eq!(
-            fixture
-                .settings
-                .save_setup_checkpoint(unknown, &models)
-                .expect_err("unsupported choice")
-                .code,
-            "unknown_model"
-        );
+        fixture
+            .settings
+            .edit(|settings| {
+                settings.theme = ThemePreference::Dark;
+                Ok(())
+            })
+            .expect("change");
+        assert!(fixture.paths.settings_file().exists());
+        assert_eq!(fixture.settings.load().theme, ThemePreference::Dark);
+    }
+
+    #[test]
+    fn a_refused_edit_leaves_the_settings_and_the_file_alone() {
+        let fixture = Fixture::start();
+        let error = fixture
+            .settings
+            .edit(|settings| {
+                settings.theme = ThemePreference::Dark;
+                Err::<(), _>(AppError::new(ErrorCategory::General, "refused", "refused"))
+            })
+            .expect_err("refused");
+
+        assert_eq!(error.code, "refused");
+        assert_eq!(fixture.settings.load().theme, ThemePreference::System);
+        assert!(!fixture.paths.settings_file().exists());
     }
 
     #[test]
@@ -806,7 +782,7 @@ mod tests {
         fs::write(fixture.paths.settings_file(), malformed).expect("hand edit");
 
         assert_eq!(fixture.settings.get().settings, before);
-        assert!(!fixture.settings.get_setup_state().first_run_complete);
+        assert!(!fixture.settings.load().first_run_complete);
         assert!(fixture.settings.recording_settings().is_ok());
         assert!(fixture.settings.setup_test_settings().is_ok());
         assert_eq!(

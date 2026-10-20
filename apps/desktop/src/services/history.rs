@@ -12,22 +12,16 @@ use whispernow_platform::{AppPaths, ClearPlan, SqliteHistoryRepository};
 
 pub(crate) struct HistoryStore {
     paths: AppPaths,
-    repository: Mutex<Result<SqliteHistoryRepository, AppError>>,
+    repository: Result<Mutex<SqliteHistoryRepository>, AppError>,
 }
 
 impl HistoryStore {
     pub(super) fn open(paths: AppPaths) -> (Self, Option<AppError>) {
         let (repository, diagnostic) = match SqliteHistoryRepository::open(&paths) {
-            Ok((repository, diagnostic)) => (Ok(repository), diagnostic),
+            Ok((repository, diagnostic)) => (Ok(Mutex::new(repository)), diagnostic),
             Err(error) => (Err(error.clone()), Some(error)),
         };
-        (
-            Self {
-                paths,
-                repository: Mutex::new(repository),
-            },
-            diagnostic,
-        )
+        (Self { paths, repository }, diagnostic)
     }
 
     /// Removes entries beyond a new `limit` or older than `retention`; returns whether any were
@@ -37,9 +31,7 @@ impl HistoryStore {
         limit: HistoryLimit,
         retention: HistoryRetention,
     ) -> Result<bool, AppError> {
-        self.lock()
-            .as_ref()
-            .map_err(Clone::clone)?
+        self.repository()?
             .prune(limit, retention)
             .map(|removed| removed > 0)
     }
@@ -54,54 +46,44 @@ impl HistoryStore {
         limit: HistoryLimit,
         retention: HistoryRetention,
     ) -> Result<EntryId, AppError> {
-        self.lock()
-            .as_mut()
-            .map_err(|error| error.clone())?
+        self.repository()?
             .insert(entry, audio, keep_audio, limit, retention)
     }
 
     /// Records that an entry's text never reached the focused application.
     pub(super) fn mark_not_delivered(&self, id: EntryId, error: &str) -> Result<(), AppError> {
-        self.lock()
-            .as_ref()
-            .map_err(Clone::clone)?
-            .mark_not_delivered(id, error)
+        self.repository()?.mark_not_delivered(id, error)
     }
 
     pub(super) fn list(&self, request: &HistoryPageRequest) -> Result<HistoryPage, AppError> {
-        self.lock().as_ref().map_err(Clone::clone)?.list(request)
+        self.repository()?.list(request)
     }
 
     /// One entry's kept audio as WAV bytes.
     pub(crate) fn audio(&self, id: EntryId) -> Result<Vec<u8>, AppError> {
-        self.lock()
-            .as_ref()
-            .map_err(Clone::clone)?
-            .audio(id)?
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCategory::NotFound,
-                    "history_audio_not_kept",
-                    "The audio for this dictation was not kept",
-                )
-            })
+        self.repository()?.audio(id)?.ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::NotFound,
+                "history_audio_not_kept",
+                "The audio for this dictation was not kept",
+            )
+        })
     }
 
     /// Deletes one entry; returns whether it existed.
     pub(super) fn delete(&self, id: EntryId) -> Result<bool, AppError> {
-        self.lock().as_ref().map_err(Clone::clone)?.delete(id)
+        self.repository()?.delete(id)
     }
 
     /// Deletes every entry; returns whether anything was removed.
     pub(super) fn clear(&self) -> Result<bool, AppError> {
-        self.lock().as_ref().map_err(Clone::clone)?.clear()
+        self.repository()?.clear()
     }
 
     /// The folder of kept audio, created when missing so it can be opened before the first
     /// recording is kept.
     pub(super) fn recordings_dir(&self) -> Result<PathBuf, AppError> {
-        let repository = self.lock();
-        repository.as_ref().map_err(Clone::clone)?;
+        let _repository = self.repository()?;
         let directory = self.paths.recordings_dir();
         std::fs::create_dir_all(&directory).map_err(|_| {
             AppError::new(
@@ -114,11 +96,11 @@ impl HistoryStore {
     }
 
     pub(super) fn clear_data(&self, plan: &ClearPlan) -> ClearDataItem {
-        let repository = self.lock();
+        let repository = self.repository();
         let cleared = repository
             .as_ref()
             .map_err(Clone::clone)
-            .and_then(SqliteHistoryRepository::clear)
+            .and_then(|repository| repository.clear())
             .inspect_err(|error| {
                 tracing::warn!(
                     code = error.code,
@@ -137,10 +119,11 @@ impl HistoryStore {
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, Result<SqliteHistoryRepository, AppError>> {
+    fn repository(&self) -> Result<MutexGuard<'_, SqliteHistoryRepository>, AppError> {
         self.repository
-            .lock()
-            .expect("history repository lock poisoned")
+            .as_ref()
+            .map(|repository| repository.lock().expect("history repository lock poisoned"))
+            .map_err(Clone::clone)
     }
 }
 

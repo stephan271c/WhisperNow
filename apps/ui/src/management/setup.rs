@@ -1,7 +1,7 @@
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
     AppState, PermissionKind, PermissionStatus, PermissionsResponse, SaveSettingsResponse,
-    SetupStateView, SetupTestResult,
+    SettingsView, SetupTestResult,
 };
 use whispernow_domain::{ModelAvailability, SetupCheckpoint, SetupStep};
 
@@ -32,44 +32,63 @@ fn permissions_settled(permissions: &PermissionsResponse) -> bool {
 }
 
 impl ManagementState {
-    pub fn edit_setup(&mut self, edit: impl FnOnce(&mut SetupCheckpoint)) {
+    /// Applies `edit` to the checkpoint setup shows and returns it; `None` while a settings save
+    /// is pending, which leaves the checkpoint as it was.
+    pub fn edit_setup(
+        &mut self,
+        edit: impl FnOnce(&mut SetupCheckpoint),
+    ) -> Option<SetupCheckpoint> {
         if self.settings_pending() {
-            return;
+            return None;
         }
         let setup = self
             .setup
             .as_mut()
             .expect("setup controls render after loading");
-        edit(&mut setup.checkpoint);
+        edit(setup);
+        Some(setup.clone())
     }
 
     #[must_use]
-    pub fn setup_checkpoint(&self) -> Option<&SetupCheckpoint> {
-        self.setup.as_ref().map(|setup| &setup.checkpoint)
+    pub fn checkpoint(&self) -> SetupCheckpoint {
+        self.setup
+            .clone()
+            .expect("setup controls render after loading")
     }
 
-    pub fn setup_move(&mut self, step: SetupStep) -> SetupCheckpoint {
-        let mut checkpoint = self
-            .setup
+    #[must_use]
+    pub fn setup_move(&self, step: SetupStep) -> SetupCheckpoint {
+        SetupCheckpoint {
+            step,
+            ..self.checkpoint()
+        }
+    }
+
+    #[must_use]
+    pub fn first_run_complete(&self) -> bool {
+        self.settings
             .as_ref()
-            .expect("setup controls render after loading")
-            .checkpoint
-            .clone();
-        checkpoint.step = step;
-        checkpoint
+            .is_some_and(|view| view.settings.first_run_complete)
+    }
+
+    /// The step first-run setup is on; `None` once it has finished, or before it loads.
+    #[must_use]
+    pub fn unfinished_setup_step(&self) -> Option<SetupStep> {
+        self.setup
+            .as_ref()
+            .filter(|_| !self.first_run_complete())
+            .map(|setup| setup.step)
     }
 
     /// Whether microphones may be listed: listing can ask for microphone access, so setup waits
     /// until it has moved past its permission step.
     #[must_use]
     pub fn may_list_devices(&self) -> bool {
-        self.setup.as_ref().is_some_and(|setup| {
-            setup.first_run_complete
-                || !matches!(
-                    setup.checkpoint.step,
-                    SetupStep::Welcome | SetupStep::Permissions
-                )
-        })
+        self.setup.is_some()
+            && !matches!(
+                self.unfinished_setup_step(),
+                Some(SetupStep::Welcome | SetupStep::Permissions)
+            )
     }
 
     #[must_use]
@@ -77,7 +96,7 @@ impl ManagementState {
         let Some(setup) = self.setup.as_ref() else {
             return false;
         };
-        match setup.checkpoint.step {
+        match setup.step {
             // The desktop checks the choices when setup finishes.
             SetupStep::Welcome | SetupStep::TryIt => true,
             SetupStep::Permissions => {
@@ -86,7 +105,7 @@ impl ManagementState {
             }
             // The download carries on in the background while setup moves on.
             SetupStep::Model => self.setup_model_ready() || model_downloading,
-            SetupStep::Shortcuts => setup.checkpoint.shortcuts_ready(),
+            SetupStep::Shortcuts => setup.shortcuts_ready(),
         }
     }
 
@@ -94,14 +113,19 @@ impl ManagementState {
     pub fn setup_model_ready(&self) -> bool {
         self.setup.as_ref().is_some_and(|setup| {
             self.models.iter().any(|model| {
-                model.id == setup.checkpoint.model_id
-                    && model.availability != ModelAvailability::NotInstalled
+                model.id == setup.model_id && model.availability != ModelAvailability::NotInstalled
             })
         })
     }
 
-    pub fn finish_setup_later(&mut self, response: SetupStateView) {
-        self.setup = Some(response);
+    /// Installs `view` and its checkpoint as the one setup shows; a fresh installation holds none.
+    pub fn install_setup(&mut self, view: SettingsView) {
+        self.setup = Some(view.settings.setup.clone().unwrap_or_default());
+        self.install_settings(view);
+    }
+
+    pub fn finish_setup_later(&mut self, view: SettingsView) {
+        self.install_setup(view);
         self.notify(
             Tone::Info,
             NoticeScope::Setup,
@@ -110,26 +134,19 @@ impl ManagementState {
     }
 
     /// Installs the fresh checkpoint of setup started again from Settings.
-    pub fn restart_setup(&mut self, response: SetupStateView) {
+    pub fn restart_setup(&mut self, view: SettingsView) {
         self.permissions = None;
         self.end_permission_watch();
         self.setup_test = None;
-        self.setup = Some(response);
+        self.install_setup(view);
     }
 
     pub fn finish_setup(&mut self, saved: SaveSettingsResponse) {
-        let SaveSettingsResponse {
-            settings: response,
-            warnings,
-        } = saved;
+        let SaveSettingsResponse { settings, warnings } = saved;
         if !warnings.is_empty() {
             self.notify_saved(NoticeScope::Setup, "Setup finished", &warnings);
         }
-        let first_run_complete = response.settings.first_run_complete;
-        self.install_settings(response);
-        if let Some(setup) = &mut self.setup {
-            setup.first_run_complete = first_run_complete;
-        }
+        self.install_settings(settings);
         self.end_permission_watch();
     }
 
@@ -171,9 +188,7 @@ impl ManagementState {
     }
 
     fn on_permissions_step(&self) -> bool {
-        self.setup.as_ref().is_some_and(|setup| {
-            !setup.first_run_complete && setup.checkpoint.step == SetupStep::Permissions
-        })
+        self.unfinished_setup_step() == Some(SetupStep::Permissions)
     }
 
     /// The test could not start, or its stop failed: the failure is its result, unless a

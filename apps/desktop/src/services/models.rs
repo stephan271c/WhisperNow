@@ -6,7 +6,7 @@ use std::{
 use whispernow_domain::AppError;
 
 use whispernow_core::{CancellationToken, ResolvedModel};
-use whispernow_domain::ipc::{ActiveDownload, ErrorCategory, ModelSummary, Phase};
+use whispernow_domain::ipc::{ActiveDownload, ErrorCategory, ModelSummary};
 use whispernow_domain::{DownloadPhase, ModelAvailability};
 use whispernow_domain::{ModelFamily, ModelId};
 use whispernow_platform::{
@@ -14,9 +14,9 @@ use whispernow_platform::{
 };
 
 use super::{
-    Dictation, lock,
-    settings::SettingsCoordinator,
+    NativeServices, lock,
     state::{DownloadTask, StateCell},
+    unknown_model,
 };
 
 /// The dictation worker owns the recognizer; selecting a model asks it to load the model.
@@ -100,9 +100,7 @@ impl ModelCoordinator {
         let _transition = self.transition();
         let token = CancellationToken::default();
         self.state.update(|state| {
-            if matches!(state.phase, Phase::ClearingData | Phase::Updating) {
-                state.phase.require_idle()?;
-            }
+            state.require_not_in_maintenance()?;
             if state.active_downloads.contains_key(model_id) {
                 return Err(AppError::new(
                     ErrorCategory::General,
@@ -111,7 +109,7 @@ impl ModelCoordinator {
                 ));
             }
             if state.active_downloads.is_empty() {
-                state.download_failures = 0;
+                state.download_failed = false;
             }
             state.active_downloads.insert(
                 model_id.clone(),
@@ -140,7 +138,7 @@ impl ModelCoordinator {
         let Ok(worker) = worker else {
             self.state.apply(|state| {
                 state.active_downloads.remove(model_id);
-                state.download_failures = state.download_failures.saturating_add(1);
+                state.download_failed = true;
             });
             return Err(AppError::new(
                 ErrorCategory::General,
@@ -167,39 +165,6 @@ impl ModelCoordinator {
         Ok(())
     }
 
-    /// Loads the model and then saves it as the selected one. A model that cannot load leaves
-    /// the saved selection as it was.
-    pub(crate) fn select(
-        &self,
-        model_id: ModelId,
-        settings: &SettingsCoordinator,
-        dictation: &Dictation,
-    ) -> Result<(), AppError> {
-        let _transition = self.transition();
-        {
-            let state = self.state.lock();
-            state.phase.require_idle()?;
-            state.require_no_downloads()?;
-        }
-        let resolved = installed(&self.store, &model_id)?;
-        if !resolved.definition.family().is_speech() {
-            return Err(AppError::new(
-                ErrorCategory::Model,
-                "model_not_speech",
-                "This model cleans up transcripts; choose a speech model",
-            ));
-        }
-        dictation.load_model(resolved)?;
-        let mut current = settings.lock();
-        let mut saved = current.clone();
-        if saved.model_id != model_id {
-            saved.model_id = model_id.clone();
-            settings.save(&mut current, saved)?;
-        }
-        self.state.apply(|state| state.selected_model_id = model_id);
-        Ok(())
-    }
-
     /// Checks that the requested model is a downloaded, inactive model and not the last usable
     /// one. The caller holds the model transition, so nothing changes that
     /// before the file is deleted.
@@ -218,13 +183,7 @@ impl ModelCoordinator {
         let target = models
             .iter()
             .find(|entry| entry.definition.id == *model_id)
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCategory::Model,
-                    "unknown_model",
-                    "The model is not supported",
-                )
-            })?;
+            .ok_or_else(unknown_model)?;
         if target.availability != ModelAvailability::Downloaded {
             return Err(AppError::new(
                 ErrorCategory::Model,
@@ -302,6 +261,30 @@ impl ModelCoordinator {
     }
 }
 
+impl NativeServices {
+    /// Loads the model and then saves it as the selected one. A model that cannot load leaves
+    /// the saved selection as it was.
+    pub(crate) fn select_model(&self, model_id: ModelId) -> Result<(), AppError> {
+        let _transition = self.models.transition();
+        self.state.lock().require_quiescent()?;
+        let resolved = installed(&self.models.store, &model_id)?;
+        if !resolved.definition.family().is_speech() {
+            return Err(AppError::new(
+                ErrorCategory::Model,
+                "model_not_speech",
+                "This model cleans up transcripts; choose a speech model",
+            ));
+        }
+        self.dictation.load_model(resolved)?;
+        self.settings.edit(|saved| {
+            saved.model_id.clone_from(&model_id);
+            Ok(())
+        })?;
+        self.state.apply(|state| state.selected_model_id = model_id);
+        Ok(())
+    }
+}
+
 pub(super) fn installed(store: &ModelStore, id: &ModelId) -> Result<ResolvedModel, AppError> {
     store
         .resolve(id)
@@ -321,7 +304,7 @@ pub(super) fn installed(store: &ModelStore, id: &ModelId) -> Result<ResolvedMode
         })
 }
 
-pub(super) fn model_list_error<E>(_error: E) -> AppError {
+fn model_list_error(_: ModelStoreError) -> AppError {
     AppError::new(
         ErrorCategory::Model,
         "model_list",
@@ -381,7 +364,7 @@ fn run_model_download(
     state.apply(|current| {
         current.active_downloads.remove(&model_id);
         if let Some(error) = completion_error {
-            current.download_failures = current.download_failures.saturating_add(1);
+            current.download_failed = true;
             current.last_error = Some(error);
         }
     });
@@ -424,9 +407,9 @@ mod tests {
     use whispernow_domain::{DEFAULT_CLEANUP_MODEL_ID, ModelId, ModelRegistry};
     use whispernow_platform::{AppPaths, DownloadTimeouts, LocalCleanupService, ModelStore};
 
-    use crate::services::{Fixture, RecordingTrigger, state::StateCell};
+    use crate::services::{Fixture, Phase, RecordingTrigger, state::StateCell};
 
-    use super::{ModelCoordinator, Phase, transfer_rate};
+    use super::{ModelCoordinator, transfer_rate};
 
     struct DownloadFixture {
         models: Arc<ModelCoordinator>,
@@ -511,7 +494,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.flush();
         let download = DownloadFixture::new(&fixture.state);
-        fixture.state.lock().download_failures = 3;
+        fixture.state.lock().download_failed = true;
         let transition = download.models.transition();
         let (started, starting) = mpsc::channel();
 
@@ -538,7 +521,7 @@ mod tests {
 
         assert_eq!(fixture.state.snapshot().phase, Phase::Updating);
         assert!(fixture.state.lock().active_downloads.is_empty());
-        assert_eq!(fixture.state.lock().download_failures, 3);
+        assert!(fixture.state.lock().download_failed);
         assert!(super::lock(&download.models.workers).is_empty());
     }
 
@@ -547,14 +530,14 @@ mod tests {
         let fixture = Fixture::new();
         fixture.flush();
         let download = DownloadFixture::new(&fixture.state);
-        fixture.state.lock().download_failures = 3;
+        fixture.state.lock().download_failed = true;
         download
             .models
             .download(&download.model_id)
             .expect("download admitted first");
         let mut connection = download.request();
 
-        assert_eq!(fixture.state.lock().download_failures, 0);
+        assert!(!fixture.state.lock().download_failed);
         assert_eq!(fixture.state.snapshot().active_downloads.len(), 1);
         assert_eq!(
             fixture
@@ -584,7 +567,7 @@ mod tests {
             .expect("release the pending response");
         download.models.shutdown_downloads();
         assert!(fixture.state.snapshot().active_downloads.is_empty());
-        assert_eq!(fixture.state.lock().download_failures, 0);
+        assert!(!fixture.state.lock().download_failed);
         assert!(fixture.state.snapshot().error.is_none());
         fixture
             .dictation
@@ -626,7 +609,7 @@ mod tests {
             Phase::Recording { .. }
         ));
         assert!(fixture.state.snapshot().active_downloads.is_empty());
-        assert_eq!(fixture.state.lock().download_failures, 0);
+        assert!(!fixture.state.lock().download_failed);
         assert!(fixture.state.snapshot().error.is_none());
         fixture.dictation.cancel().expect("cancel recording");
         fixture.flush();

@@ -5,7 +5,7 @@ pub use command_names::COMMAND_NAMES;
 
 use crate::{
     ApiKey, ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability, ModelFamily, ModelId,
-    Settings, SetupCheckpoint, SpeechBenchmark,
+    Settings, SpeechBenchmark,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -37,13 +37,6 @@ impl SettingsView {
 pub struct SaveSettingsResponse {
     pub settings: SettingsView,
     pub warnings: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupStateView {
-    pub first_run_complete: bool,
-    pub checkpoint: SetupCheckpoint,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -297,7 +290,7 @@ pub struct AppState {
     pub selected_model_id: ModelId,
     pub model_state: ModelState,
     pub last_transcript: Option<String>,
-    /// The latest failure a surface should explain; a failed dictation also shows it in `phase`.
+    /// The latest failure a surface should explain. Always present in `Phase::Error`.
     pub error: Option<AppError>,
     pub active_downloads: Vec<ActiveDownload>,
     /// How setup's latest test dictation ended; cleared when the next test starts.
@@ -342,11 +335,9 @@ pub enum Phase {
     ClearingData,
     /// An update is being installed and the application will restart.
     Updating,
-    /// The latest dictation failed or was not delivered. Stays until dismissed or the next
-    /// recording starts.
-    Error {
-        error: AppError,
-    },
+    /// The latest dictation failed or was not delivered, and `AppState::error` says why. Stays
+    /// until dismissed or the next recording starts.
+    Error,
 }
 
 impl Phase {
@@ -362,7 +353,7 @@ impl Phase {
 
     pub fn require_idle(&self) -> Result<(), AppError> {
         match self {
-            Self::Idle | Self::Error { .. } => Ok(()),
+            Self::Idle | Self::Error => Ok(()),
             Self::Recording { .. } => Err(conflict(
                 "workflow_busy",
                 "Stop the current recording first",
@@ -449,31 +440,7 @@ pub enum EventPayload {
     },
 }
 
-impl EventPayload {
-    #[must_use]
-    pub const fn event_name(&self) -> &'static str {
-        match self {
-            EventPayload::StateChanged { .. } => self::STATE_CHANGED_EVENT,
-            EventPayload::AudioLevel { .. } => self::AUDIO_LEVEL_EVENT,
-            EventPayload::UpdateChanged { .. } => self::UPDATE_CHANGED_EVENT,
-            EventPayload::HistoryChanged => self::HISTORY_CHANGED_EVENT,
-            EventPayload::NavigationRequested { .. } => self::NAVIGATION_REQUESTED_EVENT,
-        }
-    }
-}
-
-pub const STATE_CHANGED_EVENT: &str = "whispernow://state-changed";
-pub const AUDIO_LEVEL_EVENT: &str = "whispernow://audio-level";
-pub const UPDATE_CHANGED_EVENT: &str = "whispernow://update-changed";
-pub const HISTORY_CHANGED_EVENT: &str = "whispernow://history-changed";
-pub const NAVIGATION_REQUESTED_EVENT: &str = "whispernow://navigation-requested";
-pub const EVENT_NAMES: [&str; 5] = [
-    STATE_CHANGED_EVENT,
-    AUDIO_LEVEL_EVENT,
-    UPDATE_CHANGED_EVENT,
-    HISTORY_CHANGED_EVENT,
-    NAVIGATION_REQUESTED_EVENT,
-];
+pub const EVENT: &str = "whispernow://event";
 
 #[cfg(test)]
 mod tests;

@@ -1,7 +1,7 @@
 //! This file has no imports so the desktop build script can include it with
 //! `#[path]` and generate Tauri's command permissions from this same list.
 
-pub const COMMAND_NAMES: [&str; 42] = [
+pub const COMMAND_NAMES: [&str; 40] = [
     "get_settings",
     "update_settings",
     "set_start_on_login",
@@ -15,7 +15,6 @@ pub const COMMAND_NAMES: [&str; 42] = [
     "cancel_download",
     "select_model",
     "delete_model",
-    "get_setup_state",
     "save_setup_checkpoint",
     "complete_setup",
     "restart_setup",
@@ -26,7 +25,6 @@ pub const COMMAND_NAMES: [&str; 42] = [
     "stop_recording",
     "cancel_recording",
     "dismiss_recording_overlay",
-    "copy_last_transcript",
     "copy_text",
     "open_main_window",
     "get_state",

@@ -70,11 +70,7 @@ impl UiState {
         if !matches!(state.phase, Phase::Recording { .. }) {
             self.audio_rms = 0.0;
         }
-        // A failed dictation is the current problem until it is dismissed.
-        self.error = match &state.phase {
-            Phase::Error { error } => Some(error.clone()),
-            _ => state.error.clone(),
-        };
+        self.error.clone_from(&state.error);
         self.snapshot = Some(state);
     }
 

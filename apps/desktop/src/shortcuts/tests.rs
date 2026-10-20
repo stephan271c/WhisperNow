@@ -263,7 +263,7 @@ fn a_changed_mode_keeps_the_shortcut_registered_and_a_changed_key_replaces_it() 
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F1").0);
 
     coordinator
-        .apply_update(Ok(recording("F1", RecordingMode::Toggle)))
+        .apply_update(recording("F1", RecordingMode::Toggle))
         .expect("switch to toggle");
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F1").0]));
     assert_eq!(
@@ -272,7 +272,7 @@ fn a_changed_mode_keeps_the_shortcut_registered_and_a_changed_key_replaces_it() 
     );
 
     coordinator
-        .apply_update(Ok(recording("F3", RecordingMode::Toggle)))
+        .apply_update(recording("F3", RecordingMode::Toggle))
         .expect("replace the key");
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F3").0]));
     assert_eq!(
@@ -286,7 +286,7 @@ fn a_refused_shortcut_change_registers_the_previous_shortcut_again() {
     let (registrar, coordinator) = memory_coordinator("F1");
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F3").0);
     assert_eq!(
-        coordinator.apply_update(Ok(recording("F3", RecordingMode::Toggle))),
+        coordinator.apply_update(recording("F3", RecordingMode::Toggle)),
         Err(ShortcutRegistrationError::ConflictOrUnsupported)
     );
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F1").0]));
@@ -370,7 +370,7 @@ fn paused_dictation_releases_the_shortcuts_and_resuming_restores_them() {
     assert!(registrar.registered().is_empty());
 
     coordinator
-        .apply_update(Ok(hold("F2")))
+        .apply_update(hold("F2"))
         .expect("a change while paused");
     assert!(
         registrar.registered().is_empty(),
@@ -434,7 +434,7 @@ fn presses_ignore_repeats_and_only_hold_releases_reach_the_worker() {
     ] {
         let (_registrar, coordinator) = memory_coordinator("F1");
         coordinator
-            .apply_update(Ok(recording("F2", mode)))
+            .apply_update(recording("F2", mode))
             .expect("recording shortcut");
         let binding = binding_id("F2");
         let press = Some(ShortcutAction::Pressed(trigger));
@@ -579,9 +579,7 @@ fn native_registration_never_runs_under_the_input_locks() {
         observed.set(calls());
     };
 
-    coordinator
-        .apply_update(Ok(hold("F2")))
-        .expect("apply update");
+    coordinator.apply_update(hold("F2")).expect("apply update");
     native_step("apply update");
     coordinator.observe_dictation(true);
     coordinator.sync_cancel_shortcut();

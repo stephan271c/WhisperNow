@@ -10,7 +10,6 @@
     "allow-stop-recording",
     "allow-cancel-recording",
     "allow-dismiss-recording-overlay",
-    "allow-copy-last-transcript",
     "allow-open-main-window"
   ]
 }

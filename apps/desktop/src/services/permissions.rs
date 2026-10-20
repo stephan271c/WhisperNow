@@ -6,8 +6,9 @@ use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::ipc::{
     PasteHelperSetup, Permission, PermissionKind, PermissionStatus, PermissionsResponse,
 };
+use whispernow_platform::AppPaths;
 
-use super::NativeServices;
+use super::output::OutputCoordinator;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SessionFacts {
@@ -138,26 +139,30 @@ fn portal_card(kind: PermissionKind, status: PermissionStatus) -> Permission {
 }
 
 impl SessionFacts {
-    pub(super) fn collect(services: &NativeServices, global_shortcuts: PermissionStatus) -> Self {
+    pub(super) fn collect(
+        output: &OutputCoordinator,
+        paths: &AppPaths,
+        global_shortcuts: PermissionStatus,
+    ) -> Self {
         #[cfg(target_os = "macos")]
         {
-            let _ = (services, global_shortcuts);
+            let _ = (output, paths, global_shortcuts);
             Self::MacOs {
                 accessibility_trusted: whispernow_platform::accessibility_trusted(),
             }
         }
         #[cfg(target_os = "windows")]
         {
-            let _ = (services, global_shortcuts);
+            let _ = (output, paths, global_shortcuts);
             Self::Windows
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            if services.output.native_wayland() {
-                let paste = match services.output.remote_desktop_consent() {
+            if output.native_wayland() {
+                let paste = match output.remote_desktop_consent() {
                     Some(consent) => WaylandPaste::Portal {
                         consent,
-                        setup_command: services.paste_helper_setup_command(),
+                        setup_command: paste_helper_setup_command(paths),
                     },
                     None => WaylandPaste::Helper,
                 };
@@ -176,6 +181,21 @@ impl SessionFacts {
                 }
             }
         }
+    }
+}
+
+/// The command that sets the Wayland paste helper up, when this build carries its install
+/// script.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn paste_helper_setup_command(paths: &AppPaths) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        crate::input_helper::setup_command(&paths.paste_helper_setup_dir())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = paths;
+        None
     }
 }
 

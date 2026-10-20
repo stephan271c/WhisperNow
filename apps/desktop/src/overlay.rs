@@ -112,7 +112,7 @@ pub(crate) const fn overlay_presentation(phase: &Phase, can_float: bool) -> Over
             OverlayPresentation::None
         }
         (_, true) => OverlayPresentation::Window,
-        (Phase::Error { .. }, false) => OverlayPresentation::Notification,
+        (Phase::Error, false) => OverlayPresentation::Notification,
         (_, false) => OverlayPresentation::None,
     }
 }
@@ -154,7 +154,7 @@ impl RecordingOverlay {
         let notify = presentation == OverlayPresentation::Notification;
         if notify
             && !self.notified
-            && let Phase::Error { error } = &snapshot.phase
+            && let Some(error) = &snapshot.error
         {
             self.window.notify(notification(error));
         }

@@ -81,6 +81,29 @@ impl Gateway {
         Ok(self.finish_view(view))
     }
 
+    pub(crate) async fn save_setup_checkpoint(
+        &self,
+        request: SetupCheckpoint,
+    ) -> Result<SettingsView, AppError> {
+        let view = self
+            .run_command(
+                "save_setup_checkpoint",
+                Failure::Published,
+                move |services| services.save_setup_checkpoint(request),
+            )
+            .await?;
+        Ok(self.finish_view(view))
+    }
+
+    pub(crate) async fn restart_setup(&self) -> Result<SettingsView, AppError> {
+        let view = self
+            .run_command("restart_setup", Failure::Local, |services| {
+                services.settings.restart_setup()
+            })
+            .await?;
+        Ok(self.finish_view(view))
+    }
+
     pub(crate) async fn update_settings(
         &self,
         request: Settings,
@@ -134,10 +157,9 @@ impl Gateway {
         let (refused, registered) = self.register_shortcuts(&saved, &mut chosen).await;
         checkpoint.recording_shortcut = chosen.recording_shortcut;
         checkpoint.recording_mode = chosen.recording_mode;
-        let before = saved.clone();
         let completing = self
             .run_command("complete_setup", Failure::Published, move |services| {
-                services.complete_setup(&checkpoint, &before)
+                services.complete_setup(&checkpoint)
             })
             .await;
         let settings = match completing {
@@ -183,7 +205,7 @@ impl Gateway {
         let Ok(recording) = recording_binding(chosen) else {
             return (None, false);
         };
-        match self.apply_shortcuts(Ok(recording)).await {
+        match self.apply_shortcuts(recording).await {
             None => (None, true),
             Some(mut refused) => {
                 chosen
@@ -223,7 +245,11 @@ impl Gateway {
 
     /// Registers `saved`'s shortcut again after a save that registered another failed.
     async fn restore_shortcuts(&self, saved: &Settings) {
-        if let Some(error) = self.apply_shortcuts(recording_binding(saved)).await {
+        let restored = match recording_binding(saved) {
+            Ok(recording) => self.apply_shortcuts(recording).await,
+            Err(error) => Some(shortcut_error(error)),
+        };
+        if let Some(error) = restored {
             tracing::warn!(
                 code = error.code,
                 "the saved shortcuts could not be registered again"
@@ -233,10 +259,7 @@ impl Gateway {
 
     /// Registers `recording` in place of the current shortcut, which stays registered on a
     /// refusal.
-    async fn apply_shortcuts(
-        &self,
-        recording: Result<RecordingBinding, ShortcutRegistrationError>,
-    ) -> Option<AppError> {
+    async fn apply_shortcuts(&self, recording: RecordingBinding) -> Option<AppError> {
         let shortcuts = Arc::clone(&self.shortcuts);
         match run_blocking(move || shortcuts.apply_update(recording)).await {
             Ok(Ok(())) => None,

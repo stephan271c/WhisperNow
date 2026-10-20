@@ -18,6 +18,8 @@ pub(crate) struct CleanupPlan {
 pub(crate) struct AiCleanup {
     pub(crate) service: Arc<dyn LlmService>,
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,
+    /// Read when a call is prepared, so settings snapshots and recording start never wait on
+    /// the OS credential store.
     pub(crate) api_keys: Arc<SettingsStore>,
 }
 

@@ -14,10 +14,10 @@ async fn history_changed_event_from_tauri_refreshes_history() {
     install_tauri_probe();
     install_mount_point();
     dioxus::launch(whispernow_ui::app);
-    wait_for("the history-changed listener", || {
+    wait_for("the event listener", || {
         eval_bool(&format!(
             "window.__whispernowListeners.has({:?})",
-            whispernow_domain::ipc::HISTORY_CHANGED_EVENT
+            whispernow_domain::ipc::EVENT
         ))
     })
     .await;
@@ -37,7 +37,7 @@ async fn history_changed_event_from_tauri_refreshes_history() {
             return true;
           }}
         }})()",
-        whispernow_domain::ipc::HISTORY_CHANGED_EVENT
+        whispernow_domain::ipc::EVENT
     ));
 
     assert!(!threw, "the Tauri event callback must not panic");

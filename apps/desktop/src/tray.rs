@@ -95,9 +95,7 @@ impl TrayState {
 }
 
 pub(crate) fn tray_state(snapshot: &AppState) -> TrayState {
-    let failed = snapshot.error.is_some()
-        || snapshot.model_state == ModelState::Failed
-        || matches!(snapshot.phase, Phase::Error { .. });
+    let failed = snapshot.error.is_some() || snapshot.model_state == ModelState::Failed;
     match snapshot.phase {
         Phase::Paused if !failed => TrayState::Paused,
         Phase::Recording { .. } if failed => TrayState::RecordingError,
@@ -423,6 +421,7 @@ mod tests {
             (Phase::Updating, false, TrayState::Idle),
             (Phase::ClearingData, false, TrayState::Idle),
             (Phase::Idle, true, TrayState::Error),
+            (Phase::Error, true, TrayState::Error),
             (recording(), true, TrayState::RecordingError),
             (Phase::Paused, true, TrayState::Error),
         ] {

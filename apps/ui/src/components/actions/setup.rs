@@ -1,11 +1,11 @@
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use whispernow_domain::AppError;
-use whispernow_domain::ipc::{PermissionKind, PermissionsResponse, SetupStateView};
+use whispernow_domain::ipc::{PermissionKind, PermissionsResponse, SettingsView};
 use whispernow_domain::{SetupCheckpoint, SetupStep};
 
-use crate::UiContext;
 use crate::client;
+use crate::{ManagementState, UiContext};
 
 use crate::{NoticeScope, SetupTest, UiOperation};
 
@@ -14,37 +14,28 @@ const PERMISSION_POLL_MS: u32 = 1_000;
 pub(crate) const PERMISSION_POLLS: u32 = 120;
 
 impl UiContext {
-    pub(crate) fn move_setup(mut self, step: SetupStep) {
-        let request = self.management.write().setup_move(step);
-        self.save_checkpoint(request, |mut actions, setup| {
-            actions.management.write().setup = Some(setup);
-        });
+    pub(crate) fn move_setup(self, step: SetupStep) {
+        let request = self.management.peek().setup_move(step);
+        self.save_checkpoint(request, ManagementState::install_setup);
     }
 
     pub(crate) fn finish_setup_later(self) {
-        let request = self
-            .management
-            .peek()
-            .setup_checkpoint()
-            .expect("setup controls render after loading")
-            .clone();
-        self.save_checkpoint(request, |mut actions, setup| {
-            actions.management.write().finish_setup_later(setup);
-        });
+        let request = self.management.peek().checkpoint();
+        self.save_checkpoint(request, ManagementState::finish_setup_later);
     }
 
     fn save_checkpoint(
         self,
         request: SetupCheckpoint,
-        finish: impl FnOnce(Self, SetupStateView) + 'static,
+        install: impl FnOnce(&mut ManagementState, SettingsView) + 'static,
     ) {
         let operation = UiOperation::SaveSetup;
         self.run(
             operation,
             async move { client::invoke("save_setup_checkpoint", Some(&request)).await },
-            move |actions, answer| match answer {
-                Ok(setup) => {
-                    finish(actions, setup);
+            move |mut actions, answer| match answer {
+                Ok(view) => {
+                    install(&mut actions.management.write(), view);
                     actions.list_devices_once_allowed();
                 }
                 Err(error) => actions.report(NoticeScope::Setup, &error),
@@ -53,32 +44,15 @@ impl UiContext {
     }
 
     pub(crate) fn save_setup_edit(mut self, edit: impl FnOnce(&mut SetupCheckpoint)) {
-        if self.management.peek().settings_pending() {
+        let Some(request) = self.management.write().edit_setup(edit) else {
             return;
-        }
-        let mut request = self
-            .management
-            .peek()
-            .setup_checkpoint()
-            .expect("setup is loaded")
-            .clone();
-        edit(&mut request);
-        self.management
-            .write()
-            .edit_setup(|checkpoint| *checkpoint = request.clone());
-        self.save_checkpoint(request, |mut actions, setup| {
-            actions.management.write().setup = Some(setup);
-        });
+        };
+        self.save_checkpoint(request, ManagementState::install_setup);
     }
 
     pub(crate) fn complete_setup(self) {
         let operation = UiOperation::CompleteSetup;
-        let request = self
-            .management
-            .peek()
-            .setup_checkpoint()
-            .expect("setup controls render after loading")
-            .clone();
+        let request = self.management.peek().checkpoint();
         self.run(
             operation,
             async move { client::invoke("complete_setup", Some(&request)).await },
@@ -95,7 +69,7 @@ impl UiContext {
             operation,
             client::call("restart_setup"),
             move |mut actions, answer| match answer {
-                Ok(setup) => actions.management.write().restart_setup(setup),
+                Ok(view) => actions.management.write().restart_setup(view),
                 Err(error) => actions.report(NoticeScope::Setup, &error),
             },
         );
@@ -154,9 +128,7 @@ impl UiContext {
     pub(crate) fn install_permissions(mut self, permissions: PermissionsResponse) {
         let request = self.management.write().install_permissions(permissions);
         if let Some(request) = request {
-            self.save_checkpoint(request, |mut actions, setup| {
-                actions.management.write().setup = Some(setup);
-            });
+            self.save_checkpoint(request, ManagementState::install_setup);
         }
     }
 

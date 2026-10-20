@@ -48,6 +48,25 @@ fn the_cancel_shortcut_is_a_lone_non_typing_key_or_a_combination_and_never_a_rec
 }
 
 #[test]
+fn shortcuts_are_valid_unless_a_shortcut_rule_is_broken() {
+    let mut settings = Settings::default();
+    assert!(settings.shortcuts_valid());
+    settings.cancel_shortcut = Some(Shortcut::default_cancel());
+    assert!(settings.shortcuts_valid());
+    settings.cancel_shortcut = Some(shortcut(&[], "q"));
+    assert!(!settings.shortcuts_valid());
+    settings.cancel_shortcut = Some(settings.recording_shortcut.clone());
+    assert!(!settings.shortcuts_valid());
+    settings.cancel_shortcut = None;
+    settings.recording_shortcut = shortcut(&[], "f9");
+    assert!(!settings.shortcuts_valid());
+
+    settings.recording_shortcut = Settings::default().recording_shortcut;
+    settings.vocabulary_replacements = vec![VocabularyReplacement::new(" ", "x")];
+    assert!(settings.shortcuts_valid());
+}
+
+#[test]
 fn model_names_are_checked_for_every_provider() {
     let mut settings = Settings::default();
     for saved in [
@@ -142,6 +161,38 @@ fn incomplete_cleanup_settings_save_with_a_warning_until_repaired() {
 }
 
 #[test]
+fn cleanup_has_an_active_target_only_while_enabled_and_resolved() {
+    let mut settings = Settings {
+        llm_provider: LlmProvider::LocalCleanup,
+        ..Settings::default()
+    };
+    assert_eq!(settings.active_cleanup_target(), None);
+
+    settings.cleanup_enabled = true;
+    assert_eq!(
+        settings.active_cleanup_target(),
+        Some(CleanupTarget::Local {
+            model: settings.cleanup_model_id()
+        })
+    );
+
+    settings.llm_provider = LlmProvider::Custom;
+    settings.provider_settings_mut(LlmProvider::Custom).model = "local".to_owned();
+    assert_eq!(settings.active_cleanup_target(), None);
+
+    settings.provider_settings_mut(LlmProvider::Custom).api_base =
+        Some(ProviderEndpoint::parse("http://localhost:8080/v1").expect("endpoint"));
+    assert_eq!(
+        settings.active_cleanup_target(),
+        settings.cleanup_target().ok()
+    );
+    assert!(settings.active_cleanup_target().is_some());
+
+    settings.cleanup_enabled = false;
+    assert_eq!(settings.active_cleanup_target(), None);
+}
+
+#[test]
 fn the_cleanup_model_is_the_one_saved_for_its_provider_else_the_default() {
     let mut settings = Settings::default();
     assert_eq!(
@@ -189,6 +240,11 @@ fn an_update_is_refused_only_for_a_rule_it_breaks() {
     assert_eq!(
         edited.validate_update(&before),
         Err(SettingsError::CancelIsRecordingShortcut)
+    );
+    assert_eq!(
+        Settings::default().validate_update(&before),
+        Ok(()),
+        "the edit that repairs a broken rule is accepted"
     );
 }
 

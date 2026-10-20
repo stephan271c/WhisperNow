@@ -3,7 +3,7 @@ use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
     ActiveDownload, AppState, ClearDataItem, ClearDataResult, DataLocation, ErrorCategory,
     EventPayload, MainWindowSection, MicrophoneTestResponse, ModelState, ModelSummary, Phase,
-    SaveSettingsResponse, SettingsView, SetupStateView,
+    SaveSettingsResponse, SettingsView,
 };
 use whispernow_domain::{
     ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability, ModelId, ProviderEndpoint,
@@ -38,25 +38,17 @@ pub(super) fn loaded() -> ManagementState {
         settings: editable_settings(),
         warnings: Vec::new(),
     });
-    management.setup = Some(SetupStateView {
-        first_run_complete: true,
-        checkpoint: SetupCheckpoint::default(),
-    });
+    management.setup = Some(SetupCheckpoint::default());
     management
 }
 
-fn unfinished_setup() -> ManagementState {
+pub(super) fn unfinished_setup(checkpoint: SetupCheckpoint) -> ManagementState {
     let mut management = loaded();
-    management.setup = Some(SetupStateView {
-        first_run_complete: false,
-        checkpoint: SetupCheckpoint {
-            step: SetupStep::Model,
-            model_id: ModelId::new("sherpa-onnx-whisper-tiny").expect("fixture model id"),
-            input_device: None,
-            recording_shortcut: shortcut(),
-            recording_mode: RecordingMode::Hold,
-        },
-    });
+    let mut settings = editable_settings();
+    settings.first_run_complete = false;
+    settings.setup = Some(checkpoint.clone());
+    management.install_settings(SettingsView::new(&settings));
+    management.setup = Some(checkpoint);
     management
 }
 
@@ -66,7 +58,14 @@ fn current_links(html: &str) -> usize {
 
 #[test]
 fn home_is_the_first_page_and_shows_the_setup_checklist_without_redirecting() {
-    let mut page = shell(snapshot(Phase::Idle), unfinished_setup());
+    let checkpoint = SetupCheckpoint {
+        step: SetupStep::Model,
+        model_id: ModelId::new("sherpa-onnx-whisper-tiny").expect("fixture model id"),
+        input_device: None,
+        recording_shortcut: shortcut(),
+        recording_mode: RecordingMode::Hold,
+    };
+    let mut page = shell(snapshot(Phase::Idle), unfinished_setup(checkpoint));
     let html = page.html();
 
     assert_eq!(text(&html, "page-heading"), "Home", "no redirect to setup");
@@ -538,9 +537,7 @@ fn settings_controls_on_each_blocked_page_are_disabled() {
             } else {
                 crate::test_support::RECORDING
             };
-            let mut management = configured();
-            management.setup = loaded().setup;
-            let mut page = shell(snapshot(phase), management);
+            let mut page = shell(snapshot(phase), configured());
             if saving {
                 page.act(|actions| {
                     actions.change_setting(SettingKey::StartMinimized, |settings| {
@@ -1570,13 +1567,7 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
     page.settle();
     let html = page.html();
     assert!(html.contains("Removed"), "{html}");
-    for read in [
-        "get_state",
-        "get_settings",
-        "get_setup_state",
-        "list_models",
-        "get_history",
-    ] {
+    for read in ["get_state", "get_settings", "list_models", "get_history"] {
         assert_eq!(
             fake::count(read),
             1,

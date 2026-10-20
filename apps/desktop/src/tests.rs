@@ -110,14 +110,13 @@ fn command_catalog_is_identical_across_handler_permissions_and_capabilities() {
 
     let allowed_by_window = allowed_commands_by_window(manifest_dir);
     let all_commands: BTreeSet<String> = catalog.iter().map(ToString::to_string).collect();
-    // The overlay reads state, and its controls stop, cancel, dismiss, copy the unpasted
-    // transcript, or open the main window; nothing else.
+    // The overlay reads state, and its controls stop, cancel, dismiss, or open the main window;
+    // nothing else.
     let recording_bar_commands = [
         "get_state",
         "stop_recording",
         "cancel_recording",
         "dismiss_recording_overlay",
-        "copy_last_transcript",
         "open_main_window",
     ]
     .map(str::to_owned);

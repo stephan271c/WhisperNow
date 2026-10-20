@@ -208,7 +208,7 @@ pub(super) fn GeneralPage() -> Element {
                 PasteHelperNotice { setup }
             }
         }
-        if management.read().setup.as_ref().is_some_and(|setup| setup.first_run_complete) {
+        if management.read().first_run_complete() {
             Section { id: "setup", title: "Setup",
                 SettingRow { id: "run-setup-again", title: "Run setup again",
                     Button {
@@ -327,10 +327,7 @@ pub(super) fn PrivacyPage() -> Element {
 
 /// Where AI cleanup sends a transcript, or `None` when it stays on this computer.
 pub(crate) fn cleanup_destination(settings: &Settings) -> Option<String> {
-    if !settings.cleanup_enabled {
-        return None;
-    }
-    let CleanupTarget::Remote(target) = settings.cleanup_target().ok()? else {
+    let CleanupTarget::Remote(target) = settings.active_cleanup_target()? else {
         return None;
     };
     let provider = target.provider.provider();

@@ -1,11 +1,11 @@
 use whispernow_core::{
     audio::TARGET_SAMPLE_RATE,
     llm::{CleanupFallback, LlmError},
-    workflow::{PipelineFailureKind, PreparedTranscription},
+    workflow::{PipelineFailureKind, PreparedTranscription, has_microphone_audio},
 };
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{ErrorCategory, Phase, SetupTestResult};
-use whispernow_domain::{CleanupTarget, EntryStatus, NewHistoryEntry};
+use whispernow_domain::{CleanupTarget, EntryId, EntryStatus, NewHistoryEntry};
 
 use super::{Recording, RecordingTrigger, Worker, capture::CaptureInterruption};
 use crate::services::{output::OutputNotice, state::CancelReason};
@@ -36,7 +36,6 @@ impl Worker {
     pub(super) fn finish(&mut self, trigger: RecordingTrigger, outcome: Outcome) {
         let setup_test = trigger.is_setup_test();
         self.parts.state.apply(|state| {
-            let reason = state.cancel.take();
             let next = match outcome {
                 Outcome::Cancelled => {
                     if setup_test {
@@ -55,8 +54,8 @@ impl Worker {
                     Phase::Idle
                 }
                 Outcome::Failed(error) => {
-                    state.last_error = Some(error.clone());
-                    Phase::Error { error }
+                    state.last_error = Some(error);
+                    Phase::Error
                 }
                 Outcome::Heard(text) => {
                     state.setup_test = Some(SetupTestResult::Heard { text });
@@ -68,27 +67,19 @@ impl Worker {
                     warning,
                 } => {
                     state.last_transcript = (!transcript.trim().is_empty()).then_some(transcript);
-                    state.last_error = failure.clone().or(warning);
-                    failure.map_or(Phase::Idle, |error| Phase::Error { error })
+                    let failed = failure.is_some();
+                    state.last_error = failure.or(warning);
+                    if failed { Phase::Error } else { Phase::Idle }
                 }
             };
-            state.phase = if reason == Some(CancelReason::Pause) {
-                Phase::Paused
-            } else {
-                next
-            };
+            state.end_dictation(next);
         });
         if let Some(reply) = self.deferred_update.take() {
             self.begin_update(reply);
         }
     }
 
-    pub(super) fn cancelled(
-        &self,
-        recording: &Recording,
-        samples: &[f32],
-        has_audio: bool,
-    ) -> Outcome {
+    pub(super) fn cancelled(&self, recording: &Recording, samples: &[f32]) -> Outcome {
         let reason = self.parts.state.lock().cancel;
         let (status, error) = match reason {
             Some(CancelReason::User) => (EntryStatus::Cancelled, None),
@@ -102,13 +93,7 @@ impl Worker {
             ),
             None => return Outcome::Cancelled,
         };
-        self.keep_untranscribed(
-            recording,
-            samples,
-            has_audio,
-            status,
-            error.map(str::to_owned),
-        );
+        self.keep_untranscribed(recording, samples, status, error.map(str::to_owned));
         Outcome::Cancelled
     }
 
@@ -116,13 +101,11 @@ impl Worker {
         &self,
         recording: &Recording,
         samples: &[f32],
-        has_audio: bool,
         error: AppError,
     ) -> Outcome {
         self.keep_untranscribed(
             recording,
             samples,
-            has_audio,
             EntryStatus::Failed,
             Some(error.summary.clone()),
         );
@@ -133,21 +116,22 @@ impl Worker {
         &self,
         recording: &Recording,
         samples: &[f32],
-        has_audio: bool,
         kind: PipelineFailureKind,
     ) -> Outcome {
         let error = pipeline_error(kind);
-        if kept_failure(kind) {
-            return self.failed_with_audio(recording, samples, has_audio, error);
-        }
-        let heard_nothing = matches!(
-            kind,
-            PipelineFailureKind::NoAudio | PipelineFailureKind::NoSpeech
-        );
-        if heard_nothing && recording.trigger.is_setup_test() {
-            Outcome::HeardNothing
-        } else {
-            Outcome::Failed(error)
+        match kind {
+            PipelineFailureKind::NoAudio | PipelineFailureKind::NoSpeech => {
+                if recording.trigger.is_setup_test() {
+                    Outcome::HeardNothing
+                } else {
+                    Outcome::Failed(error)
+                }
+            }
+            PipelineFailureKind::RecognitionFailed
+            | PipelineFailureKind::EmptyTranscription
+            | PipelineFailureKind::UnknownTokens => {
+                self.failed_with_audio(recording, samples, error)
+            }
         }
     }
 
@@ -156,19 +140,37 @@ impl Worker {
         &self,
         recording: &Recording,
         samples: &[f32],
-        has_audio: bool,
         status: EntryStatus,
         error: Option<String>,
     ) {
-        if recording.trigger.is_setup_test() || !has_audio {
+        if recording.trigger.is_setup_test() || !has_microphone_audio(samples) {
             return;
         }
+        if let Err(error) = self.save_entry(recording, samples, status, error, None) {
+            tracing::warn!(
+                code = error.code,
+                "untranscribed recording could not be saved"
+            );
+        }
+    }
+
+    /// Publishes `HistoryChanged` whether or not the save succeeded.
+    pub(super) fn save_entry(
+        &self,
+        recording: &Recording,
+        samples: &[f32],
+        status: EntryStatus,
+        error: Option<String>,
+        transcript: Option<&PreparedTranscription>,
+    ) -> Result<EntryId, AppError> {
         let saved = self.parts.history.insert(
             NewHistoryEntry {
                 created_at: recording.started_at,
                 duration_millis: Some(capture_duration_millis(samples)),
-                raw_text: None,
-                cleaned_text: None,
+                raw_text: transcript.map(|prepared| prepared.raw_text.clone()),
+                cleaned_text: transcript
+                    .filter(|prepared| prepared.final_text != prepared.raw_text)
+                    .map(|prepared| prepared.final_text.clone()),
                 status,
                 error,
                 asr_model_id: Some(recording.settings.model_id.clone()),
@@ -178,17 +180,12 @@ impl Worker {
             recording.settings.history_limit,
             recording.settings.history_retention,
         );
-        if let Err(error) = saved {
-            tracing::warn!(
-                code = error.code,
-                "untranscribed recording could not be saved"
-            );
-        }
-        self.history_changed();
+        self.parts.state.events().history_changed();
+        saved
     }
 }
 
-pub(super) fn capture_duration_millis(samples: &[f32]) -> u64 {
+fn capture_duration_millis(samples: &[f32]) -> u64 {
     u64::try_from(samples.len())
         .unwrap_or(u64::MAX)
         .saturating_mul(1_000)
@@ -283,14 +280,5 @@ pub(super) fn pipeline_error(kind: PipelineFailureKind) -> AppError {
             "transcription_failed",
             "Speech recognition failed",
         ),
-    }
-}
-
-const fn kept_failure(kind: PipelineFailureKind) -> bool {
-    match kind {
-        PipelineFailureKind::RecognitionFailed
-        | PipelineFailureKind::EmptyTranscription
-        | PipelineFailureKind::UnknownTokens => true,
-        PipelineFailureKind::NoAudio | PipelineFailureKind::NoSpeech => false,
     }
 }

@@ -44,9 +44,9 @@ impl AudioSink for LevelProbe {
     fn observe(&self, summary: AudioLevelSummary) {
         self.with(|state| {
             if state.levels.len() < MAX_LEVELS {
-                state.levels.push(unit(summary.rms));
+                state.levels.push(summary.rms);
             }
-            state.peak = state.peak.max(unit(summary.peak));
+            state.peak = state.peak.max(summary.peak);
         });
     }
 
@@ -54,14 +54,6 @@ impl AudioSink for LevelProbe {
         if matches!(event, AudioEvent::DeviceLost | AudioEvent::StreamError) {
             self.with(|state| state.capture_failed = true);
         }
-    }
-}
-
-fn unit(value: f32) -> f32 {
-    if value.is_finite() {
-        value.clamp(0.0, 1.0)
-    } else {
-        0.0
     }
 }
 
@@ -141,7 +133,7 @@ mod tests {
             if self.refuse {
                 return Err(AudioInputError::PermissionDenied);
             }
-            for rms in (0_u8..100).map(|step| f32::from(step) / 50.0) {
+            for rms in (0_u8..100).map(|step| f32::from(step) / 99.0) {
                 sink.observe(AudioLevelSummary {
                     peak: rms,
                     rms,
@@ -153,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn a_test_is_bounded_clamped_and_always_stops_capture() {
+    fn a_test_is_bounded_and_always_stops_capture() {
         let input = FakeInput::default();
         let response = run(
             &input,
@@ -164,12 +156,6 @@ mod tests {
         .expect("test runs");
 
         assert_eq!(response.levels.len(), 64);
-        assert!(
-            response
-                .levels
-                .iter()
-                .all(|level| (0.0..=1.0).contains(level))
-        );
         assert!((response.peak - 1.0).abs() < f32::EPSILON);
         assert_eq!(*input.calls.lock().expect("calls"), ["start", "stop"]);
     }

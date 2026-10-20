@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 use dioxus::core::Task;
 use whispernow_domain::ipc::{
     AudioDevice, ClearDataResult, DataLocation, MicrophoneTestResponse, ModelSummary,
-    PermissionKind, PermissionsResponse, SettingsView, SetupStateView,
+    PermissionKind, PermissionsResponse, SettingsView,
 };
-use whispernow_domain::{EntryId, HistoryEntry, HistoryFilter, Settings};
+use whispernow_domain::{EntryId, HistoryEntry, HistoryFilter, Settings, SetupCheckpoint};
 
 use crate::components::ui::Tone;
 use crate::{Notice, NoticeScope, UiOperation};
@@ -39,7 +39,8 @@ pub(crate) struct ManagementState {
     edited: Option<Settings>,
     saving: Option<SettingKey>,
     setting_errors: BTreeMap<SettingKey, String>,
-    pub setup: Option<SetupStateView>,
+    /// The checkpoint setup shows, including choices not saved yet.
+    pub setup: Option<SetupCheckpoint>,
     pub devices: Vec<AudioDevice>,
     pub devices_listed: bool,
     pub models: Vec<ModelSummary>,

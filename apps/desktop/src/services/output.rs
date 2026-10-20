@@ -6,7 +6,8 @@ use whispernow_core::{
     CancellationToken,
     text_output::{PasteOutcome, PastePlatform, PasteQueue},
 };
-use whispernow_domain::ipc::PermissionStatus;
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{ErrorCategory, PermissionStatus};
 use whispernow_platform::{NativePasteError, NativePastePlatform};
 
 #[cfg(target_os = "linux")]
@@ -31,9 +32,6 @@ pub(crate) enum OutputNotice {
     PasteFailed,
     Cancelled,
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CopyUnavailable;
 
 pub(crate) trait TranscriptOutput: Send + Sync {
     fn output(&self, text: &str, cancellation: &CancellationToken) -> OutputNotice;
@@ -134,7 +132,7 @@ impl OutputCoordinator {
     }
 
     /// Leaves `text` on the clipboard for a manual paste, excluded from clipboard history.
-    pub(crate) fn copy(&self, text: &str) -> Result<(), CopyUnavailable> {
+    pub(crate) fn copy(&self, text: &str) -> Result<(), AppError> {
         let copied = match &self.operation {
             Some(OutputOperation::Native(queue)) => queue.copy(text),
             #[cfg(target_os = "linux")]
@@ -150,12 +148,12 @@ impl OutputCoordinator {
             #[cfg(target_os = "linux")]
             Some(OutputOperation::Wayland {
                 clipboard: None, ..
-            }) => return Err(CopyUnavailable),
-            None => return Err(CopyUnavailable),
+            }) => return Err(copy_unavailable()),
+            None => return Err(copy_unavailable()),
         };
         copied.map_err(|error| {
-            tracing::warn!(?error, "transcript could not be copied");
-            CopyUnavailable
+            tracing::warn!(?error, "text could not be copied");
+            copy_unavailable()
         })
     }
 
@@ -206,6 +204,14 @@ impl TranscriptOutput for OutputCoordinator {
     fn output(&self, text: &str, cancellation: &CancellationToken) -> OutputNotice {
         Self::output(self, text, cancellation)
     }
+}
+
+fn copy_unavailable() -> AppError {
+    AppError::new(
+        ErrorCategory::Output,
+        "copy_unavailable",
+        "The text could not be copied",
+    )
 }
 
 const fn native_notice(outcome: PasteOutcome<NativePasteError>) -> OutputNotice {
@@ -316,18 +322,16 @@ struct WaylandOutputPortal {
     consent: Mutex<Option<PermissionStatus>>,
 }
 
-/// The consent a portal answer shows, when it shows one.
 #[cfg(target_os = "linux")]
-const fn consent_after<T>(result: &Result<T, WaylandPortalError>) -> Option<PermissionStatus> {
-    match result {
-        Ok(_) => Some(PermissionStatus::Granted),
-        Err(WaylandPortalError::PermissionDenied | WaylandPortalError::KeyboardUnavailable) => {
+const fn failure_consent(error: WaylandPortalError) -> Option<PermissionStatus> {
+    match error {
+        WaylandPortalError::PermissionDenied | WaylandPortalError::KeyboardUnavailable => {
             Some(PermissionStatus::Denied)
         }
-        Err(WaylandPortalError::PortalUnavailable | WaylandPortalError::Disconnected) => {
+        WaylandPortalError::PortalUnavailable | WaylandPortalError::Disconnected => {
             Some(PermissionStatus::Unavailable)
         }
-        Err(_) => None,
+        _ => None,
     }
 }
 
@@ -407,9 +411,9 @@ impl WaylandOutputPortal {
         }
     }
 
-    fn record_consent<T>(&self, result: &Result<T, WaylandPortalError>) {
-        if let Some(consent) = consent_after(result) {
-            *self.consent.lock().expect("output state lock poisoned") = Some(consent);
+    fn record_consent(&self, consent: Option<PermissionStatus>) {
+        if consent.is_some() {
+            *self.consent.lock().expect("output state lock poisoned") = consent;
         }
     }
 
@@ -441,10 +445,12 @@ impl WaylandOutputPortal {
         {
             return PermissionStatus::Unavailable;
         }
-        let result = receiver
-            .recv()
-            .unwrap_or(Err(WaylandPortalError::Disconnected));
-        self.record_consent(&result);
+        let consent = match receiver.recv() {
+            Ok(Ok(())) => Some(PermissionStatus::Granted),
+            Ok(Err(error)) => failure_consent(error),
+            Err(_) => failure_consent(WaylandPortalError::Disconnected),
+        };
+        self.record_consent(consent);
         self.consent()
     }
 
@@ -469,26 +475,26 @@ impl WaylandOutputPortal {
         let Ok(response) = receiver.recv() else {
             return OutputNotice::CapabilityUnavailable;
         };
-        let consent = match response {
-            PasteOutcome::Failed(error) => Err(error),
-            PasteOutcome::Cancelled => Err(WaylandPortalError::Cancelled),
-            _ => Ok(()),
-        };
-        self.record_consent(&consent);
-        match response {
+        let (consent, notice) = match response {
             PasteOutcome::PastedAndRestored
             | PasteOutcome::PastedWithoutRestore
-            | PasteOutcome::RestoreSkippedClipboardChanged => OutputNotice::Pasted,
-            PasteOutcome::Failed(
-                WaylandPortalError::PermissionDenied | WaylandPortalError::KeyboardUnavailable,
-            ) => OutputNotice::PermissionDenied,
-            PasteOutcome::Failed(
-                WaylandPortalError::PortalUnavailable | WaylandPortalError::Disconnected,
-            ) => OutputNotice::CapabilityUnavailable,
-            PasteOutcome::Cancelled => OutputNotice::Cancelled,
-            PasteOutcome::Failed(_) if cancellation.is_cancelled() => OutputNotice::Cancelled,
-            PasteOutcome::Failed(_) => OutputNotice::PasteFailed,
-        }
+            | PasteOutcome::RestoreSkippedClipboardChanged => {
+                (Some(PermissionStatus::Granted), OutputNotice::Pasted)
+            }
+            PasteOutcome::Cancelled => (None, OutputNotice::Cancelled),
+            PasteOutcome::Failed(error) => {
+                let consent = failure_consent(error);
+                let notice = match consent {
+                    Some(PermissionStatus::Denied) => OutputNotice::PermissionDenied,
+                    Some(PermissionStatus::Unavailable) => OutputNotice::CapabilityUnavailable,
+                    _ if cancellation.is_cancelled() => OutputNotice::Cancelled,
+                    _ => OutputNotice::PasteFailed,
+                };
+                (consent, notice)
+            }
+        };
+        self.record_consent(consent);
+        notice
     }
 
     fn shutdown(&self) {
@@ -653,13 +659,14 @@ mod tests {
         use whispernow_platform::wayland::{RemoteDesktopRestoreTokenStore, WaylandPortalError};
 
         use super::super::{
-            CopyUnavailable, OutputCoordinator, OutputNotice, OutputOperation,
-            WaylandOutputCommand, WaylandOutputPortal,
+            OutputCoordinator, OutputNotice, OutputOperation, WaylandOutputCommand,
+            WaylandOutputPortal,
         };
 
         enum PortalAnswer {
             Prepare(Result<(), WaylandPortalError>),
             Paste(PasteOutcome<WaylandPortalError>),
+            PasteAfterCancel(PasteOutcome<WaylandPortalError>),
         }
 
         fn scripted(
@@ -676,9 +683,18 @@ mod tests {
                     let _restore_dir = restore_dir;
                     while let Some(command) = receiver.blocking_recv() {
                         match command {
-                            WaylandOutputCommand::Paste { reply: sender, .. } => {
-                                let Some(PortalAnswer::Paste(outcome)) = answers.pop_front() else {
-                                    panic!("expected a scripted paste answer");
+                            WaylandOutputCommand::Paste {
+                                reply: sender,
+                                cancellation,
+                                ..
+                            } => {
+                                let outcome = match answers.pop_front() {
+                                    Some(PortalAnswer::Paste(outcome)) => outcome,
+                                    Some(PortalAnswer::PasteAfterCancel(outcome)) => {
+                                        cancellation.cancel();
+                                        outcome
+                                    }
+                                    _ => panic!("expected a scripted paste answer"),
                                 };
                                 pastes.fetch_add(1, Ordering::SeqCst);
                                 sender.send(outcome).expect("paste reply");
@@ -742,6 +758,18 @@ mod tests {
         }
 
         #[test]
+        fn a_paste_that_fails_after_a_cancel_reports_the_cancel() {
+            let (coordinator, _) = scripted([PortalAnswer::PasteAfterCancel(
+                PasteOutcome::Failed(WaylandPortalError::Backend),
+            )]);
+            assert_eq!(
+                coordinator.output("transcript", &CancellationToken::default()),
+                OutputNotice::Cancelled
+            );
+            coordinator.shutdown();
+        }
+
+        #[test]
         fn empty_stopping_and_cancelled_output_never_reach_the_portal() {
             let (coordinator, pastes) = scripted([]);
             assert_eq!(
@@ -795,7 +823,13 @@ mod tests {
                 Some(PermissionStatus::Unavailable)
             );
             assert!(!coordinator.can_copy());
-            assert_eq!(coordinator.copy("transcript"), Err(CopyUnavailable));
+            assert_eq!(
+                coordinator
+                    .copy("transcript")
+                    .expect_err("no clipboard")
+                    .code,
+                "copy_unavailable"
+            );
         }
 
         #[test]
@@ -832,6 +866,35 @@ mod tests {
                 consent_after_unavailable,
                 Some(PermissionStatus::Unavailable)
             );
+        }
+
+        #[test]
+        fn answers_that_show_no_consent_leave_it_unchanged() {
+            let (coordinator, _) = scripted([
+                PortalAnswer::Prepare(Err(WaylandPortalError::PermissionDenied)),
+                PortalAnswer::Prepare(Err(WaylandPortalError::Backend)),
+                PortalAnswer::Paste(PasteOutcome::Cancelled),
+                PortalAnswer::Paste(PasteOutcome::Failed(WaylandPortalError::Disconnected)),
+                PortalAnswer::Paste(PasteOutcome::PastedAndRestored),
+            ]);
+            let denied = coordinator.request_remote_desktop_consent();
+            let after_backend_failure = coordinator.request_remote_desktop_consent();
+            let cancelled = coordinator.output("transcript", &CancellationToken::default());
+            let after_cancel = coordinator.remote_desktop_consent();
+            let disconnected = coordinator.output("transcript", &CancellationToken::default());
+            let after_disconnect = coordinator.remote_desktop_consent();
+            let pasted = coordinator.output("transcript", &CancellationToken::default());
+            let after_paste = coordinator.remote_desktop_consent();
+            coordinator.shutdown();
+
+            assert_eq!(denied, Some(PermissionStatus::Denied));
+            assert_eq!(after_backend_failure, Some(PermissionStatus::Denied));
+            assert_eq!(cancelled, OutputNotice::Cancelled);
+            assert_eq!(after_cancel, Some(PermissionStatus::Denied));
+            assert_eq!(disconnected, OutputNotice::CapabilityUnavailable);
+            assert_eq!(after_disconnect, Some(PermissionStatus::Unavailable));
+            assert_eq!(pasted, OutputNotice::Pasted);
+            assert_eq!(after_paste, Some(PermissionStatus::Granted));
         }
     }
 }

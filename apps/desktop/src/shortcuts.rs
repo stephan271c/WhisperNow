@@ -18,7 +18,7 @@ pub(crate) struct ShortcutId(pub(crate) u32);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShortcutBinding {
     pub(crate) id: ShortcutId,
-    pub(crate) canonical: String,
+    pub(crate) global: GlobalShortcut,
     pub(crate) shortcut: Shortcut,
 }
 
@@ -98,14 +98,14 @@ impl ShortcutRegistrar for TauriShortcutRegistrar {
     fn register(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
         self.0
             .global_shortcut()
-            .register(binding.canonical.as_str())
+            .register(binding.global)
             .map_err(|_| ShortcutRegistrationError::ConflictOrUnsupported)
     }
 
     fn unregister(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
         self.0
             .global_shortcut()
-            .unregister(binding.canonical.as_str())
+            .unregister(binding.global)
             .map_err(|_| ShortcutRegistrationError::ConflictOrUnsupported)
     }
 }
@@ -129,7 +129,7 @@ pub(crate) fn binding(shortcut: &Shortcut) -> ShortcutBinding {
         .expect("every shortcut key has an accelerator");
     ShortcutBinding {
         id: ShortcutId(parsed.id()),
-        canonical: parsed.to_string(),
+        global: parsed,
         shortcut: shortcut.clone(),
     }
 }
@@ -138,7 +138,7 @@ pub(crate) fn binding(shortcut: &Shortcut) -> ShortcutBinding {
 pub(crate) fn recording_binding(
     settings: &Settings,
 ) -> Result<RecordingBinding, ShortcutRegistrationError> {
-    if !settings.shortcut_problems().is_empty() {
+    if !settings.shortcuts_valid() {
         return Err(ShortcutRegistrationError::ConflictOrUnsupported);
     }
     Ok(RecordingBinding {
@@ -149,7 +149,7 @@ pub(crate) fn recording_binding(
 
 /// The cancel shortcut `settings` turn on; none while the shortcuts break a rule.
 pub(crate) fn cancel_binding(settings: &Settings) -> Option<ShortcutBinding> {
-    if !settings.shortcut_problems().is_empty() {
+    if !settings.shortcuts_valid() {
         tracing::warn!("the saved shortcuts break a rule; the cancel shortcut is off");
         return None;
     }
@@ -380,9 +380,8 @@ impl ShortcutCoordinator {
     /// one is registered again and the error is returned.
     pub(crate) fn apply_update(
         &self,
-        candidate: Result<RecordingBinding, ShortcutRegistrationError>,
+        candidate: RecordingBinding,
     ) -> Result<(), ShortcutRegistrationError> {
-        let candidate = candidate?;
         let mut native = self.native();
         let enabled = (self.enabled)();
         let previous = native.recording.replace(candidate);

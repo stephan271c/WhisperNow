@@ -63,12 +63,19 @@ pub fn RecordingBar() -> Element {
         Phase::Processing { cleaning_up: true } => {
             ("overlay-cleaning-up", "Cleaning up…", None, None)
         }
-        Phase::Error { error } => (
-            "overlay-failed",
-            error.summary.as_str(),
-            None,
-            crate::home_status::category_fix(error.category),
-        ),
+        Phase::Error => {
+            let error = state
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.error.as_ref())
+                .expect("a failed dictation shows its error");
+            (
+                "overlay-failed",
+                error.summary.as_str(),
+                None,
+                crate::home_status::category_fix(error.category),
+            )
+        }
         Phase::Idle | Phase::Paused | Phase::ClearingData | Phase::Updating => {
             ("overlay-idle", "", None, None)
         }
@@ -86,7 +93,7 @@ pub fn RecordingBar() -> Element {
     };
     let recording = matches!(phase, Phase::Recording { .. });
     let in_flight = phase.is_busy();
-    let failed = matches!(phase, Phase::Error { .. });
+    let failed = *phase == Phase::Error;
     let visible = in_flight || failed;
     drop(state);
 

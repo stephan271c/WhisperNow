@@ -30,11 +30,7 @@ pub(super) fn HomePage() -> Element {
         .and_then(|snapshot| snapshot.last_transcript.as_ref())
         .cloned();
     let management = context.management.read();
-    let setup_step = management
-        .setup
-        .as_ref()
-        .filter(|setup| !setup.first_run_complete)
-        .map(|setup| setup.checkpoint.step);
+    let setup_step = management.unfinished_setup_step();
     let shortcut = management.settings.as_ref().map(|view| {
         let settings = &view.settings;
         (settings.recording_mode, settings.recording_shortcut.clone())

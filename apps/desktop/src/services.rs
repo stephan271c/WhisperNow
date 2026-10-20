@@ -1,5 +1,4 @@
 use std::{
-    path::PathBuf,
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
@@ -7,11 +6,12 @@ use whispernow_domain::AppError;
 
 use whispernow_core::audio::{AudioDeviceChoice, AudioInput, AudioInputError};
 use whispernow_domain::ipc::{
-    AudioDevice, ErrorCategory, EventPayload, MicrophoneTestResponse, PermissionKind,
-    PermissionStatus, PermissionsResponse, SaveSettingsResponse, SettingsView,
+    AudioDevice, ErrorCategory, MicrophoneTestResponse, PermissionKind, PermissionStatus,
+    PermissionsResponse, SaveSettingsResponse, SettingsView,
 };
 use whispernow_domain::{
-    EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, Settings, SetupCheckpoint, SetupStep,
+    CleanupTarget, EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, Settings,
+    SetupCheckpoint, SetupStep,
 };
 use whispernow_platform::{
     AppPaths, LocalCleanupService, open_in_file_manager, open_privacy_settings,
@@ -50,16 +50,11 @@ pub(crate) struct NativeServices {
     pub(crate) dictation: Dictation,
     paths: AppPaths,
     pub(crate) output: Arc<OutputCoordinator>,
-    paste_helper_setup_dir: PathBuf,
     microphone_access: MicrophoneAccess,
     local_cleanup: Arc<LocalCleanupService>,
 }
 
 impl NativeServices {
-    fn publish_history_changed(&self) {
-        self.state.events().publish(EventPayload::HistoryChanged);
-    }
-
     /// A change or a failure broadcasts `HistoryChanged` so every listener re-fetches. The
     /// history store's lock orders it against dictations.
     fn run_history_mutation(
@@ -68,7 +63,7 @@ impl NativeServices {
     ) -> Result<(), AppError> {
         let result = operation();
         if !matches!(result, Ok(false)) {
-            self.publish_history_changed();
+            self.state.events().history_changed();
         }
         result.map(|_| ())
     }
@@ -108,34 +103,22 @@ impl NativeServices {
         edited: Settings,
     ) -> Result<(Settings, SaveSettingsResponse), AppError> {
         let (before, settings) = self.settings.update(edited, self.audio.as_ref())?;
-        self.follow_cleanup_provider(&settings.settings);
+        follow_cleanup_provider(&self.local_cleanup, &settings.settings);
         let limit = settings.settings.history_limit;
         let retention = settings.settings.history_retention;
-        let pruning = if limit == before.history_limit && retention == before.history_retention {
-            Ok(false)
-        } else {
-            self.history.prune(limit, retention)
-        };
-        if !matches!(pruning, Ok(false)) {
-            self.publish_history_changed();
-        }
+        let pruning = self.run_history_mutation(|| {
+            if limit == before.history_limit && retention == before.history_retention {
+                Ok(false)
+            } else {
+                self.history.prune(limit, retention)
+            }
+        });
         let warnings = pruning
             .err()
             .map(|warning| warning.summary)
             .into_iter()
             .collect();
         Ok((before, SaveSettingsResponse { settings, warnings }))
-    }
-
-    /// Loads the chosen local cleanup model in the background when AI cleanup uses it, and
-    /// frees it otherwise.
-    fn follow_cleanup_provider(&self, settings: &Settings) {
-        self.local_cleanup.set_use_gpu(settings.cleanup_uses_gpu);
-        if settings.uses_local_cleanup() {
-            self.local_cleanup.preload(settings.cleanup_model_id());
-        } else {
-            self.local_cleanup.unload();
-        }
     }
 
     pub(crate) fn copy_last_transcript(&self) -> Result<(), AppError> {
@@ -146,29 +129,19 @@ impl NativeServices {
                 "There is no transcript to copy yet",
             )
         })?;
-        self.output.copy(&text).map_err(|_| {
-            AppError::new(
-                ErrorCategory::Output,
-                "copy_unavailable",
-                "The transcript could not be copied",
-            )
-        })
+        self.output.copy(&text)
     }
 
     pub(crate) fn list_audio_devices(&self) -> Result<Vec<AudioDevice>, AppError> {
-        self.audio.list_input_devices().map_err(|_| {
-            AppError::new(
-                ErrorCategory::Audio,
-                "audio_devices",
-                "Audio input devices could not be listed",
-            )
-        })
+        self.audio
+            .list_input_devices()
+            .map_err(|_| audio_devices_unavailable())
     }
 
     /// Listens to the selected microphone for a few seconds and reports its levels. No audio
     /// is kept.
     pub(crate) fn test_microphone(&self) -> Result<MicrophoneTestResponse, AppError> {
-        let device = self.settings.recording_settings()?.input_device;
+        let device = self.settings.input_device()?;
         self.listen(device, microphone_test::TEST_DURATION)
     }
 
@@ -183,25 +156,12 @@ impl NativeServices {
         result
     }
 
-    /// The command that sets the Wayland paste helper up, when this build
-    /// carries its install script.
-    fn paste_helper_setup_command(&self) -> Option<String> {
-        #[cfg(target_os = "linux")]
-        {
-            crate::input_helper::setup_command(&self.paste_helper_setup_dir)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            None
-        }
-    }
-
     /// The shortcut portal's consent is the shortcut coordinator's to report, so the caller
     /// passes it in.
     pub(crate) fn permissions(&self, global_shortcuts: PermissionStatus) -> PermissionsResponse {
         permission_states(
             self.microphone_access.status(),
-            SessionFacts::collect(self, global_shortcuts),
+            SessionFacts::collect(&self.output, &self.paths, global_shortcuts),
         )
     }
 
@@ -243,12 +203,24 @@ impl NativeServices {
             .ok_or_else(permission_not_requestable)
     }
 
+    pub(crate) fn save_setup_checkpoint(
+        &self,
+        checkpoint: SetupCheckpoint,
+    ) -> Result<SettingsView, AppError> {
+        let model_supported = self
+            .models
+            .model_store()
+            .definition(&checkpoint.model_id)
+            .is_ok();
+        self.settings
+            .save_setup_checkpoint(checkpoint, model_supported)
+    }
+
     /// Saves setup's choices and loads the chosen model. A model that cannot load leaves the
     /// saved settings and setup as they were.
     pub(crate) fn complete_setup(
         &self,
         checkpoint: &SetupCheckpoint,
-        before: &Settings,
     ) -> Result<SettingsView, AppError> {
         if checkpoint.step != SetupStep::TryIt {
             return Err(AppError::new(
@@ -257,14 +229,11 @@ impl NativeServices {
                 "Review every setup step before finishing",
             ));
         }
+        let before = self.settings.load();
         {
             let state = self.state.lock();
             if before.first_run_complete {
-                return Err(AppError::new(
-                    ErrorCategory::General,
-                    "setup_already_complete",
-                    "Setup has already finished",
-                ));
+                return Err(setup_already_complete());
             }
             state.phase.require_idle()?;
         }
@@ -273,15 +242,13 @@ impl NativeServices {
         let mut edited = before.clone();
         apply_checkpoint(&mut edited, checkpoint);
         edited
-            .validate_update(before)
+            .validate_update(&before)
             .map_err(|error| settings_error(&error))?;
-        self.models
-            .select(checkpoint.model_id.clone(), &self.settings, &self.dictation)?;
-        let mut current = self.settings.lock();
-        let mut settings = current.clone();
-        apply_checkpoint(&mut settings, checkpoint);
-        self.settings.save(&mut current, settings)?;
-        Ok(SettingsView::new(&current))
+        self.select_model(checkpoint.model_id.clone())?;
+        self.settings.edit(|settings| {
+            apply_checkpoint(settings, checkpoint);
+            Ok(SettingsView::new(settings))
+        })
     }
 
     /// Reads one history page in any phase; only the history store's own lock
@@ -361,11 +328,35 @@ fn no_permission_settings() -> AppError {
     )
 }
 
-fn shutting_down() -> AppError {
+pub(crate) fn shutting_down() -> AppError {
     AppError::new(
         ErrorCategory::General,
         "application_shutting_down",
         "The application is shutting down",
+    )
+}
+
+fn audio_devices_unavailable() -> AppError {
+    AppError::new(
+        ErrorCategory::Audio,
+        "audio_devices",
+        "Audio input devices could not be listed",
+    )
+}
+
+fn unknown_model() -> AppError {
+    AppError::new(
+        ErrorCategory::Model,
+        "unknown_model",
+        "The model is not supported",
+    )
+}
+
+fn setup_already_complete() -> AppError {
+    AppError::new(
+        ErrorCategory::General,
+        "setup_already_complete",
+        "Setup has already finished",
     )
 }
 
@@ -382,6 +373,16 @@ fn capture_start_error(error: &AudioInputError) -> AppError {
             "audio_start",
             "Audio capture could not be started",
         )
+    }
+}
+
+/// Loads the chosen local cleanup model in the background when AI cleanup uses it, and frees it
+/// otherwise.
+fn follow_cleanup_provider(local_cleanup: &LocalCleanupService, settings: &Settings) {
+    local_cleanup.set_use_gpu(settings.cleanup_uses_gpu);
+    match settings.active_cleanup_target() {
+        Some(CleanupTarget::Local { model }) => local_cleanup.preload(model),
+        _ => local_cleanup.unload(),
     }
 }
 

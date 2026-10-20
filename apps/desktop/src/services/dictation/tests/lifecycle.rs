@@ -93,7 +93,6 @@ pub(super) fn native_services_before_preload(
         dictation: fixture.dictation,
         paths: paths.clone(),
         output: Arc::new(OutputCoordinator::native(None)),
-        paste_helper_setup_dir: paths.paste_helper_setup_dir(),
         microphone_access: MicrophoneAccess::default(),
         local_cleanup,
     };
@@ -231,6 +230,8 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
 
 #[test]
 fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
+    use whispernow_domain::{SetupCheckpoint, SetupStep};
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -275,6 +276,27 @@ fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
             .await
             .expect("update settings");
         assert_eq!(updated.settings.warnings, standing);
+        let saved = gateway
+            .save_setup_checkpoint(SetupCheckpoint::default())
+            .await
+            .expect("save checkpoint");
+        assert_eq!(saved.warnings, standing);
+        assert_eq!(saved.settings.setup, Some(SetupCheckpoint::default()));
+        let checkpoint = SetupCheckpoint {
+            step: SetupStep::TryIt,
+            ..SetupCheckpoint::default()
+        };
+        gateway
+            .services
+            .complete_setup(&checkpoint)
+            .expect("complete setup");
+        let restarted = gateway.restart_setup().await.expect("restart setup");
+        assert_eq!(restarted.warnings, standing);
+        assert!(!restarted.settings.first_run_complete);
+        assert_eq!(
+            restarted.settings.setup.map(|setup| setup.step),
+            Some(SetupStep::Welcome)
+        );
     });
     gateway.services.request_shutdown();
     gateway.services.shutdown();
@@ -328,7 +350,7 @@ fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
         let loaded = services.state.lock().model.clone();
 
         let error = services
-            .complete_setup(&checkpoint, &services.settings.load())
+            .complete_setup(&checkpoint)
             .expect_err("setup refused");
 
         assert_eq!(error.code, expected);
@@ -351,7 +373,7 @@ fn setup_loads_and_selects_the_model_then_saves_its_choices() {
     };
 
     let view = services
-        .complete_setup(&checkpoint, &services.settings.load())
+        .complete_setup(&checkpoint)
         .expect("complete setup");
 
     assert!(view.settings.first_run_complete);
@@ -367,19 +389,64 @@ fn setup_loads_and_selects_the_model_then_saves_its_choices() {
     drop(state);
     assert_eq!(
         services
-            .settings
-            .save_setup_checkpoint(checkpoint.clone(), services.models.model_store())
+            .save_setup_checkpoint(checkpoint.clone())
             .expect_err("completed setup cannot save a checkpoint")
             .code,
         "setup_already_complete"
     );
     let restarted = services.settings.restart_setup().expect("restart setup");
-    assert!(!restarted.first_run_complete);
-    assert_eq!(restarted.checkpoint.step, SetupStep::Welcome);
+    assert!(!restarted.settings.first_run_complete);
+    assert_eq!(
+        restarted.settings.setup.map(|setup| setup.step),
+        Some(SetupStep::Welcome)
+    );
     services
-        .settings
-        .save_setup_checkpoint(checkpoint, services.models.model_store())
+        .save_setup_checkpoint(checkpoint)
         .expect("restarted setup accepts checkpoints");
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_checkpoints_do_not_scan_unrelated_installed_artifacts() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use whispernow_domain::SetupCheckpoint;
+
+    let (services, _root) = native_services(Fixture::new());
+    let registry = ModelRegistry::builtin();
+    let other = registry
+        .speech_models()
+        .find(|model| model.id != ModelId::default())
+        .expect("another model");
+    let inaccessible = services.paths.models_dir().join(other.id.as_str());
+    fs::create_dir_all(&inaccessible).expect("unrelated installation");
+    fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o000))
+        .expect("inaccessible artifacts");
+    let scan = services.models.model_store().list();
+    let checkpoint = SetupCheckpoint::default();
+    let saved = services.save_setup_checkpoint(checkpoint.clone());
+    fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o700))
+        .expect("restore artifacts access");
+
+    assert!(
+        scan.is_err(),
+        "the unrelated installation cannot be scanned"
+    );
+    assert_eq!(
+        saved.expect("supported checkpoint").settings.setup,
+        Some(checkpoint.clone())
+    );
+    assert_eq!(services.settings.get().settings.setup, Some(checkpoint));
+    let unknown = SetupCheckpoint {
+        model_id: ModelId::new("unknown-model").expect("model id"),
+        ..SetupCheckpoint::default()
+    };
+    assert_eq!(
+        services
+            .save_setup_checkpoint(unknown)
+            .expect_err("unsupported choice")
+            .code,
+        "unknown_model"
+    );
 }
 
 #[test]
@@ -439,7 +506,7 @@ fn invalid_setup_choices_leave_the_saved_and_selected_model_unchanged() {
     };
 
     let error = services
-        .complete_setup(&checkpoint, &services.settings.load())
+        .complete_setup(&checkpoint)
         .expect_err("invalid setup choices");
 
     assert_eq!(error.code, "invalid_settings");

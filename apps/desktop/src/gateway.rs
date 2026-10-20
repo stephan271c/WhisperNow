@@ -11,8 +11,11 @@ use whispernow_core::CancellationToken;
 use whispernow_domain::ipc::ErrorCategory;
 
 use crate::{
-    activation::ActivationGate, autostart::AutostartRegistration, services::NativeServices,
-    shortcuts::ShortcutCoordinator, tray::TrayController,
+    activation::ActivationGate,
+    autostart::AutostartRegistration,
+    services::{NativeServices, shutting_down},
+    shortcuts::ShortcutCoordinator,
+    tray::TrayController,
 };
 
 pub(crate) use events::{emit, forward_events};
@@ -74,11 +77,7 @@ impl Gateway {
         let result = run_blocking(move || {
             let _running = commands.read().expect("command barrier lock poisoned");
             if shutdown.is_cancelled() {
-                return Err(AppError::new(
-                    ErrorCategory::General,
-                    "application_shutting_down",
-                    "The application is closing",
-                ));
+                return Err(shutting_down());
             }
             work(services)
         })
