@@ -230,9 +230,8 @@ impl MicrophoneAccess {
 
 #[cfg(test)]
 mod tests {
-    use whispernow_domain::ipc::{
-        ErrorCategory, PermissionKind as Kind, PermissionStatus as Status,
-    };
+    use whispernow_domain::ErrorCategory;
+    use whispernow_domain::ipc::{PermissionKind as Kind, PermissionStatus as Status};
 
     use super::{
         AppError, MicrophoneAccess, PasteHelperSetup, SessionFacts, WaylandPaste, permission_states,

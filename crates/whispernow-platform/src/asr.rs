@@ -24,13 +24,6 @@ pub struct SherpaAsrEngine {
     loaded: Option<(ModelId, OfflineRecognizer)>,
 }
 
-impl SherpaAsrEngine {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
 impl AsrEngine for SherpaAsrEngine {
     fn loaded_model_id(&self) -> Option<&ModelId> {
         self.loaded.as_ref().map(|(model_id, _)| model_id)

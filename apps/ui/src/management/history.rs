@@ -1,5 +1,4 @@
-use whispernow_domain::AppError;
-use whispernow_domain::ipc::ErrorCategory;
+use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{HistoryFilter, HistoryPage, HistoryPageRequest};
 
 use super::ManagementState;

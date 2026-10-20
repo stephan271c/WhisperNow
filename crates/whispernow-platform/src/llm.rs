@@ -193,6 +193,13 @@ fn status_error(status: u16) -> LlmError {
         401 | 403 => LlmError::Authentication,
         408 | 429 => LlmError::RateLimited,
         500..=599 => LlmError::TemporarilyUnavailable,
+        300..=399 => {
+            tracing::warn!(
+                status,
+                "the provider redirected; set the endpoint it redirects to"
+            );
+            LlmError::InvalidRequest
+        }
         // Rig also reports an error envelope that came with a success status.
         200..=299 => LlmError::InvalidResponse,
         _ => LlmError::InvalidRequest,

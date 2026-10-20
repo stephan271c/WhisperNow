@@ -1,11 +1,10 @@
 mod command_names;
 
-pub use crate::{AppError, ErrorCategory};
 pub use command_names::COMMAND_NAMES;
 
 use crate::{
-    ApiKey, ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability, ModelFamily, ModelId,
-    Settings, SpeechBenchmark,
+    ApiKey, AppError, ClearDataCategory, DownloadPhase, ErrorCategory, LlmProvider,
+    ModelAvailability, ModelFamily, ModelId, Settings, SpeechBenchmark,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

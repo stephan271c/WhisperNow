@@ -16,10 +16,10 @@ use whispernow_core::{
     llm::{LlmError, LlmFinishReason, LlmFuture, LlmRequest, LlmResponse, LlmService},
     workflow::VoiceActivity,
 };
-use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest};
+use whispernow_domain::ipc::SetApiKeyRequest;
 use whispernow_domain::{
-    ApiKey, AppError, EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, LlmProvider,
-    ModelId, ModelRegistry, Settings,
+    ApiKey, AppError, EntryStatus, ErrorCategory, HistoryEntry, HistoryFilter, HistoryPageRequest,
+    LlmProvider, ModelId, ModelRegistry, Settings,
 };
 use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore};
 
@@ -590,6 +590,36 @@ fn a_decode_that_fails_twice_keeps_the_audio_as_a_failed_entry() {
     assert!(
         state.last_error.is_none(),
         "a dismissed failure stops showing"
+    );
+}
+
+#[test]
+fn a_later_error_does_not_replace_a_failed_dictations_error() {
+    let fixture = Fixture::new();
+    fixture.script.failures.store(2, Ordering::SeqCst);
+    fixture.start();
+    fixture.dictation.stop().expect("stop");
+    assert_eq!(fixture.settled_error().code, "transcription_failed");
+
+    fixture.state.publish_error(AppError::new(
+        ErrorCategory::General,
+        "another_error",
+        "Another error",
+    ));
+    assert_eq!(
+        fixture.state.snapshot().error.expect("error").code,
+        "transcription_failed"
+    );
+
+    fixture.state.dismiss_error();
+    fixture.state.publish_error(AppError::new(
+        ErrorCategory::General,
+        "another_error",
+        "Another error",
+    ));
+    assert_eq!(
+        fixture.state.snapshot().error.expect("error").code,
+        "another_error"
     );
 }
 

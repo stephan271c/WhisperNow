@@ -1,11 +1,10 @@
-use crate::AppError;
 use serde_json::to_value;
 
 use super::{
-    AppState, ErrorCategory, EventPayload, ModelState, Phase, RecordingTrigger, UpdatePhase,
-    UpdateProgress, UpdateState,
+    AppState, EventPayload, ModelState, Phase, RecordingTrigger, UpdatePhase, UpdateProgress,
+    UpdateState,
 };
-use crate::ModelId;
+use crate::{AppError, ErrorCategory, ModelId};
 
 #[test]
 fn phase_carries_the_recording_trigger() {

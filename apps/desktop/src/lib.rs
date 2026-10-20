@@ -172,9 +172,9 @@ pub fn run() {
             let (events, event_receiver) = services::Events::channel();
             let resource_dir = app.path().resource_dir()?;
             let (services, enable_autostart) =
-                NativeServices::compose(events, native_wayland, resource_dir).map_err(|error| {
-                    io::Error::other(format!("desktop setup failed ({})", error.code))
-                })?;
+                NativeServices::compose(events, native_wayland, &resource_dir).map_err(
+                    |error| io::Error::other(format!("desktop setup failed ({})", error.code)),
+                )?;
             let tray = TrayController::new(app, services.output.can_copy())?;
             let settings = services.settings.load();
             let start_minimized = settings.start_minimized;

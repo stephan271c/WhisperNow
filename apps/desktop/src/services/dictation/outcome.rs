@@ -3,8 +3,8 @@ use whispernow_core::{
     llm::{CleanupFallback, LlmError},
     workflow::{PipelineFailureKind, PreparedTranscription, has_microphone_audio},
 };
-use whispernow_domain::AppError;
-use whispernow_domain::ipc::{ErrorCategory, Phase, SetupTestResult};
+use whispernow_domain::ipc::{Phase, SetupTestResult};
+use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{CleanupTarget, EntryId, EntryStatus, NewHistoryEntry};
 
 use super::{Recording, RecordingTrigger, Worker, capture::CaptureInterruption};

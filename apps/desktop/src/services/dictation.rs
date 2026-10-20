@@ -11,7 +11,7 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_core::{
     CancellationToken, ResolvedModel,
@@ -24,7 +24,7 @@ use whispernow_core::{
         has_microphone_audio, prepare_segmented,
     },
 };
-use whispernow_domain::ipc::{ErrorCategory, MicrophoneTestResponse};
+use whispernow_domain::ipc::MicrophoneTestResponse;
 use whispernow_domain::{
     EntryStatus, HistoryLimit, HistoryRetention, ModelId, UtcMillis, VocabularyReplacement,
 };
@@ -780,7 +780,10 @@ impl Worker {
             }
             Ok(_) if cancellation.is_cancelled() => Err(DecodeFailure::Cancelled),
             Ok(Ok(result)) => Ok(result),
-            Ok(Err(_)) => Err(DecodeFailure::Failed),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "the speech recognizer failed");
+                Err(DecodeFailure::Failed)
+            }
         }
     }
 
@@ -801,7 +804,8 @@ impl Worker {
                 self.set_model(LoadedModel::Ready(requested.clone()));
                 Ok(())
             }
-            Ok(Err(_)) => {
+            Ok(Err(error)) => {
+                tracing::warn!(%error, model_id = %requested, "the speech model did not load");
                 self.set_model(LoadedModel::Failed);
                 Err(model_load_error())
             }

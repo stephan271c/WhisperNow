@@ -31,7 +31,12 @@ impl AiCleanup {
         cancellation: &CancellationToken,
     ) {
         let started = Instant::now();
-        let result = self.run(plan, &prepared.deterministic_text, cancellation);
+        let result = self.run(plan, &prepared.final_text, cancellation);
+        if let Err(fallback) = &result
+            && *fallback != CleanupFallback::Cancelled
+        {
+            tracing::warn!(?fallback, "AI cleanup kept the recognized text");
+        }
         tracing::info!(
             stage = "cleanup",
             duration_ms = started.elapsed().as_secs_f64() * 1_000.0,

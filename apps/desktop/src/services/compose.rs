@@ -2,13 +2,12 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_core::{
     audio::AudioInput,
     llm::{LlmFuture, LlmRequest, LlmService},
 };
-use whispernow_domain::ipc::ErrorCategory;
 use whispernow_platform::{
     AppPaths, CpalAudioInput, LocalCleanupService, ModelStore, SettingsLoad, SettingsStore,
     SherpaAsrEngine, silero_vad_model_path, silero_voice_activity,
@@ -30,7 +29,7 @@ impl NativeServices {
     pub(crate) fn compose(
         events: Events,
         native_wayland: bool,
-        resource_dir: PathBuf,
+        resource_dir: &Path,
     ) -> Result<(Self, bool), AppError> {
         let paths = AppPaths::discover().map_err(|_| {
             AppError::new(
@@ -62,7 +61,7 @@ impl NativeServices {
                     "AI cleanup is unavailable",
                 )
             })?;
-        let llama_dir = llama_dir(&resource_dir);
+        let llama_dir = llama_dir(resource_dir);
         let vad_model = silero_vad_model_path(resource_dir);
         let initial = State::new(persisted.model_id.clone());
         let state = Arc::new(StateCell::new(initial, events));
@@ -100,7 +99,7 @@ impl NativeServices {
             voice_activity: Arc::new(move || silero_voice_activity(&vad_model)),
             cleanup,
             output: output.clone(),
-            engine: Box::new(|| Box::new(SherpaAsrEngine::new())),
+            engine: Box::new(|| Box::new(SherpaAsrEngine::default())),
         })?;
         Ok((
             Self {

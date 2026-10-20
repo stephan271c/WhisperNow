@@ -15,7 +15,7 @@ use whispernow_core::audio::{
 
 use whispernow_domain::ipc::AudioDevice;
 
-use super::{CaptureBackend, CaptureStream, CpalBackend, OpenedCapture, StreamFault};
+use super::{CaptureBackend, CaptureStream, CpalBackend, OpenedCapture, StreamFault, backend};
 
 const RAW_QUEUE_CAPACITY: usize = 8;
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -69,6 +69,7 @@ impl AudioInput for CpalAudioInput {
             dropped_frames,
         } = self.backend.open(&device, chunks_tx)?;
         let processor = AudioProcessor::new(sample_rate_hz, channels)
+            .inspect_err(|error| tracing::warn!(%error, "the audio processor could not be built"))
             .map_err(|_| AudioInputError::UnsupportedConfiguration)?;
         stream.start()?;
         tracing::info!(
@@ -223,7 +224,9 @@ impl Worker {
         }
         let processed = processor.push_interleaved(&chunk);
         let _recycled = self.recycle.try_send(chunk).is_ok();
-        let output = processed.map_err(|_| backend("process native audio chunk"))?;
+        let output = processed
+            .inspect_err(|error| tracing::warn!(%error, "an audio chunk could not be processed"))
+            .map_err(|_| backend("process native audio chunk"))?;
         self.emit_processor_output(output);
         Ok(())
     }
@@ -261,6 +264,7 @@ impl Worker {
     fn finish_processor(&self, processor: AudioProcessor) -> Result<(), AudioInputError> {
         let (output, summary) = processor
             .finish()
+            .inspect_err(|error| tracing::warn!(%error, "the audio processor could not be flushed"))
             .map_err(|_| backend("flush audio processor"))?;
         self.emit_processor_output(output);
         if summary.sample_count > 0 {
@@ -268,10 +272,6 @@ impl Worker {
         }
         Ok(())
     }
-}
-
-fn backend(operation: &'static str) -> AudioInputError {
-    AudioInputError::Backend { operation }
 }
 
 #[cfg(test)]

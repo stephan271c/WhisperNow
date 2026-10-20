@@ -1,6 +1,6 @@
 use whispernow_domain::VocabularyReplacement;
 
-use crate::llm::CleanupFallback;
+use crate::{audio::TARGET_SAMPLE_RATE, llm::CleanupFallback};
 
 use super::*;
 
@@ -79,4 +79,26 @@ fn failed_cleanup_keeps_the_vocabulary_output_and_successful_cleanup_replaces_it
     cleaned.apply_cleanup(Ok("Right word.".to_owned()));
     assert_eq!(cleaned.final_text, "Right word.");
     assert_eq!(cleaned.fallback, None);
+}
+
+#[test]
+fn absent_and_flat_signals_are_no_audio() {
+    assert!(!has_microphone_audio(&[]));
+    assert!(!has_microphone_audio(&vec![
+        0.0;
+        TARGET_SAMPLE_RATE as usize
+    ]));
+    assert!(!has_microphone_audio(&vec![
+        0.000_05;
+        TARGET_SAMPLE_RATE as usize
+    ]));
+    assert!(has_microphone_audio(&[0.01; 160]));
+}
+
+#[test]
+fn an_impulse_above_the_peak_threshold_counts_as_audio() {
+    let mut impulse = vec![0.0; TARGET_SAMPLE_RATE as usize];
+    impulse[8_000] = 0.01;
+
+    assert!(has_microphone_audio(&impulse));
 }

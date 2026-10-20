@@ -1,8 +1,8 @@
 //! The pill renders the published state snapshot itself; this module only decides where the
 //! window is and whether it shows.
 
-use whispernow_domain::ipc::{AppState, ErrorCategory, Phase};
-use whispernow_domain::{AppError, WindowGeometry};
+use whispernow_domain::ipc::{AppState, Phase};
+use whispernow_domain::{AppError, ErrorCategory, WindowGeometry};
 
 mod tauri_window;
 

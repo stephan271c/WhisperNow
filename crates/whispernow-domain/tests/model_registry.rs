@@ -120,16 +120,14 @@ fn cleanup_models_start_with_the_default_and_name_the_published_revision() {
 }
 
 #[test]
-fn lookup_accepts_typed_and_text_ids_and_rejects_unknown_models() {
+fn lookup_finds_registered_models_and_rejects_unknown_ones() {
     let registry = ModelRegistry::builtin();
-    let id = ModelId::new("sherpa-onnx-whisper-turbo").expect("built-in identifier is valid");
 
-    assert_eq!(registry.get(&id).map(|model| &model.id), Some(&id));
     assert_eq!(
         registry
             .get("sherpa-onnx-whisper-turbo")
-            .map(|model| &model.id),
-        Some(&id)
+            .map(|model| model.id.as_str()),
+        Some("sherpa-onnx-whisper-turbo")
     );
     assert!(registry.get("unknown-model").is_none());
 }

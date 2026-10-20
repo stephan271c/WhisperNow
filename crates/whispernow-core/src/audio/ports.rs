@@ -10,12 +10,11 @@ use super::{AudioBlock, AudioLevelSummary};
 pub struct AudioDeviceId(String);
 
 impl AudioDeviceId {
-    pub fn new(value: impl Into<String>) -> Result<Self, AudioInputError> {
+    /// `None` for a blank identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Option<Self> {
         let value = value.into();
-        if value.trim().is_empty() {
-            return Err(AudioInputError::InvalidDeviceId);
-        }
-        Ok(Self(value))
+        (!value.trim().is_empty()).then_some(Self(value))
     }
 
     #[must_use]
@@ -53,8 +52,6 @@ pub trait AudioSink: Send + Sync {
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum AudioInputError {
-    #[error("audio device identifier is empty")]
-    InvalidDeviceId,
     #[error("audio input device was not found")]
     InvalidDevice,
     #[error("audio input device is unavailable")]

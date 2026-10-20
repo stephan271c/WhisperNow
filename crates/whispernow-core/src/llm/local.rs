@@ -22,7 +22,6 @@
 use std::{
     fmt,
     ops::{ControlFlow, Range},
-    time::{Duration, Instant},
 };
 
 use thiserror::Error;
@@ -160,11 +159,6 @@ pub struct LocalDecodeOutput {
     pub accepted: usize,
     /// Batches decoded after the prompt.
     pub passes: usize,
-    /// Prompt decoding through the first sampled token; excludes full-prompt
-    /// tokenization and context creation.
-    pub prompt_time: Duration,
-    /// Everything after the first sampled token.
-    pub generation_time: Duration,
 }
 
 impl fmt::Debug for LocalDecodeOutput {
@@ -178,8 +172,6 @@ impl fmt::Debug for LocalDecodeOutput {
             .field("drafted", &self.drafted)
             .field("accepted", &self.accepted)
             .field("passes", &self.passes)
-            .field("prompt_time", &self.prompt_time)
-            .field("generation_time", &self.generation_time)
             .finish_non_exhaustive()
     }
 }
@@ -191,7 +183,6 @@ pub fn decode<C: DecodeContext>(
     request: LocalDecodeRequest<'_>,
     mut between_passes: impl FnMut(&[u8]) -> ControlFlow<()>,
 ) -> Result<LocalDecodeOutput, LocalDecodeError> {
-    let started = Instant::now();
     let LocalDecodeRequest {
         prompt,
         max_tokens,
@@ -240,8 +231,6 @@ pub fn decode<C: DecodeContext>(
     }
 
     let first = sampler.sample(context.logits(last_length - 1)?);
-    let prompt_time = started.elapsed();
-    let generating = Instant::now();
     let mut state = State {
         cached: prompt,
         sampled: first,
@@ -269,8 +258,6 @@ pub fn decode<C: DecodeContext>(
         drafted: reply.drafted,
         accepted: reply.accepted,
         passes,
-        prompt_time,
-        generation_time: generating.elapsed(),
     })
 }
 

@@ -1,10 +1,9 @@
 use dioxus::prelude::*;
-use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    ActiveDownload, ErrorCategory, EventPayload, PasteHelperSetup, Permission, PermissionKind,
-    PermissionStatus, PermissionsResponse, Phase, SaveSettingsResponse, SettingsView,
-    SetupTestResult,
+    ActiveDownload, EventPayload, PasteHelperSetup, Permission, PermissionKind, PermissionStatus,
+    PermissionsResponse, Phase, SaveSettingsResponse, SettingsView, SetupTestResult,
 };
+use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{
     DownloadPhase, ModelAvailability, ModelId, RecordingMode, SetupCheckpoint, SetupStep, Shortcut,
     ShortcutKey, ShortcutModifier,

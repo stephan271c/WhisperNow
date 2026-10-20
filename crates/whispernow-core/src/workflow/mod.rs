@@ -3,16 +3,15 @@
 
 mod join;
 mod pipeline;
-mod presence;
 mod segmentation;
-mod types;
 
 pub use join::join_segment_texts;
 
-pub use pipeline::{apply_vocabulary_replacements, prepare_segmented};
-pub use presence::has_microphone_audio;
+pub use pipeline::{
+    PipelineFailureKind, PreparedTranscription, apply_vocabulary_replacements,
+    has_microphone_audio, prepare_segmented,
+};
 pub use segmentation::{AlwaysSpeech, AudioSegment, FRAME_SAMPLES, SpeechSegmenter, VoiceActivity};
-pub use types::{PipelineFailureKind, PreparedTranscription};
 
 #[cfg(test)]
 mod tests;

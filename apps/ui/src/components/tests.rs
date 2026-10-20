@@ -1,10 +1,10 @@
 use dioxus::prelude::*;
-use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    ActiveDownload, AppState, ClearDataItem, ClearDataResult, DataLocation, ErrorCategory,
-    EventPayload, MainWindowSection, MicrophoneTestResponse, ModelState, ModelSummary, Phase,
+    ActiveDownload, AppState, ClearDataItem, ClearDataResult, DataLocation, EventPayload,
+    MainWindowSection, MicrophoneTestResponse, ModelState, ModelSummary, Phase,
     SaveSettingsResponse, SettingsView,
 };
+use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{
     ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability, ModelId, ProviderEndpoint,
     ProviderSettings, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,

@@ -1,5 +1,5 @@
-use whispernow_domain::ipc::{AppState, ErrorCategory, Phase};
-use whispernow_domain::{AppError, WindowGeometry};
+use whispernow_domain::ipc::{AppState, Phase};
+use whispernow_domain::{AppError, ErrorCategory, WindowGeometry};
 
 use crate::tests::{recording, snapshot};
 

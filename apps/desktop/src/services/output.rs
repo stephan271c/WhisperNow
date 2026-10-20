@@ -6,8 +6,8 @@ use whispernow_core::{
     CancellationToken,
     text_output::{PasteOutcome, PastePlatform, PasteQueue},
 };
-use whispernow_domain::AppError;
-use whispernow_domain::ipc::{ErrorCategory, PermissionStatus};
+use whispernow_domain::ipc::PermissionStatus;
+use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_platform::{NativePasteError, NativePastePlatform};
 
 #[cfg(target_os = "linux")]
@@ -109,7 +109,11 @@ impl OutputCoordinator {
             return OutputNotice::PasteFailed;
         };
         match operation {
-            OutputOperation::Native(queue) => native_notice(queue.paste(text, cancellation)),
+            OutputOperation::Native(queue) => {
+                let outcome = queue.paste(text, cancellation);
+                tracing::debug!(?outcome, "paste finished");
+                native_notice(outcome)
+            }
             #[cfg(target_os = "linux")]
             OutputOperation::Helper(helper) => helper.output(text, cancellation),
             #[cfg(target_os = "linux")]
@@ -267,7 +271,7 @@ where
                 .spawn(move || {
                     let sent = progress.clone();
                     let outcome =
-                        queue.paste_reporting_keystroke(&text, &cancellation, move |_| {
+                        queue.paste_reporting_keystroke(&text, &cancellation, move || {
                             let _ = sent.send(Progress::Sent);
                         });
                     tracing::debug!(?outcome, "paste finished");

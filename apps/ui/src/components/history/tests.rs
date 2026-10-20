@@ -501,8 +501,8 @@ fn a_search_that_cannot_run_explains_itself_in_place_of_stale_rows() {
     let (request_id, _) = management.history_request();
     management.fail_history_refresh(
         request_id,
-        &whispernow_domain::ipc::AppError {
-            category: whispernow_domain::ipc::ErrorCategory::General,
+        &whispernow_domain::AppError {
+            category: whispernow_domain::ErrorCategory::General,
             code: "text_too_large".to_owned(),
             summary: "This search is too long. Shorten it and try again.".to_owned(),
         },

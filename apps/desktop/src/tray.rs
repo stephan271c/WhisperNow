@@ -380,9 +380,9 @@ mod tests {
     use super::*;
     use crate::tests::{recording, snapshot};
 
-    fn transcription_failed() -> whispernow_domain::ipc::AppError {
-        whispernow_domain::ipc::AppError {
-            category: whispernow_domain::ipc::ErrorCategory::Recognition,
+    fn transcription_failed() -> whispernow_domain::AppError {
+        whispernow_domain::AppError {
+            category: whispernow_domain::ErrorCategory::Recognition,
             code: "transcription_failed".to_owned(),
             summary: "The recording could not be transcribed".to_owned(),
         }

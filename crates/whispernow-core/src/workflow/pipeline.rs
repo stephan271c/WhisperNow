@@ -2,7 +2,39 @@ use std::time::Instant;
 
 use whispernow_domain::VocabularyReplacement;
 
-use super::{PipelineFailureKind, PreparedTranscription, join_segment_texts};
+use super::join_segment_texts;
+use crate::{audio::AudioLevelAccumulator, llm::CleanupFallback};
+
+const NO_AUDIO_PEAK_THRESHOLD: f32 = 0.000_5;
+const NO_AUDIO_RMS_THRESHOLD: f32 = 0.000_1;
+
+/// Has not yet caused history or output side effects.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedTranscription {
+    pub raw_text: String,
+    /// The raw text after vocabulary replacements, which AI cleanup edits and then replaces.
+    pub final_text: String,
+    /// Why AI cleanup kept the deterministic text.
+    pub fallback: Option<CleanupFallback>,
+}
+
+impl PreparedTranscription {
+    pub fn apply_cleanup(&mut self, cleanup: Result<String, CleanupFallback>) {
+        match cleanup {
+            Ok(text) => self.final_text = text,
+            Err(fallback) => self.fallback = Some(fallback),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PipelineFailureKind {
+    NoAudio,
+    NoSpeech,
+    RecognitionFailed,
+    EmptyTranscription,
+    UnknownTokens,
+}
 
 /// Joins the decoded segment texts and applies the vocabulary once to the whole transcript.
 /// A recording without segments contained no speech.
@@ -30,8 +62,7 @@ pub fn prepare_segmented(
     );
     Ok(PreparedTranscription {
         raw_text,
-        final_text: deterministic_text.clone(),
-        deterministic_text,
+        final_text: deterministic_text,
         fallback: None,
     })
 }
@@ -48,4 +79,13 @@ pub fn apply_vocabulary_replacements(text: &str, replacements: &[VocabularyRepla
             current.replace(&rule.source, &rule.replacement)
         }
     })
+}
+
+/// Whether a normalized recording holds more than flat device noise. No speech detector runs.
+#[must_use]
+pub fn has_microphone_audio(samples: &[f32]) -> bool {
+    let mut levels = AudioLevelAccumulator::default();
+    levels.observe(samples);
+    let summary = levels.summary();
+    summary.peak >= NO_AUDIO_PEAK_THRESHOLD || summary.rms >= NO_AUDIO_RMS_THRESHOLD
 }

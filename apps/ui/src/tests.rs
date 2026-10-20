@@ -1,8 +1,8 @@
-use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    ErrorCategory, EventPayload, ManualUpdatePackage, ModelState, Phase, SettingsView, UpdateError,
-    UpdatePhase, UpdateProgress, UpdateState,
+    EventPayload, ManualUpdatePackage, ModelState, Phase, SettingsView, UpdateError, UpdatePhase,
+    UpdateProgress, UpdateState,
 };
+use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{LlmProvider, Settings, Shortcut, ShortcutKey, ShortcutModifier};
 
 use crate::components::cleanup_destination;

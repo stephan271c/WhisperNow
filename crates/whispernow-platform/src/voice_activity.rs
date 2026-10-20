@@ -28,11 +28,8 @@ const MAX_SPEECH_DURATION_SECONDS: f32 = 30.0;
 const VAD_BUFFER_SIZE_SECONDS: f32 = 30.0;
 
 #[must_use]
-pub fn silero_vad_model_path(resource_root: impl AsRef<Path>) -> PathBuf {
-    resource_root
-        .as_ref()
-        .join("vad")
-        .join(SILERO_VAD_MODEL_FILE)
+pub fn silero_vad_model_path(resource_root: &Path) -> PathBuf {
+    resource_root.join("vad").join(SILERO_VAD_MODEL_FILE)
 }
 
 /// Builds fresh detector state for a recording. An unavailable model fails open to

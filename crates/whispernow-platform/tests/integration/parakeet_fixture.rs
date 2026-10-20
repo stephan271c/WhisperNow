@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use whispernow_core::{ResolvedModel, asr::AsrEngine};
-use whispernow_domain::{ModelId, ModelRegistry};
+use whispernow_domain::ModelRegistry;
 use whispernow_platform::SherpaAsrEngine;
 
 #[test]
@@ -14,7 +14,7 @@ fn manual_parakeet_fixture_matches_documented_text() {
             "WHISPERNOW_ASR_MODEL_ROOT must name the extracted Parakeet v2 FP16 archive root",
         ));
     let definition = ModelRegistry::builtin()
-        .get(ModelId::new("sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16").expect("model id"))
+        .get("sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16")
         .expect("Parakeet v2 FP16")
         .clone();
     assert_eq!(
@@ -32,7 +32,7 @@ fn manual_parakeet_fixture_matches_documented_text() {
         whispernow_core::audio::TARGET_SAMPLE_RATE.cast_signed()
     );
 
-    let mut engine = SherpaAsrEngine::new();
+    let mut engine = SherpaAsrEngine::default();
     engine
         .load(&ResolvedModel { definition, root })
         .expect("load Parakeet");

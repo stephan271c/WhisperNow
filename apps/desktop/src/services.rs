@@ -2,12 +2,12 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_core::audio::{AudioDeviceChoice, AudioInput, AudioInputError};
 use whispernow_domain::ipc::{
-    AudioDevice, ErrorCategory, MicrophoneTestResponse, PermissionKind, PermissionStatus,
-    PermissionsResponse, SaveSettingsResponse, SettingsView,
+    AudioDevice, MicrophoneTestResponse, PermissionKind, PermissionStatus, PermissionsResponse,
+    SaveSettingsResponse, SettingsView,
 };
 use whispernow_domain::{
     CleanupTarget, EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, Settings,
@@ -371,6 +371,7 @@ fn setup_already_complete() -> AppError {
 }
 
 fn capture_start_error(error: &AudioInputError) -> AppError {
+    tracing::warn!(%error, "audio capture could not be started");
     if matches!(error, AudioInputError::PermissionDenied) {
         AppError::new(
             ErrorCategory::Permission,

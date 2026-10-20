@@ -5,10 +5,9 @@ mod permissions;
 mod settings;
 
 use std::sync::{Arc, RwLock, atomic::AtomicBool};
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_core::CancellationToken;
-use whispernow_domain::ipc::ErrorCategory;
 
 use crate::{
     activation::ActivationGate,

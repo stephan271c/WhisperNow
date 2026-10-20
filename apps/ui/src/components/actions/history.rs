@@ -1,9 +1,8 @@
 use std::future::Future;
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ErrorCategory};
 
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use whispernow_domain::ipc::ErrorCategory;
 use whispernow_domain::{EntryId, HistoryPageRequest};
 
 use crate::client;

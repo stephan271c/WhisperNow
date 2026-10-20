@@ -150,16 +150,19 @@ impl CaptureBackend for CpalBackend {
         }
         let fault = Arc::new(AtomicU8::new(StreamFault::None as u8));
         let dropped_frames = Arc::new(AtomicUsize::new(0));
+        let callback = CallbackPorts {
+            channels,
+            chunks,
+            available,
+            recycle: recycle.clone(),
+            dropped_frames: Arc::clone(&dropped_frames),
+        };
         let stream = build_stream(
             &device,
             selected.sample_format(),
             config,
-            channels,
-            chunks,
-            available,
-            recycle.clone(),
+            callback,
             Arc::clone(&fault),
-            Arc::clone(&dropped_frames),
         )?;
         Ok(OpenedCapture {
             stream: Box::new(stream),
@@ -207,15 +210,15 @@ fn negotiate_input_config(
 ) -> Option<SupportedStreamConfig> {
     supported
         .iter()
-        .filter(|range| sample_format_rank(range.sample_format()).is_some())
-        .map(|range| {
+        .filter_map(|range| {
+            let format_rank = sample_format_rank(range.sample_format())?;
             let sample_rate = preferred_sample_rate(range);
             let score = (
-                sample_format_rank(range.sample_format()).unwrap_or(u8::MAX),
+                format_rank,
                 channel_rank(range.channels()),
                 sample_rate.abs_diff(48_000),
             );
-            (score, (*range).with_sample_rate(sample_rate))
+            Some((score, (*range).with_sample_rate(sample_rate)))
         })
         .min_by_key(|(score, _)| *score)
         .map(|(_, config)| config)
@@ -270,30 +273,24 @@ fn configure_buffer_size(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_stream(
-    device: &Device,
-    format: SampleFormat,
-    config: StreamConfig,
+struct CallbackPorts {
     channels: NonZeroUsize,
     chunks: SyncSender<Vec<f32>>,
     available: Receiver<Vec<f32>>,
     recycle: SyncSender<Vec<f32>>,
-    fault: Arc<AtomicU8>,
     dropped_frames: Arc<AtomicUsize>,
+}
+
+fn build_stream(
+    device: &Device,
+    format: SampleFormat,
+    config: StreamConfig,
+    callback: CallbackPorts,
+    fault: Arc<AtomicU8>,
 ) -> Result<Stream, AudioInputError> {
     macro_rules! typed_stream {
         ($sample:ty) => {
-            build_typed_stream::<$sample>(
-                device,
-                config,
-                channels,
-                chunks,
-                available,
-                recycle,
-                fault,
-                dropped_frames,
-            )
+            build_typed_stream::<$sample>(device, config, callback, fault)
         };
     }
     match format {
@@ -313,38 +310,30 @@ fn build_stream(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_typed_stream<T>(
     device: &Device,
     config: StreamConfig,
-    channels: NonZeroUsize,
-    chunks: SyncSender<Vec<f32>>,
-    available: Receiver<Vec<f32>>,
-    recycle: SyncSender<Vec<f32>>,
+    callback: CallbackPorts,
     fault: Arc<AtomicU8>,
-    dropped_frames: Arc<AtomicUsize>,
 ) -> Result<Stream, AudioInputError>
 where
     T: cpal::SizedSample + Copy,
     f32: FromSample<T>,
 {
-    let callback_recycle = recycle;
-    let callback_dropped = dropped_frames;
-    let error_fault = fault;
     device
         .build_input_stream::<T, _, _>(
             config,
             move |data, _| {
                 copy_callback_samples(
                     data,
-                    channels,
-                    &chunks,
-                    &available,
-                    &callback_recycle,
-                    &callback_dropped,
+                    callback.channels,
+                    &callback.chunks,
+                    &callback.available,
+                    &callback.recycle,
+                    &callback.dropped_frames,
                 );
             },
-            move |error| map_stream_fault(error.kind()).store(&error_fault),
+            move |error| map_stream_fault(error.kind()).store(&fault),
             Some(STREAM_BUILD_TIMEOUT),
         )
         .map_err(|error| map_device_error(&error, "build input stream"))
@@ -414,7 +403,7 @@ fn map_device_error(error: &cpal::Error, operation: &'static str) -> AudioInputE
     }
 }
 
-fn backend(operation: &'static str) -> AudioInputError {
+pub(super) fn backend(operation: &'static str) -> AudioInputError {
     AudioInputError::Backend { operation }
 }
 

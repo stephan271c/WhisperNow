@@ -101,10 +101,19 @@ fn fake_response(text: &str, finish_reason: LlmFinishReason) -> LlmResponse {
     }
 }
 
+async fn clean_up_with(service: &FakeService, text: &str) -> Result<String, CleanupFallback> {
+    clean_up(
+        service,
+        text,
+        &config(),
+        None,
+        &CancellationToken::default(),
+    )
+    .await
+}
+
 async fn clean_up_once(behavior: Behavior, text: &str) -> Result<String, CleanupFallback> {
-    let service = FakeService::new([behavior]);
-    let config = config();
-    clean_up(&service, text, &config, None, &CancellationToken::default()).await
+    clean_up_with(&FakeService::new([behavior]), text).await
 }
 
 #[test]
@@ -145,15 +154,7 @@ async fn a_transient_failure_is_retried() {
         Behavior::Error(LlmError::Transport),
         Behavior::Text("Hello world."),
     ]);
-    let config = config();
-    let result = clean_up(
-        &service,
-        "hello world",
-        &config,
-        None,
-        &CancellationToken::default(),
-    )
-    .await;
+    let result = clean_up_with(&service, "hello world").await;
     assert_eq!(result, Ok("Hello world.".to_owned()));
     assert_eq!(service.calls(), 2);
 }
@@ -161,15 +162,7 @@ async fn a_transient_failure_is_retried() {
 #[tokio::test]
 async fn transient_failures_are_retried_at_most_twice() {
     let service = FakeService::new([Behavior::Error(LlmError::RateLimited); 4]);
-    let config = config();
-    let result = clean_up(
-        &service,
-        "hello world",
-        &config,
-        None,
-        &CancellationToken::default(),
-    )
-    .await;
+    let result = clean_up_with(&service, "hello world").await;
     assert_eq!(
         result,
         Err(CleanupFallback::ProviderFailed(LlmError::RateLimited))
@@ -183,15 +176,7 @@ async fn a_missing_model_is_reported_without_a_retry() {
         Behavior::Error(LlmError::ModelNotFound),
         Behavior::Text("Hello world."),
     ]);
-    let config = config();
-    let result = clean_up(
-        &service,
-        "hello world",
-        &config,
-        None,
-        &CancellationToken::default(),
-    )
-    .await;
+    let result = clean_up_with(&service, "hello world").await;
     assert_eq!(
         result,
         Err(CleanupFallback::ProviderFailed(LlmError::ModelNotFound))

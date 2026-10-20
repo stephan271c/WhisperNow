@@ -1,8 +1,8 @@
 use std::sync::Arc;
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_domain::ipc::{
-    ClearDataResult, ErrorCategory, SaveSettingsResponse, SetApiKeyRequest, SettingsView,
+    ClearDataResult, SaveSettingsResponse, SetApiKeyRequest, SettingsView,
 };
 use whispernow_domain::{ClearDataCategory, LlmProvider, Settings, SetupCheckpoint};
 

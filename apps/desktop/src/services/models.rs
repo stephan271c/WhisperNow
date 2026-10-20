@@ -3,10 +3,10 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_core::{CancellationToken, ResolvedModel};
-use whispernow_domain::ipc::{ActiveDownload, ErrorCategory, ModelSummary};
+use whispernow_domain::ipc::{ActiveDownload, ModelSummary};
 use whispernow_domain::{DownloadPhase, ModelAvailability};
 use whispernow_domain::{ModelFamily, ModelId};
 use whispernow_platform::{
@@ -60,7 +60,7 @@ impl ModelCoordinator {
         let models = self
             .store
             .list()
-            .map_err(model_list_error)?
+            .map_err(|error| model_list_error(&error))?
             .into_iter()
             .map(|entry| ModelSummary {
                 recommended: entry.definition.id == ModelId::default(),
@@ -179,7 +179,10 @@ impl ModelCoordinator {
         }
         state.require_no_downloads()?;
         drop(state);
-        let models = self.store.list().map_err(model_list_error)?;
+        let models = self
+            .store
+            .list()
+            .map_err(|error| model_list_error(&error))?;
         let target = models
             .iter()
             .find(|entry| entry.definition.id == *model_id)
@@ -288,7 +291,8 @@ impl NativeServices {
 pub(super) fn installed(store: &ModelStore, id: &ModelId) -> Result<ResolvedModel, AppError> {
     store
         .resolve(id)
-        .map_err(|_| {
+        .map_err(|error| {
+            tracing::warn!(%error, model_id = %id, "the model could not be inspected");
             AppError::new(
                 ErrorCategory::Model,
                 "model_resolve",
@@ -304,7 +308,8 @@ pub(super) fn installed(store: &ModelStore, id: &ModelId) -> Result<ResolvedMode
         })
 }
 
-fn model_list_error(_: ModelStoreError) -> AppError {
+fn model_list_error(error: &ModelStoreError) -> AppError {
+    tracing::warn!(%error, "the models could not be listed");
     AppError::new(
         ErrorCategory::Model,
         "model_list",
@@ -355,11 +360,14 @@ fn run_model_download(
             tracing::info!(model_id = %model_id, "model download cancelled");
             None
         }
-        Err(_) => Some(AppError::new(
-            ErrorCategory::Model,
-            "model_download",
-            "The model could not be installed",
-        )),
+        Err(error) => {
+            tracing::warn!(%error, model_id = %model_id, "the model could not be installed");
+            Some(AppError::new(
+                ErrorCategory::Model,
+                "model_download",
+                "The model could not be installed",
+            ))
+        }
     };
     state.apply(|current| {
         current.active_downloads.remove(&model_id);

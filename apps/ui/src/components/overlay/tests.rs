@@ -1,9 +1,7 @@
 use dioxus::prelude::*;
-use whispernow_domain::AppError;
 use whispernow_domain::RecordingMode;
-use whispernow_domain::ipc::{
-    AppState, ErrorCategory, EventPayload, MainWindowSection, Phase, RecordingTrigger,
-};
+use whispernow_domain::ipc::{AppState, EventPayload, MainWindowSection, Phase, RecordingTrigger};
+use whispernow_domain::{AppError, ErrorCategory};
 
 use serde_json::Value;
 

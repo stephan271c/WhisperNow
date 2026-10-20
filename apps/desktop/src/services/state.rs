@@ -233,7 +233,12 @@ impl StateCell {
         }
     }
 
+    /// A failed dictation's error stays until it is dismissed, so a later error does not replace it.
     pub(crate) fn publish_error(&self, error: AppError) {
-        self.apply(|state| state.last_error = Some(error));
+        self.apply(|state| {
+            if state.phase != Phase::Error {
+                state.last_error = Some(error);
+            }
+        });
     }
 }

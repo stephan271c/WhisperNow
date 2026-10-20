@@ -6,12 +6,12 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_core::audio::{
     AudioBlock, AudioDeviceChoice, AudioEvent, AudioInput, AudioLevelSummary, AudioSink,
 };
-use whispernow_domain::ipc::{ErrorCategory, MicrophoneTestResponse};
+use whispernow_domain::ipc::MicrophoneTestResponse;
 
 use super::capture_start_error;
 

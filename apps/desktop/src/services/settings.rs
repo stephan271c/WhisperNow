@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex, MutexGuard};
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_core::audio::{AudioDeviceChoice, AudioDeviceId, AudioInput};
-use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest, SettingsView};
+use whispernow_domain::ipc::{SetApiKeyRequest, SettingsView};
 use whispernow_domain::{ApiKey, LlmProvider, RemoteProvider, SettingsError};
 use whispernow_domain::{ModelId, Settings, SetupCheckpoint, SetupStep, WindowGeometry};
 use whispernow_platform::{SettingsNotice, SettingsStore};
@@ -311,7 +311,7 @@ pub(super) fn device_choice(selected: Option<&str>) -> Result<AudioDeviceChoice,
         None => Ok(AudioDeviceChoice::SystemDefault),
         Some(id) => AudioDeviceId::new(id)
             .map(AudioDeviceChoice::Device)
-            .map_err(|_| {
+            .ok_or_else(|| {
                 AppError::new(
                     ErrorCategory::Audio,
                     "audio_device_invalid",
@@ -387,7 +387,7 @@ mod tests {
             state.last_error.as_ref().map(|error| error.code.clone())
         }
 
-        fn set_key(&self, secret: &str) -> Result<(), whispernow_domain::ipc::AppError> {
+        fn set_key(&self, secret: &str) -> Result<(), whispernow_domain::AppError> {
             self.settings
                 .set_api_key(&SetApiKeyRequest {
                     provider: LlmProvider::OpenAi,

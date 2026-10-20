@@ -1,3 +1,7 @@
+//! The platform supplies plain clipboard reads and writes plus the paste
+//! keystroke; this module owns the ordering, the compare-and-restore rule, and
+//! the one-at-a-time queue so the rules are testable without a desktop.
+
 use std::{
     fmt,
     sync::{Mutex, PoisonError},
@@ -89,17 +93,16 @@ impl<P: PastePlatform> PasteQueue<P> {
     }
 
     pub fn paste(&self, text: &str, cancellation: &CancellationToken) -> PasteOutcome<P::Error> {
-        self.paste_reporting_keystroke(text, cancellation, |_| {})
+        self.paste_reporting_keystroke(text, cancellation, || {})
     }
 
     /// Pastes like [`Self::paste`], and calls `sent` as soon as the keystroke
-    /// has been sent, with whether the previous clipboard will be put back.
-    /// The restore still happens before this returns.
+    /// has been sent. The restore still happens before this returns.
     pub fn paste_reporting_keystroke(
         &self,
         text: &str,
         cancellation: &CancellationToken,
-        sent: impl FnOnce(bool),
+        sent: impl FnOnce(),
     ) -> PasteOutcome<P::Error> {
         let mut platform = self.platform.lock().unwrap_or_else(PoisonError::into_inner);
         paste_and_restore(&mut *platform, text, cancellation, sent)
@@ -125,7 +128,7 @@ fn paste_and_restore<P: PastePlatform>(
     platform: &mut P,
     text: &str,
     cancellation: &CancellationToken,
-    sent: impl FnOnce(bool),
+    sent: impl FnOnce(),
 ) -> PasteOutcome<P::Error> {
     if cancellation.is_cancelled() {
         return PasteOutcome::Cancelled;
@@ -149,7 +152,7 @@ fn paste_and_restore<P: PastePlatform>(
     }
     let paste_error = match platform.send_paste_shortcut() {
         KeystrokeOutcome::Sent => {
-            sent(previous.is_some());
+            sent();
             None
         }
         KeystrokeOutcome::Uncertain(error) => Some(error),
@@ -328,7 +331,7 @@ mod tests {
     }
 
     fn run(desktop: &mut FakeDesktop) -> PasteOutcome<&'static str> {
-        paste_and_restore(desktop, "transcript", &CancellationToken::default(), |_| {})
+        paste_and_restore(desktop, "transcript", &CancellationToken::default(), || {})
     }
 
     fn pasted(text: &str) -> Event {
@@ -345,27 +348,20 @@ mod tests {
     }
 
     #[test]
-    fn the_sent_keystroke_is_reported_with_whether_a_restore_follows() {
-        let report = |desktop: &mut FakeDesktop| {
-            let mut reported = None;
-            paste_and_restore(
-                desktop,
-                "transcript",
-                &CancellationToken::default(),
-                |restoring| reported = Some(restoring),
-            );
+    fn the_sent_keystroke_is_reported() {
+        let reported = |desktop: &mut FakeDesktop| {
+            let mut reported = false;
+            let cancellation = CancellationToken::default();
+            paste_and_restore(desktop, "transcript", &cancellation, || reported = true);
             reported
         };
-        assert_eq!(
-            report(&mut FakeDesktop::holding(Some("previous"))),
-            Some(true)
-        );
-        assert_eq!(report(&mut FakeDesktop::holding(None)), Some(false));
+        assert!(reported(&mut FakeDesktop::holding(Some("previous"))));
+        assert!(reported(&mut FakeDesktop::holding(None)));
         let mut refused = FakeDesktop {
             shortcut: KeystrokeOutcome::NotSent("focus changed"),
             ..FakeDesktop::holding(Some("previous"))
         };
-        assert_eq!(report(&mut refused), None);
+        assert!(!reported(&mut refused));
     }
 
     #[test]
@@ -432,7 +428,7 @@ mod tests {
                 ..FakeDesktop::holding(Some("previous"))
             };
 
-            let outcome = paste_and_restore(&mut desktop, "transcript", &cancellation, |_| {});
+            let outcome = paste_and_restore(&mut desktop, "transcript", &cancellation, || {});
 
             assert!(cancellation.is_cancelled());
             assert_ne!(outcome, PasteOutcome::Cancelled);
@@ -473,7 +469,7 @@ mod tests {
         let mut desktop = FakeDesktop::holding(Some("previous"));
 
         assert_eq!(
-            paste_and_restore(&mut desktop, "text", &cancelled, |_| {}),
+            paste_and_restore(&mut desktop, "text", &cancelled, || {}),
             PasteOutcome::Cancelled
         );
         assert!(desktop.events().is_empty());
