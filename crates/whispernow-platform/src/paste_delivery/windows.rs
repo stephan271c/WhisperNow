@@ -179,10 +179,7 @@ fn token_integrity_level(process: HANDLE) -> Result<u32, NativePasteError> {
         });
     }
 
-    let words = required
-        .checked_add(size_of::<usize>() - 1)
-        .map(|size| size / size_of::<usize>())
-        .ok_or(NativePasteError::Unavailable)?;
+    let words = required.div_ceil(size_of::<usize>());
     let mut buffer = vec![0_usize; words];
     // SAFETY: the allocation is at least `required_bytes`, aligned for the
     // pointer-containing label structure, and remains writable for the call.

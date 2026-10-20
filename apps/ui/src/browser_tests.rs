@@ -105,7 +105,7 @@ fn adapter_count(command: &str) -> u32 {
 }
 
 #[wasm_bindgen_test(async)]
-async fn a_history_copy_reaches_the_tauri_clipboard_adapter() {
+async fn a_history_copy_reaches_the_desktop_copy_command() {
     install_tauri_probe();
     install_mount_point();
     dioxus::launch(BrowserSettingsSurface);
@@ -114,13 +114,13 @@ async fn a_history_copy_reaches_the_tauri_clipboard_adapter() {
     click("nav-history");
     wait_for("the history page to render", || rendered("history-copy-7")).await;
     click("history-copy-7");
-    wait_for("the copy to reach writeClipboardText", || {
-        adapter_calls().contains("plugin:clipboard-manager|write_text")
+    wait_for("the copy to reach the desktop", || {
+        adapter_count("copy_text") == 1
     })
     .await;
     let calls = adapter_calls();
     assert!(
-        calls.contains("cleaned 7"),
+        calls.contains(r#"{"command":"copy_text","payload":{"request":"cleaned 7"}}"#),
         "the pasted text is copied: {calls}"
     );
 }
@@ -146,7 +146,7 @@ fn install_tauri_probe() {
               if (command === "suspend_shortcuts" || command === "resume_shortcuts") {
                 return null;
               }
-              if (command === "plugin:clipboard-manager|write_text") {
+              if (command === "copy_text") {
                 return null;
               }
               throw new Error(`unexpected command: ${command}`);

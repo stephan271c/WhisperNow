@@ -14,6 +14,7 @@ use tauri_plugin_updater::{Update, UpdaterExt as _};
 use whispernow_domain::ipc::{
     ManualUpdatePackage, UpdateError, UpdatePhase, UpdateProgress, UpdateState,
 };
+use whispernow_platform::open_url;
 
 use crate::services::Dictation;
 
@@ -389,7 +390,9 @@ impl UpdateController {
         let Some(release_page) = self.lock().release_page() else {
             return self.snapshot();
         };
-        let error = open_in_browser(&release_page).err();
+        let error = open_url(&release_page)
+            .err()
+            .map(|_| UpdateError::ReleasePageUnavailable);
         self.update(|updates| {
             if let UpdatePhase::ManualInstallAvailable { error: current, .. } =
                 &mut updates.state.phase
@@ -500,32 +503,6 @@ fn update_route(
         target: Some(format!("linux-{architecture}-{format}")),
         delivery,
     })
-}
-
-/// Hands the release page to the desktop's default browser. Manual delivery exists only for
-/// Linux packages, so other platforms have no opener.
-fn open_in_browser(url: &str) -> Result<(), UpdateError> {
-    #[cfg(target_os = "linux")]
-    {
-        let mut opener = std::process::Command::new("xdg-open")
-            .arg(url)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|_| UpdateError::ReleasePageUnavailable)?;
-        std::thread::spawn(move || {
-            if !opener.wait().is_ok_and(|status| status.success()) {
-                tracing::warn!("release page opener failed");
-            }
-        });
-        Ok(())
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = url;
-        Err(UpdateError::ReleasePageUnavailable)
-    }
 }
 
 #[tauri::command]

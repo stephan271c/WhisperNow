@@ -539,6 +539,4 @@ impl CancelShortcut {
 }
 
 #[cfg(test)]
-mod tests {
-    include!("shortcuts/tests.rs");
-}
+mod tests;

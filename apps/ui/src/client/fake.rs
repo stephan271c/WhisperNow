@@ -7,7 +7,7 @@ use std::{
     rc::Rc,
     task::{Poll, Waker},
 };
-use whispernow_domain::AppError;
+use whispernow_domain::{AppError, ipc::COMMAND_NAMES};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -70,6 +70,10 @@ pub(crate) fn run_timers() {
 }
 
 pub(super) async fn invoke(command: &'static str, request: Option<Value>) -> Reply {
+    assert!(
+        COMMAND_NAMES.contains(&command),
+        "the desktop has no {command} command"
+    );
     let slot = Rc::new(RefCell::new(Slot::default()));
     DESKTOP.with_borrow_mut(|desktop| {
         desktop.calls.push(Call {

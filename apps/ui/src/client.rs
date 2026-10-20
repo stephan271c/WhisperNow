@@ -63,17 +63,6 @@ pub(crate) const fn viewport_height() -> Option<f64> {
     None
 }
 
-pub(crate) async fn write_clipboard(text: &str) -> Answer<()> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        wasm::write_clipboard_text(text).await
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        invoke("write_clipboard", Some(&text)).await
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum WindowAction {
     Minimize,
@@ -174,9 +163,6 @@ mod wasm {
         #[wasm_bindgen(js_name = revokeObjectUrl)]
         pub fn revoke_object_url(url: &str);
 
-        #[wasm_bindgen(catch, js_name = writeClipboardText)]
-        async fn write_clipboard_text_js(text: &str) -> Result<(), JsValue>;
-
         #[wasm_bindgen(catch, js_name = listenTyped)]
         async fn listen_typed(name: &str, callback: &Function) -> Result<u32, JsValue>;
 
@@ -228,10 +214,6 @@ mod wasm {
         };
         let response = invoke_typed(command, request).await.map_err(from_js)?;
         serde_wasm_bindgen::from_value(response).map_err(|_| connection_error())
-    }
-
-    pub(super) async fn write_clipboard_text(text: &str) -> Answer<()> {
-        write_clipboard_text_js(text).await.map_err(from_js)
     }
 
     // Make the URL after the last await, in the same step that hands it to the player.

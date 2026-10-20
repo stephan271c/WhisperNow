@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use whispernow_domain::{
-    ApiKey, LlmProvider, ModelFamily, ProviderEndpoint, ProviderSettings, Settings,
+    ApiKey, LlmProvider, ModelAvailability, ModelFamily, ProviderEndpoint, ProviderSettings,
+    Settings,
 };
 
 use super::NoticeRegion;
@@ -108,7 +109,20 @@ pub(super) fn AiCleanupPage() -> Element {
                     }
                 }
             }
-            if source != CleanupSource::WhisperNow {
+            if source == CleanupSource::WhisperNow {
+                AutosaveRow { id: "cleanup-uses-gpu", title: "Use GPU",
+                    description: "Off runs cleanup on the CPU.",
+                    setting: SettingKey::CleanupUsesGpu,
+                    Toggle { checked: settings.cleanup_uses_gpu,
+                        disabled,
+                        onchange: move |enabled: bool| {
+                            context.change_setting(SettingKey::CleanupUsesGpu, move |settings| {
+                                settings.cleanup_uses_gpu = enabled;
+                            });
+                        }
+                    }
+                }
+            } else {
                 ProviderRows { settings: settings.clone(), provider, disabled }
             }
         }
@@ -311,7 +325,10 @@ fn CleanupModels(chosen_model: String, disabled: bool) -> Element {
                 for model in models {
                     ModelRow {
                         key: "{model.id.as_str()}",
-                        kind: ModelRowKind::Cleanup { chosen: model.id.as_str() == chosen_model },
+                        kind: ModelRowKind::Cleanup {
+                            chosen: model.id.as_str() == chosen_model
+                                && model.availability == ModelAvailability::Downloaded,
+                        },
                         settings_disabled: disabled,
                         download_blocked: download_blocked.clone(),
                         delete_blocked: delete_blocked.clone(),

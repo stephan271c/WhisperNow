@@ -4,8 +4,9 @@ use whispernow_domain::{EntryStatus, HistoryEntry};
 
 use super::audio::AudioPlayer;
 use super::format::{LocalClock, duration_label, machine_time};
-use crate::HistoryCopied;
-use crate::components::ui::{Button, ButtonSize, ButtonVariant, ConfirmButton, Icon, IconName};
+use crate::CopyTarget;
+use crate::components::CopyButton;
+use crate::components::ui::{ButtonSize, ConfirmButton, Icon, IconName};
 
 /// The marker a row shows; a dictation that was pasted needs none.
 pub(super) const fn status_badge(status: EntryStatus) -> Option<(&'static str, &'static str)> {
@@ -18,12 +19,7 @@ pub(super) const fn status_badge(status: EntryStatus) -> Option<(&'static str, &
 }
 
 #[component]
-pub(super) fn HistoryRow(
-    entry: HistoryEntry,
-    copied: Option<HistoryCopied>,
-    delete_blocked: bool,
-    clock: LocalClock,
-) -> Element {
+pub(super) fn HistoryRow(entry: HistoryEntry, delete_blocked: bool, clock: LocalClock) -> Element {
     let context = use_context::<UiContext>();
     let id = entry.id;
     let rid = id.0;
@@ -33,11 +29,6 @@ pub(super) fn HistoryRow(
     let target = format!("the transcript from {when}");
     let duration = entry.duration_millis.map(duration_label);
     let badge = status_badge(entry.status);
-    let copy_label = match copied {
-        Some(copied) if copied.succeeded => "Copied",
-        Some(_) => "Copy failed",
-        None => "Copy",
-    };
     rsx! { li { class: "history-row", id: "history-entry-{rid}",
         div { class: "history-row-main",
             div { class: "history-row-summary",
@@ -74,13 +65,8 @@ pub(super) fn HistoryRow(
                 }
             }
             div { class: "history-row-actions",
-                Button { id: "history-copy-{rid}", size: ButtonSize::Sm,
-                    variant: ButtonVariant::Secondary,
-                    aria_label: "{copy_label} {target}",
-                    disabled: text.is_none(),
-                    onclick: move |_| context.copy_history_entry(id),
-                    Icon { name: if copy_label == "Copied" { IconName::CheckCircle } else { IconName::Copy } }
-                    "{copy_label}"
+                CopyButton { id: "history-copy-{rid}", target: CopyTarget::HistoryEntry(id),
+                    text, label: "Copy", names: target.clone(), size: ButtonSize::Sm, icon: true,
                 }
                 ConfirmButton { id: "history-delete-{rid}", size: ButtonSize::Sm,
                     label: "Delete", confirm_label: "Delete this dictation",
@@ -89,9 +75,6 @@ pub(super) fn HistoryRow(
                     onconfirm: move |()| context.delete_history_entry(id),
                 }
             }
-        }
-        span { class: "visually-hidden", role: "status",
-            if copy_label != "Copy" { "{copy_label}" }
         }
         if let Some(error) = &entry.error {
             div { class: "history-problem", id: "history-problem-{rid}",

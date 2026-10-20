@@ -83,6 +83,7 @@ impl NativeServices {
             installed_cleanup_model(Arc::clone(&store)),
             installed_cuda_pack(Arc::clone(&store)),
         ));
+        local_cleanup.set_use_gpu(persisted.cleanup_uses_gpu);
         if persisted.uses_local_cleanup() {
             local_cleanup.preload(persisted.cleanup_model_id());
         }

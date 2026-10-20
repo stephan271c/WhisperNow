@@ -15,7 +15,7 @@ use operations::UiOperation;
 // The two windows' roots; `app` picks one.
 pub use components::{AppShell, RecordingBar};
 use home_status::{HomeStatus, HomeStatusKind};
-use management::{HistoryCopied, ManagementState, SettingKey, SetupTest};
+use management::{Copied, CopyTarget, ManagementState, SettingKey, SetupTest};
 use notice::{Notice, NoticeScope};
 use overlay::OverlayView;
 use route::{Route, SettingsRoute, TopLevel, nav_keyboard_target};

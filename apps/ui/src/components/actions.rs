@@ -23,10 +23,11 @@ use whispernow_domain::ipc::EventPayload;
 use super::ui::Tone;
 use crate::client;
 
-use crate::{NoticeScope, Route, UiContext, UiOperation};
+use crate::{Copied, CopyTarget, NoticeScope, Route, UiContext, UiOperation};
 
 /// How long the level meter stays up after a microphone test.
 const METER_MS: u32 = 20_000;
+const COPIED_MS: u32 = 2_000;
 
 impl UiContext {
     pub(crate) fn active_download(
@@ -131,16 +132,26 @@ impl UiContext {
         self.state.write().apply_event(event);
     }
 
-    pub(crate) fn copy_text(mut self, text: String, scope: NoticeScope) {
-        spawn_forever(async move {
-            let copied = client::write_clipboard(&text).await.is_ok();
-            let (tone, message) = if copied {
-                (Tone::Success, "Copied to the clipboard")
-            } else {
-                (Tone::Error, "Could not copy to the clipboard")
-            };
-            self.management.write().notify(tone, scope, message);
+    /// Copies `text` and shows the outcome on the Copy button for `target` for a moment; a
+    /// newer copy replaces it.
+    pub(crate) fn copy_text(mut self, text: String, target: CopyTarget) {
+        let copy_task = spawn_forever(async move {
+            let succeeded = client::invoke::<_, ()>("copy_text", Some(&text))
+                .await
+                .is_ok();
+            self.management.write().copied = Some(Copied { target, succeeded });
+            client::delay(COPIED_MS).await;
+            let mut management = self.management;
+            let mut management = management.write();
+            management.copied = None;
+            management.copy_task = None;
         });
+        let mut management = self.management;
+        let mut management = management.write();
+        management.copied = None;
+        if let Some(previous) = management.copy_task.replace(copy_task) {
+            previous.cancel();
+        }
     }
 
     pub(crate) fn test_microphone(self) {

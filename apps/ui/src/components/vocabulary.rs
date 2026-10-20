@@ -4,13 +4,14 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 use whispernow_domain::{Settings, VocabularyReplacement};
 
+use super::CopyButton;
 use super::configuration::SettingsLoading;
 use super::ui::focus::{neighbour, take_focus};
 use super::ui::{
     Button, ButtonVariant, DraftText, Field, IconButton, IconName, Section, TextInput,
 };
 use crate::blocked_reason::DisabledReason;
-use crate::{NoticeScope, SettingKey, UiContext};
+use crate::{CopyTarget, SettingKey, UiContext};
 
 /// The add form's id; tests submit it as Enter does.
 const ADD_FORM: &str = "vocabulary-add-form";
@@ -224,9 +225,8 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>, disabled: bool) -> Elem
         Section { id: "vocabulary-transfer", title: "Import and export",
             description: "A JSON list of {{\"source\": …, \"replacement\": …}} pairs.",
             div { class: "card-actions",
-                Button { id: "vocabulary-export", disabled: rules.is_empty(),
-                    onclick: move |_| context.copy_text(export.clone(), NoticeScope::Settings),
-                    "Copy rules as JSON"
+                CopyButton { id: "vocabulary-export", target: CopyTarget::VocabularyRules,
+                    text: (!rules.is_empty()).then_some(export), label: "Copy rules as JSON",
                 }
             }
             Field { id: "vocabulary-import", label: "Paste rules to import",

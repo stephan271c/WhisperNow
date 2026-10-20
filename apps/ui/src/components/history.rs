@@ -36,7 +36,6 @@ pub(super) fn HistoryScreen() -> Element {
     let clock = use_clock();
     // The search waiting for typing to pause; a key press restarts it.
     let mut search_task = use_signal(|| None::<Task>);
-    let copied = management.read().history_copied;
     let blocked = |operation| context.blocked(operation);
     let settings = management.read().shown_settings().cloned();
     let change_blocked = blocked(UiOperation::ChangeHistory);
@@ -151,7 +150,6 @@ pub(super) fn HistoryScreen() -> Element {
                     ul { class: "history-list",
                         for entry in members {
                             HistoryRow { key: "{entry.id.0}",
-                                copied: copied.filter(|copied| copied.entry == entry.id),
                                 delete_blocked: change_blocked.is_some(),
                                 entry,
                                 clock,

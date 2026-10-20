@@ -186,6 +186,24 @@ pub(crate) async fn copy_last_transcript(state: tauri::State<'_, Gateway>) -> Re
     Ok(())
 }
 
+#[tauri::command]
+pub(crate) async fn copy_text(
+    request: String,
+    state: tauri::State<'_, Gateway>,
+) -> Result<(), AppError> {
+    state
+        .run_command("copy_text", Failure::Local, move |services| {
+            services.output.copy(&request).map_err(|_| {
+                AppError::new(
+                    ErrorCategory::Output,
+                    "copy_unavailable",
+                    "The text could not be copied",
+                )
+            })
+        })
+        .await
+}
+
 /// Shows the main window at the section an overlay action points to and dismisses the failure
 /// it came from.
 #[tauri::command]

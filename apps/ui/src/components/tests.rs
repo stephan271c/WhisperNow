@@ -357,7 +357,7 @@ fn a_cleanup_failure_on_home_opens_ai_cleanup_settings() {
 }
 
 #[test]
-fn the_latest_transcript_can_be_copied_from_home() {
+fn copying_the_latest_transcript_confirms_on_its_button() {
     let mut transcribed = snapshot(Phase::Idle);
     transcribed.last_transcript = Some("Meet on Thursday".to_owned());
     let mut page = shell(transcribed, loaded());
@@ -365,10 +365,15 @@ fn the_latest_transcript_can_be_copied_from_home() {
     assert_eq!(text(&html, "latest-transcript"), "Meet on Thursday");
 
     page.click("copy-latest");
-    assert_eq!(
-        fake::requests::<String>("write_clipboard"),
-        ["Meet on Thursday"]
+    assert_eq!(fake::requests::<String>("copy_text"), ["Meet on Thursday"]);
+    page.answer("copy_text", Ok(()));
+    assert_eq!(text(&page.html(), "copy-latest").trim(), "Copied");
+    assert!(
+        page.context().management.read().notice.is_none(),
+        "no notice card"
     );
+    page.wait();
+    assert_eq!(text(&page.html(), "copy-latest").trim(), "Copy");
 }
 
 fn open(page: &mut Page, ids: &[&str]) {
@@ -691,11 +696,6 @@ fn a_pending_settings_save_disables_speech_model_selection() {
         &["nav-settings", "start-minimized", "nav-settings-models"],
     );
     let choose = "model-sherpa-onnx-whisper-base-use";
-    assert!(
-        tag(&page.html(), "footer-model")
-            .expect("footer model choice")
-            .contains(" disabled=")
-    );
     assert!(
         tag(&page.html(), choose)
             .expect("model choice")
@@ -1403,6 +1403,50 @@ fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() 
             .expect("other cleanup model")
             .contains(" disabled=")
     );
+}
+
+#[test]
+fn a_cleanup_model_is_marked_selected_only_once_downloaded() {
+    const SMALL: &str = "whispernow-cleanup-lfm2.5-350m-r112-q8_0";
+    const LARGE: &str = "whispernow-cleanup-minicpm5-1b-r112-q8_0";
+    for availability in [
+        ModelAvailability::NotInstalled,
+        ModelAvailability::Downloaded,
+    ] {
+        let mut management = local_cleanup(SMALL, LARGE, "llama-cuda-13.4");
+        management.models[1].availability = availability;
+        let mut page = shell(snapshot(Phase::Idle), management);
+        open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+        assert_eq!(
+            page.html().contains(">Selected</span>"),
+            availability == ModelAvailability::Downloaded,
+            "{availability:?}"
+        );
+    }
+}
+
+#[test]
+fn the_gpu_switch_shows_only_for_the_apps_own_models_and_saves() {
+    let mut page = shell(snapshot(Phase::Idle), configured());
+    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+    assert!(tag(&page.html(), "cleanup-uses-gpu").is_none());
+
+    let management = local_cleanup(
+        "whispernow-cleanup-lfm2.5-350m-r112-q8_0",
+        "whispernow-cleanup-minicpm5-1b-r112-q8_0",
+        "llama-cuda-13.4",
+    );
+    let mut page = shell(snapshot(Phase::Idle), management);
+    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+    assert!(
+        tag(&page.html(), "cleanup-uses-gpu")
+            .expect("the GPU switch")
+            .contains("aria-checked=\"true\"")
+    );
+    page.click("cleanup-uses-gpu");
+    let sent = sent_settings();
+    assert_eq!(sent.len(), 1);
+    assert!(!sent[0].cleanup_uses_gpu);
 }
 
 #[test]

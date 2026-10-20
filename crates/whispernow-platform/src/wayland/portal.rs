@@ -1,5 +1,4 @@
 use std::{
-    fmt,
     os::fd::OwnedFd,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -18,8 +17,10 @@ use ashpd::{
     },
 };
 use futures_util::StreamExt as _;
+use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
+    net::unix::pipe,
     sync::mpsc,
     task::JoinHandle,
 };
@@ -44,36 +45,27 @@ const XK_SHIFT_L: i32 = 0xffe1;
 const XK_V_LOWER: i32 = 0x0076;
 const BEFORE_PASTE_DELAY: Duration = Duration::from_millis(20);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum WaylandPortalError {
+    #[error("desktop portal operation failed")]
     Backend,
+    #[error("the paste was cancelled")]
     Cancelled,
+    #[error("clipboard snapshot exceeds safe limits")]
     ClipboardSnapshotTooLarge,
+    #[error("clipboard portal is unavailable")]
     ClipboardUnavailable,
+    #[error("desktop portal disconnected")]
     Disconnected,
+    #[error("remote keyboard capability was not granted")]
     KeyboardUnavailable,
+    #[error("desktop portal permission was denied")]
     PermissionDenied,
+    #[error("required desktop portal is unavailable")]
     PortalUnavailable,
+    #[error("remote desktop restore token could not be stored safely")]
     TokenStore,
 }
-
-impl fmt::Display for WaylandPortalError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Backend => "desktop portal operation failed",
-            Self::Cancelled => "the paste was cancelled",
-            Self::ClipboardSnapshotTooLarge => "clipboard snapshot exceeds safe limits",
-            Self::ClipboardUnavailable => "clipboard portal is unavailable",
-            Self::Disconnected => "desktop portal disconnected",
-            Self::KeyboardUnavailable => "remote keyboard capability was not granted",
-            Self::PermissionDenied => "desktop portal permission was denied",
-            Self::PortalUnavailable => "required desktop portal is unavailable",
-            Self::TokenStore => "remote desktop restore token could not be stored safely",
-        })
-    }
-}
-
-impl std::error::Error for WaylandPortalError {}
 
 enum ClipboardSignal {
     OwnerChanged { mime_types: Vec<String> },
@@ -407,11 +399,12 @@ async fn read_selection(
         .await
         .map_err(map_portal_error)?;
     let fd: OwnedFd = fd.into();
-    let file = tokio::fs::File::from_std(std::fs::File::from(fd));
+    let pipe =
+        pipe::Receiver::from_owned_fd(fd).map_err(|_| WaylandPortalError::ClipboardUnavailable)?;
     let mut bytes = SecretBytes::default();
     tokio::time::timeout(
         READ_TIMEOUT,
-        file.take(MAX_FORMAT_BYTES as u64 + 1)
+        pipe.take(MAX_FORMAT_BYTES as u64 + 1)
             .read_to_end(&mut bytes),
     )
     .await
@@ -450,11 +443,7 @@ async fn serve_for(
 ) -> Result<(), WaylandPortalError> {
     let deadline = tokio::time::Instant::now() + duration;
     loop {
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            return Ok(());
-        }
-        match tokio::time::timeout(deadline - now, output.signals.recv()).await {
+        match tokio::time::timeout_at(deadline, output.signals.recv()).await {
             Err(_) => return Ok(()),
             Ok(None | Some(ClipboardSignal::Closed)) => {
                 return Err(WaylandPortalError::Disconnected);
@@ -482,11 +471,10 @@ async fn serve_transfer(
         return;
     };
     let success = match clipboard.selection_write(session, serial).await {
-        Ok(fd) => {
-            let fd: OwnedFd = fd.into();
-            let mut file = tokio::fs::File::from_std(std::fs::File::from(fd));
-            file.write_all(&bytes).await.is_ok() && file.shutdown().await.is_ok()
-        }
+        Ok(fd) => match pipe::Sender::from_owned_fd(fd.into()) {
+            Ok(mut pipe) => pipe.write_all(&bytes).await.is_ok(),
+            Err(_) => false,
+        },
         Err(_) => false,
     };
     let _ignored = clipboard

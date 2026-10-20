@@ -1,5 +1,5 @@
 use std::sync::{
-    Mutex,
+    Mutex, OnceLock,
     atomic::{AtomicUsize, Ordering},
     mpsc,
 };
@@ -43,7 +43,7 @@ pub(super) struct RecordingSink {
     dropped_frames: AtomicUsize,
     /// Samples accepted so far, published with each level as elapsed time.
     captured_samples: AtomicUsize,
-    interruption: Mutex<Option<CaptureInterruption>>,
+    interruption: OnceLock<CaptureInterruption>,
     worker: mpsc::Sender<Message>,
     events: Events,
 }
@@ -66,7 +66,7 @@ impl RecordingSink {
             max_samples,
             dropped_frames: AtomicUsize::new(0),
             captured_samples: AtomicUsize::new(0),
-            interruption: Mutex::new(None),
+            interruption: OnceLock::new(),
             worker,
             events,
         }
@@ -101,22 +101,12 @@ impl RecordingSink {
     }
 
     pub(super) fn interruption(&self) -> Option<CaptureInterruption> {
-        *self
-            .interruption
-            .lock()
-            .expect("recording audio lock poisoned")
+        self.interruption.get().copied()
     }
 
     fn interrupt(&self, interruption: CaptureInterruption) {
-        {
-            let mut current = self
-                .interruption
-                .lock()
-                .expect("recording audio lock poisoned");
-            if current.is_some() {
-                return;
-            }
-            *current = Some(interruption);
+        if self.interruption.set(interruption).is_err() {
+            return;
         }
         tracing::info!(
             ?interruption,

@@ -97,7 +97,7 @@ fn ordered_models(models: &[ModelSummary], active_id: Option<&ModelId>) -> Vec<M
 pub(super) enum ModelRowKind {
     /// `state` is the load state of the model in use; `None` for the others.
     Speech { state: Option<ModelState> },
-    /// `chosen` marks the model the local cleanup provider runs.
+    /// `chosen` marks the downloaded model the local cleanup provider runs.
     Cleanup { chosen: bool },
     /// The CUDA pack.
     Runtime,

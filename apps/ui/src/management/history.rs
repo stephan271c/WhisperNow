@@ -1,17 +1,10 @@
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::ErrorCategory;
-use whispernow_domain::{EntryId, HistoryEntry, HistoryFilter, HistoryPage, HistoryPageRequest};
+use whispernow_domain::{HistoryFilter, HistoryPage, HistoryPageRequest};
 
 use super::ManagementState;
 use crate::NoticeScope;
 use crate::components::ui::Tone;
-
-/// The outcome of the latest history copy, shown on the Copy button of its entry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct HistoryCopied {
-    pub entry: EntryId,
-    pub succeeded: bool,
-}
 
 impl ManagementState {
     pub(crate) fn history_request(&mut self) -> (u64, HistoryPageRequest) {
@@ -105,15 +98,5 @@ impl ManagementState {
         self.history_filter = HistoryFilter::default();
         self.history_pages = 1;
         true
-    }
-
-    #[must_use]
-    pub fn history_entry(&self, id: EntryId) -> Option<&HistoryEntry> {
-        self.history.iter().find(|entry| entry.id == id)
-    }
-
-    #[must_use]
-    pub fn history_copy(&self, id: EntryId) -> Option<String> {
-        self.history_entry(id)?.text().map(str::to_owned)
     }
 }

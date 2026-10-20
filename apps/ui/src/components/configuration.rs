@@ -9,7 +9,7 @@ use super::microphone_test::MicrophoneTest;
 use super::ui::{Button, Section, Segmented, Select, SettingRow, Toggle};
 use super::{PasteHelperNotice, ShortcutCapture};
 use crate::blocked_reason::DisabledReason;
-use crate::{NoticeScope, Route, SettingKey, UiContext, UiOperation};
+use crate::{Route, SettingKey, UiContext, UiOperation};
 
 /// Theme choices as (setting, select value, label).
 const THEMES: [(ThemePreference, &str, &str); 3] = [
@@ -205,7 +205,7 @@ pub(super) fn GeneralPage() -> Element {
         }
         if let Some(setup) = paste_helper_setup {
             Section { id: "pasting", title: "Pasting",
-                PasteHelperNotice { setup, scope: NoticeScope::Settings }
+                PasteHelperNotice { setup }
             }
         }
         if management.read().setup.as_ref().is_some_and(|setup| setup.first_run_complete) {

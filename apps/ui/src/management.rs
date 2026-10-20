@@ -10,14 +10,28 @@ use whispernow_domain::ipc::{
     AudioDevice, ClearDataResult, DataLocation, MicrophoneTestResponse, ModelSummary,
     PermissionKind, PermissionsResponse, SettingsView, SetupStateView,
 };
-use whispernow_domain::{HistoryEntry, HistoryFilter, Settings};
+use whispernow_domain::{EntryId, HistoryEntry, HistoryFilter, Settings};
 
 use crate::components::ui::Tone;
 use crate::{Notice, NoticeScope, UiOperation};
 
-pub(crate) use history::HistoryCopied;
 pub(crate) use settings::SettingKey;
 pub(crate) use setup::SetupTest;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CopyTarget {
+    LatestTranscript,
+    HistoryEntry(EntryId),
+    PasteHelperCommand,
+    VocabularyRules,
+}
+
+/// The outcome of the latest copy, shown on the Copy button it came from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Copied {
+    pub target: CopyTarget,
+    pub succeeded: bool,
+}
 
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct ManagementState {
@@ -45,9 +59,9 @@ pub(crate) struct ManagementState {
     /// Pages in the loaded history window; "Load more" grows it by one.
     history_pages: u32,
     history_request_id: u64,
-    pub history_copied: Option<HistoryCopied>,
-    /// The latest history copy, which clears its outcome after a moment.
-    pub(crate) history_copy_task: Option<Task>,
+    pub copied: Option<Copied>,
+    /// The latest copy, which clears its outcome after a moment.
+    pub(crate) copy_task: Option<Task>,
     /// The application data a clear would remove, once the user asked to review it.
     pub data_locations: Option<Vec<DataLocation>>,
     pub clear_result: Option<ClearDataResult>,

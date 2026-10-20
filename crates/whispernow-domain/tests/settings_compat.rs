@@ -40,6 +40,7 @@ fn settings_round_trip_and_missing_fields_take_defaults() {
             key: ShortcutKey::F8,
         },
         cleanup_enabled: true,
+        cleanup_uses_gpu: false,
         history_limit: HistoryLimit::Last1000,
         history_retention: HistoryRetention::Days30,
         keep_audio: true,

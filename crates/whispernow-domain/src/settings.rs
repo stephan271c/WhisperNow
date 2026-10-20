@@ -191,6 +191,8 @@ pub struct Settings {
     pub first_run_complete: bool,
     pub setup: Option<SetupCheckpoint>,
     pub cleanup_enabled: bool,
+    /// Whether the local cleanup model may load on a GPU; off keeps it on the CPU.
+    pub cleanup_uses_gpu: bool,
     pub llm_provider: LlmProvider,
     pub llm_provider_settings: BTreeMap<LlmProvider, ProviderSettings>,
     /// Providers whose API key is saved in the OS credential store.
@@ -218,6 +220,7 @@ impl Default for Settings {
             first_run_complete: false,
             setup: None,
             cleanup_enabled: false,
+            cleanup_uses_gpu: true,
             llm_provider: LlmProvider::OpenAi,
             llm_provider_settings: BTreeMap::new(),
             api_keys: BTreeSet::new(),

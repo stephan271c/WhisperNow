@@ -874,5 +874,5 @@ fn settings_explain_how_to_paste_without_the_portal_indicator() {
     window.answer("get_permissions", Ok(answer));
     assert_eq!(text(&window.html(), "paste-helper-command"), command);
     window.click("paste-helper-copy");
-    assert_eq!(window.sent(), ["write_clipboard"]);
+    assert_eq!(window.sent(), ["copy_text"]);
 }

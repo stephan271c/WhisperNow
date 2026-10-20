@@ -404,8 +404,8 @@ fn copy_confirms_on_the_button_that_was_pressed() {
     state.history.push(entry(8, UtcMillis(NOW.0 - 2 * HOUR)));
     let mut page = history_page(state);
     page.click("history-copy-7");
-    assert_eq!(fake::requests::<String>("write_clipboard"), ["cleaned 7"]);
-    fake::answer("write_clipboard", Ok(()));
+    assert_eq!(fake::requests::<String>("copy_text"), ["cleaned 7"]);
+    fake::answer("copy_text", Ok(()));
     page.settle();
     let html = page.html();
     assert_eq!(text(&html, "history-copy-7").trim(), "Copied");
@@ -424,11 +424,11 @@ fn copy_confirms_on_the_button_that_was_pressed() {
 
     page.click("history-copy-8");
     assert_eq!(
-        fake::requests::<String>("write_clipboard"),
+        fake::requests::<String>("copy_text"),
         ["cleaned 7", "cleaned 8"]
     );
     page.answer(
-        "write_clipboard",
+        "copy_text",
         Err::<(), _>(AppError::new(
             ErrorCategory::General,
             "clipboard_unavailable",

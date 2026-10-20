@@ -38,6 +38,7 @@
     "allow-cancel-recording",
     "allow-dismiss-recording-overlay",
     "allow-copy-last-transcript",
+    "allow-copy-text",
     "allow-open-main-window",
     "allow-get-state",
     "allow-get-history",

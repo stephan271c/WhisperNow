@@ -31,12 +31,14 @@ pub(crate) struct LocalCleanupEngine {
 
 impl LocalCleanupEngine {
     /// Loads llama.cpp from `library_directory`, with the CUDA pack in `cuda` when given, and
-    /// the model from `model_path`. A CUDA pack that does not load leaves the other backends.
+    /// the model from `model_path`, on the CPU unless `use_gpu`. A CUDA pack that does not
+    /// load leaves the other backends.
     pub(crate) fn load(
         library_directory: &Path,
         cuda: Option<&Path>,
         model_path: &Path,
         threads: i32,
+        use_gpu: bool,
     ) -> Result<Self, LlamaError> {
         let llama = Llama::load(library_directory)?;
         if let Some(cuda) = cuda
@@ -44,7 +46,7 @@ impl LocalCleanupEngine {
         {
             tracing::warn!(target: "whispernow::llama", %error, "the CUDA pack did not load; using the other backends");
         }
-        let model = LlamaModel::load(llama, model_path)?;
+        let model = LlamaModel::load(llama, model_path, use_gpu)?;
         Ok(Self {
             model: Rc::new(model),
             context: None,

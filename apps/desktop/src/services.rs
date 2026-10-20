@@ -130,6 +130,7 @@ impl NativeServices {
     /// Loads the chosen local cleanup model in the background when AI cleanup uses it, and
     /// frees it otherwise.
     fn follow_cleanup_provider(&self, settings: &Settings) {
+        self.local_cleanup.set_use_gpu(settings.cleanup_uses_gpu);
         if settings.uses_local_cleanup() {
             self.local_cleanup.preload(settings.cleanup_model_id());
         } else {
@@ -149,7 +150,7 @@ impl NativeServices {
             AppError::new(
                 ErrorCategory::Output,
                 "copy_unavailable",
-                "The transcript could not be copied; open History to copy it",
+                "The transcript could not be copied",
             )
         })
     }

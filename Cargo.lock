@@ -7532,6 +7532,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
  "tracing",
  "whispernow-domain",
 ]
@@ -7541,7 +7542,6 @@ name = "whispernow-desktop"
 version = "0.2.0"
 dependencies = [
  "ashpd",
- "async-trait",
  "futures-util",
  "gdk",
  "rusqlite",

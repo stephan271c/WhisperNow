@@ -12,6 +12,7 @@ publish = false
 rubato.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 whispernow-domain = { path = "../whispernow-domain" }
 

@@ -75,6 +75,7 @@ impl LocalCleanupService {
                 library_directory,
                 model_locator: model,
                 cuda_locator: cuda,
+                use_gpu: AtomicBool::new(true),
                 shutdown: AtomicBool::new(false),
                 held: AtomicBool::new(false),
             }),
@@ -93,6 +94,14 @@ impl LocalCleanupService {
     pub fn reload(&self) {
         if self.lock_worker().is_some() {
             let _ = self.send(Command::Reload);
+        }
+    }
+
+    /// Whether models load on a GPU; off keeps them on the CPU. A change frees the loaded
+    /// model, so the next load follows it.
+    pub fn set_use_gpu(&self, use_gpu: bool) {
+        if self.shared.use_gpu.swap(use_gpu, Ordering::AcqRel) != use_gpu {
+            self.unload();
         }
     }
 
@@ -161,6 +170,7 @@ struct Shared {
     library_directory: PathBuf,
     model_locator: CleanupModelLocator,
     cuda_locator: CudaPackLocator,
+    use_gpu: AtomicBool,
     shutdown: AtomicBool,
     /// Prevents a model from loading while its file is being removed.
     held: AtomicBool,
@@ -234,12 +244,19 @@ fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine
         return Err(LlamaError::NotInstalled);
     }
     let path = (shared.model_locator)(model_id).ok_or(LlamaError::NotInstalled)?;
-    let cuda = (shared.cuda_locator)();
+    let use_gpu = shared.use_gpu.load(Ordering::Acquire);
+    let cuda = use_gpu.then(|| (shared.cuda_locator)()).flatten();
     let threads = default_threads();
-    let loaded = LocalCleanupEngine::load(&shared.library_directory, cuda.as_deref(), &path, threads)
-        .inspect_err(|error| {
-            tracing::warn!(target: "whispernow::local_cleanup", %error, model = model_id.as_str(), "the cleanup model did not load");
-        })?;
+    let loaded = LocalCleanupEngine::load(
+        &shared.library_directory,
+        cuda.as_deref(),
+        &path,
+        threads,
+        use_gpu,
+    )
+    .inspect_err(|error| {
+        tracing::warn!(target: "whispernow::local_cleanup", %error, model = model_id.as_str(), "the cleanup model did not load");
+    })?;
     let (kind, device) = match loaded.backend() {
         Backend::Gpu(device) => ("gpu", device.as_str()),
         Backend::Cpu => ("cpu", ""),

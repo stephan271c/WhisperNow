@@ -20,18 +20,18 @@ use crate::{
 
 /// `struct input_event` on 64-bit Linux: a `timeval`, then type, code, value.
 const EVENT_SIZE: usize = 24;
+const _: () = assert!(size_of::<libc::input_event>() == EVENT_SIZE);
 const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;
 const SYN_DROPPED: u16 = 3;
-/// `EVIOCSCLOCKID`, `_IOW('E', 0xa0, int)`.
-const EVIOCSCLOCKID: u64 = 0x4004_45a0;
-/// `EVIOCGNAME(256)`, `_IOC(_IOC_READ, 'E', 0x06, 256)`.
-const EVIOCGNAME: u64 = 0x8100_4506;
+const EVDEV_IOCTL_BASE: u32 = b'E' as u32;
+const EVIOCSCLOCKID: libc::Ioctl = libc::_IOW::<libc::c_int>(EVDEV_IOCTL_BASE, 0xa0);
+const EVIOCGNAME: libc::Ioctl = libc::_IOR::<[u8; 256]>(EVDEV_IOCTL_BASE, 0x06);
 const KEY_STATE_BYTES: usize = (MAX_KEY_CODE as usize + 1) / 8;
-/// `EVIOCGKEY(KEY_STATE_BYTES)`, `_IOC(_IOC_READ, 'E', 0x18, KEY_STATE_BYTES)`.
-const EVIOCGKEY: u64 = 0x8060_4518;
+const EVIOCGKEY: libc::Ioctl = libc::_IOR::<[u8; KEY_STATE_BYTES]>(EVDEV_IOCTL_BASE, 0x18);
 /// `EVIOCGBIT(EV_KEY, KEY_STATE_BYTES)`.
-const EVIOCGBIT_KEY: u64 = 0x8060_4521;
+const EVIOCGBIT_KEY: libc::Ioctl =
+    libc::_IOR::<[u8; KEY_STATE_BYTES]>(EVDEV_IOCTL_BASE, 0x20 + EV_KEY as u32);
 const RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 /// Shift, Ctrl, Alt and Super, left and right. A paste waits until none is
 /// physically held, because a held one would combine with the shortcut.
@@ -215,8 +215,7 @@ fn scan(
             unsafe_code,
             reason = "evdev key capabilities are only readable by ioctl"
         )]
-        if unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGBIT_KEY as _, supported.as_mut_ptr()) } < 0
-        {
+        if unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGBIT_KEY, supported.as_mut_ptr()) } < 0 {
             continue;
         }
         let mut held = [0_u8; KEY_STATE_BYTES];
@@ -226,7 +225,7 @@ fn scan(
             unsafe_code,
             reason = "evdev's initial key state is only readable by ioctl"
         )]
-        if unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGKEY as _, held.as_mut_ptr()) } < 0 {
+        if unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGKEY, held.as_mut_ptr()) } < 0 {
             continue;
         }
         let device = *next_device;
@@ -255,7 +254,7 @@ fn open_device(path: &Path) -> Option<File> {
     // SAFETY: EVIOCGNAME(256) writes at most 256 bytes into `name`, which is
     // valid for the call, from an open evdev descriptor owned by `file`.
     #[allow(unsafe_code, reason = "evdev's name is only readable by ioctl")]
-    let length = unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGNAME as _, name.as_mut_ptr()) };
+    let length = unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGNAME, name.as_mut_ptr()) };
     let length = usize::try_from(length).unwrap_or_default();
     let name = name.get(..length).unwrap_or_default();
     if name.strip_suffix(b"\0").unwrap_or(name) == virtual_keyboard::NAME.as_bytes() {
@@ -265,7 +264,7 @@ fn open_device(path: &Path) -> Option<File> {
     // SAFETY: EVIOCSCLOCKID reads one `int` through the pointer, which is valid
     // for the call, from an open evdev descriptor owned by `file`.
     #[allow(unsafe_code, reason = "evdev's clock is only selectable by ioctl")]
-    let result = unsafe { libc::ioctl(file.as_raw_fd(), EVIOCSCLOCKID as _, &raw const clock) };
+    let result = unsafe { libc::ioctl(file.as_raw_fd(), EVIOCSCLOCKID, &raw const clock) };
     (result == 0).then_some(file)
 }
 

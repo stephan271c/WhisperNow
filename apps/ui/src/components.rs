@@ -1,13 +1,9 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use dioxus::prelude::*;
-use whispernow_domain::ModelAvailability;
 use whispernow_domain::ipc::{ModelState, UpdatePhase};
 
-use crate::{
-    Notice, NoticeScope, Route, SettingsRoute, TopLevel, UiContext, UiOperation,
-    nav_keyboard_target,
-};
+use crate::{Notice, NoticeScope, Route, SettingsRoute, TopLevel, UiContext, nav_keyboard_target};
 
 mod actions;
 mod ai_cleanup;
@@ -26,7 +22,6 @@ pub(crate) mod ui;
 mod updates;
 mod vocabulary;
 
-use crate::blocked_reason::DisabledReason;
 use ai_cleanup::AiCleanupPage;
 use configuration::{AudioPage, GeneralPage, PrivacyPage};
 use data::ClearDataCard;
@@ -35,12 +30,10 @@ use home::HomePage;
 use models::ModelsPage;
 pub use overlay::RecordingBar;
 use setup::SetupScreen;
-use shared::{PasteHelperNotice, ShortcutCapture};
+use shared::{CopyButton, PasteHelperNotice, ShortcutCapture};
 use titlebar::{TitleBar, use_window_chrome};
 use ui::focus::{focus, take_focus};
-use ui::{
-    Banner, BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName, Select, Tone,
-};
+use ui::{Banner, BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName, Tone};
 use updates::AboutPage;
 use vocabulary::VocabularyPage;
 
@@ -269,57 +262,32 @@ fn SidebarFooter() -> Element {
     let navigator = context.navigator;
     let state = context.state.read();
     let management = context.management.read();
-    let selected = state.snapshot.as_ref().map(|snapshot| {
-        (
-            snapshot.selected_model_id.as_str().to_owned(),
-            snapshot.model_state,
-        )
-    });
-    let installed = management
-        .speech_models()
-        .filter(|model| model.availability != ModelAvailability::NotInstalled)
-        .map(|model| (model.id.clone(), model.display_name.clone()))
-        .collect::<Vec<_>>();
-    let (model_name, model_state) = selected.as_ref().map_or_else(
-        || ("Connecting…".to_owned(), None),
-        |(id, model_state)| (management.model_display_name(id), Some(*model_state)),
-    );
+    let model_name = state
+        .snapshot
+        .as_ref()
+        .map(|snapshot| management.model_display_name(snapshot.selected_model_id.as_str()));
+    let model_state = state.snapshot.as_ref().map(|snapshot| snapshot.model_state);
     let dot = match model_state {
         Some(ModelState::Ready) => "status-dot",
         Some(ModelState::Failed) => "status-dot error",
         _ => "status-dot waiting",
     };
-    let state_label = model_state.map_or("Connecting", labels::model_state);
-    let switch_blocked = context
-        .blocked(UiOperation::ModelSwitch)
-        .or(context.settings_blocked());
+    let state_label = model_state.map_or("Connecting…", labels::model_state);
+    // Hidden, not removed: a live region must stay mounted to announce the change to Ready.
+    let state_class = if model_state == Some(ModelState::Ready) {
+        "visually-hidden"
+    } else {
+        "model-status-state"
+    };
     let update = update_summary(state.update_snapshot.as_ref().map(|update| &update.phase));
-    let selected_id = selected.map(|(id, _)| id).unwrap_or_default();
     rsx! {
         footer { class: "sidebar-footer",
-            p { class: "model-status", role: "status", aria_live: "polite", aria_atomic: "true",
+            div { class: "model-status",
                 span { class: dot, aria_hidden: "true" }
-                span { class: "model-status-name", "{model_name}" }
-                span { class: "model-status-state", "{state_label}" }
-            }
-            if installed.len() > 1 {
-                Select {
-                    id: "footer-model",
-                    label: "Speech model",
-                    value: selected_id,
-                    options: installed.iter().map(|(id, name)| (id.as_str().to_owned(), name.clone())).collect::<Vec<_>>(),
-                    disabled: switch_blocked.is_some(),
-                    aria_describedby: switch_blocked.as_ref().map(|_| "footer-model-disabled-reason".to_owned()),
-                    onchange: {
-                        let installed = installed.clone();
-                        move |value: String| {
-                            if let Some((id, _)) = installed.iter().find(|(id, _)| id.as_str() == value) {
-                                context.switch_model(id.clone());
-                            }
-                        }
-                    },
+                if let Some(name) = model_name {
+                    span { class: "model-status-name", "{name}" }
                 }
-                DisabledReason { id: "footer-model-disabled-reason", reason: switch_blocked.clone() }
+                p { class: state_class, role: "status", aria_live: "polite", aria_atomic: "true", "{state_label}" }
             }
             if let Some(update) = update {
                 Button {
@@ -330,7 +298,6 @@ fn SidebarFooter() -> Element {
                     "{update}"
                 }
             }
-            span { class: "app-version", "Version {env!(\"CARGO_PKG_VERSION\")}" }
         }
     }
 }

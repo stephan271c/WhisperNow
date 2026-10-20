@@ -247,7 +247,7 @@ fn PermissionsStep() -> Element {
                     Banner { tone: Tone::Success, p { "Everything WhisperNow needs is allowed." } }
                 }
                 if let Some(setup) = permissions.paste_helper_setup.clone() {
-                    PasteHelperNotice { setup, scope: NoticeScope::Setup }
+                    PasteHelperNotice { setup }
                 }
             },
         }

@@ -1,12 +1,11 @@
-use crate::UiContext;
+use crate::{CopyTarget, UiContext};
 use std::collections::BTreeSet;
 
 use dioxus::prelude::*;
 use whispernow_domain::ipc::PasteHelperSetup;
 use whispernow_domain::{Shortcut, ShortcutKey, ShortcutModifier};
 
-use super::ui::{Banner, Button, Kbd, Tone, shortcut_parts};
-use crate::NoticeScope;
+use super::ui::{Banner, Button, ButtonSize, Icon, IconName, Kbd, Tone, shortcut_parts};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CaptureStatus {
@@ -27,12 +26,55 @@ impl CaptureStatus {
     }
 }
 
+/// Copies `text` and shows the outcome in its label for a moment; without `text` it is
+/// disabled. In a repeated row, `names` says what it copies; it follows the label in the
+/// accessible name.
+#[component]
+pub(super) fn CopyButton(
+    id: String,
+    target: CopyTarget,
+    text: Option<String>,
+    label: String,
+    names: Option<String>,
+    #[props(default)] size: ButtonSize,
+    #[props(default)] icon: bool,
+) -> Element {
+    let context = use_context::<UiContext>();
+    let succeeded = context
+        .management
+        .read()
+        .copied
+        .filter(|copied| copied.target == target)
+        .map(|copied| copied.succeeded);
+    let shown = match succeeded {
+        Some(true) => "Copied",
+        Some(false) => "Copy failed",
+        None => label.as_str(),
+    };
+    rsx! {
+        Button { id: "{id}", size, disabled: text.is_none(),
+            aria_label: names.as_ref().map(|names| format!("{shown} {names}")),
+            onclick: move |_| {
+                if let Some(text) = text.clone() {
+                    context.copy_text(text, target);
+                }
+            },
+            if icon {
+                Icon { name: if succeeded == Some(true) { IconName::CheckCircle } else { IconName::Copy } }
+            }
+            "{shown}"
+        }
+        span { class: "visually-hidden", role: "status",
+            if succeeded.is_some() { "{shown}" }
+        }
+    }
+}
+
 /// Shown while Wayland paste goes through the `RemoteDesktop` portal because the
 /// paste helper is not set up: why the desktop shows its indicator, and how to
 /// set the helper up.
 #[component]
-pub(super) fn PasteHelperNotice(setup: PasteHelperSetup, scope: NoticeScope) -> Element {
-    let context = use_context::<UiContext>();
+pub(super) fn PasteHelperNotice(setup: PasteHelperSetup) -> Element {
     rsx! { div { id: "paste-helper-notice",
         Banner { tone: Tone::Warning, title: "Your desktop shows a remote control indicator",
             p { "WhisperNow's paste helper is not set up, so your desktop presses the paste keys for it and shows its remote control indicator while WhisperNow runs." }
@@ -41,9 +83,8 @@ pub(super) fn PasteHelperNotice(setup: PasteHelperSetup, scope: NoticeScope) -> 
                     p { "To paste without it, run this command in a terminal, then restart WhisperNow:" }
                     code { id: "paste-helper-command", class: "command", "{command}" }
                     div { class: "card-actions",
-                        Button { id: "paste-helper-copy",
-                            onclick: move |_| context.copy_text(command.clone(), scope),
-                            "Copy command"
+                        CopyButton { id: "paste-helper-copy", target: CopyTarget::PasteHelperCommand,
+                            text: command, label: "Copy command",
                         }
                     }
                 },

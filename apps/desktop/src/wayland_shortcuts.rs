@@ -11,7 +11,6 @@ use ashpd::{
         global_shortcuts::{BindShortcutsOptions, GlobalShortcuts, NewShortcut},
     },
 };
-use async_trait::async_trait;
 use futures_util::{FutureExt as _, Stream, StreamExt as _, future, stream};
 use tokio::{sync::mpsc, time::Instant};
 use whispernow_platform::wayland::shortcut_input_chord;
@@ -95,7 +94,6 @@ enum PortalSignal {
     Disconnected,
 }
 
-#[async_trait]
 trait ShortcutPortal: Send {
     async fn register(
         &mut self,
@@ -168,7 +166,6 @@ impl AshpdShortcutPortal {
     }
 }
 
-#[async_trait]
 impl ShortcutPortal for AshpdShortcutPortal {
     async fn register(
         &mut self,
@@ -759,7 +756,6 @@ mod tests {
         stopped: Arc<AtomicBool>,
     }
 
-    #[async_trait]
     impl ShortcutPortal for FakePortal {
         async fn register(
             &mut self,

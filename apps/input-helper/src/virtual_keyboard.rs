@@ -20,29 +20,17 @@ const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;
 const BUS_VIRTUAL: u16 = 0x06;
 
-// `linux/uinput.h` requests: `_IOW('U', 100, int)`, `_IOW('U', 101, int)`,
-// `_IOW('U', 3, struct uinput_setup)` and `_IO('U', 1)`, `_IO('U', 2)`.
-const UI_SET_EVBIT: u64 = 0x4004_5564;
-const UI_SET_KEYBIT: u64 = 0x4004_5565;
-const UI_DEV_SETUP: u64 = 0x405c_5503;
-const UI_DEV_CREATE: u64 = 0x5501;
-const UI_DEV_DESTROY: u64 = 0x5502;
+const UINPUT_IOCTL_BASE: u32 = b'U' as u32;
+const UI_SET_EVBIT: libc::Ioctl = libc::_IOW::<libc::c_int>(UINPUT_IOCTL_BASE, 100);
+const UI_SET_KEYBIT: libc::Ioctl = libc::_IOW::<libc::c_int>(UINPUT_IOCTL_BASE, 101);
+const UI_DEV_SETUP: libc::Ioctl = libc::_IOW::<libc::uinput_setup>(UINPUT_IOCTL_BASE, 3);
+const UI_DEV_CREATE: libc::Ioctl = libc::_IO(UINPUT_IOCTL_BASE, 1);
+const UI_DEV_DESTROY: libc::Ioctl = libc::_IO(UINPUT_IOCTL_BASE, 2);
 
 /// Lets the compositor add the new device before its first key.
 const SETTLE: Duration = Duration::from_millis(300);
 /// Between key events, so every application sees each one.
 const KEY_GAP: Duration = Duration::from_millis(8);
-
-/// `struct uinput_setup`.
-#[repr(C)]
-struct UinputSetup {
-    bustype: u16,
-    vendor: u16,
-    product: u16,
-    version: u16,
-    name: [u8; 80],
-    ff_effects_max: u32,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PasteShortcut {
@@ -82,15 +70,19 @@ impl VirtualKeyboard {
         for key in [KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_V] {
             keyboard.request(UI_SET_KEYBIT, libc::c_ulong::from(key))?;
         }
-        let mut setup = UinputSetup {
-            bustype: BUS_VIRTUAL,
-            vendor: 0,
-            product: 0,
-            version: 1,
-            name: [0; 80],
+        let mut setup = libc::uinput_setup {
+            id: libc::input_id {
+                bustype: BUS_VIRTUAL,
+                vendor: 0,
+                product: 0,
+                version: 1,
+            },
+            name: [0; libc::UINPUT_MAX_NAME_SIZE],
             ff_effects_max: 0,
         };
-        setup.name[..NAME.len()].copy_from_slice(NAME.as_bytes());
+        for (slot, byte) in setup.name.iter_mut().zip(NAME.bytes()) {
+            *slot = libc::c_char::from_ne_bytes([byte]);
+        }
         keyboard.request(UI_DEV_SETUP, std::ptr::from_ref(&setup) as libc::c_ulong)?;
         keyboard.request(UI_DEV_CREATE, 0)?;
         thread::sleep(SETTLE);
@@ -137,11 +129,11 @@ impl VirtualKeyboard {
         self.file.write_all(&event)
     }
 
-    fn request(&self, request: u64, argument: libc::c_ulong) -> io::Result<()> {
+    fn request(&self, request: libc::Ioctl, argument: libc::c_ulong) -> io::Result<()> {
         // SAFETY: each request takes an integer or, for UI_DEV_SETUP, a
         // pointer to a live `uinput_setup` the caller keeps for the call.
         #[allow(unsafe_code, reason = "uinput is configured only by ioctl")]
-        let result = unsafe { libc::ioctl(self.file.as_raw_fd(), request as _, argument) };
+        let result = unsafe { libc::ioctl(self.file.as_raw_fd(), request, argument) };
         if result < 0 {
             Err(io::Error::last_os_error())
         } else {
@@ -174,10 +166,5 @@ mod tests {
             assert_eq!(PasteShortcut::parse(other), None, "{other}");
         }
         assert_eq!(PasteShortcut::ControlShiftV.keys(), [29, 42, 47]);
-    }
-
-    #[test]
-    fn the_setup_struct_matches_the_kernel_layout() {
-        assert_eq!(std::mem::size_of::<UinputSetup>(), 92);
     }
 }

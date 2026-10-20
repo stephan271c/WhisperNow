@@ -343,11 +343,17 @@ pub(crate) struct LlamaModel {
 }
 
 impl LlamaModel {
-    /// Loads a GGUF on the first GPU that takes it, else on the CPU.
-    pub(crate) fn load(llama: &'static Llama, path: &Path) -> Result<Self, LlamaError> {
+    /// Loads a GGUF on the first GPU that takes it, else on the CPU; with `use_gpu` off, on
+    /// the CPU.
+    pub(crate) fn load(
+        llama: &'static Llama,
+        path: &Path,
+        use_gpu: bool,
+    ) -> Result<Self, LlamaError> {
         let path =
             CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| LlamaError::Model)?;
-        for (device, description) in llama.gpus() {
+        let gpus = if use_gpu { llama.gpus() } else { Vec::new() };
+        for (device, description) in gpus {
             let mut devices = [device, std::ptr::null_mut()];
             match Self::load_on(llama, &path, devices.as_mut_ptr(), ALL_LAYERS) {
                 Ok((model, vocab)) => {

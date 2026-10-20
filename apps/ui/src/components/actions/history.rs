@@ -7,11 +7,7 @@ use whispernow_domain::ipc::ErrorCategory;
 use whispernow_domain::{EntryId, HistoryPageRequest};
 
 use crate::client;
-use crate::{NoticeScope, UiContext};
-
-use crate::{HistoryCopied, UiOperation};
-
-const COPIED_MS: u32 = 2_000;
+use crate::{NoticeScope, UiContext, UiOperation};
 
 impl UiContext {
     pub(crate) fn refresh_history(mut self) {
@@ -55,29 +51,6 @@ impl UiContext {
     pub(crate) fn clear_history_filter(mut self) {
         if self.management.write().clear_history_filter() {
             self.refresh_history();
-        }
-    }
-
-    /// Copies one entry's text and shows the outcome on its Copy button for a moment; a newer
-    /// copy replaces it.
-    pub(crate) fn copy_history_entry(mut self, entry: EntryId) {
-        let Some(text) = self.management.peek().history_copy(entry) else {
-            return;
-        };
-        let copy_task = spawn_forever(async move {
-            let succeeded = client::write_clipboard(&text).await.is_ok();
-            self.management.write().history_copied = Some(HistoryCopied { entry, succeeded });
-            client::delay(COPIED_MS).await;
-            let mut management = self.management;
-            let mut management = management.write();
-            management.history_copied = None;
-            management.history_copy_task = None;
-        });
-        let mut management = self.management;
-        let mut management = management.write();
-        management.history_copied = None;
-        if let Some(previous) = management.history_copy_task.replace(copy_task) {
-            previous.cancel();
         }
     }
 

@@ -18,8 +18,9 @@ use std::{
     time::Duration,
 };
 #[cfg(target_os = "linux")]
-use whispernow_platform::wayland::{
-    RemoteDesktopRestoreTokenStore, WaylandOutput, WaylandPortalError,
+use whispernow_platform::{
+    NativeClipboard,
+    wayland::{RemoteDesktopRestoreTokenStore, WaylandOutput, WaylandPortalError},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,8 +52,13 @@ enum OutputOperation {
     /// Wayland with the paste helper; preferred over the portal.
     #[cfg(target_os = "linux")]
     Helper(HelperOutput<HelperPastePlatform>),
+    /// The portal's clipboard lives only in its paste session, so copies go to the `XWayland`
+    /// clipboard instead.
     #[cfg(target_os = "linux")]
-    Wayland(WaylandOutputPortal),
+    Wayland {
+        portal: WaylandOutputPortal,
+        clipboard: Option<Mutex<NativeClipboard>>,
+    },
 }
 
 impl OutputCoordinator {
@@ -63,7 +69,16 @@ impl OutputCoordinator {
             HelperPastePlatform::connect().map_or_else(
                 || {
                     tracing::info!("the paste helper is unavailable; pasting through the portal");
-                    OutputOperation::Wayland(WaylandOutputPortal::spawn(path, stopping.clone()))
+                    let clipboard = NativeClipboard::connect()
+                        .inspect_err(|error| {
+                            tracing::warn!(?error, "the XWayland clipboard is unavailable");
+                        })
+                        .ok()
+                        .map(Mutex::new);
+                    OutputOperation::Wayland {
+                        portal: WaylandOutputPortal::spawn(path, stopping.clone()),
+                        clipboard,
+                    }
                 },
                 |platform| OutputOperation::Helper(HelperOutput::new(platform, stopping.clone())),
             )
@@ -100,7 +115,7 @@ impl OutputCoordinator {
             #[cfg(target_os = "linux")]
             OutputOperation::Helper(helper) => helper.output(text, cancellation),
             #[cfg(target_os = "linux")]
-            OutputOperation::Wayland(portal) => portal.output(text, cancellation),
+            OutputOperation::Wayland { portal, .. } => portal.output(text, cancellation),
         }
     }
 
@@ -108,20 +123,34 @@ impl OutputCoordinator {
         match self.operation {
             Some(OutputOperation::Native(_)) => true,
             #[cfg(target_os = "linux")]
-            Some(OutputOperation::Helper(_)) => true,
+            Some(
+                OutputOperation::Helper(_)
+                | OutputOperation::Wayland {
+                    clipboard: Some(_), ..
+                },
+            ) => true,
             _ => false,
         }
     }
 
     /// Leaves `text` on the clipboard for a manual paste, excluded from clipboard history.
-    /// The portal's clipboard lives only in its paste session, so there it is unavailable.
     pub(crate) fn copy(&self, text: &str) -> Result<(), CopyUnavailable> {
         let copied = match &self.operation {
             Some(OutputOperation::Native(queue)) => queue.copy(text),
             #[cfg(target_os = "linux")]
             Some(OutputOperation::Helper(helper)) => helper.queue.copy(text),
             #[cfg(target_os = "linux")]
-            Some(OutputOperation::Wayland(_)) => return Err(CopyUnavailable),
+            Some(OutputOperation::Wayland {
+                clipboard: Some(clipboard),
+                ..
+            }) => clipboard
+                .lock()
+                .expect("clipboard lock poisoned")
+                .write_text(text),
+            #[cfg(target_os = "linux")]
+            Some(OutputOperation::Wayland {
+                clipboard: None, ..
+            }) => return Err(CopyUnavailable),
             None => return Err(CopyUnavailable),
         };
         copied.map_err(|error| {
@@ -133,7 +162,7 @@ impl OutputCoordinator {
     pub(crate) const fn native_wayland(&self) -> bool {
         match self.operation {
             #[cfg(target_os = "linux")]
-            Some(OutputOperation::Helper(_) | OutputOperation::Wayland(_)) => true,
+            Some(OutputOperation::Helper(_) | OutputOperation::Wayland { .. }) => true,
             _ => false,
         }
     }
@@ -143,7 +172,7 @@ impl OutputCoordinator {
     pub(crate) fn remote_desktop_consent(&self) -> Option<PermissionStatus> {
         match &self.operation {
             #[cfg(target_os = "linux")]
-            Some(OutputOperation::Wayland(portal)) => Some(portal.consent()),
+            Some(OutputOperation::Wayland { portal, .. }) => Some(portal.consent()),
             _ => None,
         }
     }
@@ -153,7 +182,7 @@ impl OutputCoordinator {
     pub(crate) fn request_remote_desktop_consent(&self) -> Option<PermissionStatus> {
         match &self.operation {
             #[cfg(target_os = "linux")]
-            Some(OutputOperation::Wayland(portal)) => Some(portal.prepare()),
+            Some(OutputOperation::Wayland { portal, .. }) => Some(portal.prepare()),
             _ => None,
         }
     }
@@ -167,7 +196,7 @@ impl OutputCoordinator {
         #[cfg(target_os = "linux")]
         match &self.operation {
             Some(OutputOperation::Helper(helper)) => helper.shutdown(),
-            Some(OutputOperation::Wayland(portal)) => portal.shutdown(),
+            Some(OutputOperation::Wayland { portal, .. }) => portal.shutdown(),
             _ => {}
         }
     }
@@ -624,8 +653,8 @@ mod tests {
         use whispernow_platform::wayland::{RemoteDesktopRestoreTokenStore, WaylandPortalError};
 
         use super::super::{
-            OutputCoordinator, OutputNotice, OutputOperation, WaylandOutputCommand,
-            WaylandOutputPortal,
+            CopyUnavailable, OutputCoordinator, OutputNotice, OutputOperation,
+            WaylandOutputCommand, WaylandOutputPortal,
         };
 
         enum PortalAnswer {
@@ -670,13 +699,16 @@ mod tests {
                 })
             };
             let coordinator = OutputCoordinator {
-                operation: Some(OutputOperation::Wayland(WaylandOutputPortal {
-                    commands,
-                    available: true,
-                    worker: Mutex::new(Some(worker)),
-                    restore_token: RemoteDesktopRestoreTokenStore::new(restore_token_path),
-                    consent: Mutex::new(None),
-                })),
+                operation: Some(OutputOperation::Wayland {
+                    portal: WaylandOutputPortal {
+                        commands,
+                        available: true,
+                        worker: Mutex::new(Some(worker)),
+                        restore_token: RemoteDesktopRestoreTokenStore::new(restore_token_path),
+                        consent: Mutex::new(None),
+                    },
+                    clipboard: None,
+                }),
                 stopping: CancellationToken::default(),
             };
             (coordinator, pastes)
@@ -736,15 +768,18 @@ mod tests {
             let restore_dir = tempfile::tempdir().expect("restore token directory");
             let (commands, _receiver) = tokio::sync::mpsc::unbounded_channel();
             let coordinator = OutputCoordinator {
-                operation: Some(OutputOperation::Wayland(WaylandOutputPortal {
-                    commands,
-                    available: false,
-                    worker: Mutex::new(None),
-                    restore_token: RemoteDesktopRestoreTokenStore::new(
-                        restore_dir.path().join("restore-token"),
-                    ),
-                    consent: Mutex::new(None),
-                })),
+                operation: Some(OutputOperation::Wayland {
+                    portal: WaylandOutputPortal {
+                        commands,
+                        available: false,
+                        worker: Mutex::new(None),
+                        restore_token: RemoteDesktopRestoreTokenStore::new(
+                            restore_dir.path().join("restore-token"),
+                        ),
+                        consent: Mutex::new(None),
+                    },
+                    clipboard: None,
+                }),
                 stopping: CancellationToken::default(),
             };
             assert_eq!(
@@ -759,6 +794,8 @@ mod tests {
                 coordinator.request_remote_desktop_consent(),
                 Some(PermissionStatus::Unavailable)
             );
+            assert!(!coordinator.can_copy());
+            assert_eq!(coordinator.copy("transcript"), Err(CopyUnavailable));
         }
 
         #[test]

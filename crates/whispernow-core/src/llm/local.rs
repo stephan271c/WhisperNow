@@ -554,8 +554,7 @@ impl Sampler {
         let mut best = (0_usize, f32::NEG_INFINITY);
         let mut suppressed = self.suppressed.iter().copied().peekable();
         for (token, &logit) in logits.iter().enumerate() {
-            let value = if suppressed.peek() == Some(&token) {
-                suppressed.next();
+            let value = if suppressed.next_if_eq(&token).is_some() {
                 f32::NEG_INFINITY
             } else {
                 self.penalized(token, logit)

@@ -1,4 +1,4 @@
-//! Opens a local directory in the desktop's file manager, or a system settings page.
+//! Opens a local directory, a web page or a system settings page with the desktop's opener.
 
 use std::{
     ffi::OsStr,
@@ -9,16 +9,22 @@ use std::{
 
 use whispernow_domain::ipc::PermissionKind;
 
+const OPENER: &str = if cfg!(target_os = "macos") {
+    "open"
+} else if cfg!(target_os = "windows") {
+    "explorer"
+} else {
+    "xdg-open"
+};
+
 /// Opens `directory` in the desktop's file manager without waiting for it.
 pub fn open_in_file_manager(directory: &Path) -> io::Result<()> {
-    let program = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "windows") {
-        "explorer"
-    } else {
-        "xdg-open"
-    };
-    spawn_opener(program, directory.as_os_str())
+    spawn_opener(OPENER, directory.as_os_str())
+}
+
+/// Opens `url` in the desktop's default browser without waiting for it.
+pub fn open_url(url: &str) -> io::Result<()> {
+    spawn_opener(OPENER, OsStr::new(url))
 }
 
 /// Opens the system settings `kind` without waiting for it.

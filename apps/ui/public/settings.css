@@ -456,13 +456,6 @@ small {
   background: var(--color-warning);
 }
 
-.app-version {
-  display: block;
-  margin-top: var(--space-3);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-}
-
 .settings-content {
   min-width: 0;
   padding: var(--space-8) clamp(24px, 4.6vw, 64px) var(--space-10);
@@ -1345,20 +1338,21 @@ small {
 }
 
 .model-status {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
   gap: var(--space-1) var(--space-2);
   font-size: var(--font-size-xs);
 }
 
 .model-status-name {
-  color: var(--color-text-primary);
-  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
 }
 
 .model-status-state {
-  color: var(--color-text-secondary);
+  grid-column: 2;
+  margin: 0;
+  color: var(--color-text-primary);
 }
 
 .sidebar-footer .btn {

@@ -32,10 +32,6 @@ export function revokeObjectUrl(url) {
   URL.revokeObjectURL(url);
 }
 
-export async function writeClipboardText(text) {
-  await tauri().core.invoke("plugin:clipboard-manager|write_text", { text });
-}
-
 export async function listenTyped(name, callback) {
   const unlisten = await tauri().event.listen(name, (event) => callback(event.payload));
   const id = nextListenerId++;

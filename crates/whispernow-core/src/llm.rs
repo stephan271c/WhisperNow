@@ -164,16 +164,16 @@ fn strip_think_blocks(text: &str) -> String {
     const CLOSE: &str = "</think>";
     let mut rest = text;
     // Some providers stream the reasoning without its opening tag.
-    if let Some(close) = rest.find(CLOSE)
-        && rest.find(OPEN).is_none_or(|open| open > close)
+    if let Some((reasoning, after)) = rest.split_once(CLOSE)
+        && !reasoning.contains(OPEN)
     {
-        rest = &rest[close + CLOSE.len()..];
+        rest = after;
     }
     let mut kept = String::with_capacity(rest.len());
-    while let Some(open) = rest.find(OPEN) {
-        kept.push_str(&rest[..open]);
-        match rest[open..].find(CLOSE) {
-            Some(close) => rest = &rest[open + close + CLOSE.len()..],
+    while let Some((before, block)) = rest.split_once(OPEN) {
+        kept.push_str(before);
+        match block.split_once(CLOSE) {
+            Some((_, after)) => rest = after,
             // An unterminated block is all reasoning.
             None => return kept,
         }

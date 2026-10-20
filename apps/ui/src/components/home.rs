@@ -1,14 +1,14 @@
 use dioxus::prelude::*;
 use whispernow_domain::{RecordingMode, SetupStep, Shortcut};
 
-use super::NoticeRegion;
 use super::labels;
 use super::microphone_test::MicrophoneTest;
 use super::ui::{
     Banner, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconName, ShortcutLabel, Tone,
 };
 use super::updates::UpdateStatus;
-use crate::{HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext};
+use super::{CopyButton, NoticeRegion};
+use crate::{CopyTarget, HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext};
 
 /// The steps the setup checklist lists, each done once setup has moved past it.
 const CHECKLIST: [(&str, SetupStep); 4] = [
@@ -172,12 +172,8 @@ fn LatestTranscript(transcript: Option<String>) -> Element {
             if let Some(text) = transcript {
                 p { id: "latest-transcript", class: "transcript-text", "{text}" }
                 div { class: "card-actions",
-                    Button {
-                        id: "copy-latest",
-                        size: ButtonSize::Sm,
-                        onclick: move |_| context.copy_text(text.clone(), NoticeScope::Home),
-                        Icon { name: IconName::Copy }
-                        "Copy"
+                    CopyButton { id: "copy-latest", target: CopyTarget::LatestTranscript,
+                        text, label: "Copy", size: ButtonSize::Sm, icon: true,
                     }
                     Button {
                         variant: ButtonVariant::Ghost,

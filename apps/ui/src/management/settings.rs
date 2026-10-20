@@ -22,6 +22,7 @@ pub enum SettingKey {
     ProviderModel,
     ProviderApiBase,
     CleanupEnabled,
+    CleanupUsesGpu,
     Vocabulary,
 }
 

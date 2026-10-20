@@ -21,7 +21,6 @@ repository = "https://github.com/stephan271c/WhisperNow"
 [workspace.dependencies]
 arboard = { version = "=3.6.1", default-features = false, features = ["image-data"] }
 ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "tracing"] }
-async-trait = "=0.1.89"
 base64 = "=0.22.1"
 bzip2 = "=0.6.1"
 cpal = "=0.18.1"
@@ -65,6 +64,7 @@ tempfile = "=3.27.0"
 thiserror = "=2.0.20"
 time = { version = "=0.3.44", features = ["formatting", "parsing"] }
 tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "=0.7.19", default-features = false }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt"] }
 url = "=2.5.8"

@@ -11,7 +11,6 @@ import {
   objectUrl,
   revokeObjectUrl,
   unlistenTyped,
-  writeClipboardText,
 } from "../public/tauri_bridge.js";
 
 function installTauri(invocations) {
@@ -51,20 +50,6 @@ test("a command without input is invoked without a request argument", async () =
   await invokeTyped("get_state", undefined);
 
   assert.deepEqual(invocations, [{ command: "get_state", payload: {} }]);
-});
-
-test("copy text reaches the production clipboard adapter", async () => {
-  const invocations = [];
-  installTauri(invocations);
-
-  await writeClipboardText("cleaned transcript");
-
-  assert.deepEqual(invocations, [
-    {
-      command: "plugin:clipboard-manager|write_text",
-      payload: { text: "cleaned transcript" },
-    },
-  ]);
 });
 
 function installAudio(invocations, bytes) {

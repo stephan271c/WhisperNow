@@ -26,7 +26,7 @@ pub use clear_data::ClearDataError;
 #[cfg(any(test, feature = "test-support"))]
 pub use credential_store::MemoryCredentialStore;
 pub use credential_store::{CredentialStore, CredentialStoreUnavailable};
-pub use file_manager::{open_in_file_manager, open_privacy_settings};
+pub use file_manager::{open_in_file_manager, open_privacy_settings, open_url};
 pub use llama::{CUDA_LIBRARIES, Llama};
 pub use llm::{complete, list_models};
 pub use local_cleanup::{CleanupModelLocator, CudaPackLocator, LocalCleanupService};
