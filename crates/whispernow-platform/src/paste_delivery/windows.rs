@@ -1,9 +1,6 @@
-//! Windows target revalidation and keyboard-only paste injection.
-//!
-//! This boundary accepts no clipboard or transcript data. It emits one fixed,
-//! balanced `SendInput` batch only after all physical modifiers have been
-//! observed released and the capture-time top-level window, process, and
-//! focused child have been checked again.
+//! Windows paste: one fixed, balanced `SendInput` batch, sent only after the
+//! target's integrity level is no higher than ours, the physical modifiers are
+//! released, and the capture-time window, process and focused child match.
 
 use std::{mem::size_of, ptr};
 

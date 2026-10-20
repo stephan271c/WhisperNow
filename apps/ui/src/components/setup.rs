@@ -221,7 +221,7 @@ fn WelcomeStep() -> Element {
     } }
 }
 
-/// One card per permission this platform needs. Leaving the step stops the polling.
+/// One card per permission this platform needs.
 #[component]
 fn PermissionsStep() -> Element {
     let context = use_context::<UiContext>();

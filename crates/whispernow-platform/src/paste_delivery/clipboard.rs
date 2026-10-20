@@ -1,12 +1,12 @@
 //! The X11, Windows and macOS clipboard through `arboard`.
 //!
 //! Only text, HTML with its plain-text alternative, and images are captured and
-//! restored. File lists, RTF and application-private formats are not, and
-//! `arboard` reports a clipboard holding only those exactly as it reports an
-//! empty one, so neither is ever cleared. Every value this adapter writes is
-//! marked for exclusion from clipboard history, cloud sync and clipboard
-//! monitors where the platform has such a marker: the transcript is
-//! transient, and a restored value is already in history.
+//! restored. `arboard` reports a clipboard holding only other formats (file
+//! lists, RTF, application-private formats) exactly as it reports an empty
+//! one, so neither is ever cleared. Every value written is marked for
+//! exclusion from clipboard history, cloud sync and monitors where the
+//! platform has such a marker: the transcript is transient, and a restored
+//! value is already in history.
 
 use std::{borrow::Cow, fmt, mem};
 

@@ -41,7 +41,8 @@ pub fn prepare_segmented(
 pub fn apply_vocabulary_replacements(text: &str, replacements: &[VocabularyReplacement]) -> String {
     replacements.iter().fold(text.to_owned(), |current, rule| {
         // `str::replace` with an empty pattern inserts the replacement between every character.
-        if rule.source.is_empty() {
+        // Editing refuses a blank source, but a hand-edited one stays in the saved settings.
+        if rule.has_blank_source() {
             current
         } else {
             current.replace(&rule.source, &rule.replacement)

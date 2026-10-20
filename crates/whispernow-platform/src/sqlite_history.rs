@@ -46,8 +46,9 @@ pub struct SqliteHistoryRepository {
 
 impl SqliteHistoryRepository {
     /// Opens the history database, imports the Python release's `history.json` when present,
-    /// and removes unowned numeric WAV files and unfinished audio writes. Returns any non-fatal diagnostic, such
-    /// as a malformed `history.json` that was moved aside rather than imported.
+    /// and removes unowned numeric WAV files and unfinished audio writes. Returns any
+    /// non-fatal diagnostic, such as a malformed `history.json` that was moved aside rather
+    /// than imported.
     pub fn open(paths: &AppPaths) -> Result<(Self, Option<AppError>), AppError> {
         let open_error = |code: &str| {
             tracing::warn!(code, "transcription history did not open");
@@ -262,7 +263,8 @@ impl SqliteHistoryRepository {
         Ok(deleted > 0 || recordings_removed)
     }
 
-    /// Deletes the entries beyond `limit`, with their audio; returns how many were deleted.
+    /// Deletes the entries beyond `limit` or older than `retention`, with their audio; returns
+    /// how many were deleted.
     pub fn prune(
         &self,
         limit: HistoryLimit,

@@ -62,3 +62,15 @@ fn only_a_loopback_host_is_on_this_computer() {
         assert_eq!(endpoint.is_on_this_computer(), local, "{url}");
     }
 }
+
+#[test]
+fn the_base_drops_trailing_slashes_and_nothing_else() {
+    for (url, base) in [
+        ("https://api.example.com/v1", "https://api.example.com/v1"),
+        ("https://api.example.com/v1/", "https://api.example.com/v1"),
+        ("http://localhost:11434//", "http://localhost:11434"),
+    ] {
+        let endpoint = ProviderEndpoint::parse(url).expect("a valid endpoint");
+        assert_eq!(endpoint.base(), base, "{url}");
+    }
+}

@@ -38,7 +38,6 @@ pub fn open_privacy_settings(kind: PermissionKind) -> io::Result<()> {
     spawn_opener(program, OsStr::new(uri))
 }
 
-/// The opener and URI of `kind` on this platform.
 const fn privacy_settings_uri(kind: PermissionKind) -> Option<(&'static str, &'static str)> {
     if cfg!(target_os = "macos") {
         Some((

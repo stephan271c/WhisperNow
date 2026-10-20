@@ -31,8 +31,8 @@ impl AppPaths {
         self.inspect_targets(categories)
     }
 
-    /// The open history repository owns its database and recordings; only its Python
-    /// leftovers are file-deletion targets here.
+    /// The history database and recordings belong to the open history repository, and the
+    /// CUDA pack to the model store; they are listed but left for those owners to clear.
     pub fn clear_data(
         &self,
         categories: &[ClearDataCategory],

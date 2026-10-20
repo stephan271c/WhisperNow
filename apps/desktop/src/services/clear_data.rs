@@ -1,6 +1,5 @@
 use whispernow_domain::AppError;
 use whispernow_domain::ClearDataCategory;
-use whispernow_domain::ModelId;
 use whispernow_domain::ipc::{ClearDataItem, ClearDataResult, DataLocation, ErrorCategory};
 use whispernow_platform::{ClearDataError, CudaPackRemovalOutcome, Llama, ModelStoreError};
 
@@ -51,6 +50,7 @@ impl NativeServices {
             .paths
             .clear_data(&other_categories)
             .map_err(inspect_error)?;
+        let mut reset_model_id = None;
         if let Some(saved) = &mut settings_lock
             && entries
                 .iter()
@@ -61,6 +61,7 @@ impl NativeServices {
                 .all(|entry| entry.deleted)
         {
             **saved = whispernow_domain::Settings::default();
+            reset_model_id = Some(saved.model_id.clone());
         }
         let mut restart_required = entries.iter().any(|entry| {
             matches!(
@@ -108,8 +109,8 @@ impl NativeServices {
             .chain(credential_item)
             .collect();
         self.state.apply(|state| {
-            if restart_required {
-                state.selected_model_id = ModelId::default();
+            if let Some(model_id) = reset_model_id {
+                state.selected_model_id = model_id;
             }
             state.last_transcript = None;
             state.last_error = credential_warning;

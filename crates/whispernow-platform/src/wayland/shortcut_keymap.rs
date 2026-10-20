@@ -26,6 +26,8 @@ const COMMAND_MODIFIERS: [u16; 6] = [
     KEY_RIGHTMETA,
 ];
 
+/// The shortcut as key codes for the release helper: `+` between keys, `,`
+/// between a key's alternative codes (left and right `Ctrl` is `29,97`).
 pub fn shortcut_input_chord(shortcut: &Shortcut) -> io::Result<String> {
     let mut groups: Vec<_> = shortcut
         .modifiers

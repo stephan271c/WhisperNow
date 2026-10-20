@@ -360,8 +360,8 @@ impl ShortcutRegistrar for WaylandShortcutRegistrar {
 
     /// Each registration opens a portal session the compositor may ask the user
     /// to approve, so the cancel shortcut is not registered for every dictation;
-    /// the overlay's cancel button and the tray cancel instead. A second Wayland shortcut
-    /// would require restoring support for multiple portal sessions and held shortcuts.
+    /// the overlay's cancel button and the tray cancel instead. The portal actor holds one
+    /// session, so only the recording shortcut is registered.
     fn supports_transient_shortcuts(&self) -> bool {
         false
     }

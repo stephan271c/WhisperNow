@@ -73,7 +73,6 @@ pub(super) fn LevelMeter(test: MicrophoneTestResponse) -> Element {
 }
 
 pub(super) fn percent(level: f32) -> u8 {
-    // Clamped to 0..=100 before the cast.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,

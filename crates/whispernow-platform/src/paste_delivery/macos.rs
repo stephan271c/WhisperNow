@@ -1,4 +1,5 @@
-//! macOS Accessibility revalidation and balanced Core Graphics Command-V.
+//! macOS paste: waits for the modifiers, re-checks Accessibility trust and
+//! focus, then posts a balanced Core Graphics Command-V.
 
 #[cfg(target_os = "macos")]
 use super::{NativePasteError, NativePasteInjection, wait_until_modifiers_released};

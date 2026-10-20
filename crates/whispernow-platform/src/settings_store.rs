@@ -139,7 +139,6 @@ impl SettingsStore {
         self.credentials.write(&account(provider), key)
     }
 
-    /// Removes the API key of `provider` from the credential store; an absent key is removed.
     pub fn delete_api_key(&self, provider: LlmProvider) -> Result<(), CredentialStoreUnavailable> {
         self.credentials.delete(&account(provider))
     }

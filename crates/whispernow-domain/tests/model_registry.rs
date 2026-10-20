@@ -152,10 +152,13 @@ fn identifiers_reject_filesystem_components() {
 }
 
 #[test]
-fn every_speech_model_is_measured() {
+fn only_speech_models_are_measured() {
     for model in ModelRegistry::builtin().models() {
-        if model.family() != ModelFamily::Cleanup {
-            assert!(model.profile.benchmark().is_some(), "{}", model.id);
-        }
+        assert_eq!(
+            model.benchmark.is_some(),
+            model.family() != ModelFamily::Cleanup,
+            "{}",
+            model.id
+        );
     }
 }

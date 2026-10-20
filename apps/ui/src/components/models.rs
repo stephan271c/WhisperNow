@@ -143,12 +143,12 @@ pub(super) fn ModelRow(
                     span { "{format_bytes(model.size_bytes)} download" }
                     ModelLanguages { languages: model.languages.clone() }
                 }
-                if matches!(kind, ModelRowKind::Speech { .. }) {
+                if let (ModelRowKind::Speech { .. }, Some(benchmark)) = (kind, model.benchmark) {
                     div { class: "model-ratings",
-                        RatingBars { label: "Speed", value: model.speed,
-                            detail: model.benchmark.map(|benchmark| speed_detail(&benchmark)) }
-                        RatingBars { label: "Accuracy", value: model.accuracy,
-                            detail: model.benchmark.map(|benchmark| accuracy_detail(&benchmark)) }
+                        RatingBars { label: "Speed", value: benchmark.speed(),
+                            detail: speed_detail(&benchmark) }
+                        RatingBars { label: "Accuracy", value: benchmark.accuracy(),
+                            detail: accuracy_detail(&benchmark) }
                     }
                 }
             }
@@ -254,12 +254,9 @@ fn accuracy_detail(benchmark: &SpeechBenchmark) -> String {
 
 /// `detail` is the measurement behind the rating, shown on hover.
 #[component]
-fn RatingBars(label: &'static str, value: Rating, detail: Option<String>) -> Element {
+fn RatingBars(label: &'static str, value: Rating, detail: String) -> Element {
     let filled = value.get();
-    let spoken = detail.as_ref().map_or_else(
-        || format!("{label}: {filled} of {}", Rating::MAX),
-        |detail| format!("{label}: {filled} of {}. {detail}", Rating::MAX),
-    );
+    let spoken = format!("{label}: {filled} of {}. {detail}", Rating::MAX);
     rsx! {
         span { class: "rating", role: "img", title: detail, aria_label: "{spoken}",
             span { aria_hidden: "true", "{label}" }

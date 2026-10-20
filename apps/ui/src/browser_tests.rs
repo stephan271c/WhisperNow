@@ -222,8 +222,6 @@ fn management_with_history() -> ManagementState {
         availability: ModelAvailability::Downloaded,
         languages: vec!["en".to_owned()],
         size_bytes: 116_204_861,
-        speed: whispernow_domain::Rating::new(5),
-        accuracy: whispernow_domain::Rating::new(1),
         benchmark: None,
         recommended: false,
     }];

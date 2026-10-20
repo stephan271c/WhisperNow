@@ -15,8 +15,6 @@ mod legacy;
 
 pub use legacy::PythonSettings;
 
-/// An unfinished setup keeps its step and choices in [`Settings::setup`] so an interrupted wizard
-/// resumes without claiming setup is complete.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SetupStep {
@@ -48,8 +46,10 @@ pub enum ThemePreference {
     Dark,
 }
 
-/// Download operation identifiers are intentionally excluded because they are process-scoped. The
-/// saved settings stay in effect until setup finishes and commits these choices.
+/// An unfinished setup keeps its step and choices in [`Settings::setup`] so an interrupted wizard
+/// resumes without claiming setup is complete. Download operation identifiers are excluded
+/// because they are process-scoped. The saved settings stay in effect until setup finishes and
+/// commits these choices.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct SetupCheckpoint {
@@ -130,6 +130,11 @@ impl VocabularyReplacement {
             source: source.into(),
             replacement: replacement.into(),
         }
+    }
+
+    #[must_use]
+    pub fn has_blank_source(&self) -> bool {
+        self.source.trim().is_empty()
     }
 }
 

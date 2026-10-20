@@ -1,6 +1,7 @@
 //! The native paste transaction: `arboard` clipboard plus a fixed keystroke.
 //!
-//! Native Wayland sessions use the portal path in [`crate::wayland`] instead.
+//! Native Wayland sessions, `XWayland` included, use the portal path in
+//! [`crate::wayland`] instead.
 
 use std::{
     thread,
@@ -61,8 +62,6 @@ pub struct NativePastePlatform {
 }
 
 impl NativePastePlatform {
-    /// Connects to the clipboard of a Windows, macOS or native X11 session.
-    /// Native Wayland sessions, including their `XWayland`, paste another way.
     pub fn connect() -> Result<Self, NativePasteError> {
         Ok(Self {
             clipboard: NativeClipboard::connect()?,

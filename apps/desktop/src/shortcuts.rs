@@ -156,9 +156,9 @@ pub(crate) fn cancel_binding(settings: &Settings) -> Option<ShortcutBinding> {
     settings.cancel_shortcut.as_ref().map(binding)
 }
 
-/// Reports whether shortcuts may be registered: dictation is neither paused
-/// nor updating and the application is not closing. The application state is
-/// read, never mirrored.
+/// Reports whether shortcuts may be registered: dictation is not paused, updating or
+/// clearing data, and the application is not closing. The application state is read,
+/// never mirrored.
 pub(crate) type LifecycleProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// The native registrations, changed only while the `native` lock is held.

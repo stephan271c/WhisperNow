@@ -268,7 +268,6 @@ fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine
 /// The decode thread: loads, frees and decodes in the order commands arrive.
 fn run(commands: &mpsc::Receiver<Command>, shared: &Shared) {
     let shutdown = || shared.shutdown.load(Ordering::Acquire);
-    // The loaded model and the id it was loaded for.
     let mut engine: Option<(ModelId, LocalCleanupEngine)> = None;
     while let Ok(command) = commands.recv() {
         match command {

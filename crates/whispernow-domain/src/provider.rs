@@ -12,8 +12,7 @@ pub enum LlmProvider {
     OpenRouter,
     Ollama,
     /// The small cleanup model trained for this app, run in process by llama.cpp once it is
-    /// installed from the model list. It does only Clean Up & Format, and gets a short prompt
-    /// made for it.
+    /// installed from the model list. It gets a short prompt made for it.
     LocalCleanup,
     Gemini,
     /// A user-supplied OpenAI-compatible endpoint.
@@ -108,7 +107,7 @@ pub enum EndpointError {
     InsecureRemote,
 }
 
-/// A custom provider base URL: HTTPS, or HTTP to this computer, with no credentials, query or
+/// A provider's API base URL: HTTPS, or HTTP to this computer, with no credentials, query or
 /// fragment.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ProviderEndpoint {
@@ -144,6 +143,12 @@ impl ProviderEndpoint {
     #[must_use]
     pub fn expose_url(&self) -> &str {
         &self.text
+    }
+
+    /// The address without trailing slashes, ready to have a path appended.
+    #[must_use]
+    pub fn base(&self) -> &str {
+        self.text.trim_end_matches('/')
     }
 
     #[must_use]

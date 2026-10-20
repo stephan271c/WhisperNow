@@ -7,8 +7,8 @@ use whispernow_domain::ipc::{
 };
 use whispernow_domain::{
     ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability, ModelId, ProviderEndpoint,
-    ProviderSettings, Rating, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut,
-    ShortcutKey, ShortcutModifier, SpeechBenchmark, VocabularyReplacement, WerSource,
+    ProviderSettings, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
+    ShortcutModifier, SpeechBenchmark, VocabularyReplacement, WerSource,
 };
 
 use crate::client::fake;
@@ -395,8 +395,6 @@ pub(super) fn model(id: &str, name: &str, availability: ModelAvailability) -> Mo
         availability,
         languages: vec!["en".to_owned()],
         size_bytes: 75_000_000,
-        speed: Rating::new(5),
-        accuracy: Rating::new(3),
         benchmark: None,
         recommended: name == "Base",
     }
@@ -1290,7 +1288,6 @@ fn speech_model_controls_use_download_cancel_and_refresh_the_finished_download()
 #[test]
 fn speed_and_accuracy_bars_explain_themselves_on_hover() {
     let mut management = configured();
-    management.models[0].speed = Rating::new(3);
     management.models[0].benchmark = Some(SpeechBenchmark {
         english_wer: 5.39,
         wer_source: WerSource::Leaderboard,
@@ -1306,7 +1303,8 @@ fn speed_and_accuracy_bars_explain_themselves_on_hover() {
     let html = page.html();
     assert!(html.contains("aria-label=\"Speed: 3 of 5"));
     assert!(html.contains("aria-label=\"Speed: 5 of 5"));
-    assert!(html.contains("aria-label=\"Accuracy: 3 of 5"));
+    assert!(html.contains("aria-label=\"Accuracy: 5 of 5"));
+    assert!(html.contains("aria-label=\"Accuracy: 1 of 5"));
     let titles = html
         .split("title=\"")
         .skip(1)

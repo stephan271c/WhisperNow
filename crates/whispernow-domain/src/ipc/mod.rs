@@ -5,7 +5,7 @@ pub use command_names::COMMAND_NAMES;
 
 use crate::{
     ApiKey, ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability, ModelFamily, ModelId,
-    Rating, Settings, SetupCheckpoint, SpeechBenchmark,
+    Settings, SetupCheckpoint, SpeechBenchmark,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -64,7 +64,6 @@ pub struct AudioDevice {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionKind {
-    /// Microphone access, on every platform.
     Microphone,
     /// macOS Accessibility, which sends the paste keystroke.
     Accessibility,
@@ -104,8 +103,7 @@ pub struct Permission {
 #[serde(rename_all = "camelCase")]
 pub struct PermissionsResponse {
     pub permissions: Vec<Permission>,
-    /// Present when Wayland paste falls back to the `RemoteDesktop` portal
-    /// because the paste helper is not set up.
+    /// Present when Wayland paste has no paste helper set up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paste_helper_setup: Option<PasteHelperSetup>,
 }
@@ -156,9 +154,7 @@ pub struct ModelSummary {
     /// BCP-47 tags of the languages a speech model transcribes; empty for other models.
     pub languages: Vec<String>,
     pub size_bytes: u64,
-    pub speed: Rating,
-    pub accuracy: Rating,
-    /// A speech model's measurements, which its ratings come from.
+    /// A speech model's measurements; the UI rates it from them.
     pub benchmark: Option<SpeechBenchmark>,
     /// The model new installations start with.
     pub recommended: bool,

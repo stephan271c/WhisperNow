@@ -38,8 +38,7 @@ impl AppPaths {
         }
     }
 
-    /// Builds paths from explicit roots. This is the test seam; callers do not
-    /// need to mutate global environment variables or touch real user data.
+    /// Builds paths from explicit roots, so tests never touch the real user directories.
     #[must_use]
     pub fn from_base_dirs(config_base: impl AsRef<Path>, data_base: impl AsRef<Path>) -> Self {
         Self {
@@ -158,9 +157,8 @@ impl AppPaths {
         self.data_dir.join("logs")
     }
 
-    /// Portal-issued `RemoteDesktop` restore token. This is deliberately kept
-    /// separate from user-editable settings because the token is a capability,
-    /// not a preference.
+    /// Portal-issued `RemoteDesktop` restore token. It is kept out of the user-editable
+    /// settings because it is a capability, not a preference.
     #[must_use]
     pub fn wayland_remote_desktop_token_file(&self) -> PathBuf {
         self.config_dir.join("wayland-remote-desktop-token")

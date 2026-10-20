@@ -54,6 +54,16 @@ fn vocabulary_rules_are_literal_sequential_and_case_sensitive() {
 }
 
 #[test]
+fn blank_vocabulary_sources_are_skipped() {
+    let rules = ["", " ", " \t"].map(|source| VocabularyReplacement::new(source, "x"));
+
+    assert_eq!(
+        apply_vocabulary_replacements("two words\tapart", &rules),
+        "two words\tapart"
+    );
+}
+
+#[test]
 fn failed_cleanup_keeps_the_vocabulary_output_and_successful_cleanup_replaces_it() {
     let vocabulary = [VocabularyReplacement::from((
         "wrong".to_owned(),

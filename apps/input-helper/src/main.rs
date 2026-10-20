@@ -21,8 +21,9 @@
 //! Ctrl+V and Ctrl+Shift+V, so `WhisperNow` can paste on Wayland without a
 //! remote desktop session. It prints `ready` once the keyboard exists, then
 //! answers each `ctrl-v` or `ctrl-shift-v` line with `sent`, `held` when the
-//! user kept a modifier held, or `failed`. It reads keyboards only to see
-//! held modifiers.
+//! user kept a modifier held, or `failed`; any other line, or one sent while
+//! a paste is pending, gets `refused`. It reads keyboards only to see held
+//! modifiers.
 
 mod chord;
 #[cfg(target_os = "linux")]

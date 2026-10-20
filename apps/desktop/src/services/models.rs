@@ -8,7 +8,7 @@ use whispernow_domain::AppError;
 use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::ipc::{ActiveDownload, ErrorCategory, ModelSummary, Phase};
 use whispernow_domain::{DownloadPhase, ModelAvailability};
-use whispernow_domain::{ModelFamily, ModelId, ModelProfile};
+use whispernow_domain::{ModelFamily, ModelId};
 use whispernow_platform::{
     CudaPackState, DownloadProgress, Llama, LocalCleanupService, ModelStore, ModelStoreError,
 };
@@ -70,9 +70,7 @@ impl ModelCoordinator {
                 availability: entry.availability,
                 languages: entry.definition.languages,
                 size_bytes: entry.definition.source.archive_size_bytes,
-                speed: entry.definition.profile.speed(),
-                accuracy: entry.definition.profile.accuracy(),
-                benchmark: entry.definition.profile.benchmark(),
+                benchmark: entry.definition.benchmark,
             })
             .chain(self.cuda_pack())
             .collect();
@@ -94,8 +92,6 @@ impl ModelCoordinator {
             availability,
             languages: Vec::new(),
             size_bytes: self.store.cuda_pack_size(),
-            speed: CUDA_PACK_PROFILE.speed(),
-            accuracy: CUDA_PACK_PROFILE.accuracy(),
             benchmark: None,
         })
     }
@@ -392,8 +388,6 @@ fn run_model_download(
         }
     });
 }
-
-const CUDA_PACK_PROFILE: ModelProfile = ModelProfile::rated(5, 3);
 
 const MIN_RATE_INTERVAL: Duration = Duration::from_millis(500);
 

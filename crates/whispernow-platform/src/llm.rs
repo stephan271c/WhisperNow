@@ -15,8 +15,8 @@ use rig_core::{
     },
     streaming::StreamedAssistantContent,
 };
-use whispernow_core::llm::{LlmError, LlmFinishReason, LlmPrompt, LlmRemoteConfig, LlmResponse};
-use whispernow_domain::{ApiKey, ProviderEndpoint, RemoteProvider};
+use whispernow_core::llm::{LlmError, LlmFinishReason, LlmPrompt, LlmResponse};
+use whispernow_domain::{ApiKey, ProviderEndpoint, RemoteCleanupTarget, RemoteProvider};
 
 mod model_list;
 
@@ -31,94 +31,91 @@ const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 
-pub async fn complete(config: LlmRemoteConfig, prompt: LlmPrompt) -> Result<LlmResponse, LlmError> {
-    let http = reqwest::Client::builder()
-        .connect_timeout(HTTP_CONNECT_TIMEOUT)
-        .build()
-        .map_err(|_| LlmError::InvalidRequest)?;
-    let key = config.api_key.as_ref();
-    let model_id = config.target.model;
-    let openai_model = |key: String, base_url: String| {
-        let client = openai::CompletionsClient::builder()
-            .api_key(key)
-            .base_url(base_url)
-            .http_client(http.clone())
-            .build()
-            .map_err(|_| LlmError::InvalidRequest)?;
-        Ok::<_, LlmError>(client.completion_model(model_id.clone()))
-    };
-    match &config.target.provider {
+pub async fn complete(
+    target: RemoteCleanupTarget,
+    api_key: Option<ApiKey>,
+    prompt: LlmPrompt,
+) -> Result<LlmResponse, LlmError> {
+    let http = http_client(None)?;
+    let key = api_key.as_ref();
+    let (secret, base) = match &target.provider {
         RemoteProvider::Anthropic(endpoint) => {
             let mut builder = anthropic::Client::builder()
                 .api_key(required_key(key)?)
-                .http_client(http.clone());
+                .http_client(http);
             if let Some(endpoint) = endpoint {
-                builder = builder.base_url(endpoint.expose_url());
+                builder = builder.base_url(endpoint.base());
             }
             let client = builder.build().map_err(|_| LlmError::InvalidRequest)?;
-            let mut model = client.completion_model(model_id);
+            let mut model = client.completion_model(target.model);
             model
                 .default_max_tokens
                 .get_or_insert(ANTHROPIC_FALLBACK_MAX_TOKENS);
-            stream_model(model, &prompt, |_| LlmFinishReason::Unknown).await
+            return stream_model(model, &prompt, |_| LlmFinishReason::Unknown).await;
         }
         RemoteProvider::Gemini(endpoint) => {
             let mut builder = gemini::Client::builder()
                 .api_key(required_key(key)?)
-                .http_client(http.clone());
+                .http_client(http);
             if let Some(endpoint) = endpoint {
-                builder = builder.base_url(endpoint.expose_url());
+                builder = builder.base_url(endpoint.base());
             }
             let client = builder.build().map_err(|_| LlmError::InvalidRequest)?;
-            stream_model(client.completion_model(model_id), &prompt, |response| {
+            return stream_model(client.completion_model(target.model), &prompt, |response| {
                 gemini_finish_reason(response.and_then(|response| response.finish_reason.as_ref()))
             })
-            .await
+            .await;
         }
-        RemoteProvider::OpenAi(endpoint) => {
-            let model = openai_model(
-                required_key(key)?,
-                openai_compatible_base_url(endpoint.as_ref(), OPENAI_BASE_URL),
-            )?;
-            stream_model(model, &prompt, |_| LlmFinishReason::Unknown).await
-        }
-        RemoteProvider::OpenRouter(endpoint) => {
-            let model = openai_model(
-                required_key(key)?,
-                openai_compatible_base_url(endpoint.as_ref(), OPENROUTER_BASE_URL),
-            )?;
-            stream_model(model, &prompt, |_| LlmFinishReason::Unknown).await
-        }
+        RemoteProvider::OpenAi(endpoint) => (
+            required_key(key)?,
+            base_url(endpoint.as_ref(), OPENAI_BASE_URL).to_owned(),
+        ),
+        RemoteProvider::OpenRouter(endpoint) => (
+            required_key(key)?,
+            base_url(endpoint.as_ref(), OPENROUTER_BASE_URL).to_owned(),
+        ),
         RemoteProvider::Ollama(endpoint) => {
             // Ollama serves the OpenAI protocol under `/v1`; a bare host means its default path.
-            let base_url = match endpoint {
+            let base = match endpoint {
                 Some(endpoint) if endpoint.url().path() == "/" => {
-                    format!("{}/v1", endpoint.expose_url().trim_end_matches('/'))
+                    format!("{}/v1", endpoint.base())
                 }
-                _ => openai_compatible_base_url(endpoint.as_ref(), OLLAMA_BASE_URL),
+                _ => base_url(endpoint.as_ref(), OLLAMA_BASE_URL).to_owned(),
             };
-            let model = openai_model(
-                key.map(|key| key.expose_secret().to_owned())
-                    .unwrap_or_default(),
-                base_url,
-            )?;
-            stream_model(model, &prompt, |_| LlmFinishReason::Unknown).await
+            (required_key(key).unwrap_or_default(), base)
         }
-        RemoteProvider::Custom(endpoint) => {
-            let model = openai_model(
-                key.map(|key| key.expose_secret().to_owned())
-                    .unwrap_or_default(),
-                endpoint.expose_url().to_owned(),
-            )?;
-            stream_model(model, &prompt, |_| LlmFinishReason::Unknown).await
-        }
-    }
+        RemoteProvider::Custom(endpoint) => (
+            required_key(key).unwrap_or_default(),
+            endpoint.base().to_owned(),
+        ),
+    };
+    let client = openai::CompletionsClient::builder()
+        .api_key(secret)
+        .base_url(base)
+        .http_client(http)
+        .build()
+        .map_err(|_| LlmError::InvalidRequest)?;
+    stream_model(client.completion_model(target.model), &prompt, |_| {
+        LlmFinishReason::Unknown
+    })
+    .await
 }
 
-fn openai_compatible_base_url(endpoint: Option<&ProviderEndpoint>, default: &str) -> String {
-    endpoint
-        .map_or(default, ProviderEndpoint::expose_url)
-        .to_owned()
+/// A client that follows no redirect. reqwest strips only `Authorization` and cookies when a
+/// redirect changes host, so following one would resend `x-api-key`, `x-goog-api-key` and the
+/// request body to whatever host the endpoint names.
+fn http_client(total_timeout: Option<Duration>) -> Result<reqwest::Client, LlmError> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(timeout) = total_timeout {
+        builder = builder.timeout(timeout);
+    }
+    builder.build().map_err(|_| LlmError::InvalidRequest)
+}
+
+fn base_url<'a>(endpoint: Option<&'a ProviderEndpoint>, default: &'a str) -> &'a str {
+    endpoint.map_or(default, ProviderEndpoint::base)
 }
 
 fn required_key(key: Option<&ApiKey>) -> Result<String, LlmError> {
@@ -177,22 +174,26 @@ where
 
 fn map_error(error: &CompletionError) -> LlmError {
     if let Some(status) = error.provider_response_status() {
-        if names_missing_model(error) {
+        if status.as_u16() == 404 || names_missing_model(error) {
             return LlmError::ModelNotFound;
         }
-        return match status.as_u16() {
-            401 | 403 => LlmError::Authentication,
-            404 => LlmError::ModelNotFound,
-            408 | 429 => LlmError::RateLimited,
-            500..=599 => LlmError::TemporarilyUnavailable,
-            400..=499 => LlmError::InvalidRequest,
-            _ => LlmError::InvalidResponse,
-        };
+        return status_error(status.as_u16());
     }
     match error {
         CompletionError::HttpError(_) => LlmError::Transport,
         CompletionError::UrlError(_) | CompletionError::RequestError(_) => LlmError::InvalidRequest,
         _ => LlmError::InvalidResponse,
+    }
+}
+
+fn status_error(status: u16) -> LlmError {
+    match status {
+        401 | 403 => LlmError::Authentication,
+        408 | 429 => LlmError::RateLimited,
+        500..=599 => LlmError::TemporarilyUnavailable,
+        // Rig also reports an error envelope that came with a success status.
+        200..=299 => LlmError::InvalidResponse,
+        _ => LlmError::InvalidRequest,
     }
 }
 
@@ -209,25 +210,33 @@ fn names_missing_model(error: &CompletionError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ANTHROPIC_FALLBACK_MAX_TOKENS, GeminiFinishReason, OPENROUTER_BASE_URL, complete,
-        gemini_finish_reason, map_error, openai_compatible_base_url, required_key,
+        ANTHROPIC_FALLBACK_MAX_TOKENS, GeminiFinishReason, OPENROUTER_BASE_URL, base_url, complete,
+        gemini_finish_reason, map_error, required_key, status_error,
     };
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+        time::{Duration, Instant},
+    };
+
     use reqwest::StatusCode;
     use rig_core::completion::CompletionError;
     use whispernow_core::llm::{
-        LlmError, LlmFinishReason, LlmPrompt, LlmRemoteConfig, build_cleanup_prompt,
+        LlmError, LlmFinishReason, LlmPrompt, LlmResponse, build_cleanup_prompt,
     };
     use whispernow_domain::{ApiKey, ProviderEndpoint, RemoteCleanupTarget, RemoteProvider};
 
-    fn request(provider: RemoteProvider, model: &str) -> (LlmRemoteConfig, LlmPrompt) {
+    fn request(
+        provider: RemoteProvider,
+        model: &str,
+    ) -> (RemoteCleanupTarget, Option<ApiKey>, LlmPrompt) {
         (
-            LlmRemoteConfig {
-                target: RemoteCleanupTarget {
-                    provider,
-                    model: model.to_owned(),
-                },
-                api_key: ApiKey::new("token").ok(),
+            RemoteCleanupTarget {
+                provider,
+                model: model.to_owned(),
             },
+            ApiKey::new("token").ok(),
             build_cleanup_prompt("  um so can you send me the report by friday \n"),
         )
     }
@@ -279,29 +288,37 @@ mod tests {
     }
 
     #[test]
-    fn openai_compatible_providers_use_the_override_or_their_default() {
+    fn a_provider_uses_the_override_or_its_default() {
+        assert_eq!(base_url(None, OPENROUTER_BASE_URL), OPENROUTER_BASE_URL);
+        let endpoint = ProviderEndpoint::parse("http://127.0.0.1:11434/v1/").expect("endpoint");
         assert_eq!(
-            openai_compatible_base_url(None, OPENROUTER_BASE_URL),
-            OPENROUTER_BASE_URL
-        );
-        let endpoint = ProviderEndpoint::parse("http://127.0.0.1:11434/v1").expect("endpoint");
-        assert_eq!(
-            openai_compatible_base_url(Some(&endpoint), OPENROUTER_BASE_URL),
-            endpoint.expose_url()
+            base_url(Some(&endpoint), OPENROUTER_BASE_URL),
+            "http://127.0.0.1:11434/v1"
         );
     }
 
-    async fn sent_request(
+    #[test]
+    fn a_status_is_told_apart_by_what_the_user_can_do_about_it() {
+        for (status, expected) in [
+            (401, LlmError::Authentication),
+            (403, LlmError::Authentication),
+            (408, LlmError::RateLimited),
+            (429, LlmError::RateLimited),
+            (503, LlmError::TemporarilyUnavailable),
+            (400, LlmError::InvalidRequest),
+            (404, LlmError::InvalidRequest),
+            (307, LlmError::InvalidRequest),
+            (200, LlmError::InvalidResponse),
+        ] {
+            assert_eq!(status_error(status), expected, "{status}");
+        }
+    }
+
+    async fn exchange(
         provider: impl FnOnce(ProviderEndpoint) -> RemoteProvider,
         model: &str,
-    ) -> serde_json::Value {
-        use std::{
-            io::{Read, Write},
-            net::TcpListener,
-            thread,
-            time::{Duration, Instant},
-        };
-
+        response: String,
+    ) -> (Result<LlmResponse, LlmError>, serde_json::Value) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
         listener
             .set_nonblocking(true)
@@ -353,16 +370,33 @@ mod tests {
                         let body = serde_json::from_slice(&request[end + 4..end + 4 + length])
                             .expect("request JSON");
                         connection
-                            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                            .write_all(response.as_bytes())
                             .expect("fixture response");
                         return body;
                     }
                 }
             }
         });
-        let (config, prompt) = request(provider(endpoint), model);
-        let result = complete(config, prompt).await;
+        let (target, api_key, prompt) = request(provider(endpoint), model);
+        let result =
+            tokio::time::timeout(Duration::from_secs(5), complete(target, api_key, prompt))
+                .await
+                .expect("complete did not return; the redirect was probably followed");
         let body = server.join().expect("fixture provider request");
+        (result, body)
+    }
+
+    async fn sent_request(
+        provider: impl FnOnce(ProviderEndpoint) -> RemoteProvider,
+        model: &str,
+    ) -> serde_json::Value {
+        let (result, body) = exchange(
+            provider,
+            model,
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+                .to_owned(),
+        )
+        .await;
         assert!(result.is_err());
         body
     }
@@ -394,5 +428,28 @@ mod tests {
         )
         .await;
         assert_eq!(body["max_tokens"], ANTHROPIC_FALLBACK_MAX_TOKENS);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_is_not_followed() {
+        let target = TcpListener::bind("127.0.0.1:0").expect("redirect target");
+        target
+            .set_nonblocking(true)
+            .expect("nonblocking redirect target");
+        let redirect = format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            target.local_addr().expect("redirect target address")
+        );
+        let (result, _) = exchange(
+            |endpoint| RemoteProvider::Anthropic(Some(endpoint)),
+            "claude-x",
+            redirect,
+        )
+        .await;
+        assert_eq!(result, Err(LlmError::InvalidRequest));
+        assert!(
+            matches!(target.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "the redirect target was contacted"
+        );
     }
 }

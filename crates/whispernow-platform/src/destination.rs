@@ -1,7 +1,5 @@
-//! Current-focus discovery used only at output time.
-//!
-//! No target is retained from recording start. The output adapter captures the
-//! focused native target immediately before beginning a synchronous delivery.
+//! Captures the focused window immediately before a delivery; nothing is retained from the
+//! start of the recording.
 
 use std::process;
 

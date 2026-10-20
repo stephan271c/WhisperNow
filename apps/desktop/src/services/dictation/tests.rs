@@ -140,7 +140,6 @@ impl TranscriptOutput for FakeOutput {
     }
 }
 
-/// A frame is speech when it is loud.
 struct Loudness;
 
 impl VoiceActivity for Loudness {
@@ -594,7 +593,7 @@ impl Fixture {
             .iter()
             .map(|request| match request {
                 LlmRequest::Local { model, .. } => model.as_str().to_owned(),
-                LlmRequest::Remote { config, .. } => config.target.model.clone(),
+                LlmRequest::Remote { target, .. } => target.model.clone(),
             })
             .collect()
     }
@@ -641,12 +640,15 @@ fn a_saved_remote_api_key_reaches_the_cleanup_request() {
     assert_eq!(fixture.pasted(), ["Cleaned with the saved key."]);
     let requests = fixture.provider.requests.lock().expect("requests");
     assert_eq!(requests.len(), 1);
-    let LlmRequest::Remote { config, .. } = &requests[0] else {
+    let LlmRequest::Remote {
+        target, api_key, ..
+    } = &requests[0]
+    else {
         panic!("remote cleanup request");
     };
-    assert_eq!(config.target.provider.provider(), LlmProvider::OpenAi);
+    assert_eq!(target.provider.provider(), LlmProvider::OpenAi);
     assert_eq!(
-        config.api_key.as_ref().map(ApiKey::expose_secret),
+        api_key.as_ref().map(ApiKey::expose_secret),
         Some("test-provider-key")
     );
 }

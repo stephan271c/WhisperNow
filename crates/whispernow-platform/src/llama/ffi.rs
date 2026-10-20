@@ -1,5 +1,6 @@
-//! The parts of llama.cpp b11259's public C API (`include/llama.h`, `ggml/include/ggml.h`,
-//! `ggml/include/ggml-backend.h`) the cleanup engine uses, resolved at run time.
+//! The parts of the pinned llama.cpp release's public C API (`include/llama.h`,
+//! `ggml/include/ggml.h`, `ggml/include/ggml-backend.h`) the cleanup engine uses, resolved at
+//! run time.
 //!
 //! The structs mirror the C layouts of that release exactly; the size checks below were
 //! taken from the headers with `offsetof` and `sizeof`. Bumping the pinned release means
@@ -146,8 +147,8 @@ macro_rules! api {
 
         impl Api {
             /// # Safety
-            /// The libraries must be llama.cpp b11259's, so each symbol has the declared
-            /// signature, and must stay loaded while the table is used.
+            /// The libraries must be the pinned llama.cpp release's, so each symbol has the
+            /// declared signature, and must stay loaded while the table is used.
             pub(super) unsafe fn resolve(
                 $($library: &Library),*
             ) -> Result<Self, libloading::Error> {

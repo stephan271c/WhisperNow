@@ -27,8 +27,8 @@ pub const CLEANUP_MODEL_IDS: [&str; CLEANUP_MODELS.len()] = {
 /// which run the cleanup models on NVIDIA GPUs. Not a model, and not in the registry.
 pub const CUDA_PACK_ID: &str = "llama-cuda-13.4";
 const CLEANUP_MODEL_FILE: &str = "model-Q8_0.gguf";
-/// Where the local cleanup models are published: pinned release assets. They are
-/// placeholders until the models are uploaded, which waits for the user's go-ahead.
+/// Where the local cleanup models are published: pinned release assets. The URLs are
+/// placeholders until the models are uploaded.
 const CLEANUP_MODEL_RELEASE: &str =
     "https://github.com/stephan271c/WhisperNow/releases/download/cleanup-model-r112";
 
@@ -37,7 +37,6 @@ struct CleanupModel {
     display_name: &'static str,
     size_bytes: u64,
     sha256: &'static str,
-    profile: ModelProfile,
 }
 
 const CLEANUP_MODELS: [CleanupModel; 2] = [
@@ -49,7 +48,6 @@ const CLEANUP_MODELS: [CleanupModel; 2] = [
         display_name: "Local cleanup model (LFM2.5 350M)",
         size_bytes: 379_215_072,
         sha256: "a46d6f79213615cd2faa960c24e8fb2ace09c28e3c1a07ef15f6e9cad974d53b",
-        profile: ModelProfile::rated(5, 3),
     },
     // `training/runs/r112-minicpm-full-inst-1e-5-e3/gguf/model-Q8_0.gguf`:
     // MiniCPM5-1B fine-tuned the same way, under Apache-2.0.
@@ -58,7 +56,6 @@ const CLEANUP_MODELS: [CleanupModel; 2] = [
         display_name: "Local cleanup model (MiniCPM5 1B)",
         size_bytes: 1_153_520_640,
         sha256: "9c28d3e0c029907624ad0c2dac0adda77d485ddbcfbfebd67658aceb434e3fbb",
-        profile: ModelProfile::rated(3, 5),
     },
 ];
 
@@ -337,65 +334,20 @@ impl SpeechBenchmark {
     }
 }
 
-/// A hint for choosing between models on the same computer.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ModelProfile {
-    /// Ratings given without a benchmark.
-    Rated {
-        speed: Rating,
-        accuracy: Rating,
-    },
-    Measured(SpeechBenchmark),
-}
-
-impl ModelProfile {
-    #[must_use]
-    pub const fn rated(speed: u8, accuracy: u8) -> Self {
-        Self::Rated {
-            speed: Rating::new(speed),
-            accuracy: Rating::new(accuracy),
-        }
-    }
-
-    #[must_use]
-    pub fn accuracy(&self) -> Rating {
-        match self {
-            Self::Rated { accuracy, .. } => *accuracy,
-            Self::Measured(benchmark) => benchmark.accuracy(),
-        }
-    }
-
-    #[must_use]
-    pub fn speed(&self) -> Rating {
-        match self {
-            Self::Rated { speed, .. } => *speed,
-            Self::Measured(benchmark) => benchmark.speed(),
-        }
-    }
-
-    #[must_use]
-    pub fn benchmark(&self) -> Option<SpeechBenchmark> {
-        match self {
-            Self::Rated { .. } => None,
-            Self::Measured(benchmark) => Some(*benchmark),
-        }
-    }
-}
-
-fn leaderboard(english_wer: f32, speed: f32) -> ModelProfile {
-    ModelProfile::Measured(SpeechBenchmark {
+fn leaderboard(english_wer: f32, speed: f32) -> SpeechBenchmark {
+    SpeechBenchmark {
         english_wer,
         wer_source: WerSource::Leaderboard,
         speed,
-    })
+    }
 }
 
-fn estimated(english_wer: f32, speed: f32) -> ModelProfile {
-    ModelProfile::Measured(SpeechBenchmark {
+fn estimated(english_wer: f32, speed: f32) -> SpeechBenchmark {
+    SpeechBenchmark {
         english_wer,
         wer_source: WerSource::Estimated,
         speed,
-    })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -406,7 +358,7 @@ pub struct ModelDefinition {
     pub layout: ModelLayout,
     /// The BCP-47 tags of the languages a speech model transcribes; empty for other models.
     pub languages: Vec<String>,
-    pub profile: ModelProfile,
+    pub benchmark: Option<SpeechBenchmark>,
 }
 
 impl ModelDefinition {
@@ -575,7 +527,7 @@ fn transducer(
     archive_size_bytes: u64,
     sha256: &str,
     languages: &[&str],
-    profile: ModelProfile,
+    benchmark: SpeechBenchmark,
 ) -> ModelDefinition {
     let precision = id
         .rsplit('-')
@@ -592,7 +544,7 @@ fn transducer(
             tokens: "tokens.txt".to_owned(),
         },
         languages: tags(languages),
-        profile,
+        benchmark: Some(benchmark),
     }
 }
 
@@ -603,7 +555,7 @@ fn whisper(
     archive_size_bytes: u64,
     sha256: &str,
     languages: &[&str],
-    profile: ModelProfile,
+    benchmark: SpeechBenchmark,
 ) -> ModelDefinition {
     ModelDefinition {
         id: ModelId::new(id).expect("built-in identifiers are non-empty"),
@@ -615,7 +567,7 @@ fn whisper(
             tokens: format!("{artifact_prefix}-tokens.txt"),
         },
         languages: tags(languages),
-        profile,
+        benchmark: Some(benchmark),
     }
 }
 
@@ -624,7 +576,7 @@ fn sense_voice(
     display_name: &str,
     archive_size_bytes: u64,
     sha256: &str,
-    profile: ModelProfile,
+    benchmark: SpeechBenchmark,
 ) -> ModelDefinition {
     ModelDefinition {
         id: ModelId::new(id).expect("built-in identifiers are non-empty"),
@@ -635,7 +587,7 @@ fn sense_voice(
             tokens: "tokens.txt".to_owned(),
         },
         languages: tags(SENSE_VOICE_LANGUAGES),
-        profile,
+        benchmark: Some(benchmark),
     }
 }
 
@@ -644,7 +596,7 @@ fn qwen3_asr(
     display_name: &str,
     archive_size_bytes: u64,
     sha256: &str,
-    profile: ModelProfile,
+    benchmark: SpeechBenchmark,
 ) -> ModelDefinition {
     ModelDefinition {
         id: ModelId::new(archive.to_ascii_lowercase()).expect("built-in identifiers are valid"),
@@ -659,7 +611,7 @@ fn qwen3_asr(
             tokenizer_config: "tokenizer/tokenizer_config.json".to_owned(),
         },
         languages: tags(QWEN3_ASR_LANGUAGES),
-        profile,
+        benchmark: Some(benchmark),
     }
 }
 
@@ -677,6 +629,6 @@ fn local_cleanup(model: &CleanupModel) -> ModelDefinition {
             model: CLEANUP_MODEL_FILE.to_owned(),
         },
         languages: Vec::new(),
-        profile: model.profile,
+        benchmark: None,
     }
 }

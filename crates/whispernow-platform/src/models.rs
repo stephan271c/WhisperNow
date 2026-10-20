@@ -332,7 +332,6 @@ impl ModelStore {
         self.resolve_unlocked(self.definition(model_id)?)
     }
 
-    /// Lists the complete supported registry with current availability.
     pub fn list(&self) -> Result<Vec<ModelListEntry>, ModelStoreError> {
         let _guard = self.lock_store();
         self.registry
@@ -352,7 +351,6 @@ impl ModelStore {
             .collect()
     }
 
-    /// Removes only the downloaded model selected by a registry identifier.
     pub fn remove(&self, model_id: &ModelId) -> Result<(), ModelStoreError> {
         let _guard = self.lock_store();
         let definition = self.definition(model_id)?;

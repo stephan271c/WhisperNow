@@ -1,8 +1,10 @@
 use std::sync::Arc;
 use whispernow_domain::AppError;
 
-use whispernow_domain::ipc::{ClearDataResult, ErrorCategory, SaveSettingsResponse, SettingsView};
-use whispernow_domain::{ClearDataCategory, Settings, SetupCheckpoint};
+use whispernow_domain::ipc::{
+    ClearDataResult, ErrorCategory, SaveSettingsResponse, SetApiKeyRequest, SettingsView,
+};
+use whispernow_domain::{ClearDataCategory, LlmProvider, Settings, SetupCheckpoint};
 
 use super::{Failure, Gateway, run_blocking};
 use crate::{
@@ -15,11 +17,17 @@ use crate::{
 
 impl Gateway {
     pub(crate) async fn settings_view(&self) -> Result<SettingsView, AppError> {
-        let mut view = self
+        let view = self
             .run_command("get_settings", Failure::Published, |services| {
                 Ok(services.settings.get())
             })
             .await?;
+        Ok(self.finish_view(view))
+    }
+
+    /// Adds what the desktop reports now to a view. The UI replaces its whole view with each
+    /// one it receives, so every view sent to it passes through here.
+    pub(super) fn finish_view(&self, mut view: SettingsView) -> SettingsView {
         if self.shortcuts_enabled() && !self.shortcuts.registration_active() {
             let summary = match self.shortcuts.failure() {
                 Some(ShortcutRegistrationError::PermissionDenied) => {
@@ -40,8 +48,37 @@ impl Gateway {
         {
             view.warnings.push("The cancel shortcut could not be activated during the last dictation; choose another key, or cancel from the recording bar or the tray".to_owned());
         }
-        self.read_start_on_login(&mut view);
-        Ok(view)
+        match self.autostart.is_enabled() {
+            Ok(enabled) => view.start_on_login = enabled,
+            Err(_) => view
+                .warnings
+                .push("The OS startup registration could not be inspected".to_owned()),
+        }
+        view
+    }
+
+    pub(crate) async fn set_api_key(
+        &self,
+        request: SetApiKeyRequest,
+    ) -> Result<SettingsView, AppError> {
+        let view = self
+            .run_command("set_api_key", Failure::Local, move |services| {
+                services.settings.set_api_key(&request)
+            })
+            .await?;
+        Ok(self.finish_view(view))
+    }
+
+    pub(crate) async fn clear_api_key(
+        &self,
+        provider: LlmProvider,
+    ) -> Result<SettingsView, AppError> {
+        let view = self
+            .run_command("clear_api_key", Failure::Local, move |services| {
+                services.settings.clear_api_key(provider)
+            })
+            .await?;
+        Ok(self.finish_view(view))
     }
 
     pub(crate) async fn update_settings(
@@ -75,8 +112,10 @@ impl Gateway {
             self.apply_cancel_shortcut(cancel_binding(&response.settings.settings))
                 .await;
         }
-        self.read_start_on_login(&mut response.settings);
-        Ok(response)
+        Ok(SaveSettingsResponse {
+            settings: self.finish_view(response.settings),
+            warnings: response.warnings,
+        })
     }
 
     pub(super) async fn complete_setup(
@@ -101,7 +140,7 @@ impl Gateway {
                 services.complete_setup(&checkpoint, &before)
             })
             .await;
-        let mut settings = match completing {
+        let settings = match completing {
             Ok(settings) => settings,
             Err(error) => {
                 if registered {
@@ -111,8 +150,10 @@ impl Gateway {
             }
         };
         let warnings = refused.map(|warning| warning.summary).into_iter().collect();
-        self.read_start_on_login(&mut settings);
-        Ok(SaveSettingsResponse { settings, warnings })
+        Ok(SaveSettingsResponse {
+            settings: self.finish_view(settings),
+            warnings,
+        })
     }
 
     async fn saved_settings(
@@ -213,15 +254,6 @@ impl Gateway {
                 code = error.code,
                 "the cancel shortcut could not be applied"
             );
-        }
-    }
-
-    pub(super) fn read_start_on_login(&self, view: &mut SettingsView) {
-        match self.autostart.is_enabled() {
-            Ok(enabled) => view.start_on_login = enabled,
-            Err(_) => view
-                .warnings
-                .push("The OS startup registration could not be inspected".to_owned()),
         }
     }
 

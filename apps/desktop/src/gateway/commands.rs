@@ -50,13 +50,7 @@ pub(crate) async fn set_api_key(
     request: SetApiKeyRequest,
     state: tauri::State<'_, Gateway>,
 ) -> Result<SettingsView, AppError> {
-    let mut view = state
-        .run_command("set_api_key", Failure::Local, move |services| {
-            services.settings.set_api_key(&request)
-        })
-        .await?;
-    state.read_start_on_login(&mut view);
-    Ok(view)
+    state.set_api_key(request).await
 }
 
 #[tauri::command]
@@ -64,13 +58,7 @@ pub(crate) async fn clear_api_key(
     request: LlmProvider,
     state: tauri::State<'_, Gateway>,
 ) -> Result<SettingsView, AppError> {
-    let mut view = state
-        .run_command("clear_api_key", Failure::Local, move |services| {
-            services.settings.clear_api_key(request)
-        })
-        .await?;
-    state.read_start_on_login(&mut view);
-    Ok(view)
+    state.clear_api_key(request).await
 }
 
 /// The model names `request` offers, asked with its saved endpoint and API key.

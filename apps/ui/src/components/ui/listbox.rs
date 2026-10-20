@@ -44,7 +44,7 @@ impl Placement {
         }
     }
 
-    /// The list's `data-placement`, which shows it once it was measured.
+    /// The list's `data-placement`; the stylesheet hides the list until it is set.
     pub(super) const fn side_name(self) -> &'static str {
         match self.side {
             Side::Below => "below",

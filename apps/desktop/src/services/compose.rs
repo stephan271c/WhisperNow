@@ -176,9 +176,11 @@ impl LlmService for ProviderRouter {
                 max_output_tokens,
                 draft,
             } => self.local.complete(model, prompt, max_output_tokens, draft),
-            LlmRequest::Remote { config, prompt } => {
-                Box::pin(whispernow_platform::complete(config, prompt))
-            }
+            LlmRequest::Remote {
+                target,
+                api_key,
+                prompt,
+            } => Box::pin(whispernow_platform::complete(target, api_key, prompt)),
         }
     }
 }

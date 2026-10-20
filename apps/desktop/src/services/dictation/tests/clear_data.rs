@@ -150,6 +150,62 @@ fn clearing_only_cuda_model_data_reports_removal_and_restart_and_preserves_histo
     services.shutdown();
 }
 
+fn select_another_speech_model(services: &NativeServices) -> ModelId {
+    let registry = ModelRegistry::builtin();
+    let model = registry
+        .speech_models()
+        .find(|model| model.id != ModelId::default())
+        .expect("another speech model");
+    for artifact in model.layout.required_artifacts() {
+        let path = services
+            .paths
+            .models_dir()
+            .join(model.id.as_str())
+            .join(artifact);
+        fs::create_dir_all(path.parent().expect("artifact parent")).expect("model directory");
+        fs::write(path, b"fixture").expect("model artifact");
+    }
+    services
+        .models
+        .select(model.id.clone(), &services.settings, &services.dictation)
+        .expect("select model");
+    model.id.clone()
+}
+
+#[test]
+fn clearing_only_models_keeps_the_selected_model_in_state_and_settings() {
+    let (services, _root) = native_services(Fixture::new());
+    let selected = select_another_speech_model(&services);
+
+    let result = services
+        .clear_data(&[ClearDataCategory::Models])
+        .expect("clear models");
+
+    assert!(result.restart_required);
+    assert_eq!(services.settings.load().model_id, selected);
+    assert_eq!(services.state.snapshot().selected_model_id, selected);
+    services.request_shutdown();
+    services.shutdown();
+}
+
+#[test]
+fn clearing_settings_resets_the_selected_model_in_state_and_settings() {
+    let (services, _root) = native_services(Fixture::new());
+    select_another_speech_model(&services);
+
+    services
+        .clear_data(&[ClearDataCategory::Settings])
+        .expect("clear settings");
+
+    assert_eq!(services.settings.load().model_id, ModelId::default());
+    assert_eq!(
+        services.state.snapshot().selected_model_id,
+        ModelId::default()
+    );
+    services.request_shutdown();
+    services.shutdown();
+}
+
 #[test]
 fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
     let (services, _root) = native_services(Fixture::new());

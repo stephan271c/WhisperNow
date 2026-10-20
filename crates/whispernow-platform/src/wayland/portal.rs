@@ -235,8 +235,9 @@ impl WaylandOutput {
         }
     }
 
-    /// The session stays open: the clipboard it offers, the transcript or the
-    /// restored snapshot, is gone once it closes.
+    /// Reuses the open session, or opens one. It stays open between pastes:
+    /// the clipboard it offers (the transcript or the restored snapshot) is
+    /// gone once it closes.
     async fn ensure_output(&mut self) -> Result<&mut OutputSession, WaylandPortalError> {
         let closed = self.output.as_mut().is_some_and(|output| {
             let mut closed = false;
@@ -336,8 +337,8 @@ async fn restore_if_current(
     let Some(snapshot) = snapshot else {
         return PasteOutcome::PastedWithoutRestore;
     };
-    // While the session still owns the selection it holds the transcript; the
-    // portal refuses to read a session's own selection back.
+    // The portal won't read back the session's own selection, so ownership
+    // tracking stands in for comparing the clipboard with the transcript.
     if !output
         .clipboard_state
         .lock()

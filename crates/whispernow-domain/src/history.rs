@@ -99,7 +99,7 @@ impl HistoryRetention {
         Self::Forever,
     ];
 
-    /// Entries older than this are deleted, or everything when `None`.
+    /// Entries older than this many days are deleted; `None` keeps them all.
     #[must_use]
     pub const fn days(self) -> Option<u64> {
         match self {
@@ -141,7 +141,7 @@ impl HistoryRetention {
 pub enum EntryStatus {
     /// Transcribed and pasted.
     Ok,
-    /// Transcription failed, including its automatic retry.
+    /// Not transcribed: recognition failed, or the app paused or closed first.
     Failed,
     Cancelled,
     /// Transcribed, but the text never reached the focused application.

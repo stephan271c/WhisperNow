@@ -1,4 +1,4 @@
-//! llama.cpp, linked at run time from the shared libraries of a pinned release (b11259).
+//! llama.cpp, linked at run time from the shared libraries of a pinned release.
 //!
 //! Only its public C API is used. The libraries are loaded from one directory, once per
 //! process, and stay loaded: ggml's backends do not support being unloaded.
@@ -320,6 +320,8 @@ unsafe fn text(pointer: *const c_char) -> String {
     }
 }
 
+/// # Safety
+/// `message` must be a NUL-terminated string.
 unsafe extern "C" fn log(level: c_int, message: *const c_char, _data: *mut c_void) {
     if level == ffi::LOG_LEVEL_ERROR {
         // SAFETY: llama.cpp passes a NUL-terminated message.

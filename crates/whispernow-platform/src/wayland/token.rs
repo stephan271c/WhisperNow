@@ -6,11 +6,9 @@ use super::portal::WaylandPortalError;
 
 const MAX_TOKEN_BYTES: usize = 4 * 1024;
 
-/// The portal's opaque `RemoteDesktop` restore token, stored as plain text.
-///
-/// The token is never printed or included in `Debug` output. It is written
-/// through a temporary file that `tempfile` creates with mode 0600, so the
-/// file never has wider permissions.
+/// The portal's opaque `RemoteDesktop` restore token, stored as plain text and
+/// never logged. On Unix the file is private (mode 0600): it is written
+/// through a `tempfile` temporary that is created that way.
 pub struct RemoteDesktopRestoreTokenStore {
     path: PathBuf,
 }
@@ -22,7 +20,7 @@ impl RemoteDesktopRestoreTokenStore {
     }
 
     /// Whether a valid restore token is saved, so the next `RemoteDesktop`
-    /// session is restored without asking the user again.
+    /// session can skip the consent prompt.
     #[must_use]
     pub fn has_token(&self) -> bool {
         matches!(self.load(), Ok(Some(_)))

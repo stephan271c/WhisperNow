@@ -11,8 +11,8 @@ use tar::{Builder as TarBuilder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
 use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::{
-    DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout, ModelProfile,
-    ModelRegistry, ModelSource,
+    DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout, ModelRegistry,
+    ModelSource,
 };
 use whispernow_platform::{
     AppPaths, DownloadProgress, DownloadTimeouts, ModelStore, ModelStoreError,
@@ -108,7 +108,7 @@ fn definition(url: String, archive: &[u8]) -> ModelDefinition {
             tokens: ARTIFACTS[2].to_owned(),
         },
         languages: Vec::new(),
-        profile: ModelProfile::rated(3, 3),
+        benchmark: None,
     }
 }
 

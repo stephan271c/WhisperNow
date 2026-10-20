@@ -185,6 +185,7 @@ fn use_minute_tick() {
             minute += 1;
         }
     });
+    // Reading the signal subscribes the caller, so each tick re-renders it.
     let _ = minute();
 }
 

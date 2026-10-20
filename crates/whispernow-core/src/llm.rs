@@ -17,23 +17,6 @@ pub use prompt::{LlmPrompt, build_cleanup_prompt, build_local_cleanup_prompt};
 
 const TRANSIENT_RETRIES: u32 = 2;
 
-/// `Debug` never exposes the key, model, or endpoint.
-#[derive(Clone, Eq, PartialEq)]
-pub struct LlmRemoteConfig {
-    pub target: RemoteCleanupTarget,
-    pub api_key: Option<ApiKey>,
-}
-
-impl fmt::Debug for LlmRemoteConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("LlmRemoteConfig")
-            .field("target", &self.target)
-            .field("credential_present", &self.api_key.is_some())
-            .finish_non_exhaustive()
-    }
-}
-
 /// The pre-cleaned transcript the local cleanup model drafts from (see `draft`).
 #[derive(Clone, Eq, PartialEq)]
 pub struct DraftText(String);
@@ -68,7 +51,8 @@ pub enum LlmRequest {
         draft: DraftText,
     },
     Remote {
-        config: LlmRemoteConfig,
+        target: RemoteCleanupTarget,
+        api_key: Option<ApiKey>,
         prompt: LlmPrompt,
     },
 }
@@ -87,9 +71,14 @@ impl fmt::Debug for LlmRequest {
                 .field("max_output_tokens", max_output_tokens)
                 .field("draft", draft)
                 .finish_non_exhaustive(),
-            Self::Remote { config, prompt } => formatter
+            Self::Remote {
+                target,
+                api_key,
+                prompt,
+            } => formatter
                 .debug_struct("LlmRequest::Remote")
-                .field("config", config)
+                .field("target", target)
+                .field("credential_present", &api_key.is_some())
                 .field("prompt", prompt)
                 .finish(),
         }
@@ -233,10 +222,8 @@ pub async fn clean_up(
             }
         }
         CleanupTarget::Remote(target) => LlmRequest::Remote {
-            config: LlmRemoteConfig {
-                target: target.clone(),
-                api_key,
-            },
+            target: target.clone(),
+            api_key,
             prompt: build_cleanup_prompt(transcript),
         },
     };

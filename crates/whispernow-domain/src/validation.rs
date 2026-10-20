@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{LlmProvider, Settings, SetupCheckpoint};
+use crate::{LlmProvider, Settings, SetupCheckpoint, VocabularyReplacement};
 
 /// Its message is shown beside the control that broke it.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -40,7 +40,7 @@ impl Settings {
         if self
             .vocabulary_replacements
             .iter()
-            .any(|rule| rule.source.trim().is_empty())
+            .any(VocabularyReplacement::has_blank_source)
         {
             problems.push(SettingsError::VocabularySource);
         }

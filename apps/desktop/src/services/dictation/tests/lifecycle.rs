@@ -231,6 +231,57 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
 }
 
 #[test]
+fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (services, _root) = native_services(Fixture::new());
+    let shortcuts = Arc::new(ShortcutCoordinator::new(
+        Arc::new(Registrar::default()),
+        Err(ShortcutRegistrationError::ConflictOrUnsupported),
+        Arc::new(|| true),
+        None,
+    ));
+    let gateway = Gateway::new(
+        Arc::new(services),
+        shortcuts,
+        Arc::new(Autostart::default()),
+        Arc::new(ActivationGate::default()),
+        Arc::new(TrayController::default()),
+    );
+    let standing = runtime
+        .block_on(gateway.settings_view())
+        .expect("settings view")
+        .warnings;
+    assert_eq!(
+        standing,
+        ["A configured recording shortcut is unavailable; choose another combination"]
+    );
+
+    runtime.block_on(async {
+        let key = SetApiKeyRequest {
+            provider: LlmProvider::OpenAi,
+            key: ApiKey::new("saved-key").expect("key"),
+        };
+        let set = gateway.set_api_key(key).await.expect("set key");
+        assert_eq!(set.warnings, standing);
+        let cleared = gateway
+            .clear_api_key(LlmProvider::OpenAi)
+            .await
+            .expect("clear key");
+        assert_eq!(cleared.warnings, standing);
+        let updated = gateway
+            .update_settings(gateway.services.settings.load())
+            .await
+            .expect("update settings");
+        assert_eq!(updated.settings.warnings, standing);
+    });
+    gateway.services.request_shutdown();
+    gateway.services.shutdown();
+}
+
+#[test]
 fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
     use crate::services::state::DownloadTask;
     use whispernow_domain::ipc::ActiveDownload;

@@ -1,8 +1,6 @@
-//! Wayland desktop integration.
-//!
-//! This module is intentionally disjoint from the X11 adapters. Nothing in
-//! this path opens an X11 connection, invokes a command-line clipboard helper,
-//! or reads a raw input device.
+//! Wayland paste and shortcut support through desktop portals, AT-SPI and the
+//! Wayland protocol. Nothing here opens an X11 connection, runs a clipboard
+//! helper command or reads a raw input device.
 
 mod accessibility;
 mod clipboard;

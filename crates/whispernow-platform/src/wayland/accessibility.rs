@@ -10,7 +10,7 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// The paste keystroke the active window expects, found through AT-SPI by
 /// reading only each application's top-level windows. When it cannot be found
-/// in time, the target is taken to be an ordinary application, as most are.
+/// in time, `Ctrl+V` is used.
 pub async fn active_paste_keys() -> PasteKeys {
     if let Ok(Some(application)) = tokio::time::timeout(LOOKUP_TIMEOUT, active_application()).await
     {

@@ -5,11 +5,11 @@ use rig_core::providers::anthropic::{
 };
 use serde::Deserialize;
 use whispernow_core::llm::LlmError;
-use whispernow_domain::{ApiKey, ProviderEndpoint, RemoteProvider};
+use whispernow_domain::{ApiKey, RemoteProvider};
 
 use super::{
-    HTTP_CONNECT_TIMEOUT, OLLAMA_BASE_URL, OPENAI_BASE_URL, OPENROUTER_BASE_URL,
-    openai_compatible_base_url, required_key,
+    OLLAMA_BASE_URL, OPENAI_BASE_URL, OPENROUTER_BASE_URL, base_url, http_client, required_key,
+    status_error,
 };
 
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -55,43 +55,31 @@ pub async fn list_models(
     provider: &RemoteProvider,
     api_key: Option<&ApiKey>,
 ) -> Result<Vec<String>, LlmError> {
-    // Redirects are not followed, so a key sent in a provider header never reaches another host.
-    let http = reqwest::Client::builder()
-        .connect_timeout(HTTP_CONNECT_TIMEOUT)
-        .timeout(LIST_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| LlmError::InvalidRequest)?;
+    let http = http_client(Some(LIST_TIMEOUT))?;
     let optional_bearer = |request: reqwest::RequestBuilder| match api_key {
         Some(key) => request.bearer_auth(key.expose_secret()),
         None => request,
     };
     let mut models = match provider {
         RemoteProvider::OpenAi(endpoint) => {
-            let base = openai_compatible_base_url(endpoint.as_ref(), OPENAI_BASE_URL);
+            let base = base_url(endpoint.as_ref(), OPENAI_BASE_URL);
             let request = http
-                .get(format!("{}/models", base.trim_end_matches('/')))
+                .get(format!("{base}/models"))
                 .bearer_auth(required_key(api_key)?);
             ids(fetch::<IdList>(request).await?)
         }
         // OpenRouter lists its models without a key.
         RemoteProvider::OpenRouter(endpoint) => {
-            let base = openai_compatible_base_url(endpoint.as_ref(), OPENROUTER_BASE_URL);
-            let request = http.get(format!("{}/models", base.trim_end_matches('/')));
+            let base = base_url(endpoint.as_ref(), OPENROUTER_BASE_URL);
+            let request = http.get(format!("{base}/models"));
             ids(fetch::<IdList>(optional_bearer(request)).await?)
         }
         RemoteProvider::Custom(endpoint) => {
-            let request = http.get(format!(
-                "{}/models",
-                endpoint.expose_url().trim_end_matches('/')
-            ));
+            let request = http.get(format!("{}/models", endpoint.base()));
             ids(fetch::<IdList>(optional_bearer(request)).await?)
         }
         RemoteProvider::Ollama(endpoint) => {
-            let base = endpoint
-                .as_ref()
-                .map_or(OLLAMA_BASE_URL, ProviderEndpoint::expose_url)
-                .trim_end_matches('/');
+            let base = base_url(endpoint.as_ref(), OLLAMA_BASE_URL);
             let root = base.strip_suffix("/v1").unwrap_or(base);
             let request = http.get(format!("{root}/api/tags"));
             fetch::<OllamaTags>(optional_bearer(request))
@@ -102,11 +90,8 @@ pub async fn list_models(
                 .collect()
         }
         RemoteProvider::Anthropic(endpoint) => {
-            let base = normalize_anthropic_base_url(
-                endpoint
-                    .as_ref()
-                    .map_or(ANTHROPIC_BASE_URL, ProviderEndpoint::expose_url),
-            );
+            let base =
+                normalize_anthropic_base_url(base_url(endpoint.as_ref(), ANTHROPIC_BASE_URL));
             let request = http
                 .get(format!("{base}/v1/models?limit=1000"))
                 .header("x-api-key", required_key(api_key)?)
@@ -114,10 +99,7 @@ pub async fn list_models(
             ids(fetch::<IdList>(request).await?)
         }
         RemoteProvider::Gemini(endpoint) => {
-            let base = endpoint
-                .as_ref()
-                .map_or(GEMINI_BASE_URL, ProviderEndpoint::expose_url)
-                .trim_end_matches('/');
+            let base = base_url(endpoint.as_ref(), GEMINI_BASE_URL);
             let request = http
                 .get(format!("{base}/v1beta/models?pageSize=1000"))
                 .header("x-goog-api-key", required_key(api_key)?);
@@ -154,12 +136,9 @@ async fn fetch<T: serde::de::DeserializeOwned>(
     request: reqwest::RequestBuilder,
 ) -> Result<T, LlmError> {
     let response = request.send().await.map_err(|_| LlmError::Transport)?;
-    match response.status().as_u16() {
-        200..=299 => {}
-        401 | 403 => return Err(LlmError::Authentication),
-        429 => return Err(LlmError::RateLimited),
-        500..=599 => return Err(LlmError::TemporarilyUnavailable),
-        _ => return Err(LlmError::InvalidRequest),
+    let status = response.status();
+    if !status.is_success() {
+        return Err(status_error(status.as_u16()));
     }
     let body = response.bytes().await.map_err(|_| LlmError::Transport)?;
     serde_json::from_slice(&body).map_err(|_| LlmError::InvalidResponse)

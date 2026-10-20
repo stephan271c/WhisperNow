@@ -1,6 +1,5 @@
 //! Entries carry UTC milliseconds; everything here turns them into the viewer's local day and
-//! time. The clock is a context value so tests and galleries can pin both the time and the
-//! offset from UTC.
+//! time. The clock is a context value so tests can pin both the time and the offset from UTC.
 
 use whispernow_domain::{HistoryEntry, HistoryLimit, HistoryRetention, UtcMillis};
 

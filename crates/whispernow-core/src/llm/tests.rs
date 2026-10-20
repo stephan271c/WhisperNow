@@ -22,15 +22,13 @@ fn request_debug_keeps_captured_text_credentials_models_and_endpoints_private() 
             draft: DraftText::from_transcript(transcript),
         },
         LlmRequest::Remote {
-            config: LlmRemoteConfig {
-                target: RemoteCleanupTarget {
-                    provider: RemoteProvider::Custom(
-                        ProviderEndpoint::parse("https://private.example/v1").expect("endpoint"),
-                    ),
-                    model: "private-model".to_owned(),
-                },
-                api_key: Some(ApiKey::new("private-key").expect("key")),
+            target: RemoteCleanupTarget {
+                provider: RemoteProvider::Custom(
+                    ProviderEndpoint::parse("https://private.example/v1").expect("endpoint"),
+                ),
+                model: "private-model".to_owned(),
             },
+            api_key: Some(ApiKey::new("private-key").expect("key")),
             prompt: build_cleanup_prompt(transcript),
         },
     ];

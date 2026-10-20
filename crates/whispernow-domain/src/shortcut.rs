@@ -52,7 +52,7 @@ impl ShortcutModifier {
         }
     }
 
-    /// Reads a stored modifier name, including the aliases older files used.
+    /// Reads a stored modifier name or an alias such as `control`, `super` or `cmd`.
     #[must_use]
     pub fn from_name(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {

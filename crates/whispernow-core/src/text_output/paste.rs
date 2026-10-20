@@ -24,8 +24,8 @@ pub enum KeystrokeOutcome<E> {
 pub enum PasteOutcome<E> {
     PastedAndRestored,
     /// The transcript was pasted but stays on the clipboard: the previous
-    /// clipboard could not be read or held nothing capturable, or putting it
-    /// back failed.
+    /// clipboard could not be read or held nothing capturable, or checking
+    /// it or putting it back failed.
     PastedWithoutRestore,
     /// The transcript was pasted, then something newer replaced it, so the
     /// newer clipboard was kept.
