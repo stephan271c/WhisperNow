@@ -19,6 +19,8 @@ use whispernow_core::llm::{LlmError, LlmFinishReason, LlmPrompt, LlmResponse};
 use whispernow_domain::{ApiKey, ProviderEndpoint, RemoteCleanupTarget, RemoteProvider};
 
 mod model_list;
+#[cfg(test)]
+mod test_server;
 
 pub use model_list::list_models;
 
@@ -211,14 +213,9 @@ fn names_missing_model(error: &CompletionError) -> bool {
 mod tests {
     use super::{
         ANTHROPIC_FALLBACK_MAX_TOKENS, GeminiFinishReason, OPENROUTER_BASE_URL, base_url, complete,
-        gemini_finish_reason, map_error, required_key, status_error,
+        gemini_finish_reason, map_error, required_key, status_error, test_server::serve_once,
     };
-    use std::{
-        io::{Read, Write},
-        net::TcpListener,
-        thread,
-        time::{Duration, Instant},
-    };
+    use std::{net::TcpListener, time::Duration};
 
     use reqwest::StatusCode;
     use rig_core::completion::CompletionError;
@@ -317,72 +314,18 @@ mod tests {
     async fn exchange(
         provider: impl FnOnce(ProviderEndpoint) -> RemoteProvider,
         model: &str,
-        response: String,
+        status_and_headers: &str,
+        body: &str,
     ) -> (Result<LlmResponse, LlmError>, serde_json::Value) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
-        listener
-            .set_nonblocking(true)
-            .expect("nonblocking fixture listener");
-        let endpoint = ProviderEndpoint::parse(format!(
-            "http://{}/v1",
-            listener.local_addr().expect("fixture address")
-        ))
-        .expect("fixture endpoint");
-        let server = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            let (mut connection, _) = loop {
-                match listener.accept() {
-                    Ok(connection) => break connection,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(
-                            Instant::now() < deadline,
-                            "provider did not connect before the fixture request deadline"
-                        );
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                    Err(error) => panic!("accept provider request: {error}"),
-                }
-            };
-            connection
-                .set_nonblocking(false)
-                .expect("blocking fixture connection");
-            connection
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .expect("request timeout");
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 4096];
-            loop {
-                let read = connection.read(&mut buffer).expect("request bytes");
-                assert!(read > 0, "request ended before its body");
-                request.extend_from_slice(&buffer[..read]);
-                if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
-                    let header = std::str::from_utf8(&request[..end]).expect("request headers");
-                    let length = header
-                        .lines()
-                        .find_map(|line| {
-                            let (name, value) = line.split_once(':')?;
-                            name.eq_ignore_ascii_case("content-length")
-                                .then(|| value.trim().parse::<usize>().expect("body length"))
-                        })
-                        .expect("request body length");
-                    if request.len() >= end + 4 + length {
-                        let body = serde_json::from_slice(&request[end + 4..end + 4 + length])
-                            .expect("request JSON");
-                        connection
-                            .write_all(response.as_bytes())
-                            .expect("fixture response");
-                        return body;
-                    }
-                }
-            }
-        });
+        let (address, server) = serve_once(status_and_headers, body);
+        let endpoint = ProviderEndpoint::parse(format!("{address}/v1")).expect("fixture endpoint");
         let (target, api_key, prompt) = request(provider(endpoint), model);
         let result =
             tokio::time::timeout(Duration::from_secs(5), complete(target, api_key, prompt))
                 .await
                 .expect("complete did not return; the redirect was probably followed");
-        let body = server.join().expect("fixture provider request");
+        let received = server.join().expect("fixture provider request");
+        let body = serde_json::from_slice(&received.body).expect("request JSON");
         (result, body)
     }
 
@@ -390,13 +333,7 @@ mod tests {
         provider: impl FnOnce(ProviderEndpoint) -> RemoteProvider,
         model: &str,
     ) -> serde_json::Value {
-        let (result, body) = exchange(
-            provider,
-            model,
-            "HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
-                .to_owned(),
-        )
-        .await;
+        let (result, body) = exchange(provider, model, "400 Bad Request", "{}").await;
         assert!(result.is_err());
         body
     }
@@ -437,13 +374,14 @@ mod tests {
             .set_nonblocking(true)
             .expect("nonblocking redirect target");
         let redirect = format!(
-            "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "307 Temporary Redirect\r\nLocation: http://{}/",
             target.local_addr().expect("redirect target address")
         );
         let (result, _) = exchange(
             |endpoint| RemoteProvider::Anthropic(Some(endpoint)),
             "claude-x",
-            redirect,
+            &redirect,
+            "",
         )
         .await;
         assert_eq!(result, Err(LlmError::InvalidRequest));

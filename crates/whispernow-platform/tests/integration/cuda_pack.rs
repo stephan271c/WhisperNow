@@ -1,21 +1,16 @@
 //! The CUDA pack's installer, against fixture archives served locally.
 
-use std::{
-    fs,
-    io::Write,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{fs, io::Write, time::Duration};
 
-use crate::common::{self, FixtureServer, Response};
+use crate::common::{self, FixtureServer, Response, recorder, tar_file, tar_link, temp_paths};
 use flate2::{Compression, write::GzEncoder};
-use tar::{Builder as TarBuilder, EntryType, Header};
-use tempfile::{TempDir, tempdir};
+use tar::{Builder as TarBuilder, EntryType};
+use tempfile::TempDir;
 use whispernow_core::CancellationToken;
 use whispernow_domain::DownloadPhase;
 use whispernow_platform::{
-    AppPaths, CudaPackArchive, CudaPackFormat, CudaPackRemovalOutcome, CudaPackState,
-    DownloadProgress, DownloadTimeouts, ModelStore, ModelStoreError,
+    AppPaths, CudaPackArchive, CudaPackFormat, CudaPackRemovalOutcome, CudaPackState, ModelStore,
+    ModelStoreError,
 };
 use zip::write::SimpleFileOptions;
 
@@ -34,27 +29,14 @@ fn contents(name: &str) -> Vec<u8> {
 /// The backend in a gzipped tar under a top directory, beside a symlink and another file.
 fn backend_archive(backend: &str, body: &[u8]) -> Vec<u8> {
     let mut archive = TarBuilder::new(GzEncoder::new(Vec::new(), Compression::default()));
-    for (path, body) in [
-        (format!("release/{backend}"), body.to_vec()),
-        ("release/llama-server".to_owned(), b"tool".to_vec()),
-    ] {
-        let mut header = Header::new_gnu();
-        header.set_size(body.len() as u64);
-        header.set_mode(0o755);
-        header.set_entry_type(EntryType::file());
-        header.set_cksum();
-        archive
-            .append_data(&mut header, path, body.as_slice())
-            .expect("append");
-    }
-    let mut link = Header::new_gnu();
-    link.set_size(0);
-    link.set_entry_type(EntryType::symlink());
-    link.set_link_name(backend).expect("link");
-    link.set_cksum();
-    archive
-        .append_data(&mut link, "release/backend-link", &[][..])
-        .expect("append link");
+    tar_file(&mut archive, &format!("release/{backend}"), body);
+    tar_file(&mut archive, "release/llama-server", b"tool");
+    tar_link(
+        &mut archive,
+        "release/backend-link",
+        EntryType::symlink(),
+        backend,
+    );
     archive.into_inner().expect("tar").finish().expect("gzip")
 }
 
@@ -118,16 +100,11 @@ fn fixture_archives(
         },
     ];
     let total = backend_size + runtime_size;
-    let root = tempdir().expect("temporary root");
-    let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+    let (root, paths) = temp_paths();
     let store = ModelStore::with_registry_and_timeouts(
         whispernow_domain::ModelRegistry::builtin(),
         paths.clone(),
-        DownloadTimeouts {
-            connect: Duration::from_secs(2),
-            receive_body: Duration::from_secs(2),
-            total: Duration::from_secs(10),
-        },
+        common::timeouts(Duration::from_secs(10)),
     )
     .with_cuda_pack(archives.leak());
     (
@@ -141,21 +118,13 @@ fn fixture_archives(
     )
 }
 
-fn recorded() -> (Arc<Mutex<Vec<DownloadProgress>>>, impl Fn(DownloadProgress)) {
-    let progress = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&progress);
-    (progress, move |event| {
-        sink.lock().expect("progress").push(event);
-    })
-}
-
 #[test]
 fn the_pack_installs_its_files_flat_from_a_tar_gz_and_a_zip_with_progress_over_both() {
     let (fixture, _server, total) = fixture(None);
     let store = &fixture.store;
     assert_eq!(store.cuda_pack_state(), CudaPackState::NotInstalled);
     assert_eq!(store.cuda_pack_size(), total);
-    let (progress, observer) = recorded();
+    let (progress, observer) = recorder();
     store
         .download_cuda_pack(&CancellationToken::default(), &observer)
         .expect("installed");
@@ -204,7 +173,7 @@ fn the_pack_installs_its_files_flat_from_a_tar_gz_and_a_zip_with_progress_over_b
 fn a_wrong_digest_installs_nothing() {
     let wrong = "0".repeat(64).leak();
     let (fixture, _server, _) = fixture(Some(wrong));
-    let (_, observer) = recorded();
+    let (_, observer) = recorder();
     let result = fixture
         .store
         .download_cuda_pack(&CancellationToken::default(), &observer);
@@ -251,14 +220,7 @@ fn a_link_cannot_supply_the_required_backend() {
     let member = format!("release/{BACKEND}");
     for entry_type in [EntryType::symlink(), EntryType::hard_link()] {
         let mut archive = TarBuilder::new(GzEncoder::new(Vec::new(), Compression::default()));
-        let mut header = Header::new_gnu();
-        header.set_size(0);
-        header.set_entry_type(entry_type);
-        header.set_link_name("../../outside").expect("link target");
-        header.set_cksum();
-        archive
-            .append_data(&mut header, &member, &[][..])
-            .expect("link member");
+        tar_link(&mut archive, &member, entry_type, "../../outside");
         let backend = archive.into_inner().expect("tar").finish().expect("gzip");
         let (fixture, _server, _) = fixture_archives(backend, runtime_archive(&RUNTIME), None);
         assert_eq!(
@@ -315,7 +277,7 @@ fn startup_removes_old_pack_versions_and_interrupted_downloads_but_keeps_the_cur
 #[test]
 fn a_pack_not_in_use_is_removed_at_once() {
     let (fixture, _server, _) = fixture(None);
-    let (_, observer) = recorded();
+    let (_, observer) = recorder();
     fixture
         .store
         .download_cuda_pack(&CancellationToken::default(), &observer)
@@ -331,11 +293,10 @@ fn a_pack_not_in_use_is_removed_at_once() {
 
 #[test]
 fn without_archives_there_is_no_pack() {
-    let root = tempdir().expect("temporary root");
-    let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+    let (_root, paths) = temp_paths();
     let store = ModelStore::new(paths).with_cuda_pack(&[]);
     assert_eq!(store.cuda_pack_state(), CudaPackState::Unsupported);
-    let (_, observer) = recorded();
+    let (_, observer) = recorder();
     assert_eq!(
         store.download_cuda_pack(&CancellationToken::default(), &observer),
         Err(ModelStoreError::Unsupported)

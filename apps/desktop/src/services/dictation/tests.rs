@@ -12,30 +12,28 @@ use std::{
 use whispernow_core::{
     CancellationToken, ResolvedModel,
     asr::{AsrEngine, AsrError},
-    audio::{
-        AudioBlock, AudioCapture, AudioDeviceChoice, AudioInput, AudioInputError, AudioSink,
-        TARGET_SAMPLE_RATE,
-    },
+    audio::{AudioInput, TARGET_SAMPLE_RATE},
     llm::{LlmError, LlmFinishReason, LlmFuture, LlmRequest, LlmResponse, LlmService},
     workflow::VoiceActivity,
 };
-use whispernow_domain::ipc::{AudioDevice, ErrorCategory, SetApiKeyRequest};
+use whispernow_domain::ipc::{ErrorCategory, SetApiKeyRequest};
 use whispernow_domain::{
     ApiKey, AppError, EntryStatus, HistoryEntry, HistoryFilter, HistoryPageRequest, LlmProvider,
     ModelId, ModelRegistry, Settings,
 };
-use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore, SettingsStore};
+use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore};
 
 use super::{AiCleanup, Dictation, DictationParts, Message};
 
 mod clear_data;
 mod lifecycle;
 use crate::services::{
-    Events, Phase, RecordingTrigger,
+    Phase, RecordingTrigger,
     history::HistoryStore,
     output::{OutputNotice, TranscriptOutput},
     settings::SettingsCoordinator,
-    state::{LoadedModel, State, StateCell},
+    state::{LoadedModel, StateCell},
+    test_support::{FakeAudioInput, SettingsHarness, install_artifacts},
 };
 
 const TRANSCRIPT: &str = "hello from the worker";
@@ -100,34 +98,6 @@ impl AsrEngine for ScriptedAsr {
     }
 }
 
-/// Capture that delivers its audio as soon as it starts.
-struct FakeAudio {
-    audio: Vec<f32>,
-}
-
-impl AudioInput for FakeAudio {
-    fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
-        Ok(Vec::new())
-    }
-
-    fn start(
-        &self,
-        _device: AudioDeviceChoice,
-        sink: Arc<dyn AudioSink>,
-    ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
-        sink.samples(AudioBlock::new(self.audio.clone()));
-        Ok(Box::new(FakeCapture))
-    }
-}
-
-struct FakeCapture;
-
-impl AudioCapture for FakeCapture {
-    fn stop(self: Box<Self>) -> Result<(), AudioInputError> {
-        Ok(())
-    }
-}
-
 struct FakeOutput {
     notice: OutputNotice,
     pasted: Mutex<Vec<String>>,
@@ -188,6 +158,7 @@ pub(crate) struct Fixture {
     provider: Arc<FakeProvider>,
     credentials: Arc<MemoryCredentialStore>,
     model: ResolvedModel,
+    paths: AppPaths,
     root: tempfile::TempDir,
 }
 
@@ -197,53 +168,44 @@ impl Fixture {
     }
 
     fn with_output(notice: OutputNotice) -> Self {
-        Self::build(notice, vec![0.25; TARGET_SAMPLE_RATE as usize])
+        let speech = vec![0.25; TARGET_SAMPLE_RATE as usize];
+        Self::with_script(
+            notice,
+            Arc::new(FakeAudioInput::recording(speech)),
+            Arc::new(Script::default()),
+        )
     }
 
     fn with_audio(audio: Vec<f32>) -> Self {
-        Self::build(OutputNotice::Pasted, audio)
-    }
-
-    fn build(notice: OutputNotice, audio: Vec<f32>) -> Self {
         Self::with_script(
-            notice,
-            Arc::new(FakeAudio { audio }),
+            OutputNotice::Pasted,
+            Arc::new(FakeAudioInput::recording(audio)),
             Arc::new(Script::default()),
         )
     }
 
     fn with_script(notice: OutputNotice, audio: Arc<dyn AudioInput>, script: Arc<Script>) -> Self {
-        let root = tempfile::tempdir().expect("temporary root");
-        let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
-        let model_id = ModelId::default();
-        let registry = ModelRegistry::builtin();
-        let definition = registry.get(model_id.as_str()).expect("default model");
-        for artifact in definition.layout.required_artifacts() {
-            let path = paths.models_dir().join(model_id.as_str()).join(artifact);
-            fs::create_dir_all(path.parent().expect("artifact parent")).expect("model directory");
-            fs::write(path, b"fixture").expect("model artifact");
-        }
-        let credentials = Arc::new(MemoryCredentialStore::default());
-        let persistence = Arc::new(SettingsStore::with_store(
-            paths.clone(),
-            credentials.clone(),
-        ));
         let saved = Settings {
             keep_audio: true,
             ..Settings::default()
         };
+        let SettingsHarness {
+            root,
+            paths,
+            credentials,
+            persistence,
+            state,
+            settings,
+        } = SettingsHarness::new(saved.clone());
+        let model_id = ModelId::default();
+        let registry = ModelRegistry::builtin();
+        install_artifacts(
+            &paths,
+            registry.get(model_id.as_str()).expect("default model"),
+        );
         persistence.save(&saved).expect("save settings");
         let history = Arc::new(HistoryStore::open(paths.clone()).0);
-        let state = Arc::new(StateCell::new(
-            State::new(model_id.clone()),
-            Events::channel().0,
-        ));
-        let settings = Arc::new(SettingsCoordinator::new(
-            Arc::clone(&persistence),
-            Arc::clone(&state),
-            saved,
-        ));
-        let models = Arc::new(ModelStore::new(paths));
+        let models = Arc::new(ModelStore::new(paths.clone()));
         let model = models
             .resolve(&model_id)
             .expect("resolve")
@@ -290,6 +252,7 @@ impl Fixture {
             provider,
             credentials,
             model,
+            paths,
             root,
         }
     }
@@ -356,11 +319,7 @@ impl Fixture {
     }
 
     fn remove_models(&self) {
-        let paths = AppPaths::from_base_dirs(
-            self.root.path().join("config"),
-            self.root.path().join("data"),
-        );
-        fs::remove_dir_all(paths.models_dir()).expect("remove the models");
+        fs::remove_dir_all(self.paths.models_dir()).expect("remove the models");
     }
 
     fn queued_start_error(&self) -> AppError {
@@ -764,7 +723,7 @@ fn an_incomplete_cleanup_provider_keeps_the_transcript_without_calling_the_provi
     edited.provider_settings_mut(LlmProvider::Custom).model = String::new();
     let (_, view) = fixture
         .settings
-        .update(edited, &FakeAudio { audio: Vec::new() })
+        .update(edited, &FakeAudioInput::recording(Vec::new()))
         .expect("save incomplete provider");
     assert_eq!(view.warnings.len(), 1);
 

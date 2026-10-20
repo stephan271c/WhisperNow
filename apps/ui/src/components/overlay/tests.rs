@@ -10,16 +10,8 @@ use serde_json::Value;
 use super::RecordingBar;
 use crate::client::fake;
 use crate::overlay::format_elapsed;
-use crate::test_support::{Page, Probe, snapshot, tag};
+use crate::test_support::{Page, snapshot, tag};
 use crate::{ManagementState, SettingKey, UiState};
-
-#[component]
-fn Surface(initial_state: UiState, probe: Probe) -> Element {
-    let state = use_signal(move || initial_state);
-    let management = use_signal(ManagementState::default);
-    probe.provide(state, management);
-    rsx! { RecordingBar {} }
-}
 
 fn state_changed(state: AppState) -> EventPayload {
     EventPayload::StateChanged { state }
@@ -79,9 +71,7 @@ fn state_in(shown: AppState) -> UiState {
 }
 
 fn render(state: UiState) -> String {
-    dioxus_ssr::render_element(rsx! {
-        Surface { initial_state: state, probe: Probe::default() }
-    })
+    mount_bar(state).html()
 }
 
 /// The text of the one polite live region.
@@ -409,15 +399,7 @@ fn a_late_hydration_never_replaces_a_newer_phase() {
 }
 
 fn mount_bar(state: UiState) -> Page {
-    Page::new(|probe| {
-        VirtualDom::new_with_props(
-            Surface,
-            SurfaceProps {
-                initial_state: state,
-                probe,
-            },
-        )
-    })
+    Page::host(state, ManagementState::default(), RecordingBar)
 }
 
 /// Applies `event` to the bar's state, as the event listener does, and renders.

@@ -1,14 +1,14 @@
 use std::{any::Any, cell::RefCell, future::Future, pin::Pin, rc::Rc, sync::Once};
 
-pub(crate) use crate::test_fixtures::history_entry;
-use dioxus::dioxus_core::{AttributeValue, Mutation, Mutations};
+pub(crate) use crate::test_fixtures::{history_entry, management_with, settings_view, snapshot};
+use dioxus::dioxus_core::{AttributeValue, DynamicNode, Mutation, Mutations, VComponent};
 use dioxus::prelude::*;
 use dioxus_html::{
     HtmlEventConverter, MountedResult, RenderedElementBacking, SerializedFormData,
     SerializedHtmlEventConverter, SerializedKeyboardData, SerializedMouseData,
 };
 use whispernow_domain::ipc::EventPayload;
-use whispernow_domain::ipc::{AppState, ModelState, Phase};
+use whispernow_domain::ipc::{AppState, Phase};
 use whispernow_domain::{HistoryEntry, ModelId};
 use whispernow_domain::{HistoryLimit, HistoryPage, LlmProvider, ProviderSettings, Settings};
 
@@ -17,12 +17,6 @@ use crate::{UiContext, client::fake};
 /// Hands a mounted surface's window context to the test after the first render.
 #[derive(Clone, Default)]
 pub(crate) struct Probe(Rc<RefCell<Option<UiContext>>>);
-
-impl PartialEq for Probe {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-    }
-}
 
 impl Probe {
     pub(crate) fn provide(
@@ -55,28 +49,21 @@ pub(crate) struct Page {
     seen: usize,
 }
 
-#[component]
-fn Shell(
-    initial_state: crate::UiState,
-    management: crate::ManagementState,
-    probe: Probe,
-) -> Element {
-    let state = use_signal(move || initial_state);
-    let management = use_signal(move || management);
-    probe.provide(state, management);
-    rsx! { crate::AppShell {} }
-}
-
 impl Page {
-    pub(crate) fn shell(initial_state: crate::UiState, management: crate::ManagementState) -> Self {
+    pub(crate) fn host(
+        state: crate::UiState,
+        management: crate::ManagementState,
+        root: fn() -> Element,
+    ) -> Self {
         Self::new(|probe| {
             VirtualDom::new_with_props(
-                Shell,
-                ShellProps {
-                    initial_state,
-                    management,
-                    probe,
+                move |()| {
+                    let state = use_signal(|| state.clone());
+                    let management = use_signal(|| management.clone());
+                    probe.provide(state, management);
+                    rsx! { {DynamicNode::Component(VComponent::new(root, (), "root"))} }
                 },
+                (),
             )
         })
     }
@@ -106,6 +93,17 @@ impl Page {
         self.rendered.edits.extend(mutations.edits);
     }
 
+    fn dispatch(
+        &mut self,
+        target: (&str, &str),
+        name: &'static str,
+        data: PlatformEventData,
+    ) -> &mut Self {
+        let mutations = fire_rendered(&mut self.dom, &self.rendered, target, name, data);
+        self.keep(mutations);
+        self.settle()
+    }
+
     pub(crate) fn settle(&mut self) -> &mut Self {
         for _ in 0..4 {
             self.dom.process_events();
@@ -122,21 +120,11 @@ impl Page {
             !element.contains(" disabled="),
             "cannot click disabled target {id}"
         );
-        let mutations = click_rendered(&mut self.dom, &self.rendered, id);
-        self.keep(mutations);
-        self.settle()
+        self.dispatch(("id", id), "click", click_event())
     }
 
     pub(crate) fn click_named(&mut self, name: &str) -> &mut Self {
-        let mutations = fire_rendered(
-            &mut self.dom,
-            &self.rendered,
-            ("aria-label", name),
-            "click",
-            PlatformEventData::new(Box::<SerializedMouseData>::default()),
-        );
-        self.keep(mutations);
-        self.settle()
+        self.dispatch(("aria-label", name), "click", click_event())
     }
 
     /// Opens the select rendered with `id` and clicks its option labelled `label`.
@@ -153,9 +141,8 @@ impl Page {
     }
 
     pub(crate) fn fire(&mut self, id: &str, name: &'static str, value: &str) -> &mut Self {
-        let mutations = form_event_rendered(&mut self.dom, &self.rendered, id, name, value);
-        self.keep(mutations);
-        self.settle()
+        let data = SerializedFormData::new(value.to_owned(), Vec::new());
+        self.dispatch(("id", id), name, PlatformEventData::new(Box::new(data)))
     }
 
     pub(crate) fn input(&mut self, id: &str, value: &str) -> &mut Self {
@@ -173,9 +160,13 @@ impl Page {
         code: Code,
         modifiers: Modifiers,
     ) -> &mut Self {
-        let mutations = key_rendered(&mut self.dom, &self.rendered, id, key, code, modifiers);
-        self.keep(mutations);
-        self.settle()
+        let data =
+            SerializedKeyboardData::new(key, code, Location::Standard, false, modifiers, false);
+        self.dispatch(
+            ("id", id),
+            "keydown",
+            PlatformEventData::new(Box::new(data)),
+        )
     }
 
     /// Mounts `id` as the browser does, so taking focus is recorded.
@@ -218,19 +209,6 @@ impl Page {
     }
 }
 
-/// A snapshot in `phase` with the tiny Whisper model ready.
-pub(crate) fn snapshot(phase: Phase) -> AppState {
-    AppState {
-        phase,
-        selected_model_id: ModelId::new("sherpa-onnx-whisper-tiny").expect("fixture model id"),
-        model_state: ModelState::Ready,
-        last_transcript: None,
-        error: None,
-        active_downloads: Vec::new(),
-        setup_test: None,
-    }
-}
-
 pub(crate) fn state_event(phase: Phase, change: impl FnOnce(&mut AppState)) -> EventPayload {
     let mut state = snapshot(phase);
     change(&mut state);
@@ -258,13 +236,13 @@ pub(crate) fn text(html: &str, id: &str) -> String {
         .expect("tag name");
     let (open, close) = (format!("<{name}"), format!("</{name}>"));
     let mut depth = 1;
-    let mut plain = String::new();
-    let mut in_tag = false;
-    for (index, character) in html[start..].char_indices() {
+    let mut end = html.len();
+    for (index, _) in html[start..].match_indices('<') {
         let rest = &html[start + index..];
         if rest.starts_with(&close) {
             depth -= 1;
             if depth == 0 {
+                end = start + index;
                 break;
             }
         } else if rest.starts_with(&open)
@@ -272,6 +250,14 @@ pub(crate) fn text(html: &str, id: &str) -> String {
         {
             depth += 1;
         }
+    }
+    strip_tags(&html[start..end])
+}
+
+fn strip_tags(html: &str) -> String {
+    let mut plain = String::new();
+    let mut in_tag = false;
+    for character in html.chars() {
         match character {
             '<' => in_tag = true,
             '>' => in_tag = false,
@@ -330,17 +316,7 @@ pub(crate) fn label_in_name_violations(html: &str) -> Vec<String> {
                 + html[start..]
                     .find(&format!("</{tag_name}>"))
                     .expect("closing tag");
-            let mut plain = String::new();
-            let mut in_tag = false;
-            for character in html[start..stop].chars() {
-                match character {
-                    '<' => in_tag = true,
-                    '>' => in_tag = false,
-                    _ if !in_tag => plain.push(character),
-                    _ => {}
-                }
-            }
-            plain
+            strip_tags(&html[start..stop])
         };
         let visible = normalize(&visible);
         if !visible.is_empty() && !normalize(name).contains(&visible) {
@@ -392,56 +368,11 @@ pub(crate) fn click_rendered(
     rendered: &Mutations,
     target: &str,
 ) -> Mutations {
-    fire_rendered(
-        dom,
-        rendered,
-        ("id", target),
-        "click",
-        PlatformEventData::new(Box::<SerializedMouseData>::default()),
-    )
+    fire_rendered(dom, rendered, ("id", target), "click", click_event())
 }
 
-pub(crate) fn form_event_rendered(
-    dom: &mut VirtualDom,
-    rendered: &Mutations,
-    target: &str,
-    name: &'static str,
-    value: &str,
-) -> Mutations {
-    fire_rendered(
-        dom,
-        rendered,
-        ("id", target),
-        name,
-        PlatformEventData::new(Box::new(SerializedFormData::new(
-            value.to_owned(),
-            Vec::new(),
-        ))),
-    )
-}
-
-pub(crate) fn key_rendered(
-    dom: &mut VirtualDom,
-    rendered: &Mutations,
-    target: &str,
-    key: Key,
-    code: Code,
-    modifiers: Modifiers,
-) -> Mutations {
-    fire_rendered(
-        dom,
-        rendered,
-        ("id", target),
-        "keydown",
-        PlatformEventData::new(Box::new(SerializedKeyboardData::new(
-            key,
-            code,
-            Location::Standard,
-            false,
-            modifiers,
-            false,
-        ))),
-    )
+fn click_event() -> PlatformEventData {
+    PlatformEventData::new(Box::<SerializedMouseData>::default())
 }
 
 /// Mounts the element rendered with `target` as its id, as a browser does once it is in the

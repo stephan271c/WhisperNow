@@ -135,7 +135,7 @@ mod tests {
 
     fn store() -> (tempfile::TempDir, HistoryStore) {
         let dir = tempfile::tempdir().expect("temp dir");
-        let paths = AppPaths::from_base_dirs(dir.path().join("config"), dir.path().join("data"));
+        let paths = AppPaths::under(dir.path());
         (dir, HistoryStore::open(paths).0)
     }
 
@@ -193,7 +193,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let data = dir.path().join("data");
         std::fs::write(&data, b"obstructed").expect("block data directory");
-        let paths = AppPaths::from_base_dirs(dir.path().join("config"), &data);
+        let paths = AppPaths::under(dir.path());
         let (store, diagnostic) = HistoryStore::open(paths.clone());
         let error = diagnostic.expect("startup error");
         std::fs::remove_file(data).expect("repair data directory");
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn malformed_legacy_history_is_reported_only_at_startup() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let paths = AppPaths::from_base_dirs(dir.path().join("config"), dir.path().join("data"));
+        let paths = AppPaths::under(dir.path());
         std::fs::create_dir_all(paths.config_dir()).expect("config directory");
         std::fs::write(paths.history_file(), b"malformed").expect("legacy history");
         let (store, diagnostic) = HistoryStore::open(paths.clone());

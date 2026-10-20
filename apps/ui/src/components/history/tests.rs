@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use whispernow_domain::ipc::{AppState, EventPayload, Phase, SettingsView};
+use whispernow_domain::ipc::{EventPayload, Phase};
 use whispernow_domain::{
     AppError, EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryFilter, HistoryPage,
     HistoryPageRequest, UtcMillis,
@@ -8,38 +8,25 @@ use whispernow_domain::{
 use super::format::{group_by_day, retention_summary};
 use super::{HistoryScreen, LocalClock};
 use crate::client::fake;
-use crate::test_support::{Page, Probe, show_history, snapshot, tag, text};
+use crate::test_support::{
+    Page, editable_settings, management_with, show_history, snapshot, tag, text,
+};
 use crate::{ManagementState, Route, SettingsRoute, UiState};
 
 /// 2026-09-27 10:30 UTC.
 const NOW: UtcMillis = UtcMillis(1_790_505_000_000);
 const HOUR: i64 = 3_600_000;
 
-/// The page with a fixed clock, wired to the fake desktop.
-#[component]
-fn Surface(management_state: ManagementState, snapshot: AppState, probe: Probe) -> Element {
-    let state = use_signal(move || {
-        let mut state = UiState::default();
-        state.hydrate(snapshot);
-        state
-    });
-    let management = use_signal(move || management_state);
-    probe.provide(state, management);
+fn fixed_clock_history() -> Element {
     use_context_provider(|| LocalClock::fixed(NOW, 0));
     rsx! { HistoryScreen {} }
 }
 
+/// The page with a fixed clock, wired to the fake desktop.
 fn history_page(management_state: ManagementState) -> Page {
-    Page::new(|probe| {
-        VirtualDom::new_with_props(
-            Surface,
-            SurfaceProps {
-                management_state,
-                snapshot: snapshot(Phase::Idle),
-                probe,
-            },
-        )
-    })
+    let mut state = UiState::default();
+    state.hydrate(snapshot(Phase::Idle));
+    Page::host(state, management_state, fixed_clock_history)
 }
 
 /// A pasted dictation of 1:15 with kept audio, cleaned up from its transcript.
@@ -55,12 +42,7 @@ fn entry(id: i64, created_at: UtcMillis) -> HistoryEntry {
 
 /// Settings keeping the last 20 entries, and the history window `entries`.
 fn management(entries: Vec<HistoryEntry>) -> ManagementState {
-    let mut management = ManagementState::default();
-    management.install_settings(SettingsView {
-        start_on_login: false,
-        settings: crate::test_support::editable_settings(),
-        warnings: Vec::new(),
-    });
+    let mut management = management_with(editable_settings());
     show_history(&mut management, entries);
     management
 }

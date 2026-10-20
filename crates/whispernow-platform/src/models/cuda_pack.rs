@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn a_pack_in_use_is_only_marked_for_removal_and_goes_at_the_next_start() {
         let root = tempdir().expect("temporary root");
-        let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+        let paths = AppPaths::under(root.path());
         let store = ModelStore::new(paths.clone()).with_cuda_pack(PACK);
         let directory = paths.cuda_pack_dir();
         fs::create_dir_all(&directory).expect("pack directory");

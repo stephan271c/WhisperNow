@@ -91,62 +91,16 @@ pub(super) fn run(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{Arc, Mutex},
-        time::Duration,
-    };
+    use std::time::Duration;
 
-    use whispernow_core::audio::{
-        AudioCapture, AudioDeviceChoice, AudioInput, AudioInputError, AudioLevelSummary, AudioSink,
-    };
-
-    use whispernow_domain::ipc::AudioDevice;
+    use whispernow_core::audio::{AudioDeviceChoice, AudioInputError};
 
     use super::run;
-
-    #[derive(Default)]
-    struct FakeInput {
-        calls: Arc<Mutex<Vec<&'static str>>>,
-        refuse: bool,
-    }
-
-    struct FakeCapture(Arc<Mutex<Vec<&'static str>>>);
-
-    impl AudioCapture for FakeCapture {
-        fn stop(self: Box<Self>) -> Result<(), AudioInputError> {
-            self.0.lock().expect("calls").push("stop");
-            Ok(())
-        }
-    }
-
-    impl AudioInput for FakeInput {
-        fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
-            Ok(Vec::new())
-        }
-
-        fn start(
-            &self,
-            _device: AudioDeviceChoice,
-            sink: Arc<dyn AudioSink>,
-        ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
-            self.calls.lock().expect("calls").push("start");
-            if self.refuse {
-                return Err(AudioInputError::PermissionDenied);
-            }
-            for rms in (0_u8..100).map(|step| f32::from(step) / 99.0) {
-                sink.observe(AudioLevelSummary {
-                    peak: rms,
-                    rms,
-                    sample_count: 800,
-                });
-            }
-            Ok(Box::new(FakeCapture(Arc::clone(&self.calls))))
-        }
-    }
+    use crate::services::test_support::FakeAudioInput;
 
     #[test]
     fn a_test_is_bounded_and_always_stops_capture() {
-        let input = FakeInput::default();
+        let input = FakeAudioInput::levels();
         let response = run(
             &input,
             AudioDeviceChoice::SystemDefault,
@@ -162,7 +116,7 @@ mod tests {
 
     #[test]
     fn a_cancelled_test_stops_at_once_and_a_refused_start_reports_permission() {
-        let input = FakeInput::default();
+        let input = FakeAudioInput::levels();
         run(
             &input,
             AudioDeviceChoice::SystemDefault,
@@ -172,10 +126,7 @@ mod tests {
         .expect("cancelled test still returns its levels");
         assert_eq!(*input.calls.lock().expect("calls"), ["start", "stop"]);
 
-        let refused = FakeInput {
-            refuse: true,
-            ..FakeInput::default()
-        };
+        let refused = FakeAudioInput::refusing(AudioInputError::PermissionDenied);
         let error = run(
             &refused,
             AudioDeviceChoice::SystemDefault,

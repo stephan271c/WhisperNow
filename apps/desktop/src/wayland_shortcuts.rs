@@ -805,6 +805,78 @@ mod tests {
         }
     }
 
+    struct Actor {
+        commands: mpsc::UnboundedSender<Command>,
+        signals: mpsc::UnboundedSender<PortalSignal>,
+        events: mpsc::UnboundedReceiver<ShortcutEvent>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Actor {
+        fn spawn(portal: FakePortal) -> Self {
+            let (commands, command_rx) = mpsc::unbounded_channel();
+            let (signals, signal_rx) = mpsc::unbounded_channel();
+            let (events, event_rx) = mpsc::unbounded_channel();
+            let task = tokio::spawn(actor_loop(portal, command_rx, signal_rx, events));
+            Self {
+                commands,
+                signals,
+                events: event_rx,
+                task,
+            }
+        }
+
+        async fn register(&self, id: u32) -> Result<(), ShortcutRegistrationError> {
+            let (reply, response) = std_mpsc::sync_channel(1);
+            self.commands
+                .send(Command::Register {
+                    binding: binding(id),
+                    reply,
+                })
+                .expect("register");
+            tokio::task::spawn_blocking(move || response.recv().expect("register reply"))
+                .await
+                .expect("reply worker")
+        }
+
+        async fn unregister(&self, id: u32) -> Result<(), ShortcutRegistrationError> {
+            let (reply, response) = std_mpsc::sync_channel(1);
+            self.commands
+                .send(Command::Unregister {
+                    id: ShortcutId(id),
+                    reply,
+                })
+                .expect("unregister");
+            tokio::task::spawn_blocking(move || response.recv().expect("unregister reply"))
+                .await
+                .expect("reply worker")
+        }
+
+        async fn expect(&mut self, id: u32, transition: KeyTransition) {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), self.events.recv())
+                    .await
+                    .expect("transition in time"),
+                Some(ShortcutEvent::Transition {
+                    id: ShortcutId(id),
+                    transition,
+                })
+            );
+        }
+
+        async fn finish(self) {
+            let Self {
+                commands,
+                signals,
+                task,
+                ..
+            } = self;
+            drop(commands);
+            task.await.expect("actor");
+            drop(signals);
+        }
+    }
+
     #[test]
     fn a_stopped_actor_reports_the_portal_unavailable() {
         let (commands, receiver) = mpsc::unbounded_channel();
@@ -841,313 +913,170 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn denial_and_session_replacement_are_explicit() {
         let deny = Arc::new(AtomicBool::new(true));
-        let portal = FakePortal {
+        let mut actor = Actor::spawn(FakePortal {
             deny: Arc::clone(&deny),
             ..FakePortal::default()
-        };
-        let (commands, command_rx) = mpsc::unbounded_channel();
-        let (signals, signal_rx) = mpsc::unbounded_channel();
-        let (events, mut event_rx) = mpsc::unbounded_channel();
-        let actor = tokio::spawn(actor_loop(portal, command_rx, signal_rx, events));
+        });
 
-        let (reply, response) = std_mpsc::sync_channel(1);
-        commands
-            .send(Command::Register {
-                binding: binding(1),
-                reply,
-            })
-            .expect("register");
         assert_eq!(
-            tokio::task::spawn_blocking(move || response.recv().expect("reply"))
-                .await
-                .expect("join"),
+            actor.register(1).await,
             Err(ShortcutRegistrationError::PermissionDenied)
         );
         deny.store(false, Ordering::Release);
-        let (reply, response) = std_mpsc::sync_channel(1);
-        commands
-            .send(Command::Register {
-                binding: binding(1),
-                reply,
-            })
-            .expect("retry");
-        tokio::task::spawn_blocking(move || response.recv().expect("reply"))
-            .await
-            .expect("join")
-            .expect("registered");
-        signals
+        actor.register(1).await.expect("registered");
+        actor
+            .signals
             .send(PortalSignal::SessionClosed(SessionToken(1)))
             .expect("closed");
         assert_eq!(
-            event_rx.recv().await,
+            actor.events.recv().await,
             Some(ShortcutEvent::CapabilityLost(
                 ShortcutRegistrationError::SessionClosed
             ))
         );
-        for (id, register) in [(2, true), (2, false), (2, true)] {
-            let (reply, response) = std_mpsc::sync_channel(1);
-            let command = if register {
-                Command::Register {
-                    binding: binding(id),
-                    reply,
-                }
-            } else {
-                Command::Unregister {
-                    id: ShortcutId(id),
-                    reply,
-                }
-            };
-            commands.send(command).expect("replace binding");
-            tokio::task::spawn_blocking(move || response.recv().expect("binding reply"))
-                .await
-                .expect("reply worker")
-                .expect("binding changed");
-        }
-        signals
+        actor.register(2).await.expect("binding changed");
+        actor.unregister(2).await.expect("binding changed");
+        actor.register(2).await.expect("binding changed");
+        actor
+            .signals
             .send(PortalSignal::Transition(timed(
                 1000,
                 2,
                 KeyTransition::Pressed,
             )))
             .expect("new session press");
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
-                .await
-                .expect("press in time"),
-            Some(ShortcutEvent::Transition {
-                id: ShortcutId(2),
-                transition: KeyTransition::Pressed,
-            })
-        );
-        signals
+        actor.expect(2, KeyTransition::Pressed).await;
+        actor
+            .signals
             .send(PortalSignal::SessionClosed(SessionToken(2)))
             .expect("old session closed");
-        signals
+        actor
+            .signals
             .send(PortalSignal::Transition(timed(
                 1100,
                 2,
                 KeyTransition::Released,
             )))
             .expect("new session release");
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
-                .await
-                .expect("release in time"),
-            Some(ShortcutEvent::Transition {
-                id: ShortcutId(2),
-                transition: KeyTransition::Released,
-            })
-        );
-        drop(commands);
-        drop(signals);
-        actor.await.expect("actor");
+        actor.expect(2, KeyTransition::Released).await;
+        actor.finish().await;
     }
 
     #[tokio::test]
     async fn a_release_from_the_old_binding_cannot_end_the_new_hold() {
         let stopped = Arc::new(AtomicBool::new(false));
-        let portal = FakePortal {
-            registered: Arc::new(Mutex::new(None)),
-            deny: Arc::new(AtomicBool::new(false)),
+        let mut actor = Actor::spawn(FakePortal {
             stopped: Arc::clone(&stopped),
             ..FakePortal::default()
-        };
-        let (commands, command_rx) = mpsc::unbounded_channel();
-        let (signals, signal_rx) = mpsc::unbounded_channel();
-        let (events, mut event_rx) = mpsc::unbounded_channel();
-        let actor = tokio::spawn(actor_loop(portal, command_rx, signal_rx, events));
-        for (id, register) in [(1, true), (1, false), (2, true)] {
-            let (reply, response) = std_mpsc::sync_channel(1);
-            let command = if register {
-                Command::Register {
-                    binding: binding(id),
-                    reply,
-                }
-            } else {
-                Command::Unregister {
-                    id: ShortcutId(id),
-                    reply,
-                }
-            };
-            commands.send(command).expect("binding command");
-            tokio::task::spawn_blocking(move || response.recv().expect("binding reply"))
-                .await
-                .expect("reply worker")
-                .expect("binding changed");
-        }
-        signals
+        });
+        actor.register(1).await.expect("binding changed");
+        actor.unregister(1).await.expect("binding changed");
+        actor.register(2).await.expect("binding changed");
+        actor
+            .signals
             .send(PortalSignal::Transition(timed(
                 1000,
                 2,
                 KeyTransition::Pressed,
             )))
             .expect("new press");
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
-                .await
-                .expect("press in time"),
-            Some(ShortcutEvent::Transition {
-                id: ShortcutId(2),
-                transition: KeyTransition::Pressed
-            })
-        );
-        signals
+        actor.expect(2, KeyTransition::Pressed).await;
+        actor
+            .signals
             .send(PortalSignal::ReleaseWatcher(
                 SessionToken(1),
                 ReleaseEvent::Released(Duration::from_millis(1100)),
             ))
             .expect("old helper release");
-        signals
+        actor
+            .signals
             .send(PortalSignal::SessionClosed(SessionToken(1)))
             .expect("old session closed");
-        signals
+        actor
+            .signals
             .send(PortalSignal::Transition(timed(
                 1200,
                 2,
                 KeyTransition::Released,
             )))
             .expect("new release");
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
-                .await
-                .expect("release in time"),
-            Some(ShortcutEvent::Transition {
-                id: ShortcutId(2),
-                transition: KeyTransition::Released
-            })
-        );
-        drop(commands);
-        actor.await.expect("actor");
+        actor.expect(2, KeyTransition::Released).await;
+        actor.finish().await;
         assert!(stopped.load(Ordering::Acquire));
     }
 
     #[tokio::test]
     async fn a_failed_unregister_does_not_carry_the_old_hold_into_the_new_binding() {
-        let portal = FakePortal {
+        let mut actor = Actor::spawn(FakePortal {
             unregister_error: Some(ShortcutRegistrationError::PortalUnavailable),
             ..FakePortal::default()
-        };
-        let (commands, command_rx) = mpsc::unbounded_channel();
-        let (signals, signal_rx) = mpsc::unbounded_channel();
-        let (events, mut event_rx) = mpsc::unbounded_channel();
-        let actor = tokio::spawn(actor_loop(portal, command_rx, signal_rx, events));
+        });
         for id in [1, 2] {
-            let (reply, response) = std_mpsc::sync_channel(1);
-            commands
-                .send(Command::Register {
-                    binding: binding(id),
-                    reply,
-                })
-                .expect("register");
-            tokio::task::spawn_blocking(move || response.recv().expect("register reply"))
-                .await
-                .expect("reply worker")
-                .expect("registered");
-            signals
+            actor.register(id).await.expect("registered");
+            actor
+                .signals
                 .send(PortalSignal::Transition(timed(
                     1000 * u64::from(id),
                     id,
                     KeyTransition::Pressed,
                 )))
                 .expect("press");
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
-                    .await
-                    .expect("press in time"),
-                Some(ShortcutEvent::Transition {
-                    id: ShortcutId(id),
-                    transition: KeyTransition::Pressed,
-                })
-            );
+            actor.expect(id, KeyTransition::Pressed).await;
             if id == 1 {
-                let (reply, response) = std_mpsc::sync_channel(1);
-                commands
-                    .send(Command::Unregister {
-                        id: ShortcutId(id),
-                        reply,
-                    })
-                    .expect("unregister");
                 assert_eq!(
-                    tokio::task::spawn_blocking(move || response.recv().expect("unregister reply"))
-                        .await
-                        .expect("reply worker"),
+                    actor.unregister(id).await,
                     Err(ShortcutRegistrationError::PortalUnavailable)
                 );
             }
         }
-        drop(commands);
-        actor.await.expect("actor");
+        actor.finish().await;
     }
 
     #[tokio::test]
     async fn an_old_watcher_cannot_disable_a_replacement_for_the_same_shortcut() {
-        let (commands, command_rx) = mpsc::unbounded_channel();
-        let (signals, signal_rx) = mpsc::unbounded_channel();
-        let (events, mut event_rx) = mpsc::unbounded_channel();
-        let actor = tokio::spawn(actor_loop(
-            FakePortal::default(),
-            command_rx,
-            signal_rx,
-            events,
-        ));
-        for register in [true, false, true] {
-            let (reply, response) = std_mpsc::sync_channel(1);
-            let command = if register {
-                Command::Register {
-                    binding: binding(1),
-                    reply,
-                }
-            } else {
-                Command::Unregister {
-                    id: ShortcutId(1),
-                    reply,
-                }
-            };
-            commands.send(command).expect("binding command");
-            tokio::task::spawn_blocking(move || response.recv().expect("reply"))
-                .await
-                .expect("reply worker")
-                .expect("binding changed");
-        }
-        signals
+        let mut actor = Actor::spawn(FakePortal::default());
+        actor.register(1).await.expect("binding changed");
+        actor.unregister(1).await.expect("binding changed");
+        actor.register(1).await.expect("binding changed");
+        actor
+            .signals
             .send(PortalSignal::ReleaseWatcher(
                 SessionToken(2),
                 ReleaseEvent::Ready,
             ))
             .expect("ready");
-        signals
+        actor
+            .signals
             .send(PortalSignal::ReleaseWatcher(
                 SessionToken(2),
                 ReleaseEvent::Held(Duration::from_secs(1)),
             ))
             .expect("matching helper press");
-        signals
+        actor
+            .signals
             .send(PortalSignal::Transition(timed(
                 1000,
                 1,
                 KeyTransition::Pressed,
             )))
             .expect("press");
-        assert_eq!(
-            event_rx.recv().await,
-            Some(ShortcutEvent::Transition {
-                id: ShortcutId(1),
-                transition: KeyTransition::Pressed,
-            })
-        );
-        signals
+        actor.expect(1, KeyTransition::Pressed).await;
+        actor
+            .signals
             .send(PortalSignal::ReleaseWatcher(
                 SessionToken(1),
                 ReleaseEvent::Unavailable,
             ))
             .expect("old exit");
-        signals
+        actor
+            .signals
             .send(PortalSignal::ReleaseWatcher(
                 SessionToken(1),
                 ReleaseEvent::Released(Duration::from_millis(1100)),
             ))
             .expect("old release");
-        signals
+        actor
+            .signals
             .send(PortalSignal::Transition(timed(
                 1500,
                 1,
@@ -1157,27 +1086,21 @@ mod tests {
         assert!(
             tokio::time::timeout(
                 REPEAT_RELEASE_TIMEOUT + Duration::from_millis(100),
-                event_rx.recv()
+                actor.events.recv()
             )
             .await
             .is_err()
         );
-        signals
+        actor
+            .signals
             .send(PortalSignal::Transition(timed(
                 2000,
                 1,
                 KeyTransition::Released,
             )))
             .expect("release");
-        assert_eq!(
-            event_rx.recv().await,
-            Some(ShortcutEvent::Transition {
-                id: ShortcutId(1),
-                transition: KeyTransition::Released,
-            })
-        );
-        drop(commands);
-        actor.await.expect("actor");
+        actor.expect(1, KeyTransition::Released).await;
+        actor.finish().await;
     }
 
     #[test]
@@ -1357,30 +1280,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_hold_whose_release_is_dropped_still_ends_when_its_repeats_stop() {
-        let portal = FakePortal {
-            registered: Arc::new(Mutex::new(None)),
-            deny: Arc::new(AtomicBool::new(false)),
-            stopped: Arc::new(AtomicBool::new(false)),
-            ..FakePortal::default()
-        };
-        let (commands, command_rx) = mpsc::unbounded_channel();
-        let (signals, signal_rx) = mpsc::unbounded_channel();
-        let (events, mut event_rx) = mpsc::unbounded_channel();
-        let actor = tokio::spawn(actor_loop(portal, command_rx, signal_rx, events));
-        let (reply, response) = std_mpsc::sync_channel(1);
-        commands
-            .send(Command::Register {
-                binding: binding(1),
-                reply,
-            })
-            .expect("register");
-        tokio::task::spawn_blocking(move || response.recv().expect("reply"))
-            .await
-            .expect("join")
-            .expect("registered");
+        let mut actor = Actor::spawn(FakePortal::default());
+        actor.register(1).await.expect("registered");
 
         for millis in [0, 500, 530] {
-            signals
+            actor
+                .signals
                 .send(PortalSignal::Transition(timed(
                     millis,
                     1,
@@ -1388,30 +1293,9 @@ mod tests {
                 )))
                 .expect("activation");
         }
-        let mut received = Vec::new();
-        for _ in 0..2 {
-            received.push(
-                tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
-                    .await
-                    .expect("event in time"),
-            );
-        }
-        assert_eq!(
-            received,
-            [
-                Some(ShortcutEvent::Transition {
-                    id: ShortcutId(1),
-                    transition: KeyTransition::Pressed,
-                }),
-                Some(ShortcutEvent::Transition {
-                    id: ShortcutId(1),
-                    transition: KeyTransition::Released,
-                }),
-            ]
-        );
-        drop(commands);
-        drop(signals);
-        actor.await.expect("actor");
+        actor.expect(1, KeyTransition::Pressed).await;
+        actor.expect(1, KeyTransition::Released).await;
+        actor.finish().await;
     }
 
     fn timed(millis: u64, id: u32, transition: KeyTransition) -> TimedTransition {

@@ -1,11 +1,12 @@
 use dioxus::prelude::*;
 use wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_test::*;
-use whispernow_domain::ipc::{AppState, ModelState, ModelSummary, Phase, SettingsView};
+use whispernow_domain::ipc::{ModelSummary, Phase};
 use whispernow_domain::{
     ModelAvailability, ModelId, Settings, Shortcut, ShortcutKey, ShortcutModifier,
 };
 
+use crate::test_fixtures::{management_with, snapshot};
 use crate::{AppShell, ManagementState, Navigator, Route, UiContext, UiState};
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -13,13 +14,13 @@ wasm_bindgen_test_configure!(run_in_browser);
 mod browser_support {
     include!("../tests/browser_support/mod.rs");
 }
-use browser_support::{install_mount_point, wait_for};
+use browser_support::{adapter_count, eval_bool, install_mount_point, install_tauri, wait_for};
 
 #[component]
 fn BrowserSettingsSurface() -> Element {
     let state = use_signal(|| {
         let mut state = UiState::default();
-        state.hydrate(idle_snapshot());
+        state.hydrate(snapshot(Phase::Idle));
         state
     });
     let management = use_signal(management_with_history);
@@ -96,14 +97,6 @@ async fn shortcut_capture_suspends_global_shortcuts_and_saves_recording_and_canc
     }
 }
 
-fn adapter_count(command: &str) -> u32 {
-    let count = js_sys::eval(&format!(
-        "window.__whispernowAdapterCalls.filter(call => call.command === {command:?}).length"
-    ))
-    .expect("count adapter calls");
-    serde_wasm_bindgen::from_value(count).expect("integer call count")
-}
-
 #[wasm_bindgen_test(async)]
 async fn a_history_copy_reaches_the_desktop_copy_command() {
     install_tauri_probe();
@@ -133,31 +126,20 @@ fn adapter_calls() -> String {
 }
 
 fn install_tauri_probe() {
-    js_sys::eval(
+    install_tauri(
         r#"
-        window.__whispernowAdapterCalls = [];
-        window.__TAURI__ = {
-          core: {
-            invoke: async (command, payload) => {
-              window.__whispernowAdapterCalls.push({ command, payload });
-              if (command === "update_settings") {
-                return { settings: { settings: payload.request, warnings: [] }, warnings: [] };
-              }
-              if (command === "suspend_shortcuts" || command === "resume_shortcuts") {
-                return null;
-              }
-              if (command === "copy_text") {
-                return null;
-              }
-              throw new Error(`unexpected command: ${command}`);
-            }
-          },
-          event: { listen: async () => () => {} },
-          window: { getCurrentWindow: () => ({ label: "settings" }) }
-        };
+        if (command === "update_settings") {
+          return { settings: { settings: payload.request, warnings: [] }, warnings: [] };
+        }
+        if (command === "suspend_shortcuts" || command === "resume_shortcuts") {
+          return null;
+        }
+        if (command === "copy_text") {
+          return null;
+        }
+        throw new Error(`unexpected command: ${command}`);
         "#,
-    )
-    .expect("install Tauri probe");
+    );
 }
 
 fn click(id: &str) {
@@ -176,40 +158,18 @@ fn click(id: &str) {
 }
 
 fn rendered(id: &str) -> bool {
-    web_sys::window()
-        .expect("window")
-        .document()
-        .expect("document")
-        .get_element_by_id(id)
-        .is_some()
+    eval_bool(&format!("!!document.getElementById({id:?})"))
 }
 
 fn model_id() -> ModelId {
-    ModelId::new("current-model").expect("fixture model id")
-}
-
-fn idle_snapshot() -> AppState {
-    AppState {
-        phase: Phase::Idle,
-        selected_model_id: model_id(),
-        model_state: ModelState::Ready,
-        last_transcript: None,
-        error: None,
-        active_downloads: Vec::new(),
-        setup_test: None,
-    }
+    snapshot(Phase::Idle).selected_model_id
 }
 
 fn management_with_history() -> ManagementState {
-    let mut management = ManagementState::default();
-    management.install_settings(SettingsView {
-        start_on_login: false,
-        settings: Settings {
-            model_id: model_id(),
-            first_run_complete: true,
-            ..Settings::default()
-        },
-        warnings: Vec::new(),
+    let mut management = management_with(Settings {
+        model_id: model_id(),
+        first_run_complete: true,
+        ..Settings::default()
     });
     management.history_rows_filter = Some(whispernow_domain::HistoryFilter::default());
     let mut entry = crate::test_fixtures::history_entry(7, "raw 7");

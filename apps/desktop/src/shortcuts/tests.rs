@@ -1,14 +1,8 @@
-use std::{
-    collections::BTreeSet,
-    sync::{
-        OnceLock, Weak,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::{collections::BTreeSet, sync::atomic::AtomicUsize};
 
 use whispernow_domain::ShortcutKey;
 
-use super::*;
+use super::{memory_registrar::MemoryRegistrar, *};
 
 fn lifecycle_switch() -> (Arc<AtomicBool>, LifecycleProbe) {
     let running = Arc::new(AtomicBool::new(true));
@@ -18,53 +12,6 @@ fn lifecycle_switch() -> (Arc<AtomicBool>, LifecycleProbe) {
 
 fn always_running() -> LifecycleProbe {
     lifecycle_switch().1
-}
-
-#[derive(Default)]
-struct MemoryRegistrar {
-    registered: Mutex<BTreeSet<u32>>,
-    fail_register: Mutex<Option<u32>>,
-    fail_unregister: Mutex<Option<u32>>,
-    /// Behaves like a desktop portal that asks before every registration.
-    refuses_transient: AtomicBool,
-}
-
-impl MemoryRegistrar {
-    fn registered(&self) -> BTreeSet<u32> {
-        self.registered.lock().expect("registered").clone()
-    }
-
-    fn holds(&self, binding: &ShortcutBinding) -> bool {
-        self.registered().contains(&binding.id.0)
-    }
-}
-
-impl ShortcutRegistrar for MemoryRegistrar {
-    fn register(&self, value: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
-        if *self.fail_register.lock().expect("fail register") == Some(value.id.0) {
-            return Err(ShortcutRegistrationError::ConflictOrUnsupported);
-        }
-        self.registered
-            .lock()
-            .expect("registered")
-            .insert(value.id.0);
-        Ok(())
-    }
-
-    fn unregister(&self, value: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
-        if *self.fail_unregister.lock().expect("fail unregister") == Some(value.id.0) {
-            return Err(ShortcutRegistrationError::ConflictOrUnsupported);
-        }
-        self.registered
-            .lock()
-            .expect("registered")
-            .remove(&value.id.0);
-        Ok(())
-    }
-
-    fn supports_transient_shortcuts(&self) -> bool {
-        !self.refuses_transient.load(Ordering::SeqCst)
-    }
 }
 
 fn control(key: &str) -> Shortcut {
@@ -512,52 +459,11 @@ fn a_lost_shortcut_backend_unregisters_everything_and_forgets_held_keys() {
     );
 }
 
-/// Records every native call and whether `pressed` or `published` was held when it ran.
 /// Native registration may wait on the event-loop thread, which delivers input, so it must
 /// never run under a lock input takes.
-#[derive(Default)]
-struct LockProbingRegistrar {
-    registered: Mutex<BTreeSet<u32>>,
-    coordinator: OnceLock<Weak<ShortcutCoordinator>>,
-    calls: AtomicUsize,
-    calls_under_lock: AtomicUsize,
-}
-
-impl LockProbingRegistrar {
-    fn probe(&self) {
-        let Some(coordinator) = self.coordinator.get().and_then(Weak::upgrade) else {
-            return;
-        };
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        if coordinator.pressed.try_lock().is_err() || coordinator.published.try_lock().is_err() {
-            self.calls_under_lock.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-}
-
-impl ShortcutRegistrar for LockProbingRegistrar {
-    fn register(&self, value: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
-        self.probe();
-        self.registered
-            .lock()
-            .expect("registered")
-            .insert(value.id.0);
-        Ok(())
-    }
-
-    fn unregister(&self, value: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
-        self.probe();
-        self.registered
-            .lock()
-            .expect("registered")
-            .remove(&value.id.0);
-        Ok(())
-    }
-}
-
 #[test]
 fn native_registration_never_runs_under_the_input_locks() {
-    let registrar = Arc::new(LockProbingRegistrar::default());
+    let registrar = Arc::new(MemoryRegistrar::default());
     let (running, probe) = lifecycle_switch();
     let coordinator = Arc::new(ShortcutCoordinator::new(
         registrar.clone(),
@@ -565,14 +471,28 @@ fn native_registration_never_runs_under_the_input_locks() {
         probe,
         None,
     ));
+    let native_calls = Arc::new(AtomicUsize::new(0));
+    let locked_calls = Arc::new(AtomicUsize::new(0));
+    let (counted, locked) = (Arc::clone(&native_calls), Arc::clone(&locked_calls));
+    let probed = Arc::downgrade(&coordinator);
     assert!(
         registrar
-            .coordinator
-            .set(Arc::downgrade(&coordinator))
+            .probe
+            .set(Box::new(move || {
+                let Some(coordinator) = probed.upgrade() else {
+                    return;
+                };
+                counted.fetch_add(1, Ordering::SeqCst);
+                if coordinator.pressed.try_lock().is_err()
+                    || coordinator.published.try_lock().is_err()
+                {
+                    locked.fetch_add(1, Ordering::SeqCst);
+                }
+            }))
             .is_ok()
     );
     coordinator.set_cancel_binding(Some(escape()));
-    let calls = || registrar.calls.load(Ordering::SeqCst);
+    let calls = || native_calls.load(Ordering::SeqCst);
     let observed = std::cell::Cell::new(calls());
     let native_step = |step: &str| {
         assert!(calls() > observed.get(), "{step} must reach the registrar");
@@ -601,8 +521,8 @@ fn native_registration_never_runs_under_the_input_locks() {
     coordinator.shutdown();
     native_step("shutdown");
 
-    assert_eq!(registrar.calls_under_lock.load(Ordering::SeqCst), 0);
-    assert!(registrar.registered.lock().expect("registered").is_empty());
+    assert_eq!(locked_calls.load(Ordering::SeqCst), 0);
+    assert!(registrar.registered().is_empty());
 }
 
 #[test]

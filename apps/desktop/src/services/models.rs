@@ -438,8 +438,7 @@ mod tests {
             definition.source.sha256 =
                 "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into();
             let model_id = definition.id.clone();
-            let paths =
-                AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+            let paths = AppPaths::under(root.path());
             let store = Arc::new(ModelStore::with_registry_and_timeouts(
                 ModelRegistry::new(vec![definition]),
                 paths,

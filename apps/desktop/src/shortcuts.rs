@@ -538,4 +538,6 @@ impl CancelShortcut {
 }
 
 #[cfg(test)]
+pub(crate) mod memory_registrar;
+#[cfg(test)]
 mod tests;

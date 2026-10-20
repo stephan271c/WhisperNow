@@ -3,7 +3,7 @@ use std::fs;
 use rusqlite::Connection;
 use serde_json::json;
 use whispernow_domain::{
-    EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryFilter, HistoryLimit,
+    AppError, EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryFilter, HistoryLimit,
     HistoryPageRequest, HistoryRetention, ModelId, NewHistoryEntry, UtcMillis,
 };
 
@@ -18,7 +18,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().expect("temporary directory");
-        let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+        let paths = AppPaths::under(root.path());
         Self { _root: root, paths }
     }
 
@@ -56,6 +56,21 @@ fn entry(created_at: i64, status: EntryStatus, text: &str) -> NewHistoryEntry {
 
 const SPEECH: [f32; 4] = [0.0, 0.5, -0.5, 0.25];
 
+fn store(
+    history: &mut SqliteHistoryRepository,
+    entry: NewHistoryEntry,
+    audio: &[f32],
+    keep_audio: bool,
+) -> Result<EntryId, AppError> {
+    history.insert(
+        entry,
+        audio,
+        keep_audio,
+        HistoryLimit::Unlimited,
+        HistoryRetention::Forever,
+    )
+}
+
 fn all(repository: &SqliteHistoryRepository) -> Vec<HistoryEntry> {
     repository
         .list(&HistoryPageRequest {
@@ -77,33 +92,29 @@ fn find(repository: &SqliteHistoryRepository, id: EntryId) -> HistoryEntry {
 fn an_entry_round_trips_and_only_kept_audio_is_written() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    let spoken = history
-        .insert(
-            NewHistoryEntry {
-                cleaned_text: Some("Hello.".to_owned()),
-                ..entry(1, EntryStatus::Ok, "hello")
-            },
-            &SPEECH,
-            false,
-            HistoryLimit::Last20,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let spoken = store(
+        &mut history,
+        NewHistoryEntry {
+            cleaned_text: Some("Hello.".to_owned()),
+            ..entry(1, EntryStatus::Ok, "hello")
+        },
+        &SPEECH,
+        false,
+    )
+    .expect("insert");
     let spoken = find(&history, spoken);
     assert_eq!(spoken.raw_text.as_deref(), Some("hello"));
     assert_eq!(spoken.text(), Some("Hello."));
     assert!(!spoken.audio_kept);
     assert_eq!(history.audio(spoken.id).expect("audio"), None);
 
-    let kept = history
-        .insert(
-            entry(2, EntryStatus::Ok, "kept"),
-            &SPEECH,
-            true,
-            HistoryLimit::Last20,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let kept = store(
+        &mut history,
+        entry(2, EntryStatus::Ok, "kept"),
+        &SPEECH,
+        true,
+    )
+    .expect("insert");
     let kept = find(&history, kept);
     assert!(kept.audio_kept);
     let wav = history.audio(kept.id).expect("audio").expect("kept audio");
@@ -116,15 +127,13 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
 fn history_reads_do_not_parse_the_asr_model_id_saved_for_training() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    let id = history
-        .insert(
-            entry(1, EntryStatus::Ok, "dictation"),
-            &[],
-            false,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let id = store(
+        &mut history,
+        entry(1, EntryStatus::Ok, "dictation"),
+        &[],
+        false,
+    )
+    .expect("insert");
     let stored: String = history
         .connection
         .query_row(
@@ -153,15 +162,13 @@ fn failed_and_cancelled_entries_keep_audio_only_when_keep_audio_is_on() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
     let mut insert = |status, keep_audio| {
-        let id = history
-            .insert(
-                entry(1, status, "partial"),
-                &SPEECH,
-                keep_audio,
-                HistoryLimit::Last20,
-                HistoryRetention::Forever,
-            )
-            .expect("insert");
+        let id = store(
+            &mut history,
+            entry(1, status, "partial"),
+            &SPEECH,
+            keep_audio,
+        )
+        .expect("insert");
         find(&history, id)
     };
     for status in [EntryStatus::Failed, EntryStatus::Cancelled] {
@@ -246,19 +253,17 @@ fn an_entry_older_than_the_retention_is_deleted_with_its_audio() {
 fn a_forever_retention_keeps_entries_of_any_age() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    let ancient = history
-        .insert(
-            entry(
-                UtcMillis::now().get() - 365 * 86_400_000,
-                EntryStatus::Ok,
-                "ancient",
-            ),
-            &SPEECH,
-            true,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let ancient = store(
+        &mut history,
+        entry(
+            UtcMillis::now().get() - 365 * 86_400_000,
+            EntryStatus::Ok,
+            "ancient",
+        ),
+        &SPEECH,
+        true,
+    )
+    .expect("insert");
     assert_eq!(all(&history).len(), 1);
     assert_eq!(fixture.wav_names(), vec![format!("{}.wav", ancient.0)]);
 }
@@ -272,19 +277,17 @@ fn pruning_deletes_entries_that_aged_out() {
     let mut ids = Vec::new();
     for age_days in [10, 8, 2, 0] {
         ids.push(
-            history
-                .insert(
-                    entry(
-                        now - age_days * day,
-                        EntryStatus::Ok,
-                        &format!("entry {age_days}"),
-                    ),
-                    &SPEECH,
-                    true,
-                    HistoryLimit::Unlimited,
-                    HistoryRetention::Forever,
-                )
-                .expect("insert"),
+            store(
+                &mut history,
+                entry(
+                    now - age_days * day,
+                    EntryStatus::Ok,
+                    &format!("entry {age_days}"),
+                ),
+                &SPEECH,
+                true,
+            )
+            .expect("insert"),
         );
     }
     assert_eq!(
@@ -307,26 +310,17 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
     let mut history = fixture.open();
     let mut notes = Vec::new();
     for index in 0..5 {
-        let note = history
-            .insert(
-                entry(index.min(1), EntryStatus::Ok, &format!("note {index} 100%")),
-                &[],
-                false,
-                HistoryLimit::Unlimited,
-                HistoryRetention::Forever,
-            )
-            .expect("insert");
-        notes.push(note);
-    }
-    let failed = history
-        .insert(
-            entry(9, EntryStatus::Failed, ""),
+        let note = store(
+            &mut history,
+            entry(index.min(1), EntryStatus::Ok, &format!("note {index} 100%")),
             &[],
             false,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
         )
         .expect("insert");
+        notes.push(note);
+    }
+    let failed =
+        store(&mut history, entry(9, EntryStatus::Failed, ""), &[], false).expect("insert");
 
     let first = history
         .list(&HistoryPageRequest {
@@ -380,24 +374,20 @@ fn listing_pages_newest_first_and_filters_by_text_and_failure() {
 fn delivery_failure_delete_and_clear_update_entries_and_audio() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    let first = history
-        .insert(
-            entry(1, EntryStatus::Ok, "one"),
-            &SPEECH,
-            true,
-            HistoryLimit::Last20,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
-    let second = history
-        .insert(
-            entry(2, EntryStatus::Ok, "two"),
-            &SPEECH,
-            true,
-            HistoryLimit::Last20,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let first = store(
+        &mut history,
+        entry(1, EntryStatus::Ok, "one"),
+        &SPEECH,
+        true,
+    )
+    .expect("insert");
+    let second = store(
+        &mut history,
+        entry(2, EntryStatus::Ok, "two"),
+        &SPEECH,
+        true,
+    )
+    .expect("insert");
     history
         .mark_not_delivered(first, "The paste failed")
         .expect("mark");
@@ -418,25 +408,9 @@ fn delivery_failure_delete_and_clear_update_entries_and_audio() {
 fn ids_are_never_reused_after_a_delete() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    let first = history
-        .insert(
-            entry(1, EntryStatus::Ok, "one"),
-            &[],
-            false,
-            HistoryLimit::Last20,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let first = store(&mut history, entry(1, EntryStatus::Ok, "one"), &[], false).expect("insert");
     history.delete(first).expect("delete");
-    let second = history
-        .insert(
-            entry(2, EntryStatus::Ok, "two"),
-            &[],
-            false,
-            HistoryLimit::Last20,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let second = store(&mut history, entry(2, EntryStatus::Ok, "two"), &[], false).expect("insert");
     assert!(second > first);
 }
 
@@ -445,15 +419,13 @@ fn clearing_vacuums_transcript_pages_without_reusing_ids() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
     let private_text = "private-transcript-to-remove".repeat(1_000);
-    let first = history
-        .insert(
-            entry(1, EntryStatus::Ok, &private_text),
-            &SPEECH,
-            true,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let first = store(
+        &mut history,
+        entry(1, EntryStatus::Ok, &private_text),
+        &SPEECH,
+        true,
+    )
+    .expect("insert");
     let database = fixture.paths.history_database_file();
     let before = fs::metadata(&database).expect("database").len();
 
@@ -468,15 +440,13 @@ fn clearing_vacuums_transcript_pages_without_reusing_ids() {
             .windows(b"private-transcript-to-remove".len())
             .any(|window| window == b"private-transcript-to-remove")
     );
-    let later = history
-        .insert(
-            entry(2, EntryStatus::Ok, "after clear"),
-            &SPEECH,
-            true,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
-        .expect("insert after clear");
+    let later = store(
+        &mut history,
+        entry(2, EntryStatus::Ok, "after clear"),
+        &SPEECH,
+        true,
+    )
+    .expect("insert after clear");
     assert!(later > first);
     assert!(history.audio(later).expect("audio").is_some());
 }
@@ -488,15 +458,13 @@ fn a_recordings_removal_failure_keeps_history_rows() {
 
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    let id = history
-        .insert(
-            entry(1, EntryStatus::Ok, "recoverable"),
-            &SPEECH,
-            true,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let id = store(
+        &mut history,
+        entry(1, EntryStatus::Ok, "recoverable"),
+        &SPEECH,
+        true,
+    )
+    .expect("insert");
     let recordings = fixture.paths.recordings_dir();
     let permissions = fs::metadata(&recordings).expect("recordings").permissions();
     fs::set_permissions(&recordings, fs::Permissions::from_mode(0o500))
@@ -517,15 +485,13 @@ fn a_recordings_removal_failure_keeps_history_rows() {
 fn startup_removes_audio_files_that_no_entry_owns() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    let kept = history
-        .insert(
-            entry(1, EntryStatus::Failed, ""),
-            &SPEECH,
-            true,
-            HistoryLimit::Last20,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let kept = store(
+        &mut history,
+        entry(1, EntryStatus::Failed, ""),
+        &SPEECH,
+        true,
+    )
+    .expect("insert");
     drop(history);
     let audio_dir = fixture.paths.recordings_dir();
     fs::write(audio_dir.join("9999.wav"), b"orphan").expect("orphan");
@@ -552,15 +518,7 @@ fn startup_removes_audio_files_that_no_entry_owns() {
 fn an_entry_with_an_unknown_status_fails_to_load() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    history
-        .insert(
-            entry(1, EntryStatus::Ok, "one"),
-            &[],
-            false,
-            HistoryLimit::Last20,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    store(&mut history, entry(1, EntryStatus::Ok, "one"), &[], false).expect("insert");
     drop(history);
     Connection::open(fixture.paths.history_database_file())
         .expect("database")

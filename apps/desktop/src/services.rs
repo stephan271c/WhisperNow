@@ -38,6 +38,8 @@ mod output;
 mod permissions;
 mod settings;
 mod state;
+#[cfg(test)]
+mod test_support;
 
 /// Tauri commands call its coordinators directly, and its own methods for work that spans
 /// several coordinators.

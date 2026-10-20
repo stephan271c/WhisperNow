@@ -18,7 +18,7 @@ struct Fixture {
 
 fn fixture() -> Fixture {
     let root = tempdir().expect("temporary directory");
-    let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+    let paths = AppPaths::under(root.path());
     fs::create_dir_all(paths.config_dir()).expect("config directory");
     let store = Arc::new(MemoryCredentialStore::default());
     let persistence = SettingsStore::with_store(paths.clone(), Arc::clone(&store) as _);

@@ -9,7 +9,9 @@ use whispernow_domain::{AppError, ErrorCategory, ModelId};
 wasm_bindgen_test_configure!(run_in_browser);
 
 mod browser_support;
-use browser_support::{install_mount_point, render_turn, wait_for};
+use browser_support::{
+    adapter_count, eval_bool, install_mount_point, install_tauri, render_turn, wait_for,
+};
 
 #[wasm_bindgen_test(async)]
 async fn newer_ready_event_survives_the_delayed_initial_update_snapshot() {
@@ -72,35 +74,19 @@ async fn initial_update_read_failure_is_visible_without_an_event() {
 
 async fn launch_with_pending_update_read() {
     let idle = serde_json::to_string(&idle_state()).expect("idle snapshot");
-    js_sys::eval(&format!(
+    js_sys::eval("window.__whispernowInitialUpdate = undefined;")
+        .expect("forget the previous delayed update read");
+    install_tauri(&format!(
         r#"
-        window.__whispernowAdapterCalls = [];
-        window.__whispernowListeners = new Map();
-        window.__whispernowInitialUpdate = undefined;
-        window.__TAURI__ = {{
-          core: {{
-            invoke: async (command, payload) => {{
-              window.__whispernowAdapterCalls.push({{ command, payload }});
-              if (command === "get_update_state") {{
-                return new Promise((resolve, reject) => {{
-                  window.__whispernowInitialUpdate = {{ resolve, reject }};
-                }});
-              }}
-              if (command === "get_state") return {idle};
-              throw new Error(`unavailable in this test: ${{command}}`);
-            }}
-          }},
-          event: {{
-            listen: async (name, handler) => {{
-              window.__whispernowListeners.set(name, handler);
-              return () => window.__whispernowListeners.delete(name);
-            }}
-          }},
-          window: {{ getCurrentWindow: () => ({{ label: "settings", isDecorated: async () => true }}) }}
-        }};
+        if (command === "get_update_state") {{
+          return new Promise((resolve, reject) => {{
+            window.__whispernowInitialUpdate = {{ resolve, reject }};
+          }});
+        }}
+        if (command === "get_state") return {idle};
+        throw new Error(`unavailable in this test: ${{command}}`);
         "#,
-    ))
-    .expect("install delayed Tauri update read");
+    ));
     install_mount_point();
     dioxus::launch(whispernow_ui::app);
     wait_for("the pending initial update read", || {
@@ -120,7 +106,7 @@ async fn finish_initial_read(answer: Result<UpdateState, AppError>) {
     ))
     .expect("complete initial update read");
     wait_for("startup hydration after the update read", || {
-        eval_bool("window.__whispernowAdapterCalls.some(({command}) => command === 'get_state')")
+        adapter_count("get_state") > 0
     })
     .await;
     render_turn().await;
@@ -139,13 +125,6 @@ fn ready_to_restart() -> bool {
     eval_bool(
         "document.querySelector('.update-ready h3')?.textContent === 'Restart to update to v0.3.0' && Array.from(document.querySelectorAll('.update-ready button')).some(button => button.textContent.trim() === 'Restart to update' && !button.disabled)",
     )
-}
-
-fn eval_bool(script: &str) -> bool {
-    js_sys::eval(script)
-        .expect("evaluate probe script")
-        .as_bool()
-        .expect("boolean probe result")
 }
 
 fn idle_state() -> AppState {

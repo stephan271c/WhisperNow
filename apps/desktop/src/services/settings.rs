@@ -354,65 +354,31 @@ fn cleanup_plan(settings: &Settings) -> Option<CleanupPlan> {
 mod tests {
     use std::{fs, sync::Arc};
 
-    use whispernow_core::audio::{
-        AudioCapture, AudioDeviceChoice, AudioDeviceId, AudioInput, AudioInputError, AudioSink,
-    };
+    use whispernow_core::audio::{AudioDeviceChoice, AudioDeviceId};
     use whispernow_domain::ipc::{AudioDevice, SetApiKeyRequest};
     use whispernow_domain::{
         ApiKey, AppError, ErrorCategory, LlmProvider, SetupCheckpoint, ThemePreference,
         VocabularyReplacement,
     };
-    use whispernow_platform::{AppPaths, MemoryCredentialStore, SettingsStore};
+    use whispernow_platform::SettingsStore;
 
     use whispernow_domain::WindowGeometry;
 
-    use super::{SettingsCoordinator, StateCell};
-    use crate::services::{Events, state::State};
+    use super::SettingsCoordinator;
+    use crate::services::test_support::{FakeAudioInput, SettingsHarness};
 
-    struct Fixture {
-        _root: tempfile::TempDir,
-        paths: AppPaths,
-        store: Arc<MemoryCredentialStore>,
-        state: Arc<StateCell>,
-        settings: SettingsCoordinator,
+    fn fixture() -> SettingsHarness {
+        SettingsHarness::new(whispernow_domain::Settings::default())
     }
 
-    impl Fixture {
-        fn start() -> Self {
-            let root = tempfile::tempdir().expect("temporary directory");
-            let paths =
-                AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
-            fs::create_dir_all(paths.config_dir()).expect("config directory");
-            let store = Arc::new(MemoryCredentialStore::default());
-            let persistence = Arc::new(SettingsStore::with_store(
-                paths.clone(),
-                Arc::clone(&store) as _,
-            ));
-            let state = Arc::new(StateCell::new(
-                State::new(whispernow_domain::ModelId::default()),
-                Events::channel().0,
-            ));
-            let settings = SettingsCoordinator::new(
-                persistence,
-                Arc::clone(&state),
-                whispernow_domain::Settings::default(),
-            );
-            Self {
-                _root: root,
-                paths,
-                store,
-                state,
-                settings,
-            }
-        }
-
+    impl SettingsHarness {
         fn restart(&mut self) {
-            let loaded = self.settings.persistence.load().expect("startup load");
-            self.settings = SettingsCoordinator::new(
-                Arc::clone(&self.settings.persistence),
+            let loaded = self.persistence.load().expect("startup load");
+            self.settings = Arc::new(SettingsCoordinator::new(
+                Arc::clone(&self.persistence),
                 Arc::clone(&self.state),
                 loaded.settings.clone(),
-            );
+            ));
             self.settings.report_loaded(&loaded.settings, loaded.notice);
         }
 
@@ -478,7 +444,7 @@ mod tests {
             }
         }
 
-        let fixture = Fixture::start();
+        let fixture = fixture();
         let (entered, waiting) = mpsc::channel();
         let (release, blocked) = mpsc::channel();
         let persistence = Arc::new(SettingsStore::with_store(
@@ -517,36 +483,24 @@ mod tests {
         });
     }
 
-    struct ConnectedMicrophone;
-
-    impl AudioInput for ConnectedMicrophone {
-        fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
-            Ok(vec![AudioDevice {
-                id: "connected microphone".to_owned(),
-                display_name: "Connected microphone".to_owned(),
-                is_default: true,
-            }])
-        }
-
-        fn start(
-            &self,
-            _: AudioDeviceChoice,
-            _: Arc<dyn AudioSink>,
-        ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
-            panic!("editing settings does not record audio")
-        }
+    fn connected_microphone() -> FakeAudioInput {
+        FakeAudioInput::listing(Ok(vec![AudioDevice {
+            id: "connected microphone".to_owned(),
+            display_name: "Connected microphone".to_owned(),
+            is_default: true,
+        }]))
     }
 
     #[test]
     fn malformed_explicit_microphone_updates_and_checkpoints_are_not_saved() {
-        let fixture = Fixture::start();
+        let fixture = fixture();
         let before = fixture.settings.get();
         let mut edited = before.settings.clone();
         edited.input_device = Some(" ".to_owned());
         assert_eq!(
             fixture
                 .settings
-                .update(edited, &ConnectedMicrophone)
+                .update(edited, &connected_microphone())
                 .expect_err("invalid explicit microphone")
                 .code,
             "audio_device_invalid"
@@ -569,12 +523,12 @@ mod tests {
 
     #[test]
     fn connected_and_default_microphone_selections_persist_and_disconnected_ones_are_refused() {
-        let fixture = Fixture::start();
+        let fixture = fixture();
         let mut edited = fixture.settings.get().settings;
         edited.input_device = Some("connected microphone".to_owned());
         let (_, saved) = fixture
             .settings
-            .update(edited, &ConnectedMicrophone)
+            .update(edited, &connected_microphone())
             .expect("connected microphone");
         let choice = AudioDeviceChoice::Device(
             AudioDeviceId::new("connected microphone").expect("device id"),
@@ -593,7 +547,7 @@ mod tests {
         assert_eq!(
             fixture
                 .settings
-                .update(disconnected, &ConnectedMicrophone)
+                .update(disconnected, &connected_microphone())
                 .expect_err("disconnected microphone")
                 .code,
             "audio_device_missing"
@@ -606,7 +560,7 @@ mod tests {
         default.input_device = None;
         let (_, saved) = fixture
             .settings
-            .update(default, &ConnectedMicrophone)
+            .update(default, &connected_microphone())
             .expect("system default");
         assert_eq!(saved.settings.input_device, None);
         assert_eq!(
@@ -626,7 +580,7 @@ mod tests {
     #[test]
     fn malformed_saved_microphones_cannot_become_default_recording_snapshots() {
         for setup in [false, true] {
-            let fixture = Fixture::start();
+            let fixture = fixture();
             let mut saved = fixture.settings.get().settings;
             if setup {
                 saved.setup = Some(SetupCheckpoint {
@@ -667,7 +621,7 @@ mod tests {
 
     #[test]
     fn an_edit_is_saved_only_when_it_changes_the_settings() {
-        let fixture = Fixture::start();
+        let fixture = fixture();
         fixture.settings.edit(|_| Ok(())).expect("no change");
         assert!(!fixture.paths.settings_file().exists());
 
@@ -684,7 +638,7 @@ mod tests {
 
     #[test]
     fn a_refused_edit_leaves_the_settings_and_the_file_alone() {
-        let fixture = Fixture::start();
+        let fixture = fixture();
         let error = fixture
             .settings
             .edit(|settings| {
@@ -700,7 +654,7 @@ mod tests {
 
     #[test]
     fn an_update_saves_the_edit_and_keeps_what_the_window_does_not_own() {
-        let mut fixture = Fixture::start();
+        let mut fixture = fixture();
         fixture
             .settings
             .save_window_geometry(geometry())
@@ -729,7 +683,7 @@ mod tests {
 
     #[test]
     fn recording_settings_enable_cleanup_only_after_the_provider_is_repaired() {
-        let fixture = Fixture::start();
+        let fixture = fixture();
         let mut edited = fixture.settings.get().settings;
         edited.cleanup_enabled = true;
         edited.llm_provider = LlmProvider::Custom;
@@ -762,7 +716,7 @@ mod tests {
 
     #[test]
     fn saved_settings_that_break_a_rule_load_with_a_warning_and_other_edits_save() {
-        let mut fixture = Fixture::start();
+        let mut fixture = fixture();
         fs::write(
             fixture.paths.settings_file(),
             r#"{"settings_version": 2, "vocabulary_replacements": [[" ", "x"]]}"#,
@@ -793,7 +747,7 @@ mod tests {
 
     #[test]
     fn settings_reads_ignore_disk_changes_until_restart() {
-        let fixture = Fixture::start();
+        let fixture = fixture();
         let before = fixture.settings.load();
         let malformed = "{ unreadable hand edit";
         fs::write(fixture.paths.settings_file(), malformed).expect("hand edit");
@@ -818,7 +772,7 @@ mod tests {
 
     #[test]
     fn a_failed_save_keeps_the_last_settings_in_memory() {
-        let fixture = Fixture::start();
+        let fixture = fixture();
         let before = fixture.settings.load();
         fs::create_dir(fixture.paths.settings_file()).expect("block settings replacement");
         let mut edited = before.clone();
@@ -826,7 +780,7 @@ mod tests {
 
         let error = fixture
             .settings
-            .update(edited, &ConnectedMicrophone)
+            .update(edited, &connected_microphone())
             .expect_err("settings write refused");
         assert_eq!(error.code, "settings_write");
         assert_eq!(fixture.settings.load(), before);
@@ -834,7 +788,7 @@ mod tests {
 
     #[test]
     fn an_update_that_breaks_a_rule_is_refused_and_nothing_is_saved() {
-        let fixture = Fixture::start();
+        let fixture = fixture();
         let mut edited = fixture.settings.get().settings;
         edited.vocabulary_replacements = vec![VocabularyReplacement::new(" ", "x")];
 
@@ -850,7 +804,7 @@ mod tests {
 
     #[test]
     fn an_api_key_is_kept_only_in_the_store_and_can_be_cleared() {
-        let fixture = Fixture::start();
+        let fixture = fixture();
         let secret = ["kept", "-in-", "store"].concat();
         fixture.set_key(&secret).expect("store key");
 
@@ -877,10 +831,10 @@ mod tests {
 
     #[test]
     fn an_unavailable_store_refuses_key_changes_and_keeps_settings() {
-        let fixture = Fixture::start();
+        let fixture = fixture();
         fixture.set_key("existing").expect("store key");
         let before = fs::read(fixture.paths.settings_file()).expect("settings");
-        fixture.store.set_available(false);
+        fixture.credentials.set_available(false);
 
         let error = fixture.set_key("fresh").expect_err("store unavailable");
         assert_eq!(error.code, "credential_store_unavailable");
@@ -899,7 +853,7 @@ mod tests {
 
     #[test]
     fn unreadable_settings_are_reported_once_with_where_they_went() {
-        let mut fixture = Fixture::start();
+        let mut fixture = fixture();
         let truncated = r#"{"settings_version": 2, "vocabulary_replacements": [["teh", "#;
         fs::write(fixture.paths.settings_file(), truncated).expect("truncated settings");
 

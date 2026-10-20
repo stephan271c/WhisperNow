@@ -4,15 +4,13 @@ use super::*;
 fn deleting_retained_audio_updates_list_results_and_playback() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
-    let id = history
-        .insert(
-            entry(1, EntryStatus::Ok, "spoken"),
-            &SPEECH,
-            true,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
-        .expect("insert");
+    let id = store(
+        &mut history,
+        entry(1, EntryStatus::Ok, "spoken"),
+        &SPEECH,
+        true,
+    )
+    .expect("insert");
     fs::remove_file(fixture.paths.recordings_dir().join(format!("{}.wav", id.0)))
         .expect("manual deletion");
     assert!(!all(&history)[0].audio_kept);
@@ -37,15 +35,13 @@ fn a_failed_commit_rolls_back_the_entry_and_removes_audio_before_id_reuse() {
         )
         .expect("deferred constraint");
     assert!(
-        history
-            .insert(
-                entry(1, EntryStatus::Ok, "rolled back"),
-                &SPEECH,
-                true,
-                HistoryLimit::Unlimited,
-                HistoryRetention::Forever,
-            )
-            .is_err()
+        store(
+            &mut history,
+            entry(1, EntryStatus::Ok, "rolled back"),
+            &SPEECH,
+            true
+        )
+        .is_err()
     );
     assert!(all(&history).is_empty());
     assert!(fixture.wav_names().is_empty());
@@ -53,15 +49,8 @@ fn a_failed_commit_rolls_back_the_entry_and_removes_audio_before_id_reuse() {
         .connection
         .execute_batch("DROP TRIGGER fail_commit")
         .expect("allow commits");
-    let id = history
-        .insert(
-            entry(2, EntryStatus::Ok, "next"),
-            &[],
-            false,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
-        .expect("next insert");
+    let id =
+        store(&mut history, entry(2, EntryStatus::Ok, "next"), &[], false).expect("next insert");
     assert_eq!(id.0, 1);
     assert!(!all(&history)[0].audio_kept);
     assert_eq!(history.audio(id).expect("no stale audio"), None);
@@ -72,15 +61,13 @@ fn a_failed_prune_rolls_back_the_new_entry_and_preserves_owned_audio() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
     for created_at in 0..20 {
-        history
-            .insert(
-                entry(created_at, EntryStatus::Ok, "kept"),
-                &SPEECH,
-                true,
-                HistoryLimit::Unlimited,
-                HistoryRetention::Forever,
-            )
-            .expect("existing entry");
+        store(
+            &mut history,
+            entry(created_at, EntryStatus::Ok, "kept"),
+            &SPEECH,
+            true,
+        )
+        .expect("existing entry");
     }
     history.connection.execute_batch("CREATE TRIGGER refuse_prune BEFORE DELETE ON entries BEGIN SELECT RAISE(ABORT, 'refused'); END;").expect("refuse deletion");
     assert!(
@@ -111,12 +98,11 @@ fn a_reused_id_cannot_acquire_audio_that_could_not_be_cleaned_up() {
     fs::write(recordings.join("1.wav"), b"old audio").expect("leftover rollback audio");
     let permissions = fs::metadata(&recordings).expect("directory").permissions();
     fs::set_permissions(&recordings, fs::Permissions::from_mode(0o500)).expect("refuse cleanup");
-    let result = history.insert(
+    let result = store(
+        &mut history,
         entry(1, EntryStatus::Ok, "new transcript"),
         &[],
         false,
-        HistoryLimit::Unlimited,
-        HistoryRetention::Forever,
     );
     fs::set_permissions(&recordings, permissions).expect("allow cleanup");
     assert_eq!(
@@ -124,15 +110,7 @@ fn a_reused_id_cannot_acquire_audio_that_could_not_be_cleaned_up() {
         "history_audio_delete"
     );
     assert!(all(&history).is_empty());
-    let id = history
-        .insert(
-            entry(2, EntryStatus::Ok, "retry"),
-            &[],
-            false,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
-        .expect("retry");
+    let id = store(&mut history, entry(2, EntryStatus::Ok, "retry"), &[], false).expect("retry");
     assert_eq!(id.0, 1);
     assert_eq!(history.audio(id).expect("no stale audio"), None);
     assert!(!all(&history)[0].audio_kept);
@@ -143,15 +121,13 @@ fn an_audio_write_failure_still_saves_the_transcript() {
     let fixture = Fixture::new();
     let mut history = fixture.open();
     fs::write(fixture.paths.recordings_dir(), b"obstructed").expect("block recordings directory");
-    history
-        .insert(
-            entry(1, EntryStatus::Ok, "transcript kept"),
-            &SPEECH,
-            true,
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
-        .expect("transcript saved");
+    store(
+        &mut history,
+        entry(1, EntryStatus::Ok, "transcript kept"),
+        &SPEECH,
+        true,
+    )
+    .expect("transcript saved");
     let entries = all(&history);
     assert_eq!(entries[0].raw_text.as_deref(), Some("transcript kept"));
     assert!(!entries[0].audio_kept);

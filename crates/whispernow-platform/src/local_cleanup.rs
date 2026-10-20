@@ -339,7 +339,7 @@ mod tests {
 
     fn service(installed: &[&str]) -> (TempDir, LocalCleanupService) {
         let root = tempfile::tempdir().expect("temporary root");
-        let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+        let paths = AppPaths::under(root.path());
         for id in installed {
             let directory = paths.models_dir().join(id);
             fs::create_dir_all(&directory).expect("model directory");

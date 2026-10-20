@@ -5,7 +5,7 @@ use whispernow_domain::{HistoryFilter, HistoryPageRequest};
 #[test]
 fn a_failed_legacy_rename_rolls_back_and_retries_without_duplicates() {
     let root = tempfile::tempdir().expect("temporary directory");
-    let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+    let paths = AppPaths::under(root.path());
     fs::create_dir_all(paths.config_dir()).expect("config directory");
     let document = br#"[{"timestamp":"1720000000","raw_text":"import once"}]"#;
     fs::write(paths.history_file(), document).expect("legacy history");
@@ -53,7 +53,7 @@ fn a_failed_legacy_rename_rolls_back_and_retries_without_duplicates() {
 #[test]
 fn a_failed_import_commit_restores_the_legacy_document() {
     let root = tempfile::tempdir().expect("temporary directory");
-    let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+    let paths = AppPaths::under(root.path());
     fs::create_dir_all(paths.config_dir()).expect("config directory");
     let document = br#"[{"timestamp":"1720000000","raw_text":"retry after commit failure"}]"#;
     fs::write(paths.history_file(), document).expect("legacy history");

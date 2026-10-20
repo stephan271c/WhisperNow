@@ -146,48 +146,10 @@ async fn fetch<T: serde::de::DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{Read, Write},
-        net::TcpListener,
-        thread,
-        time::Duration,
-    };
-
     use whispernow_core::llm::LlmError;
     use whispernow_domain::{ApiKey, ProviderEndpoint, RemoteProvider};
 
-    use super::list_models;
-
-    /// Answers one request with `status` and `body`, and returns the request's head.
-    fn serve_once(
-        status: &'static str,
-        body: &'static str,
-    ) -> (String, thread::JoinHandle<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
-        let address = format!("http://{}", listener.local_addr().expect("fixture address"));
-        let server = thread::spawn(move || {
-            let (mut connection, _) = listener.accept().expect("provider request");
-            connection
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .expect("request timeout");
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 4096];
-            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                let read = connection.read(&mut buffer).expect("request bytes");
-                assert!(read > 0, "request ended before its headers");
-                request.extend_from_slice(&buffer[..read]);
-            }
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            connection
-                .write_all(response.as_bytes())
-                .expect("fixture response");
-            String::from_utf8(request).expect("request head")
-        });
-        (address, server)
-    }
+    use super::{super::test_server::serve_once, list_models};
 
     fn endpoint(url: String) -> ProviderEndpoint {
         ProviderEndpoint::parse(url).expect("fixture endpoint")
@@ -205,7 +167,7 @@ mod tests {
         );
         let provider = RemoteProvider::Custom(endpoint(format!("{address}/v1")));
         let models = list_models(&provider, Some(&key())).await;
-        let request = server.join().expect("fixture");
+        let request = server.join().expect("fixture").head;
         assert_eq!(models, Ok(vec!["llama-3.2".to_owned(), "qwen3".to_owned()]));
         assert!(request.starts_with("GET /v1/models "), "{request}");
         assert!(
@@ -222,7 +184,7 @@ mod tests {
         );
         let provider = RemoteProvider::Ollama(Some(endpoint(format!("{address}/v1/"))));
         let models = list_models(&provider, None).await;
-        let request = server.join().expect("fixture");
+        let request = server.join().expect("fixture").head;
         assert_eq!(
             models,
             Ok(vec!["gemma3:4b".to_owned(), "mistral:latest".to_owned()])
@@ -239,7 +201,7 @@ mod tests {
         );
         let provider = RemoteProvider::Anthropic(Some(endpoint(address)));
         let models = list_models(&provider, Some(&key())).await;
-        let request = server.join().expect("fixture");
+        let request = server.join().expect("fixture").head;
         assert_eq!(models, Ok(vec!["claude-haiku-5-5".to_owned()]));
         assert!(
             request.starts_with("GET /v1/models?limit=1000 "),
@@ -260,7 +222,7 @@ mod tests {
         );
         let provider = RemoteProvider::Gemini(Some(endpoint(address)));
         let models = list_models(&provider, Some(&key())).await;
-        let request = server.join().expect("fixture");
+        let request = server.join().expect("fixture").head;
         assert_eq!(models, Ok(vec!["gemini-2.5-flash".to_owned()]));
         assert!(
             request.starts_with("GET /v1beta/models?pageSize=1000 "),
@@ -278,7 +240,7 @@ mod tests {
         let (address, server) = serve_once("200 OK", r#"{"data":[{"id":"openai/gpt-6-mini"}]}"#);
         let provider = RemoteProvider::OpenRouter(Some(endpoint(format!("{address}/api/v1"))));
         let models = list_models(&provider, None).await;
-        let request = server.join().expect("fixture");
+        let request = server.join().expect("fixture").head;
         assert_eq!(models, Ok(vec!["openai/gpt-6-mini".to_owned()]));
         assert!(request.starts_with("GET /api/v1/models "), "{request}");
         assert!(!request.contains("authorization"), "{request}");

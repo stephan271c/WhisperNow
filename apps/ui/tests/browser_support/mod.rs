@@ -36,3 +36,43 @@ pub async fn wait_for(what: &str, condition: impl Fn() -> bool) {
     }
     panic!("timed out waiting for {what}");
 }
+
+pub fn eval_bool(script: &str) -> bool {
+    js_sys::eval(script)
+        .expect("evaluate probe script")
+        .as_bool()
+        .expect("boolean probe result")
+}
+
+pub fn install_tauri(invoke_js: &str) {
+    js_sys::eval(&format!(
+        r#"
+        window.__whispernowAdapterCalls = [];
+        window.__whispernowListeners = new Map();
+        window.__TAURI__ = {{
+          core: {{
+            invoke: async (command, payload) => {{
+              window.__whispernowAdapterCalls.push({{ command, payload }});
+              {invoke_js}
+            }}
+          }},
+          event: {{
+            listen: async (name, handler) => {{
+              window.__whispernowListeners.set(name, handler);
+              return () => window.__whispernowListeners.delete(name);
+            }}
+          }},
+          window: {{ getCurrentWindow: () => ({{ label: "settings", isDecorated: async () => true }}) }}
+        }};
+        "#
+    ))
+    .expect("install Tauri stub");
+}
+
+pub fn adapter_count(command: &str) -> u32 {
+    let count = js_sys::eval(&format!(
+        "window.__whispernowAdapterCalls.filter(call => call.command === {command:?}).length"
+    ))
+    .expect("count adapter calls");
+    serde_wasm_bindgen::from_value(count).expect("integer call count")
+}

@@ -5,47 +5,20 @@ use crate::{
     autostart::AutostartRegistration,
     gateway::Gateway,
     services::{
-        NativeServices, models::ModelCoordinator, output::OutputCoordinator,
+        NativeServices,
+        models::ModelCoordinator,
+        output::OutputCoordinator,
         permissions::MicrophoneAccess,
+        test_support::{install_artifacts, shut_down},
     },
     shortcuts::{
-        ShortcutBinding, ShortcutCoordinator, ShortcutRegistrar, ShortcutRegistrationError,
+        ShortcutCoordinator, ShortcutRegistrationError, memory_registrar::MemoryRegistrar,
         recording_binding,
     },
     tray::TrayController,
 };
+use whispernow_core::audio::AudioInputError;
 use whispernow_platform::LocalCleanupService;
-
-#[derive(Default)]
-struct Registrar {
-    registered: Mutex<Vec<ShortcutBinding>>,
-    hold: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
-}
-
-impl ShortcutRegistrar for Registrar {
-    fn register(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
-        let hold = self.hold.lock().expect("registration hold").take();
-        if let Some((entered, release)) = hold {
-            entered.send(()).expect("registration observer");
-            release
-                .recv_timeout(Duration::from_secs(10))
-                .expect("registration released");
-        }
-        self.registered
-            .lock()
-            .expect("registrations")
-            .push(binding.clone());
-        Ok(())
-    }
-
-    fn unregister(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
-        self.registered
-            .lock()
-            .expect("registrations")
-            .retain(|registered| registered.id != binding.id);
-        Ok(())
-    }
-}
 
 #[derive(Default)]
 struct Autostart {
@@ -71,10 +44,7 @@ pub(super) fn native_services(fixture: Fixture) -> (NativeServices, tempfile::Te
 pub(super) fn native_services_before_preload(
     fixture: Fixture,
 ) -> (NativeServices, tempfile::TempDir) {
-    let paths = AppPaths::from_base_dirs(
-        fixture.root.path().join("config"),
-        fixture.root.path().join("data"),
-    );
+    let paths = fixture.paths.clone();
     let store = Arc::new(ModelStore::new(paths.clone()));
     let local_cleanup = Arc::new(LocalCleanupService::new(
         fixture.root.path().join("llama"),
@@ -83,7 +53,7 @@ pub(super) fn native_services_before_preload(
     let services = NativeServices {
         settings: fixture.settings,
         history: fixture.history,
-        audio: Arc::new(FakeAudio { audio: Vec::new() }),
+        audio: Arc::new(FakeAudioInput::recording(Vec::new())),
         models: Arc::new(ModelCoordinator::new(
             store,
             Arc::clone(&fixture.state),
@@ -114,7 +84,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         .expect("runtime");
     let (services, _root) = native_services(Fixture::new());
     let saved = services.settings.get().settings;
-    let registrar = Arc::new(Registrar::default());
+    let registrar = Arc::new(MemoryRegistrar::default());
     let shortcuts = Arc::new(ShortcutCoordinator::new(
         registrar.clone(),
         recording_binding(&saved),
@@ -131,7 +101,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
     ));
     let (entered, registering) = mpsc::channel();
     let (release, released) = mpsc::channel();
-    *registrar.hold.lock().expect("registration hold") = Some((entered, released));
+    *registrar.gate.lock().expect("registration gate") = Some((entered, released));
     let mut registration_release = ReleaseOnDrop(Some(release));
     let first = Settings {
         theme: ThemePreference::Dark,
@@ -202,7 +172,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
     assert_eq!(saved.window_geometry, Some(geometry));
     assert_eq!(saved.recording_shortcut, expected.recording_shortcut);
     assert_eq!(
-        *registrar.registered.lock().expect("registrations"),
+        registrar.bindings(),
         [recording_binding(&saved)
             .expect("final recording shortcut")
             .binding]
@@ -224,8 +194,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         assert!(!view.start_on_login);
         assert!(view.warnings.is_empty());
     });
-    gateway.services.request_shutdown();
-    gateway.services.shutdown();
+    shut_down(&gateway.services);
 }
 
 #[test]
@@ -238,7 +207,7 @@ fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
         .expect("runtime");
     let (services, _root) = native_services(Fixture::new());
     let shortcuts = Arc::new(ShortcutCoordinator::new(
-        Arc::new(Registrar::default()),
+        Arc::new(MemoryRegistrar::default()),
         Err(ShortcutRegistrationError::ConflictOrUnsupported),
         Arc::new(|| true),
         None,
@@ -298,8 +267,7 @@ fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
             Some(SetupStep::Welcome)
         );
     });
-    gateway.services.request_shutdown();
-    gateway.services.shutdown();
+    shut_down(&gateway.services);
 }
 
 #[test]
@@ -331,19 +299,12 @@ fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
         } else {
             checkpoint.model_id = ModelId::new(DEFAULT_CLEANUP_MODEL_ID).expect("cleanup model id");
             let registry = ModelRegistry::builtin();
-            let definition = registry
-                .get(DEFAULT_CLEANUP_MODEL_ID)
-                .expect("cleanup model");
-            for artifact in definition.layout.required_artifacts() {
-                let path = services
-                    .paths
-                    .models_dir()
-                    .join(DEFAULT_CLEANUP_MODEL_ID)
-                    .join(artifact);
-                fs::create_dir_all(path.parent().expect("artifact parent"))
-                    .expect("model directory");
-                fs::write(path, b"fixture").expect("model artifact");
-            }
+            install_artifacts(
+                &services.paths,
+                registry
+                    .get(DEFAULT_CLEANUP_MODEL_ID)
+                    .expect("cleanup model"),
+            );
         }
         let saved = services.settings.get().settings;
         let selected = services.state.lock().selected_model_id.clone();
@@ -451,26 +412,10 @@ fn setup_checkpoints_do_not_scan_unrelated_installed_artifacts() {
 
 #[test]
 fn audio_device_listing_reports_the_system_failure() {
-    struct UnavailableDevices;
-
-    impl AudioInput for UnavailableDevices {
-        fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
-            Err(AudioInputError::Backend {
-                operation: "list devices",
-            })
-        }
-
-        fn start(
-            &self,
-            _: AudioDeviceChoice,
-            _: Arc<dyn AudioSink>,
-        ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
-            panic!("device listing does not record audio")
-        }
-    }
-
     let (mut services, _root) = native_services(Fixture::new());
-    services.audio = Arc::new(UnavailableDevices);
+    services.audio = Arc::new(FakeAudioInput::listing(Err(AudioInputError::Backend {
+        operation: "list devices",
+    })));
     let error = services
         .list_audio_devices()
         .expect_err("device listing failed");
@@ -489,15 +434,7 @@ fn invalid_setup_choices_leave_the_saved_and_selected_model_unchanged() {
         .speech_models()
         .find(|model| model.id != before.model_id)
         .expect("another speech model");
-    for artifact in model.layout.required_artifacts() {
-        let path = services
-            .paths
-            .models_dir()
-            .join(model.id.as_str())
-            .join(artifact);
-        fs::create_dir_all(path.parent().expect("artifact parent")).expect("model directory");
-        fs::write(path, b"fixture").expect("model artifact");
-    }
+    install_artifacts(&services.paths, model);
     let checkpoint = SetupCheckpoint {
         step: SetupStep::TryIt,
         model_id: model.id.clone(),

@@ -14,14 +14,15 @@ use whispernow_domain::{
 use crate::client::fake;
 use crate::components::ui::Tone;
 use crate::test_support::{
-    Page, editable_settings, focused, label_in_name_violations, snapshot, tag, text,
+    Page, editable_settings, focused, label_in_name_violations, management_with, settings_view,
+    snapshot, tag, text,
 };
 use crate::{ManagementState, NoticeScope, SettingKey, UiState};
 
 pub(super) fn shell(snapshot: AppState, management: ManagementState) -> Page {
     let mut state = UiState::default();
     state.hydrate(snapshot);
-    Page::shell(state, management)
+    Page::host(state, management, crate::AppShell)
 }
 
 pub(super) fn shortcut() -> Shortcut {
@@ -32,12 +33,7 @@ pub(super) fn shortcut() -> Shortcut {
 }
 
 pub(super) fn loaded() -> ManagementState {
-    let mut management = ManagementState::default();
-    management.install_settings(SettingsView {
-        start_on_login: false,
-        settings: editable_settings(),
-        warnings: Vec::new(),
-    });
+    let mut management = management_with(editable_settings());
     management.setup = Some(SetupCheckpoint::default());
     management
 }
@@ -413,12 +409,7 @@ fn configured() -> ManagementState {
     ];
     settings.keep_audio = true;
     settings.api_keys = [LlmProvider::OpenAi].into();
-    let mut management = ManagementState::default();
-    management.install_settings(SettingsView {
-        start_on_login: false,
-        settings,
-        warnings: Vec::new(),
-    });
+    let mut management = management_with(settings);
     management.models = vec![
         model(
             "sherpa-onnx-whisper-tiny",
@@ -1182,11 +1173,7 @@ fn local_cleanup(small: &str, large: &str, pack: &str) -> ManagementState {
             .provider_settings_mut(LlmProvider::LocalCleanup)
             .model,
     );
-    management.install_settings(SettingsView {
-        start_on_login: false,
-        settings,
-        warnings: Vec::new(),
-    });
+    management.install_settings(settings_view(settings));
     management.models = vec![
         model(
             "sherpa-onnx-whisper-base",

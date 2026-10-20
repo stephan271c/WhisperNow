@@ -48,6 +48,13 @@ impl AppPaths {
         }
     }
 
+    #[doc(hidden)]
+    #[must_use]
+    pub fn under(root: impl AsRef<Path>) -> Self {
+        let root = root.as_ref();
+        Self::from_base_dirs(root.join("config"), root.join("data"))
+    }
+
     /// Reproduces Python `platformdirs` defaults on Windows, where config and
     /// data both live below non-roaming `LocalAppData`.
     #[must_use]

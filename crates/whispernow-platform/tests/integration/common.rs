@@ -1,4 +1,4 @@
-//! A local HTTP server and SHA-256 digests for the download tests.
+//! A local HTTP server, fixture archives and SHA-256 digests for the download tests.
 use std::{
     collections::HashMap,
     fmt::Write as _,
@@ -14,6 +14,9 @@ use std::{
 };
 
 use sha2::{Digest, Sha256};
+use tar::{Builder as TarBuilder, EntryType, Header};
+use tempfile::{TempDir, tempdir};
+use whispernow_platform::{AppPaths, DownloadProgress, DownloadTimeouts};
 
 /// What the server answers on one path.
 #[derive(Clone)]
@@ -199,4 +202,49 @@ pub fn sha256(bytes: &[u8]) -> String {
         let _ = write!(&mut encoded, "{byte:02x}");
     }
     encoded
+}
+
+pub fn temp_paths() -> (TempDir, AppPaths) {
+    let root = tempdir().expect("temporary root");
+    let paths = AppPaths::under(root.path());
+    (root, paths)
+}
+
+pub fn timeouts(total: Duration) -> DownloadTimeouts {
+    DownloadTimeouts {
+        connect: Duration::from_secs(2),
+        receive_body: Duration::from_secs(2),
+        total,
+    }
+}
+
+pub fn recorder() -> (Arc<Mutex<Vec<DownloadProgress>>>, impl Fn(DownloadProgress)) {
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&progress);
+    (progress, move |event| {
+        sink.lock().expect("progress").push(event);
+    })
+}
+
+pub fn tar_file(archive: &mut TarBuilder<impl Write>, path: &str, body: &[u8]) {
+    let mut header = Header::new_gnu();
+    header.set_size(body.len() as u64);
+    header.set_mode(0o644);
+    header.set_entry_type(EntryType::file());
+    header.set_cksum();
+    archive
+        .append_data(&mut header, path, body)
+        .expect("append tar file");
+}
+
+pub fn tar_link(archive: &mut TarBuilder<impl Write>, path: &str, kind: EntryType, target: &str) {
+    let mut header = Header::new_gnu();
+    header.set_size(0);
+    header.set_mode(0o777);
+    header.set_entry_type(kind);
+    header.set_link_name(target).expect("tar link target");
+    header.set_cksum();
+    archive
+        .append_data(&mut header, path, &[][..])
+        .expect("append tar link");
 }

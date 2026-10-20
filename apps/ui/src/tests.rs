@@ -6,7 +6,10 @@ use whispernow_domain::ipc::{
 use whispernow_domain::{LlmProvider, Settings, Shortcut, ShortcutKey, ShortcutModifier};
 
 use crate::components::cleanup_destination;
-use crate::test_support::{editable_settings, history_entry, show_history, snapshot, state_event};
+use crate::test_support::{
+    editable_settings, history_entry, management_with, settings_view, show_history, snapshot,
+    state_event,
+};
 use crate::{HomeStatus, HomeStatusKind, ManagementState, SettingKey, UiState};
 
 fn ui_state(phase: Phase) -> UiState {
@@ -26,7 +29,7 @@ fn update_state(phase: UpdatePhase) -> UpdateState {
 fn settings_html(update: UpdateState) -> String {
     let mut state = ui_state(Phase::Idle);
     state.apply_update_state(update);
-    crate::test_support::Page::shell(state, ManagementState::default()).html()
+    crate::test_support::Page::host(state, ManagementState::default(), crate::AppShell).html()
 }
 
 /// Editable settings whose AI cleanup goes to `provider`, at `api_base` when given.
@@ -66,16 +69,6 @@ fn failed_refresh_keeps_loaded_rows() {
     );
     assert!(management.history_unavailable.is_none());
     assert!(management.history_loaded());
-}
-
-fn loaded_management(settings: Settings) -> ManagementState {
-    let mut management = ManagementState::default();
-    management.install_settings(SettingsView {
-        start_on_login: false,
-        settings,
-        warnings: Vec::new(),
-    });
-    management
 }
 
 fn start_minimized(settings: &mut Settings) {
@@ -273,7 +266,7 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
 
 #[test]
 fn a_saved_native_warning_keeps_the_desktops_substituted_shortcut() {
-    let mut management = loaded_management(editable_settings());
+    let mut management = management_with(editable_settings());
     let substituted = management
         .shown_settings()
         .expect("loaded")
@@ -296,11 +289,7 @@ fn a_saved_native_warning_keeps_the_desktops_substituted_shortcut() {
     returned.recording_shortcut = substituted.clone();
 
     management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
-        settings: SettingsView {
-            start_on_login: false,
-            settings: returned,
-            warnings: Vec::new(),
-        },
+        settings: settings_view(returned),
         warnings: vec![warning.summary.clone()],
     }));
 
@@ -325,7 +314,7 @@ fn a_saved_native_warning_keeps_the_desktops_substituted_shortcut() {
 
 #[test]
 fn an_unrelated_save_keeps_an_unresolved_native_settings_warning() {
-    let mut management = loaded_management(editable_settings());
+    let mut management = management_with(editable_settings());
     let request = management
         .begin_settings_update(SettingKey::StartMinimized, start_minimized)
         .expect("startup edit");
@@ -355,11 +344,7 @@ fn theme_attribute_follows_a_theme_change_at_once_and_its_rollback() {
 
     let mut settings = editable_settings();
     settings.theme = whispernow_domain::ThemePreference::Dark;
-    management.install_settings(SettingsView {
-        start_on_login: false,
-        settings,
-        warnings: Vec::new(),
-    });
+    management.install_settings(settings_view(settings));
     assert_eq!(management.theme_attribute(), Some("dark"));
 
     assert!(

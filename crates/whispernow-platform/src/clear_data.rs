@@ -144,8 +144,7 @@ mod tests {
     impl Fixture {
         fn separate_roots() -> Self {
             let temp = tempfile::tempdir().expect("temporary directory");
-            let paths =
-                AppPaths::from_base_dirs(temp.path().join("config"), temp.path().join("data"));
+            let paths = AppPaths::under(temp.path());
             Self { temp, paths }
         }
 

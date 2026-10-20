@@ -1,14 +1,16 @@
 use std::{
     fs,
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, mpsc},
     thread,
     time::Duration,
 };
 
-use crate::common::{FixtureServer, Response, Resume, sha256};
+use crate::common::{
+    self, FixtureServer, Response, Resume, recorder, sha256, tar_file, tar_link, temp_paths,
+};
 use bzip2::{Compression, write::BzEncoder};
-use tar::{Builder as TarBuilder, EntryType, Header};
-use tempfile::{TempDir, tempdir};
+use tar::{Builder as TarBuilder, EntryType};
+use tempfile::TempDir;
 use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::{
     DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout, ModelRegistry,
@@ -50,45 +52,22 @@ fn archive_with_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
 }
 
 fn archive_under(root: &str, entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let encoder = BzEncoder::new(Vec::new(), Compression::best());
-    let mut archive = TarBuilder::new(encoder);
+    let mut archive = TarBuilder::new(BzEncoder::new(Vec::new(), Compression::best()));
     for (relative_path, contents) in entries {
-        let path = format!("{root}/{relative_path}");
-        let mut header = Header::new_gnu();
-        header.set_size(contents.len() as u64);
-        header.set_mode(0o600);
-        header.set_entry_type(EntryType::file());
-        header.set_cksum();
-        archive
-            .append_data(&mut header, path, *contents)
-            .expect("append fixture artifact");
+        tar_file(&mut archive, &format!("{root}/{relative_path}"), contents);
     }
     let encoder = archive.into_inner().expect("finish tar archive");
     encoder.finish().expect("finish bzip2 archive")
 }
 
-fn archive_with_symlink() -> Vec<u8> {
-    archive_with_link(EntryType::symlink())
-}
-
-fn archive_with_hardlink() -> Vec<u8> {
-    archive_with_link(EntryType::hard_link())
-}
-
 fn archive_with_link(entry_type: EntryType) -> Vec<u8> {
-    let encoder = BzEncoder::new(Vec::new(), Compression::best());
-    let mut archive = TarBuilder::new(encoder);
-    let mut header = Header::new_gnu();
-    header.set_size(0);
-    header.set_mode(0o777);
-    header.set_entry_type(entry_type);
-    header
-        .set_link_name("../../outside")
-        .expect("fixture link target");
-    header.set_cksum();
-    archive
-        .append_data(&mut header, format!("{MODEL_ID}/escape"), &[][..])
-        .expect("append fixture link");
+    let mut archive = TarBuilder::new(BzEncoder::new(Vec::new(), Compression::best()));
+    tar_link(
+        &mut archive,
+        &format!("{MODEL_ID}/escape"),
+        entry_type,
+        "../../outside",
+    );
     let encoder = archive.into_inner().expect("finish tar archive");
     encoder.finish().expect("finish bzip2 archive")
 }
@@ -112,16 +91,18 @@ fn definition(url: String, archive: &[u8]) -> ModelDefinition {
     }
 }
 
-fn make_store(server: &FixtureServer, archive: &[u8]) -> (tempfile::TempDir, ModelStore, ModelId) {
+type TempStore = (TempDir, AppPaths, ModelStore, ModelId);
+
+fn make_store(server: &FixtureServer, archive: &[u8]) -> TempStore {
     make_store_for_url(&server.url(MODEL_PATH), archive)
 }
 
-fn make_store_for_url(url: &str, archive: &[u8]) -> (tempfile::TempDir, ModelStore, ModelId) {
+fn make_store_for_url(url: &str, archive: &[u8]) -> TempStore {
     make_store_for_definition(definition(url.to_owned(), archive))
 }
 
 /// A store for one model downloaded as a single GGUF file, like the cleanup model.
-fn make_single_file_store(url: &str, file: &[u8]) -> (tempfile::TempDir, ModelStore, ModelId) {
+fn make_single_file_store(url: &str, file: &[u8]) -> TempStore {
     let mut definition = definition(url.to_owned(), file);
     definition.layout = ModelLayout::Gguf {
         model: "model-Q8_0.gguf".to_owned(),
@@ -129,29 +110,21 @@ fn make_single_file_store(url: &str, file: &[u8]) -> (tempfile::TempDir, ModelSt
     make_store_for_definition(definition)
 }
 
-fn make_store_for_definition(
-    definition: ModelDefinition,
-) -> (tempfile::TempDir, ModelStore, ModelId) {
-    let root = tempdir().expect("temporary root");
-    let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+fn make_store_for_definition(definition: ModelDefinition) -> TempStore {
+    let (root, paths) = temp_paths();
     let id = definition.id.clone();
     let registry = ModelRegistry::new(vec![definition]);
     let store = ModelStore::with_registry_and_timeouts(
         registry,
-        paths,
-        DownloadTimeouts {
-            connect: Duration::from_secs(2),
-            receive_body: Duration::from_secs(2),
-            total: Duration::from_secs(5),
-        },
+        paths.clone(),
+        common::timeouts(Duration::from_secs(5)),
     );
-    (root, store, id)
+    (root, paths, store, id)
 }
 
 #[test]
 fn startup_removes_download_staging_and_preserves_installed_models_and_other_files() {
-    let root = tempdir().expect("temporary root");
-    let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+    let (root, paths) = temp_paths();
     let models = paths.models_dir();
     let installed = models.join(MODEL_ID);
     fs::create_dir_all(&installed).expect("installed model root");
@@ -232,20 +205,17 @@ fn local_streaming_download_reports_monotonic_progress_and_installs_atomically()
         archive.len() / 2,
         Resume::After(Duration::from_millis(30)),
     ));
-    let (_root, store, id) = make_store(&server, &archive);
-    let progress = Arc::new(Mutex::new(Vec::new()));
-    let observed = Arc::clone(&progress);
+    let (_root, _, store, id) = make_store(&server, &archive);
+    let (progress, observer) = recorder();
 
     let resolved = store
-        .download(&id, &CancellationToken::default(), &move |event| {
-            observed.lock().expect("progress lock").push(event);
-        })
+        .download(&id, &CancellationToken::default(), &observer)
         .expect("fixture download");
 
     for artifact in ARTIFACTS {
         assert!(resolved.root.join(artifact).is_file());
     }
-    let progress = progress.lock().expect("progress lock");
+    let progress = progress.lock().expect("progress");
     assert_eq!(
         progress.last().map(|event| event.phase),
         Some(DownloadPhase::Complete)
@@ -265,7 +235,7 @@ fn local_streaming_download_reports_monotonic_progress_and_installs_atomically()
 fn a_single_file_model_is_downloaded_verified_installed_and_removed_as_is() {
     let gguf = b"GGUF fixture weights".repeat(64);
     let server = serve(Response::ok(gguf.clone()));
-    let (_root, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
+    let (_root, _, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
 
     let resolved = store
         .download(&id, &CancellationToken::default(), &|_| {})
@@ -287,7 +257,7 @@ fn a_single_file_model_is_downloaded_verified_installed_and_removed_as_is() {
 fn an_installed_gguf_model_has_a_cleanup_model_path_and_nothing_else_does() {
     let gguf = b"GGUF fixture weights".repeat(64);
     let server = serve(Response::ok(gguf.clone()));
-    let (_root, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
+    let (_root, _, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
     assert_eq!(store.cleanup_model_path(&id), None);
 
     let resolved = store
@@ -306,7 +276,7 @@ fn an_installed_gguf_model_has_a_cleanup_model_path_and_nothing_else_does() {
 fn an_installed_speech_model_has_no_cleanup_model_path() {
     let archive = valid_archive();
     let server = serve(Response::ok(archive.clone()));
-    let (_root, store, id) = make_store(&server, &archive);
+    let (_root, _, store, id) = make_store(&server, &archive);
     store
         .download(&id, &CancellationToken::default(), &|_| {})
         .expect("fixture download");
@@ -330,7 +300,7 @@ fn archive_directory_prefixes_and_case_do_not_change_the_installed_model_id() {
             ],
         );
         let server = FixtureServer::start([(path, Response::ok(archive.clone()))]);
-        let (_root, store, id) = make_store_for_url(&server.url(path), &archive);
+        let (_root, _, store, id) = make_store_for_url(&server.url(path), &archive);
         let resolved = store
             .download(&id, &CancellationToken::default(), &|_| {})
             .expect("fixture download");
@@ -350,7 +320,7 @@ fn a_single_file_model_with_the_wrong_digest_is_not_installed() {
     let mut tampered = gguf.clone();
     tampered[0] ^= 1;
     let server = serve(Response::ok(tampered));
-    let (_root, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
+    let (_root, _, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
 
     assert!(
         store
@@ -370,7 +340,7 @@ fn download_succeeds_without_content_length_by_enforcing_registry_size() {
         declared_length: None,
         ..Response::ok(archive.clone())
     });
-    let (_root, store, id) = make_store(&server, &archive);
+    let (_root, _, store, id) = make_store(&server, &archive);
 
     let resolved = store
         .download(&id, &CancellationToken::default(), &|_| {})
@@ -389,7 +359,7 @@ fn cancellation_cleans_staging_and_does_not_install() {
         1,
         Resume::After(Duration::from_millis(30)),
     ));
-    let (root, store, id) = make_store(&server, &archive);
+    let (_root, paths, store, id) = make_store(&server, &archive);
     let cancellation = CancellationToken::default();
     let cancel_from_observer = cancellation.clone();
 
@@ -403,8 +373,7 @@ fn cancellation_cleans_staging_and_does_not_install() {
 
     assert_eq!(error, ModelStoreError::Cancelled);
     assert!(store.resolve(&id).expect("resolve").is_none());
-    let models_dir = root.path().join("data/WhisperNow/models");
-    let leftovers = fs::read_dir(models_dir)
+    let leftovers = fs::read_dir(paths.models_dir())
         .expect("models directory")
         .collect::<Result<Vec<_>, _>>()
         .expect("models entries");
@@ -452,7 +421,7 @@ fn failed_downloads_report_why() {
         ),
     ] {
         let server = serve(response);
-        let (_root, store, id) = make_store(&server, &archive);
+        let (_root, _, store, id) = make_store(&server, &archive);
         let error = store
             .download(
                 &id,
@@ -488,14 +457,11 @@ impl BlockedDownload {
             archive.len() / 2,
             Resume::OnRelease,
         ));
-        let root = tempdir().expect("temporary root");
-        let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+        let (root, paths) = temp_paths();
         let downloading = definition(server.url(MODEL_PATH), &archive);
         let mut other = downloading.clone();
         other.id = ModelId::new(OTHER_MODEL_ID).expect("other fixture ID");
-        let other_root = root
-            .path()
-            .join(format!("data/WhisperNow/models/{OTHER_MODEL_ID}"));
+        let other_root = paths.models_dir().join(OTHER_MODEL_ID);
         fs::create_dir_all(&other_root).expect("other model root");
         for artifact in ARTIFACTS {
             fs::write(other_root.join(artifact), artifact).expect("other artifact");
@@ -621,11 +587,11 @@ fn invalid_archives_missing_artifacts_and_links_are_rejected() {
                 artifacts: vec![ARTIFACTS[1].to_owned(), ARTIFACTS[2].to_owned()],
             },
         ),
-        (archive_with_symlink(), missing_all.clone()),
-        (archive_with_hardlink(), missing_all),
+        (archive_with_link(EntryType::symlink()), missing_all.clone()),
+        (archive_with_link(EntryType::hard_link()), missing_all),
     ] {
         let server = serve(Response::ok(archive.clone()));
-        let (_root, store, id) = make_store(&server, &archive);
+        let (_root, _, store, id) = make_store(&server, &archive);
         let error = store
             .download(&id, &CancellationToken::default(), &|_| {})
             .expect_err("invalid archive");
@@ -638,10 +604,8 @@ fn interrupted_upgrade_preserves_existing_valid_model() {
     let valid = valid_archive();
     let bad = b"checksum does not match".to_vec();
     let server = serve(Response::ok(bad.clone()));
-    let (root, store, id) = make_store(&server, &valid);
-    let installed = root
-        .path()
-        .join(format!("data/WhisperNow/models/{MODEL_ID}"));
+    let (_root, paths, store, id) = make_store(&server, &valid);
+    let installed = paths.models_dir().join(MODEL_ID);
     fs::create_dir_all(&installed).expect("existing model root");
     for artifact in ARTIFACTS {
         fs::write(installed.join(artifact), format!("old-{artifact}")).expect("existing artifact");
@@ -673,10 +637,8 @@ fn successful_download_replaces_an_existing_installation() {
         (ARTIFACTS[2], b"new-tokens"),
     ]);
     let server = serve(Response::ok(archive.clone()));
-    let (root, store, id) = make_store(&server, &archive);
-    let installed = root
-        .path()
-        .join(format!("data/WhisperNow/models/{MODEL_ID}"));
+    let (_root, paths, store, id) = make_store(&server, &archive);
+    let installed = paths.models_dir().join(MODEL_ID);
     fs::create_dir_all(&installed).expect("existing model root");
     for artifact in ARTIFACTS {
         fs::write(installed.join(artifact), format!("old-{artifact}")).expect("existing artifact");
@@ -698,8 +660,7 @@ fn resolver_rejects_intermediate_directory_symlinks_in_nested_artifacts() {
     use std::os::unix::fs::symlink;
 
     let archive = valid_archive();
-    let root = tempdir().expect("temporary root");
-    let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+    let (root, paths) = temp_paths();
     let mut definition = definition("http://127.0.0.1:1/model.tar.bz2".to_owned(), &archive);
     definition.layout = ModelLayout::Whisper {
         encoder: "files/encoder.int8.onnx".to_owned(),
@@ -708,16 +669,17 @@ fn resolver_rejects_intermediate_directory_symlinks_in_nested_artifacts() {
     };
     let id = definition.id.clone();
     let registry = ModelRegistry::new(vec![definition]);
-    let store =
-        ModelStore::with_registry_and_timeouts(registry, paths, DownloadTimeouts::default());
+    let store = ModelStore::with_registry_and_timeouts(
+        registry,
+        paths.clone(),
+        DownloadTimeouts::default(),
+    );
     let outside = root.path().join("outside");
     fs::create_dir_all(&outside).expect("outside root");
     for artifact in ARTIFACTS {
         fs::write(outside.join(artifact), artifact).expect("outside artifact");
     }
-    let installed = root
-        .path()
-        .join(format!("data/WhisperNow/models/{MODEL_ID}"));
+    let installed = paths.models_dir().join(MODEL_ID);
     fs::create_dir_all(&installed).expect("model root");
     symlink(&outside, installed.join("files")).expect("intermediate symlink");
 
@@ -727,8 +689,7 @@ fn resolver_rejects_intermediate_directory_symlinks_in_nested_artifacts() {
 #[test]
 fn remove_only_affects_the_downloaded_model_inside_the_data_directory() {
     let archive = valid_archive();
-    let root = tempdir().expect("temporary root");
-    let paths = AppPaths::from_base_dirs(root.path().join("config"), root.path().join("data"));
+    let (root, paths) = temp_paths();
     let outside_model = root.path().join("outside").join(MODEL_ID);
     fs::create_dir_all(&outside_model).expect("outside model root");
     for artifact in ARTIFACTS {

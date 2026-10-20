@@ -1,8 +1,11 @@
 use std::process::{Child, Command};
 
+use whispernow_core::audio::AudioInputError;
+use whispernow_platform::SettingsStore;
+
 use super::lifecycle::{native_services, native_services_before_preload};
 use super::*;
-use crate::services::NativeServices;
+use crate::services::{NativeServices, test_support::shut_down};
 use whispernow_domain::{
     ClearDataCategory, HistoryLimit, HistoryRetention, NewHistoryEntry, UtcMillis,
 };
@@ -82,8 +85,7 @@ fn clearing_settings_resets_memory_before_the_next_edit_even_when_the_file_is_mi
             persisted.load().expect("reload saved settings").settings,
             expected
         );
-        services.request_shutdown();
-        services.shutdown();
+        shut_down(&services);
     }
 }
 
@@ -112,8 +114,7 @@ fn empty_clear_requests_preserve_history_and_audio() {
     assert_eq!(fs::read(&cuda).expect("CUDA file preserved"), b"CUDA data");
     assert_eq!(services.state.snapshot().phase, Phase::Idle);
     assert_retained(&services, &entry, &audio);
-    services.request_shutdown();
-    services.shutdown();
+    shut_down(&services);
 }
 
 #[test]
@@ -146,8 +147,7 @@ fn clearing_only_cuda_model_data_reports_removal_and_restart_and_preserves_histo
     );
     assert_eq!(services.state.snapshot().phase, Phase::Idle);
     assert_retained(&services, &entry, &audio);
-    services.request_shutdown();
-    services.shutdown();
+    shut_down(&services);
 }
 
 fn select_another_speech_model(services: &NativeServices) -> ModelId {
@@ -156,15 +156,7 @@ fn select_another_speech_model(services: &NativeServices) -> ModelId {
         .speech_models()
         .find(|model| model.id != ModelId::default())
         .expect("another speech model");
-    for artifact in model.layout.required_artifacts() {
-        let path = services
-            .paths
-            .models_dir()
-            .join(model.id.as_str())
-            .join(artifact);
-        fs::create_dir_all(path.parent().expect("artifact parent")).expect("model directory");
-        fs::write(path, b"fixture").expect("model artifact");
-    }
+    install_artifacts(&services.paths, model);
     services
         .select_model(model.id.clone())
         .expect("select model");
@@ -183,8 +175,7 @@ fn clearing_only_models_keeps_the_selected_model_in_state_and_settings() {
     assert!(result.restart_required);
     assert_eq!(services.settings.load().model_id, selected);
     assert_eq!(services.state.snapshot().selected_model_id, selected);
-    services.request_shutdown();
-    services.shutdown();
+    shut_down(&services);
 }
 
 #[test]
@@ -201,8 +192,7 @@ fn clearing_settings_resets_the_selected_model_in_state_and_settings() {
         services.state.snapshot().selected_model_id,
         ModelId::default()
     );
-    services.request_shutdown();
-    services.shutdown();
+    shut_down(&services);
 }
 
 #[test]
@@ -262,8 +252,7 @@ fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
         .expect("dictation after clear");
     assert!(later > entry.id);
     assert!(services.history.audio(later).is_ok());
-    services.request_shutdown();
-    services.shutdown();
+    shut_down(&services);
 }
 
 #[test]
@@ -322,8 +311,7 @@ fn clearing_every_category_reports_files_and_unavailable_credentials_separately(
             !available
         );
         assert!(services.history.audio(entry.id).is_err());
-        services.request_shutdown();
-        services.shutdown();
+        shut_down(&services);
     }
 }
 
@@ -351,8 +339,7 @@ fn a_recordings_deletion_failure_keeps_history_recoverable() {
     assert!(!result.restart_required);
     assert_eq!(services.state.snapshot().phase, Phase::Idle);
     assert_retained(&services, &entry, &audio);
-    services.request_shutdown();
-    services.shutdown();
+    shut_down(&services);
 }
 
 #[test]
@@ -386,8 +373,7 @@ fn inspection_failure_preserves_history_and_restores_the_previous_phase() {
         Some("paste_failed".to_owned())
     );
     assert_retained(&services, &entry, &audio);
-    services.request_shutdown();
-    services.shutdown();
+    shut_down(&services);
 }
 
 #[test]
@@ -407,8 +393,7 @@ fn a_clear_that_resets_the_last_error_ends_the_failed_phase() {
     let snapshot = services.state.snapshot();
     assert_eq!(snapshot.phase, Phase::Idle);
     assert_eq!(snapshot.error, None);
-    services.request_shutdown();
-    services.shutdown();
+    shut_down(&services);
 }
 
 #[test]
@@ -440,8 +425,7 @@ fn clear_data_refuses_paused_and_active_recordings_without_removing_history() {
         );
         assert_eq!(services.state.snapshot().phase, phase);
         assert_retained(&services, &entry, &audio);
-        services.request_shutdown();
-        services.shutdown();
+        shut_down(&services);
     }
 }
 
@@ -459,8 +443,7 @@ fn a_failed_worker_wait_restores_idle_and_keeps_history() {
     assert_eq!(error.code, "application_shutting_down");
     assert_eq!(services.state.snapshot().phase, Phase::Idle);
     assert_retained(&services, &entry, &audio);
-    services.request_shutdown();
-    services.shutdown();
+    shut_down(&services);
 }
 
 #[test]
@@ -503,41 +486,24 @@ fn data_clear_reserves_admission_and_restores_it_after_the_guard_is_released() {
 
 #[test]
 fn a_pause_during_failed_capture_start_remains_paused() {
-    struct FailingCaptureStart {
-        entered: mpsc::Sender<()>,
-        released: Mutex<mpsc::Receiver<()>>,
-    }
-
-    impl AudioInput for FailingCaptureStart {
-        fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
-            Ok(Vec::new())
-        }
-
-        fn start(
-            &self,
-            _: AudioDeviceChoice,
-            _: Arc<dyn AudioSink>,
-        ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
-            self.entered.send(()).expect("capture-start observer");
-            self.released
-                .lock()
-                .expect("capture release")
-                .recv_timeout(WAIT)
-                .expect("capture released");
-            Err(AudioInputError::Backend {
-                operation: "start capture",
-            })
-        }
-    }
-
     let (entered, starting) = mpsc::channel();
     let (release, released) = mpsc::channel();
+    let released = Mutex::new(released);
     let fixture = Fixture::with_script(
         OutputNotice::Pasted,
-        Arc::new(FailingCaptureStart {
-            entered,
-            released: Mutex::new(released),
-        }),
+        Arc::new(
+            FakeAudioInput::refusing(AudioInputError::Backend {
+                operation: "start capture",
+            })
+            .before_start(move || {
+                entered.send(()).expect("capture-start observer");
+                released
+                    .lock()
+                    .expect("capture release")
+                    .recv_timeout(WAIT)
+                    .expect("capture released");
+            }),
+        ),
         Arc::new(Script::default()),
     );
     let mut release = ReleaseOnDrop(Some(release));
@@ -635,7 +601,7 @@ fn run_startup_overlap() {
     *script.hold_load.lock().expect("load hold") = Some((entered, released));
     let fixture = Fixture::with_script(
         OutputNotice::Pasted,
-        Arc::new(FakeAudio { audio: Vec::new() }),
+        Arc::new(FakeAudioInput::recording(Vec::new())),
         script,
     );
     let mut release = ReleaseOnDrop(Some(release));
@@ -681,6 +647,5 @@ fn run_startup_overlap() {
     worker.join().expect("clear thread");
     assert_eq!(services.state.snapshot().phase, Phase::Idle);
     assert!(!services.paths.settings_file().exists());
-    services.request_shutdown();
-    services.shutdown();
+    shut_down(&services);
 }
