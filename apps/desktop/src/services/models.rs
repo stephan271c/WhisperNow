@@ -9,9 +9,7 @@ use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::ipc::{ActiveDownload, ModelSummary};
 use whispernow_domain::{DownloadPhase, ModelAvailability};
 use whispernow_domain::{ModelFamily, ModelId};
-use whispernow_platform::{
-    CudaPackState, DownloadProgress, LocalCleanupService, ModelStore, ModelStoreError,
-};
+use whispernow_platform::{DownloadProgress, LocalCleanupService, ModelStore, ModelStoreError};
 
 use super::{
     NativeServices, lock,
@@ -72,28 +70,8 @@ impl ModelCoordinator {
                 size_bytes: entry.definition.source.archive_size_bytes,
                 benchmark: entry.definition.benchmark,
             })
-            .chain(self.cuda_pack())
             .collect();
         Ok(models)
-    }
-
-    /// The CUDA pack, listed with the models it serves, where the platform has one.
-    fn cuda_pack(&self) -> Option<ModelSummary> {
-        let availability = match self.store.cuda_pack_state() {
-            CudaPackState::Unsupported => return None,
-            CudaPackState::NotInstalled => ModelAvailability::NotInstalled,
-            CudaPackState::Installed => ModelAvailability::Downloaded,
-        };
-        Some(ModelSummary {
-            id: ModelId::cuda_pack(),
-            display_name: "NVIDIA CUDA for cleanup models".to_owned(),
-            family: ModelFamily::CudaPack,
-            recommended: false,
-            availability,
-            languages: Vec::new(),
-            size_bytes: self.store.cuda_pack_size(),
-            benchmark: None,
-        })
     }
 
     pub(crate) fn download(&self, model_id: &ModelId) -> Result<(), AppError> {
@@ -128,13 +106,10 @@ impl ModelCoordinator {
         })?;
         let store = Arc::clone(&self.store);
         let state = Arc::clone(&self.state);
-        let local_cleanup = Arc::clone(&self.local_cleanup);
         let worker_model_id = model_id.clone();
         let worker = thread::Builder::new()
             .name(format!("model-download-{model_id}"))
-            .spawn(move || {
-                run_model_download(store, &state, &local_cleanup, worker_model_id, token);
-            });
+            .spawn(move || run_model_download(store, &state, worker_model_id, token));
         let Ok(worker) = worker else {
             self.state.apply(|state| {
                 state.active_downloads.remove(model_id);
@@ -214,9 +189,6 @@ impl ModelCoordinator {
     pub(crate) fn delete(&self, model_id: &ModelId) -> Result<(), AppError> {
         let _transition = self.transition();
         self.state.lock().phase.require_idle()?;
-        if model_id.is_cuda_pack() {
-            return self.delete_cuda_pack();
-        }
         let family = self.require_deletable(model_id)?;
         // A cleanup model is freed, and kept from loading, until its file is gone.
         let _unloaded = if family == ModelFamily::Cleanup {
@@ -229,20 +201,6 @@ impl ModelCoordinator {
                 ErrorCategory::Model,
                 "model_delete",
                 "The model could not be deleted",
-            )
-        })?;
-        Ok(())
-    }
-
-    /// Removes the CUDA pack. Once loaded it stays in use until the app restarts, so it is
-    /// then only marked, and deleted at the next start.
-    fn delete_cuda_pack(&self) -> Result<(), AppError> {
-        self.state.lock().require_no_downloads()?;
-        self.store.remove_cuda_pack().map_err(|_| {
-            AppError::new(
-                ErrorCategory::Model,
-                "model_delete",
-                "The CUDA download could not be deleted",
             )
         })?;
         Ok(())
@@ -321,7 +279,6 @@ fn model_list_error(error: &ModelStoreError) -> AppError {
 fn run_model_download(
     store: Arc<ModelStore>,
     state: &StateCell,
-    local_cleanup: &LocalCleanupService,
     model_id: ModelId,
     cancellation: CancellationToken,
 ) {
@@ -342,20 +299,8 @@ fn run_model_download(
             download.progress.bytes_per_second = bytes_per_second;
         });
     };
-    let result = if model_id.is_cuda_pack() {
-        let installed = store.download_cuda_pack(&cancellation, &observer);
-        if installed.is_ok() {
-            // The loaded cleanup model, if any, moves to CUDA now.
-            local_cleanup.reload();
-        }
-        installed
-    } else {
-        store
-            .download(&model_id, &cancellation, &observer)
-            .map(drop)
-    };
-    let completion_error = match result {
-        Ok(()) => None,
+    let completion_error = match store.download(&model_id, &cancellation, &observer) {
+        Ok(_) => None,
         Err(ModelStoreError::Cancelled) => {
             tracing::info!(model_id = %model_id, "model download cancelled");
             None
@@ -459,6 +404,7 @@ mod tests {
             let local_cleanup = Arc::new(LocalCleanupService::new(
                 root.path().join("llama"),
                 Arc::clone(&store),
+                |_| {},
             ));
             Self {
                 models: Arc::new(ModelCoordinator::new(

@@ -22,7 +22,6 @@ pub(super) type Context = Opaque;
 pub(super) type Vocab = Opaque;
 pub(super) type Memory = Opaque;
 pub(super) type Device = *mut Opaque;
-pub(super) type Registry = *mut Opaque;
 
 pub(super) type LogCallback =
     unsafe extern "C" fn(level: c_int, text: *const c_char, data: *mut c_void);
@@ -170,14 +169,12 @@ macro_rules! api {
 api! {
     ggml_base {
         ggml_log_set: fn(Option<LogCallback>, *mut c_void);
-        ggml_backend_dev_name: fn(Device) -> *const c_char;
         ggml_backend_dev_description: fn(Device) -> *const c_char;
         ggml_backend_dev_memory: fn(Device, *mut usize, *mut usize);
         ggml_backend_dev_type: fn(Device) -> c_int;
     }
     ggml {
         ggml_backend_load_all_from_path: fn(*const c_char);
-        ggml_backend_load: fn(*const c_char) -> Registry;
         ggml_backend_reg_count: fn() -> usize;
         ggml_backend_dev_count: fn() -> usize;
         ggml_backend_dev_get: fn(usize) -> Device;

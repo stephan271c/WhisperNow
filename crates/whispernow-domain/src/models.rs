@@ -23,9 +23,6 @@ pub const CLEANUP_MODEL_IDS: [&str; CLEANUP_MODELS.len()] = {
     }
     ids
 };
-/// The CUDA pack's id among downloads: llama.cpp's CUDA backend and NVIDIA's CUDA runtime,
-/// which run the cleanup models on NVIDIA GPUs. Not a model, and not in the registry.
-const CUDA_PACK_ID: &str = "llama-cuda-13.4";
 const CLEANUP_MODEL_FILE: &str = "model-Q8_0.gguf";
 /// Where the local cleanup models are published: pinned release assets. The URLs are
 /// placeholders until the models are uploaded.
@@ -84,16 +81,6 @@ impl ModelId {
     }
 
     #[must_use]
-    pub fn cuda_pack() -> Self {
-        Self(CUDA_PACK_ID.to_owned())
-    }
-
-    #[must_use]
-    pub fn is_cuda_pack(&self) -> bool {
-        self.0 == CUDA_PACK_ID
-    }
-
-    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -129,8 +116,6 @@ pub enum ModelFamily {
     Qwen3Asr,
     /// The local cleanup model: one GGUF that llama.cpp runs. It does not transcribe.
     Cleanup,
-    /// Not a model: llama.cpp's CUDA backend, downloaded and listed with the models it runs.
-    CudaPack,
 }
 
 impl ModelFamily {

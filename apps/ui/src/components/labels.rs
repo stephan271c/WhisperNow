@@ -1,10 +1,17 @@
-use whispernow_domain::ipc::ModelState;
+use whispernow_domain::ipc::{CleanupDevice, ModelState};
 use whispernow_domain::{ClearDataCategory, DownloadPhase, RecordingMode, SetupStep};
 
 pub(crate) const fn recording_mode(mode: RecordingMode) -> &'static str {
     match mode {
         RecordingMode::Hold => "Hold to record",
         RecordingMode::Toggle => "Press to start and stop",
+    }
+}
+
+pub(crate) fn cleanup_device(device: &CleanupDevice) -> String {
+    match device {
+        CleanupDevice::Cpu => "Cleanup runs on the CPU.".to_owned(),
+        CleanupDevice::Gpu { name } => format!("Cleanup runs on the GPU ({name})."),
     }
 }
 

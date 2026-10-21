@@ -15,16 +15,13 @@ use thiserror::Error;
 use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::{
     DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout, ModelRegistry,
+    ModelSource,
 };
 
 use crate::{
     AppPaths,
     atomic_file::{remove_path, sync_directory},
 };
-
-mod cuda_pack;
-
-pub use self::cuda_pack::{CudaPackArchive, CudaPackFormat, CudaPackRemovalOutcome, CudaPackState};
 
 const DOWNLOAD_BUFFER_BYTES: usize = 64 * 1024;
 const MODEL_DOWNLOAD_PREFIX: &str = ".model-download-";
@@ -78,8 +75,6 @@ pub enum ModelStoreError {
     ChecksumMismatch,
     #[error("model archive is not a valid supported archive")]
     InvalidArchive,
-    #[error("this platform has no CUDA pack")]
-    Unsupported,
     #[error("model archive is missing required artifacts: {artifacts:?}")]
     MissingArtifacts { artifacts: Vec<String> },
     #[error("model filesystem operation failed during {operation}")]
@@ -110,9 +105,8 @@ pub struct ModelStore {
     paths: AppPaths,
     runtime: tokio::runtime::Runtime,
     client: reqwest::Client,
-    // Model reads must not see replacement gaps; CUDA pack mutations also share this lock.
+    // Model reads must not see replacement gaps.
     mutation: Mutex<()>,
-    cuda_pack: &'static [CudaPackArchive],
 }
 
 impl ModelStore {
@@ -132,13 +126,21 @@ impl ModelStore {
         paths: AppPaths,
         timeouts: DownloadTimeouts,
     ) -> Self {
-        remove_stale(&paths.models_dir(), |name, _| {
-            name.starts_with(MODEL_STAGE_PREFIX)
-                || (name.starts_with(MODEL_DOWNLOAD_PREFIX)
-                    && Path::new(name)
+        if let Ok(entries) = fs::read_dir(paths.models_dir()) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let partial_download = name.starts_with(MODEL_DOWNLOAD_PREFIX)
+                    && Path::new(&*name)
                         .extension()
-                        .is_some_and(|extension| extension == "part"))
-        });
+                        .is_some_and(|extension| extension == "part");
+                if (name.starts_with(MODEL_STAGE_PREFIX) || partial_download)
+                    && let Err(error) = remove_path(&entry.path())
+                {
+                    tracing::warn!(%error, "stale download files could not be removed");
+                }
+            }
+        }
         let client = reqwest::Client::builder()
             .connect_timeout(timeouts.connect)
             .read_timeout(timeouts.receive_body)
@@ -155,7 +157,6 @@ impl ModelStore {
             runtime,
             client,
             mutation: Mutex::new(()),
-            cuda_pack: cuda_pack::CUDA_PACK,
         }
     }
 
@@ -171,29 +172,6 @@ impl ModelStore {
 
     fn model_root(&self, definition: &ModelDefinition) -> PathBuf {
         self.paths.models_dir().join(definition.id.as_str())
-    }
-
-    fn download_to_temp(
-        &self,
-        directory: &Path,
-        prefix: &str,
-        file: &PinnedFile<'_>,
-        cancellation: &CancellationToken,
-        observer: &dyn Fn(DownloadProgress),
-    ) -> Result<NamedTempFile, ModelStoreError> {
-        let mut download = Builder::new()
-            .prefix(prefix)
-            .suffix(".part")
-            .tempfile_in(directory)
-            .map_err(|_| filesystem("create download staging file"))?;
-        self.runtime.block_on(download_file(
-            &self.client,
-            file,
-            &mut download,
-            cancellation,
-            observer,
-        ))?;
-        Ok(download)
     }
 
     /// Extracts the required files, which the archive holds under a directory named after
@@ -255,49 +233,26 @@ impl ModelStore {
     ) -> Result<PathBuf, ModelStoreError> {
         check_cancelled(cancellation)?;
         let destination = self.model_root(definition);
-        replace_dir(staged_root, &destination, &self.paths.models_dir())?;
+        if fs::symlink_metadata(&destination).is_ok() {
+            remove_path(&destination).map_err(|_| filesystem("replace installed model"))?;
+        }
+        fs::rename(staged_root, &destination).map_err(|_| filesystem("install staged model"))?;
+        sync_directory(&self.paths.models_dir())
+            .map_err(|_| filesystem("sync models directory"))?;
         Ok(destination)
     }
 }
 
-fn replace_dir(staged: &Path, destination: &Path, parent: &Path) -> Result<(), ModelStoreError> {
-    if fs::symlink_metadata(destination).is_ok() {
-        remove_path(destination).map_err(|_| filesystem("replace installed files"))?;
-    }
-    fs::rename(staged, destination).map_err(|_| filesystem("install staged files"))?;
-    sync_directory(parent).map_err(|_| filesystem("sync install directory"))
-}
-
-fn remove_stale(directory: &Path, is_stale: impl Fn(&str, &fs::DirEntry) -> bool) {
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if is_stale(&name.to_string_lossy(), &entry)
-            && let Err(error) = remove_path(&entry.path())
-        {
-            tracing::warn!(%error, "stale download files could not be removed");
-        }
-    }
-}
-
-struct PinnedFile<'a> {
-    url: &'a str,
-    size_bytes: u64,
-    sha256: &'a str,
-}
-
 async fn download_file(
     client: &reqwest::Client,
-    file: &PinnedFile<'_>,
+    source: &ModelSource,
     destination: &mut NamedTempFile,
     cancellation: &CancellationToken,
     observer: &dyn Fn(DownloadProgress),
 ) -> Result<(), ModelStoreError> {
     check_cancelled(cancellation)?;
     let mut response = client
-        .get(file.url)
+        .get(&source.url)
         .send()
         .await
         .map_err(|error| map_reqwest_error(&error))?;
@@ -307,7 +262,7 @@ async fn download_file(
             status: status.as_u16(),
         });
     }
-    let expected = file.size_bytes;
+    let expected = source.archive_size_bytes;
     let reported = response.content_length();
     if let Some(actual) = reported
         && actual != expected
@@ -363,7 +318,7 @@ async fn download_file(
         .and_then(|()| destination.as_file().sync_all())
         .map_err(|_| filesystem("sync download staging file"))?;
     let actual_sha256 = hex_lower(&hasher.finalize());
-    if actual_sha256 != file.sha256 {
+    if actual_sha256 != source.sha256 {
         return Err(ModelStoreError::ChecksumMismatch);
     }
     Ok(())
@@ -441,17 +396,18 @@ impl ModelStore {
         };
         let models_dir = self.paths.models_dir();
         fs::create_dir_all(&models_dir).map_err(|_| filesystem("create models directory"))?;
-        let download = self.download_to_temp(
-            &models_dir,
-            MODEL_DOWNLOAD_PREFIX,
-            &PinnedFile {
-                url: &definition.source.url,
-                size_bytes: definition.source.archive_size_bytes,
-                sha256: &definition.source.sha256,
-            },
+        let mut download = Builder::new()
+            .prefix(MODEL_DOWNLOAD_PREFIX)
+            .suffix(".part")
+            .tempfile_in(&models_dir)
+            .map_err(|_| filesystem("create download staging file"))?;
+        self.runtime.block_on(download_file(
+            &self.client,
+            &definition.source,
+            &mut download,
             cancellation,
             observer,
-        )?;
+        ))?;
         report_phase(DownloadPhase::ValidatingArchive);
         check_cancelled(cancellation)?;
         let staging = Builder::new()

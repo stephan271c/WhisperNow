@@ -96,9 +96,6 @@ fn empty_clear_requests_preserve_history_and_audio() {
     fs::create_dir_all(services.paths.python_logs_dir()).expect("logs directory");
     let log = services.paths.python_logs_dir().join("app.log");
     fs::write(&log, b"log").expect("log");
-    let cuda = services.paths.cuda_pack_dir().join("native-library");
-    fs::create_dir_all(cuda.parent().expect("CUDA directory")).expect("CUDA directory");
-    fs::write(&cuda, b"CUDA data").expect("CUDA file");
     let settings = fs::read(services.paths.settings_file()).expect("saved settings");
 
     let result = services.clear_data(&[]).expect("clear selected data");
@@ -111,40 +108,6 @@ fn empty_clear_requests_preserve_history_and_audio() {
         settings
     );
     assert!(services.paths.models_dir().exists());
-    assert_eq!(fs::read(&cuda).expect("CUDA file preserved"), b"CUDA data");
-    assert_eq!(services.state.snapshot().phase, Phase::Idle);
-    assert_retained(&services, &entry, &audio);
-    shut_down(&services);
-}
-
-#[test]
-fn clearing_only_cuda_model_data_reports_removal_and_restart_and_preserves_history() {
-    let (services, _root) = native_services(Fixture::new());
-    let (entry, audio) = retained_entry(&services);
-    fs::remove_dir_all(services.paths.models_dir()).expect("no speech model data");
-    let cuda = services.paths.cuda_pack_dir();
-    fs::create_dir_all(&cuda).expect("CUDA directory");
-    fs::write(cuda.join("native-library"), b"CUDA data").expect("CUDA file");
-    let settings = fs::read(services.paths.settings_file()).expect("saved settings");
-    let locations = services.data_locations().expect("data locations");
-    assert!(locations.iter().any(|location| {
-        location.category == ClearDataCategory::Models && location.path == cuda
-    }));
-
-    let result = services
-        .clear_data(&[ClearDataCategory::Models])
-        .expect("clear models");
-
-    assert_eq!(result.items.len(), 1);
-    assert_eq!(result.items[0].category, ClearDataCategory::Models);
-    assert_eq!(result.items[0].path, cuda.to_string_lossy());
-    assert!(result.items[0].deleted);
-    assert!(result.restart_required);
-    assert!(!cuda.exists());
-    assert_eq!(
-        fs::read(services.paths.settings_file()).expect("settings kept"),
-        settings
-    );
     assert_eq!(services.state.snapshot().phase, Phase::Idle);
     assert_retained(&services, &entry, &audio);
     shut_down(&services);
@@ -164,8 +127,9 @@ fn select_another_speech_model(services: &NativeServices) -> ModelId {
 }
 
 #[test]
-fn clearing_only_models_keeps_the_selected_model_in_state_and_settings() {
+fn clearing_only_models_keeps_history_and_the_selected_model_in_state_and_settings() {
     let (services, _root) = native_services(Fixture::new());
+    let (entry, audio) = retained_entry(&services);
     let selected = select_another_speech_model(&services);
 
     let result = services
@@ -173,8 +137,10 @@ fn clearing_only_models_keeps_the_selected_model_in_state_and_settings() {
         .expect("clear models");
 
     assert!(result.restart_required);
+    assert!(!services.paths.models_dir().exists());
     assert_eq!(services.settings.load().model_id, selected);
     assert_eq!(services.state.snapshot().selected_model_id, selected);
+    assert_retained(&services, &entry, &audio);
     shut_down(&services);
 }
 

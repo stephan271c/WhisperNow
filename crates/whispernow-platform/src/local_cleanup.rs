@@ -24,11 +24,10 @@ use whispernow_core::llm::{
 
 use self::engine::{EngineError, LocalCleanupEngine, default_threads};
 use crate::{llama::LlamaError, models::ModelStore};
-use whispernow_domain::ModelId;
+use whispernow_domain::{ModelId, ipc::CleanupDevice};
 
 enum Command {
     Load(ModelId),
-    Reload,
     /// Frees the model, then signals the sender.
     Unload(Option<mpsc::Sender<()>>),
     Decode(Job),
@@ -54,11 +53,15 @@ pub struct LocalCleanupService {
 }
 
 impl LocalCleanupService {
-    /// The engine with llama.cpp's libraries from `library_directory`, and the models and
-    /// CUDA pack installed in `store`. Nothing loads until the first cleanup or
-    /// [`Self::preload`].
+    /// The engine with llama.cpp's libraries from `library_directory` and the models installed
+    /// in `store`. Nothing loads until the first cleanup or [`Self::preload`]. `observer` hears
+    /// each change of the device the loaded model runs on, and `None` when it is freed.
     #[must_use]
-    pub fn new(library_directory: PathBuf, store: Arc<ModelStore>) -> Self {
+    pub fn new(
+        library_directory: PathBuf,
+        store: Arc<ModelStore>,
+        observer: impl Fn(Option<CleanupDevice>) + Send + Sync + 'static,
+    ) -> Self {
         Self {
             shared: Arc::new(Shared {
                 library_directory,
@@ -66,6 +69,7 @@ impl LocalCleanupService {
                 use_gpu: AtomicBool::new(true),
                 shutdown: AtomicBool::new(false),
                 held: AtomicBool::new(false),
+                observer: Box::new(observer),
             }),
             worker: Mutex::new(None),
         }
@@ -75,14 +79,6 @@ impl LocalCleanupService {
     /// wait for it.
     pub fn preload(&self, model_id: ModelId) {
         let _ = self.send(Command::Load(model_id));
-    }
-
-    /// Loads the loaded model again in the background, so a newly installed CUDA pack takes
-    /// it over; nothing happens while no model is loaded.
-    pub fn reload(&self) {
-        if self.lock_worker().is_some() {
-            let _ = self.send(Command::Reload);
-        }
     }
 
     /// Whether models load on a GPU; off keeps them on the CPU. A change frees the loaded
@@ -161,6 +157,7 @@ struct Shared {
     shutdown: AtomicBool,
     /// Prevents a model from loading while its file is being removed.
     held: AtomicBool,
+    observer: Box<dyn Fn(Option<CleanupDevice>) + Send + Sync>,
 }
 
 impl Drop for LocalCleanupService {
@@ -234,15 +231,12 @@ fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine
         .store
         .cleanup_model_path(model_id)
         .ok_or(LlamaError::NotInstalled)?;
-    let use_gpu = shared.use_gpu.load(Ordering::Acquire);
-    let cuda = use_gpu.then(|| shared.store.cuda_pack_dir()).flatten();
     let threads = default_threads();
     let loaded = LocalCleanupEngine::load(
         &shared.library_directory,
-        cuda.as_deref(),
         &path,
         threads,
-        use_gpu,
+        shared.use_gpu.load(Ordering::Acquire),
     )
     .inspect_err(|error| {
         tracing::warn!(target: "whispernow::local_cleanup", %error, model = model_id.as_str(), "the cleanup model did not load");
@@ -251,21 +245,33 @@ fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine
     Ok(loaded)
 }
 
+/// Tells the observer where the loaded model runs, when that changes. Called before each wait
+/// for a command, so every command's effect is reported.
+fn report_device(
+    shared: &Shared,
+    engine: Option<&(ModelId, LocalCleanupEngine)>,
+    reported: &mut Option<CleanupDevice>,
+) {
+    let device = engine.map(|(_, loaded)| loaded.device().clone());
+    if device != *reported {
+        (shared.observer)(device.clone());
+        *reported = device;
+    }
+}
+
 /// The decode thread: loads, frees and decodes in the order commands arrive.
 fn run(commands: &mpsc::Receiver<Command>, shared: &Shared) {
     let shutdown = || shared.shutdown.load(Ordering::Acquire);
     let mut engine: Option<(ModelId, LocalCleanupEngine)> = None;
-    while let Ok(command) = commands.recv() {
+    let mut reported = None;
+    loop {
+        report_device(shared, engine.as_ref(), &mut reported);
+        let Ok(command) = commands.recv() else {
+            break;
+        };
         match command {
             Command::Load(model_id) => {
                 if !shutdown() {
-                    let _ = load(shared, &mut engine, &model_id);
-                }
-            }
-            Command::Reload => {
-                if let Some((model_id, _)) = engine.take()
-                    && !shutdown()
-                {
                     let _ = load(shared, &mut engine, &model_id);
                 }
             }
@@ -349,7 +355,7 @@ mod tests {
         let store =
             ModelStore::with_registry_and_timeouts(registry, paths, DownloadTimeouts::default());
         let service =
-            LocalCleanupService::new(PathBuf::from("/nonexistent/llama"), Arc::new(store));
+            LocalCleanupService::new(PathBuf::from("/nonexistent/llama"), Arc::new(store), |_| {});
         (root, service)
     }
 

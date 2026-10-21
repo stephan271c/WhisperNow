@@ -1,7 +1,6 @@
 use whispernow_domain::ClearDataCategory;
 use whispernow_domain::ipc::{ClearDataItem, ClearDataResult, DataLocation};
 use whispernow_domain::{AppError, ErrorCategory};
-use whispernow_platform::{CudaPackRemovalOutcome, ModelStoreError};
 
 use super::{NativeServices, models::hold_cleanup_unloaded};
 
@@ -32,7 +31,6 @@ impl NativeServices {
         };
         let clears_settings = categories.contains(&ClearDataCategory::Settings);
         let mut settings_lock = clears_settings.then(|| self.settings.lock());
-        let cuda_path = self.paths.cuda_pack_dir();
         let plan = self.paths.clear_plan(categories).map_err(inspect_error)?;
         let history_item = categories.contains(&ClearDataCategory::History).then(|| {
             let item = self.history.clear_data(&plan);
@@ -58,27 +56,12 @@ impl NativeServices {
             **saved = whispernow_domain::Settings::default();
             reset_model_id = Some(saved.model_id.clone());
         }
-        let mut restart_required = entries.iter().any(|entry| {
+        let restart_required = entries.iter().any(|entry| {
             matches!(
                 entry.category,
                 ClearDataCategory::Settings | ClearDataCategory::Models
             ) && entry.deleted
         });
-        let cuda_item = if clears_models {
-            let removal = self.models.model_store().remove_cuda_pack();
-            if removal == Err(ModelStoreError::NotInstalled) {
-                None
-            } else {
-                restart_required |= removal.is_ok();
-                Some(ClearDataItem {
-                    category: ClearDataCategory::Models,
-                    path: cuda_path.to_string_lossy().into_owned(),
-                    deleted: removal == Ok(CudaPackRemovalOutcome::Removed),
-                })
-            }
-        } else {
-            None
-        };
         drop(settings_lock);
         let credential_item = clears_settings.then(|| ClearDataItem {
             category: ClearDataCategory::Settings,
@@ -97,7 +80,6 @@ impl NativeServices {
         let result_items = entries
             .into_iter()
             .chain(history_item)
-            .chain(cuda_item)
             .chain(credential_item)
             .collect();
         self.state.apply(|state| {

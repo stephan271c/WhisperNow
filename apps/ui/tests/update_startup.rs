@@ -136,6 +136,7 @@ fn idle_state() -> AppState {
         error: None,
         active_downloads: Vec::new(),
         setup_test: None,
+        cleanup_device: None,
     }
 }
 

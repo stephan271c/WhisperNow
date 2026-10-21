@@ -20,19 +20,15 @@ fn every_model_has_a_unique_id_and_a_pinned_source_named_after_it() {
             "{id}"
         );
         assert!(source.archive_size_bytes > 0, "{id}");
-        match model.family() {
-            ModelFamily::Cleanup => {
-                assert!(source.url.starts_with("https://"), "{id}");
-                assert!(source.url.ends_with(&format!("/{id}.gguf")), "{id}");
-            }
-            ModelFamily::CudaPack => {}
-            _ => {
-                assert_eq!(
-                    source.url,
-                    format!("{RELEASE_BASE}/{}.tar.bz2", source.archive_root())
-                );
-                assert!(source.archive_root().eq_ignore_ascii_case(id), "{id}");
-            }
+        if model.family() == ModelFamily::Cleanup {
+            assert!(source.url.starts_with("https://"), "{id}");
+            assert!(source.url.ends_with(&format!("/{id}.gguf")), "{id}");
+        } else {
+            assert_eq!(
+                source.url,
+                format!("{RELEASE_BASE}/{}.tar.bz2", source.archive_root())
+            );
+            assert!(source.archive_root().eq_ignore_ascii_case(id), "{id}");
         }
     }
     assert!(registry.speech_models().count() > 1);
@@ -96,7 +92,6 @@ fn each_model_has_the_artifacts_its_family_needs() {
                 }
             }
             ModelFamily::Cleanup => assert_eq!(artifacts, ["model-Q8_0.gguf"], "{id}"),
-            ModelFamily::CudaPack => {}
         }
     }
 }

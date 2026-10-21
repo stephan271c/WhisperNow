@@ -44,8 +44,8 @@ impl ClearPlan {
             .collect()
     }
 
-    /// The history database and recordings belong to the open history repository, and the
-    /// CUDA pack to the model store; they are listed but left for those owners to clear.
+    /// The history database and recordings belong to the open history repository; they are
+    /// listed but left for it to clear.
     #[must_use]
     pub fn remove(&self, categories: &[ClearDataCategory]) -> Vec<ClearDataItem> {
         self.targets
@@ -111,10 +111,6 @@ impl AppPaths {
         }
         if categories.contains(&ClearDataCategory::Models) {
             targets.push(Target::new(ClearDataCategory::Models, self.models_dir()));
-            targets.push(Target::listed(
-                ClearDataCategory::Models,
-                self.cuda_pack_dir(),
-            ));
         }
         Ok(targets)
     }
@@ -162,7 +158,6 @@ mod tests {
             create_file(&self.paths.history_database_file());
             create_dir(&self.paths.recordings_dir());
             create_dir(&self.paths.models_dir());
-            create_dir(&self.paths.cuda_pack_dir());
             create_dir(&self.paths.python_logs_dir());
         }
     }
@@ -214,7 +209,7 @@ mod tests {
             [
                 [ClearDataCategory::Settings; 2].as_slice(),
                 &[ClearDataCategory::History; 5],
-                &[ClearDataCategory::Models; 2],
+                &[ClearDataCategory::Models],
             ]
             .concat()
         );
@@ -223,7 +218,7 @@ mod tests {
         assert_eq!(report.len(), 6);
         assert!(report.iter().all(|entry| entry.deleted));
         let remaining = paths.data_locations().expect("remaining targets");
-        assert_eq!(remaining.len(), 3);
+        assert_eq!(remaining.len(), 2);
         assert!(
             remaining
                 .iter()
@@ -233,11 +228,6 @@ mod tests {
             remaining
                 .iter()
                 .any(|item| item.path == paths.recordings_dir())
-        );
-        assert!(
-            remaining
-                .iter()
-                .any(|item| item.path == paths.cuda_pack_dir())
         );
         assert!(config_sentinel.exists());
         assert!(data_sentinel.exists());
@@ -260,7 +250,6 @@ mod tests {
         assert!(!fixture.paths.python_logs_dir().exists());
         assert!(!fixture.paths.settings_file().exists());
         assert!(fixture.paths.models_dir().exists());
-        assert!(fixture.paths.cuda_pack_dir().exists());
         assert!(fixture.paths.history_database_file().exists());
     }
 
@@ -271,7 +260,6 @@ mod tests {
         create_file(&fixture.paths.history_database_file());
         create_dir(&fixture.paths.recordings_dir());
         create_dir(&fixture.paths.models_dir());
-        create_dir(&fixture.paths.cuda_pack_dir());
         create_dir(&fixture.paths.python_logs_dir());
 
         fixture
@@ -283,7 +271,6 @@ mod tests {
             fixture.paths.history_database_file(),
             fixture.paths.recordings_dir().join("content"),
             fixture.paths.models_dir().join("content"),
-            fixture.paths.cuda_pack_dir().join("content"),
             fixture.paths.python_logs_dir().join("content"),
         ] {
             assert_eq!(fs::read(path).expect("data preserved"), b"test data");
@@ -409,7 +396,6 @@ mod tests {
         create_dir(&outside);
         fs::create_dir_all(fixture.paths.data_dir()).expect("create data root");
         symlink(&outside, fixture.paths.models_dir()).expect("models symlink");
-        symlink(&outside, fixture.paths.cuda_pack_dir()).expect("CUDA pack symlink");
         create_dir(&fixture.paths.python_logs_dir());
         symlink(
             &outside,
@@ -423,7 +409,6 @@ mod tests {
         assert!(report.iter().all(|entry| entry.deleted));
         assert!(outside.join("content").exists());
         assert!(!fixture.paths.models_dir().exists());
-        assert!(fixture.paths.cuda_pack_dir().exists());
         assert!(!fixture.paths.python_logs_dir().exists());
     }
 }

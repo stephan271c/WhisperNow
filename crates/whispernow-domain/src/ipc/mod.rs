@@ -282,6 +282,14 @@ pub struct ActiveDownload {
     pub bytes_per_second: Option<u64>,
 }
 
+/// Where the local cleanup model runs once loaded.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CleanupDevice {
+    Cpu,
+    Gpu { name: String },
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppState {
@@ -294,6 +302,8 @@ pub struct AppState {
     pub active_downloads: Vec<ActiveDownload>,
     /// How setup's latest test dictation ended; cleared when the next test starts.
     pub setup_test: Option<SetupTestResult>,
+    /// `None` until the local cleanup model loads, and again once it is freed.
+    pub cleanup_device: Option<CleanupDevice>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

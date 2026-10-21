@@ -75,8 +75,12 @@ impl NativeServices {
         ));
         settings.report_loaded(&persisted, settings_notice);
         let store = Arc::new(ModelStore::new(paths.clone()));
-        store.finish_cuda_pack_removal();
-        let local_cleanup = Arc::new(LocalCleanupService::new(llama_dir, Arc::clone(&store)));
+        let cleanup_state = Arc::clone(&state);
+        let local_cleanup = Arc::new(LocalCleanupService::new(
+            llama_dir,
+            Arc::clone(&store),
+            move |device| cleanup_state.apply(|state| state.cleanup_device = device),
+        ));
         follow_cleanup_provider(&local_cleanup, &persisted);
         let models = Arc::new(ModelCoordinator::new(
             Arc::clone(&store),

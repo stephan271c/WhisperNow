@@ -82,8 +82,6 @@ pub(super) enum ModelRowKind {
     Speech { state: Option<ModelState> },
     /// `chosen` marks the downloaded model the local cleanup provider runs.
     Cleanup { chosen: bool },
-    /// The CUDA pack.
-    Runtime,
 }
 
 #[component]
@@ -102,7 +100,7 @@ pub(super) fn ModelRow(
     let download = context.active_download(&id);
     let active_state = match kind {
         ModelRowKind::Speech { state } => state,
-        _ => None,
+        ModelRowKind::Cleanup { .. } => None,
     };
     let active = active_state.is_some();
     let describe =

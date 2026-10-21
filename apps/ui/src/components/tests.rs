@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{
-    ActiveDownload, AppState, ClearDataItem, ClearDataResult, DataLocation, EventPayload,
-    MainWindowSection, MicrophoneTestResponse, ModelState, ModelSummary, Phase,
+    ActiveDownload, AppState, CleanupDevice, ClearDataItem, ClearDataResult, DataLocation,
+    EventPayload, MainWindowSection, MicrophoneTestResponse, ModelState, ModelSummary, Phase,
     SaveSettingsResponse, SettingsView,
 };
 use whispernow_domain::{AppError, ErrorCategory};
@@ -308,6 +308,29 @@ fn disabled_controls_explain_why_in_visible_text() {
         text(&html, "test-microphone-disabled-reason"),
         "Stop the current recording first"
     );
+}
+
+#[test]
+fn home_says_where_cleanup_runs_once_its_model_is_loaded() {
+    let home_line = |device: Option<CleanupDevice>| {
+        let mut state = snapshot(Phase::Idle);
+        state.cleanup_device = device;
+        shell(state, loaded()).html()
+    };
+    assert_eq!(
+        text(
+            &home_line(Some(CleanupDevice::Gpu {
+                name: "NVIDIA GeForce RTX 5070".to_owned(),
+            })),
+            "home-cleanup-device"
+        ),
+        "Cleanup runs on the GPU (NVIDIA GeForce RTX 5070)."
+    );
+    assert_eq!(
+        text(&home_line(Some(CleanupDevice::Cpu)), "home-cleanup-device"),
+        "Cleanup runs on the CPU."
+    );
+    assert!(tag(&home_line(None), "home-cleanup-device").is_none());
 }
 
 #[test]
@@ -1162,9 +1185,8 @@ fn cleanup_model(id: &str, name: &str, availability: ModelAvailability) -> Model
     }
 }
 
-/// Configured settings that clean up with the app's own models, two of them listed with the
-/// CUDA pack.
-fn local_cleanup(small: &str, large: &str, pack: &str) -> ManagementState {
+/// Configured settings that clean up with the app's own `small` model, `large` also downloaded.
+fn local_cleanup(small: &str, large: &str) -> ManagementState {
     let mut management = configured();
     let mut settings = management.shown_settings().cloned().expect("loaded");
     settings.llm_provider = LlmProvider::LocalCleanup;
@@ -1190,14 +1212,6 @@ fn local_cleanup(small: &str, large: &str, pack: &str) -> ManagementState {
             "Local cleanup model (MiniCPM5 1B)",
             ModelAvailability::Downloaded,
         ),
-        ModelSummary {
-            family: whispernow_domain::ModelFamily::CudaPack,
-            ..cleanup_model(
-                pack,
-                "NVIDIA CUDA for cleanup models",
-                ModelAvailability::NotInstalled,
-            )
-        },
     ];
     management.models_loaded = true;
     management
@@ -1333,11 +1347,10 @@ fn one_language_is_named_and_several_open_as_a_list_by_name() {
 }
 
 #[test]
-fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() {
+fn ai_cleanup_lists_the_cleanup_models_and_saves_the_choice() {
     const SMALL: &str = "whispernow-cleanup-lfm2.5-350m-r112-q8_0";
     const LARGE: &str = "whispernow-cleanup-minicpm5-1b-r112-q8_0";
-    const PACK: &str = "llama-cuda-13.4";
-    let management = local_cleanup(SMALL, LARGE, PACK);
+    let management = local_cleanup(SMALL, LARGE);
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
@@ -1345,7 +1358,6 @@ fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() 
         tag(&html, "model-whispernow-cleanup-lfm2-5-350m-r112-q8_0-name").is_none(),
         "cleanup models are not speech models"
     );
-    assert!(tag(&html, "cuda-pack-title").is_none());
 
     open(&mut page, &["nav-settings-ai-cleanup"]);
     let html = page.html();
@@ -1358,15 +1370,6 @@ fn ai_cleanup_lists_the_cleanup_models_and_the_cuda_pack_and_saves_the_choice() 
         tag(&html, "model-whispernow-cleanup-lfm2-5-350m-r112-q8_0-use").is_none(),
         "the chosen model is in use"
     );
-    let section = html
-        .find("id=\"cuda-pack-title\"")
-        .expect("the CUDA section");
-    let row = html
-        .find("id=\"model-llama-cuda-13-4-name\"")
-        .expect("the CUDA row");
-    assert!(row > section, "listed under its own section");
-    assert!(tag(&html, "model-llama-cuda-13-4-download").is_some());
-    assert!(tag(&html, "model-llama-cuda-13-4-use").is_none());
     assert!(
         !html.contains("aria-label=\"Speed:") && !html.contains("aria-label=\"Accuracy:"),
         "cleanup models are not rated"
@@ -1395,7 +1398,7 @@ fn a_cleanup_model_is_marked_selected_only_once_downloaded() {
         ModelAvailability::NotInstalled,
         ModelAvailability::Downloaded,
     ] {
-        let mut management = local_cleanup(SMALL, LARGE, "llama-cuda-13.4");
+        let mut management = local_cleanup(SMALL, LARGE);
         management.models[1].availability = availability;
         let mut page = shell(snapshot(Phase::Idle), management);
         open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
@@ -1416,7 +1419,6 @@ fn the_gpu_switch_shows_only_for_the_apps_own_models_and_saves() {
     let management = local_cleanup(
         "whispernow-cleanup-lfm2.5-350m-r112-q8_0",
         "whispernow-cleanup-minicpm5-1b-r112-q8_0",
-        "llama-cuda-13.4",
     );
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);

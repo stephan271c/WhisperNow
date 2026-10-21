@@ -29,10 +29,7 @@ pub use credential_store::{CredentialStore, CredentialStoreUnavailable};
 pub use file_manager::{open_in_file_manager, open_privacy_settings, open_url};
 pub use llm::{complete, list_models};
 pub use local_cleanup::LocalCleanupService;
-pub use models::{
-    CudaPackArchive, CudaPackFormat, CudaPackRemovalOutcome, CudaPackState, DownloadProgress,
-    DownloadTimeouts, ModelListEntry, ModelStore, ModelStoreError,
-};
+pub use models::{DownloadProgress, DownloadTimeouts, ModelListEntry, ModelStore, ModelStoreError};
 #[cfg(target_os = "macos")]
 pub use paste_delivery::accessibility_trusted;
 #[cfg(target_os = "linux")]

@@ -27,6 +27,7 @@ pub(crate) fn snapshot(phase: Phase) -> AppState {
         error: None,
         active_downloads: Vec::new(),
         setup_test: None,
+        cleanup_device: None,
     }
 }
 

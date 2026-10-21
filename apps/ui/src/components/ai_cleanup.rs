@@ -107,7 +107,6 @@ pub(super) fn AiCleanupPage() -> Element {
             }
             if source == CleanupSource::WhisperNow {
                 AutosaveRow { id: "cleanup-uses-gpu", title: "Use GPU",
-                    description: "Off runs cleanup on the CPU.",
                     setting: SettingKey::CleanupUsesGpu,
                     Toggle { checked: settings.cleanup_uses_gpu,
                         disabled,
@@ -265,8 +264,7 @@ fn ProviderRows(
     }
 }
 
-/// The app's own cleanup models, which run on this computer, and the CUDA pack that speeds them
-/// up on NVIDIA graphics cards.
+/// The app's own cleanup models, which run on this computer.
 #[component]
 fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
     let context = use_context::<UiContext>();
@@ -278,12 +276,6 @@ fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
         .filter(|model| model.family == ModelFamily::Cleanup)
         .cloned()
         .collect::<Vec<_>>();
-    let cuda_pack = management
-        .read()
-        .models
-        .iter()
-        .find(|model| model.family == ModelFamily::CudaPack)
-        .cloned();
     let loaded = management.read().models_loaded;
     let reason = context
         .model_download_blocked()
@@ -307,14 +299,6 @@ fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
                         settings_disabled: disabled,
                         model,
                     }
-                }
-            }
-        }
-        if let Some(pack) = cuda_pack {
-            Section { id: "cuda-pack", title: "NVIDIA CUDA",
-                description: "Faster cleanup on GeForce RTX 20, GTX 16 and newer cards.",
-                ul { class: "model-list",
-                    ModelRow { key: "{pack.id.as_str()}", kind: ModelRowKind::Runtime, model: pack }
                 }
             }
         }

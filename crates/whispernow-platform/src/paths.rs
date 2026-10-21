@@ -168,12 +168,6 @@ impl AppPaths {
     }
 
     #[must_use]
-    pub fn cuda_pack_dir(&self) -> PathBuf {
-        self.data_dir
-            .join(format!("llama-cuda-{}", crate::llama::LLAMA_CPP_BUILD))
-    }
-
-    #[must_use]
     pub fn python_logs_dir(&self) -> PathBuf {
         self.data_dir.join("logs")
     }

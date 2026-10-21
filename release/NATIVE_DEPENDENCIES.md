@@ -51,10 +51,12 @@ NSIS), about 23 MB with gzip-class compression (AppImage), and 1.5–3 MB on mac
 Nothing is compiled, so builds take no longer; staging downloads one 11–33 MB archive.
 The Vulkan backend accounts for about 44 MB on Linux and Windows. It loads only where
 a Vulkan loader (`libvulkan.so.1`, `vulkan-1.dll`) exists; without one, or without a
-usable GPU, the model runs on the CPU. The AppImage leaves the Vulkan loader and
-`libwayland-client` to the host (`LINUXDEPLOY_EXCLUDED_LIBRARIES` in the release
-workflow): copies from the build machine can keep a newer distribution's Vulkan driver
-or Mesa from loading. On macOS, `libggml` links its RPC backend, so that library ships
+usable GPU, the model runs on the CPU. It goes to the first GPU that takes it, discrete
+before integrated and the one with the most memory first; AI cleanup's Use GPU switch
+keeps it on the CPU. The AppImage leaves the Vulkan loader and `libwayland-client` to the
+host (`LINUXDEPLOY_EXCLUDED_LIBRARIES` in the release workflow): copies from the build
+machine can keep a newer distribution's Vulkan driver or Mesa from loading.
+On macOS, `libggml` links its RPC backend, so that library ships
 too, unused. Linux needs the system's GCC OpenMP runtime (`libgomp1`, a package
 dependency). If the libraries cannot load, AI cleanup reports the provider unavailable
 and keeps the deterministic text.
@@ -78,38 +80,6 @@ OpenMP runtime shipped on Windows is Apache-2.0 WITH LLVM-exception
 The cleanup models' weights, like the ASR models', are not installer resources. The
 LFM2.5-350M fine-tune is under the LFM Open License v1.0 (`lfm-open-license-v1.0.txt`),
 the MiniCPM5-1B fine-tune under Apache-2.0 (`Apache-2.0.txt`).
-
-### The CUDA pack (an optional download, not in the installers)
-
-On Linux x86_64 and Windows x86_64, Models → NVIDIA CUDA offers a download that runs
-the cleanup models with CUDA on NVIDIA GPUs instead of Vulkan. It takes two assets of
-the same llama.cpp b11259 release: the CUDA 13.4 build, of which only the CUDA backend
-is kept (`libggml-cuda.so`, `ggml-cuda.dll`), and the CUDA 13.4 runtime llama.cpp
-publishes beside it (cudart, cuBLAS, cuBLASLt). `crates/whispernow-platform/src/models/cuda_pack.rs`
-pins each asset's URL, byte length and SHA-256 (the release's own digests) and the
-files taken from it; nothing is extracted before an archive matches.
-
-| Platform | Assets | Download | Installed |
-| --- | --- | --- | --- |
-| Linux x86_64 | `ubuntu-cuda-13.4-x64.tar.gz`, `cudart-…-ubuntu-cuda-13.4-x64.tar.gz` | 593 MB | 766 MB |
-| Windows x86_64 | `win-cuda-13.4-x64.zip`, `cudart-…-win-cuda-13.4-x64.zip` | 577 MB | not measured |
-
-The files go flat into the app data's `llama-cuda-b11259/`. The engine opens the runtime and
-the backend from there by full path and adds the backend to the bundled ones
-(`ggml_backend_load`); on Windows the release's core DLLs are byte-identical in the
-Vulkan and CUDA builds. The model goes to a CUDA GPU first, then Vulkan, then the CPU.
-CUDA needs the NVIDIA driver (`libcuda.so.1`, `nvcuda.dll`, never downloaded) in a
-version that supports CUDA 13, and a GPU of compute capability 7.5 (Turing) or newer:
-the build has no code for older GPUs, whose first kernel would abort the process, so
-the engine asks the runtime for each GPU's compute capability and leaves older ones to
-Vulkan. Without a driver, CUDA lists no devices and Vulkan runs as before. A loaded
-pack cannot be unloaded, so deleting it while loaded marks it, and it is removed at
-the next start.
-
-llama.cpp's backend is MIT. NVIDIA's runtime libraries are under NVIDIA's license for
-the CUDA Toolkit; WhisperNow's packages do not contain them, and the app fetches them
-from llama.cpp's release only when the user asks. A release owner should review those
-terms before shipping the download.
 
 ## Model weights
 

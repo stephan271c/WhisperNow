@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use whispernow_domain::ipc::CleanupDevice;
 use whispernow_domain::{RecordingMode, SetupStep, Shortcut};
 
 use super::labels;
@@ -29,6 +30,12 @@ pub(super) fn HomePage() -> Element {
         .as_ref()
         .and_then(|snapshot| snapshot.last_transcript.as_ref())
         .cloned();
+    let cleanup_device = context
+        .state
+        .read()
+        .snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.cleanup_device.clone());
     let management = context.management.read();
     let setup_step = management.unfinished_setup_step();
     let shortcut = management.settings.as_ref().map(|view| {
@@ -41,7 +48,7 @@ pub(super) fn HomePage() -> Element {
             SetupChecklist { step }
         }
         UpdateStatus {}
-        StatusCard { status }
+        StatusCard { status, cleanup_device }
         ShortcutsCard { shortcut }
         MicrophoneCard {}
         LatestTranscript { transcript }
@@ -81,7 +88,7 @@ fn SetupChecklist(step: SetupStep) -> Element {
 }
 
 #[component]
-fn StatusCard(status: HomeStatus) -> Element {
+fn StatusCard(status: HomeStatus, cleanup_device: Option<CleanupDevice>) -> Element {
     let context = use_context::<UiContext>();
     let navigator = context.navigator;
     let dot = match status.kind {
@@ -107,6 +114,9 @@ fn StatusCard(status: HomeStatus) -> Element {
                 }
                 if let Some(detail) = &status.detail {
                     p { class: "status-detail", "{detail}" }
+                }
+                if let Some(device) = &cleanup_device {
+                    p { id: "home-cleanup-device", class: "status-detail", "{labels::cleanup_device(device)}" }
                 }
             }
             if let Some((label, section)) = status.fix {

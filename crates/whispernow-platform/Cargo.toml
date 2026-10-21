@@ -16,7 +16,6 @@ arboard = { workspace = true }
 bzip2.workspace = true
 cpal.workspace = true
 directories.workspace = true
-flate2.workspace = true
 futures-util = { workspace = true }
 hound.workspace = true
 keyring = { workspace = true }
@@ -38,7 +37,6 @@ tracing-subscriber.workspace = true
 url.workspace = true
 whispernow-core = { path = "../whispernow-core" }
 whispernow-domain = { path = "../whispernow-domain" }
-zip.workspace = true
 zeroize = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

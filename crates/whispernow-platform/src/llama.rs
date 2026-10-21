@@ -17,19 +17,7 @@ use std::{
 use libloading::Library;
 use thiserror::Error;
 use whispernow_core::llm::local::{DecodeContext, LocalDecodeError, Outputs, Token};
-
-macro_rules! llama_cpp_build {
-    () => {
-        "b11259"
-    };
-}
-#[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "windows", target_arch = "x86_64")
-))]
-pub(crate) use llama_cpp_build;
-
-pub(crate) const LLAMA_CPP_BUILD: &str = llama_cpp_build!();
+use whispernow_domain::ipc::CleanupDevice;
 
 /// The release's libraries, in load order: each needs the ones before it.
 #[cfg(target_os = "linux")]
@@ -52,39 +40,6 @@ const PRELOAD: &[&str] = &[];
 /// Layers to offload to a GPU: all of them, as the training side serves.
 const ALL_LAYERS: i32 = 99;
 
-/// The CUDA pack's libraries: NVIDIA's CUDA 13 runtime, in load order, then the CUDA backend
-/// of the same llama.cpp release's CUDA 13.4 build. The backend is added beside the bundled
-/// ones, so a GPU CUDA cannot run on still has Vulkan.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct CudaLibraries {
-    pub(crate) runtime: [&'static str; 3],
-    pub(crate) backend: &'static str,
-}
-
-/// Only `x86_64` Linux and Windows have a pack; other targets never load these names.
-#[cfg(not(target_os = "windows"))]
-pub(crate) const CUDA_PACK_LIBRARIES: CudaLibraries = CudaLibraries {
-    runtime: ["libcudart.so.13", "libcublasLt.so.13", "libcublas.so.13"],
-    backend: "libggml-cuda.so",
-};
-#[cfg(target_os = "windows")]
-pub(crate) const CUDA_PACK_LIBRARIES: CudaLibraries = CudaLibraries {
-    runtime: ["cudart64_13.dll", "cublasLt64_13.dll", "cublas64_13.dll"],
-    backend: "ggml-cuda.dll",
-};
-
-/// The oldest NVIDIA architecture the CUDA 13 build has code for (Turing, compute 7.5). On
-/// an older GPU its first kernel would fail, which aborts the process, so CUDA skips it.
-const CUDA_MIN_COMPUTE: (c_int, c_int) = (7, 5);
-/// `cudaDevAttrComputeCapabilityMajor` and `...Minor` of `enum cudaDeviceAttr`.
-const CUDA_COMPUTE_MAJOR: c_int = 75;
-const CUDA_COMPUTE_MINOR: c_int = 76;
-
-/// `cudaDeviceGetAttribute(int *value, enum cudaDeviceAttr attr, int device)`.
-type CudaDeviceGetAttribute = unsafe extern "C" fn(*mut c_int, c_int, c_int) -> c_int;
-
-/// The CUDA pack's device query, once the pack is loaded.
-static CUDA: Mutex<Option<CudaDeviceGetAttribute>> = Mutex::new(None);
 /// Held while llama.cpp loads, so its global state is initialized once.
 static LOADED: Mutex<Option<&'static Llama>> = Mutex::new(None);
 
@@ -159,51 +114,11 @@ impl Llama {
         Ok(llama)
     }
 
-    /// Adds the CUDA backend from the CUDA pack in `directory`, once per process.
-    pub(crate) fn load_cuda(&self, directory: &Path) -> Result<(), LlamaError> {
-        let failed = |message: String| LlamaError::Library {
-            directory: directory.to_owned(),
-            message,
-        };
-        let names = CUDA_PACK_LIBRARIES;
-        let mut cuda = CUDA.lock().unwrap_or_else(PoisonError::into_inner);
-        if cuda.is_some() {
-            return Ok(());
-        }
-        let mut libraries = Vec::with_capacity(names.runtime.len() + 1);
-        for name in names.runtime {
-            libraries.push(open(&directory.join(name)).map_err(|error| failed(error.to_string()))?);
-        }
-        // SAFETY: the CUDA runtime's documented signature; the library is kept loaded below.
-        let device_attribute = unsafe {
-            *libraries[0]
-                .get::<CudaDeviceGetAttribute>(b"cudaDeviceGetAttribute\0")
-                .map_err(|error| failed(error.to_string()))?
-        };
-        // Opened here first, so that on Windows its dependencies resolve from its own
-        // directory; ggml's own load below then finds it loaded.
-        let backend = directory.join(names.backend);
-        libraries.push(open(&backend).map_err(|error| failed(error.to_string()))?);
-        let path = CString::new(backend.as_os_str().as_encoded_bytes())
-            .map_err(|error| failed(error.to_string()))?;
-        // SAFETY: a NUL-terminated path in the pack directory for the pinned build,
-        // matching the bundled libraries.
-        if unsafe { (self.api.ggml_backend_load)(path.as_ptr()) }.is_null() {
-            return Err(failed("ggml did not load the CUDA backend".to_owned()));
-        }
-        // ggml now holds the backend; it and its runtime must never be unloaded.
-        std::mem::forget(libraries);
-        *cuda = Some(device_attribute);
-        Ok(())
-    }
-
-    /// The GPUs to try, best first: CUDA devices, then other discrete GPUs, then integrated
-    /// ones; within each, the most memory first. With the CUDA pack loaded the same GPU is
-    /// also listed under Vulkan, which is where it falls back to.
-    fn gpus(&self) -> Vec<(ffi::Device, String)> {
+    /// The GPUs to try, best first: discrete ones, then integrated ones; within each, the most
+    /// memory first.
+    fn gpus(&self) -> Vec<(ffi::Device, CleanupDevice)> {
         let api = &self.api;
-        let device_attribute = *CUDA.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut devices: Vec<(u8, usize, ffi::Device, String)> = Vec::new();
+        let mut devices: Vec<(u8, usize, ffi::Device, CleanupDevice)> = Vec::new();
         // SAFETY: device handles stay valid while the backends are loaded.
         let count = unsafe { (api.ggml_backend_dev_count)() };
         for index in 0..count {
@@ -213,24 +128,11 @@ impl Llama {
                 continue;
             }
             // SAFETY: device handles stay valid while the backends are loaded.
-            let (name, kind) = unsafe {
-                (
-                    text((api.ggml_backend_dev_name)(device)),
-                    (api.ggml_backend_dev_type)(device),
-                )
-            };
-            let rank = match name.strip_prefix("CUDA").map(str::parse::<c_int>) {
-                Some(Ok(ordinal)) => device_attribute
-                    .is_none_or(|attribute| cuda_runs_on(attribute, ordinal, &name))
-                    .then_some(0),
-                _ => match kind {
-                    ffi::DEVICE_TYPE_GPU => Some(1),
-                    ffi::DEVICE_TYPE_IGPU => Some(2),
-                    _ => None,
-                },
-            };
-            let Some(rank) = rank else {
-                continue;
+            let kind = unsafe { (api.ggml_backend_dev_type)(device) };
+            let rank = match kind {
+                ffi::DEVICE_TYPE_GPU => 0,
+                ffi::DEVICE_TYPE_IGPU => 1,
+                _ => continue,
             };
             let (mut free, mut total) = (0, 0);
             // SAFETY: device handles stay valid while the backends are loaded.
@@ -238,38 +140,19 @@ impl Llama {
                 (api.ggml_backend_dev_memory)(device, &raw mut free, &raw mut total);
                 text((api.ggml_backend_dev_description)(device))
             };
-            devices.push((rank, total, device, format!("{name} ({description})")));
+            devices.push((
+                rank,
+                total,
+                device,
+                CleanupDevice::Gpu { name: description },
+            ));
         }
         devices.sort_by_key(|&(rank, memory, ..)| (rank, std::cmp::Reverse(memory)));
         devices
             .into_iter()
-            .map(|(_, _, device, description)| (device, description))
+            .map(|(_, _, device, placed)| (device, placed))
             .collect()
     }
-}
-
-/// Whether the CUDA pack is loaded in this process. Its files stay in use until the process
-/// exits.
-#[must_use]
-pub(crate) fn cuda_loaded() -> bool {
-    CUDA.lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .is_some()
-}
-
-/// Whether the CUDA build has code for the GPU at CUDA `ordinal`, as ggml numbers them.
-fn cuda_runs_on(device_attribute: CudaDeviceGetAttribute, ordinal: c_int, name: &str) -> bool {
-    let (mut major, mut minor) = (0, 0);
-    // SAFETY: plain out-parameters; the runtime stays loaded.
-    let known = unsafe {
-        device_attribute(&raw mut major, CUDA_COMPUTE_MAJOR, ordinal) == 0
-            && device_attribute(&raw mut minor, CUDA_COMPUTE_MINOR, ordinal) == 0
-    };
-    let runs = known && (major, minor) >= CUDA_MIN_COMPUTE;
-    if !runs {
-        tracing::info!(target: "whispernow::llama", device = name, major, minor, "CUDA has no code for this GPU; it is left to the other backends");
-    }
-    runs
 }
 
 fn open(path: &Path) -> Result<Library, libloading::Error> {
@@ -318,6 +201,7 @@ pub(crate) struct LlamaModel {
     llama: &'static Llama,
     model: NonNull<ffi::Model>,
     vocab: *const ffi::Vocab,
+    device: CleanupDevice,
 }
 
 impl LlamaModel {
@@ -331,19 +215,20 @@ impl LlamaModel {
         let path =
             CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| LlamaError::Model)?;
         let gpus = if use_gpu { llama.gpus() } else { Vec::new() };
-        for (device, description) in gpus {
-            let mut devices = [device, std::ptr::null_mut()];
+        for (handle, device) in gpus {
+            let mut devices = [handle, std::ptr::null_mut()];
             match Self::load_on(llama, &path, devices.as_mut_ptr(), ALL_LAYERS) {
                 Ok((model, vocab)) => {
-                    tracing::info!(target: "whispernow::llama", backend = "gpu", device = description, "model loaded");
+                    tracing::info!(target: "whispernow::llama", backend = "gpu", ?device, "model loaded");
                     return Ok(Self {
                         llama,
                         model,
                         vocab,
+                        device,
                     });
                 }
                 Err(_) => {
-                    tracing::warn!(target: "whispernow::llama", device = description, "the GPU did not take the model; trying the next device");
+                    tracing::warn!(target: "whispernow::llama", ?device, "the GPU did not take the model; trying the next device");
                 }
             }
         }
@@ -355,7 +240,12 @@ impl LlamaModel {
             llama,
             model,
             vocab,
+            device: CleanupDevice::Cpu,
         })
+    }
+
+    pub(crate) fn device(&self) -> &CleanupDevice {
+        &self.device
     }
 
     fn load_on(

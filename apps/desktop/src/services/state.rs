@@ -7,7 +7,7 @@ use whispernow_domain::AppError;
 use whispernow_core::CancellationToken;
 use whispernow_domain::ModelId;
 use whispernow_domain::ipc::{
-    ActiveDownload, AppState, EventPayload, ModelState, Phase, SetupTestResult,
+    ActiveDownload, AppState, CleanupDevice, EventPayload, ModelState, Phase, SetupTestResult,
 };
 
 /// Sending never blocks, so a snapshot can be sent while the state lock is held and arrives
@@ -63,6 +63,8 @@ pub(crate) struct State {
     /// How setup's latest test dictation ended, kept apart from `last_transcript` and
     /// `last_error`.
     pub(crate) setup_test: Option<SetupTestResult>,
+    /// Where the local cleanup model runs, while it is loaded.
+    pub(crate) cleanup_device: Option<CleanupDevice>,
     pub(crate) active_downloads: BTreeMap<ModelId, DownloadTask>,
     pub(crate) download_failed: bool,
     /// Set with `cancellation` when the dictation in flight is asked to end early.
@@ -80,6 +82,7 @@ impl State {
             last_transcript: None,
             last_error: None,
             setup_test: None,
+            cleanup_device: None,
             active_downloads: BTreeMap::new(),
             download_failed: false,
             cancel: None,
@@ -161,6 +164,7 @@ impl State {
                 .map(|download| download.progress.clone())
                 .collect(),
             setup_test: self.setup_test.clone(),
+            cleanup_device: self.cleanup_device.clone(),
         }
     }
 }

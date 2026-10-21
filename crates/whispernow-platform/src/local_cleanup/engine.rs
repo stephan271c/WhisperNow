@@ -6,6 +6,7 @@ use whispernow_core::llm::{
     DraftText, LlmPrompt,
     local::{self, DecodeContext, LocalDecodeError, LocalDecodeOutput, LocalDecodeRequest},
 };
+use whispernow_domain::ipc::CleanupDevice;
 
 use crate::llama::{Llama, LlamaContext, LlamaError, LlamaModel};
 
@@ -30,28 +31,25 @@ pub(crate) struct LocalCleanupEngine {
 }
 
 impl LocalCleanupEngine {
-    /// Loads llama.cpp from `library_directory`, with the CUDA pack in `cuda` when given, and
-    /// the model from `model_path`, on the CPU unless `use_gpu`. A CUDA pack that does not
-    /// load leaves the other backends.
+    /// Loads llama.cpp from `library_directory` and the model from `model_path`, on the CPU
+    /// unless `use_gpu`.
     pub(crate) fn load(
         library_directory: &Path,
-        cuda: Option<&Path>,
         model_path: &Path,
         threads: i32,
         use_gpu: bool,
     ) -> Result<Self, LlamaError> {
         let llama = Llama::load(library_directory)?;
-        if let Some(cuda) = cuda
-            && let Err(error) = llama.load_cuda(cuda)
-        {
-            tracing::warn!(target: "whispernow::llama", %error, "the CUDA pack did not load; using the other backends");
-        }
         let model = LlamaModel::load(llama, model_path, use_gpu)?;
         Ok(Self {
             model: Rc::new(model),
             context: None,
             threads,
         })
+    }
+
+    pub(crate) fn device(&self) -> &CleanupDevice {
+        self.model.device()
     }
 
     /// Decodes the reply to `prompt` speculatively from the draft.
