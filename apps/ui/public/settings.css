@@ -649,7 +649,8 @@ small {
   margin-block: var(--space-2);
 }
 
-.section-note:empty {
+.section-note:empty,
+.section-note:has(> .visually-hidden:only-child) {
   display: none;
 }
 

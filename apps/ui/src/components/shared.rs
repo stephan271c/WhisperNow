@@ -141,6 +141,12 @@ pub(super) fn ShortcutCapture(
         }
         CaptureStatus::Captured(_) => "Shortcut captured.",
     };
+    // Only a refused key is shown; guidance for the capture in progress is for screen readers,
+    // since showing it would shift the page whenever the user starts or ends a capture.
+    let refused = matches!(
+        status(),
+        CaptureStatus::MissingModifier | CaptureStatus::Unsupported
+    );
     let capturing = status().is_capturing();
     let visible = if capturing {
         "Press shortcut…"
@@ -199,10 +205,14 @@ pub(super) fn ShortcutCapture(
         }
         p {
             id: help_id,
-            class: if matches!(status(), CaptureStatus::MissingModifier | CaptureStatus::Unsupported) { "shortcut-capture-help error" } else { "shortcut-capture-help" },
+            class: if refused { "shortcut-capture-help error" } else { "shortcut-capture-help" },
             role: "status",
             aria_live: "polite",
-            "{guidance}"
+            if refused {
+                "{guidance}"
+            } else {
+                span { class: "visually-hidden", "{guidance}" }
+            }
         }
     }
 }

@@ -3,7 +3,7 @@
 use std::{ops::ControlFlow, path::Path, rc::Rc};
 
 use whispernow_core::llm::{
-    DraftText, LlmPrompt,
+    DraftText, LlmPrompt, build_local_cleanup_prompt,
     local::{self, DecodeContext, LocalDecodeError, LocalDecodeOutput, LocalDecodeRequest},
 };
 use whispernow_domain::ipc::CleanupDevice;
@@ -14,6 +14,9 @@ use crate::llama::{Llama, LlamaContext, LlamaError, LlamaModel};
 /// same memory layout as the evaluation did.
 const MIN_CONTEXT: usize = 8_192;
 const CONTEXT_STEP: usize = 256;
+
+const WARM_UP_TRANSCRIPT: &str = "um so the meeting is at three no wait at four";
+const WARM_UP_TOKENS: usize = 8;
 
 /// The CPU threads to decode with: half the logical CPUs. On machines with two threads per
 /// core that is one per physical core, `llama-server`'s default; it leaves the rest of the
@@ -50,6 +53,22 @@ impl LocalCleanupEngine {
 
     pub(crate) fn device(&self) -> &CleanupDevice {
         self.model.device()
+    }
+
+    /// Builds the context and decodes a few tokens, unless a cleanup already has, so the first
+    /// cleanup does not. On an RTX 5070 with a cold shader cache that cleanup took 4.9 s,
+    /// against 65 ms for the next.
+    pub(crate) fn warm_up(&mut self) -> Result<(), EngineError> {
+        if self.context.is_some() {
+            return Ok(());
+        }
+        self.decode(
+            &build_local_cleanup_prompt(WARM_UP_TRANSCRIPT),
+            WARM_UP_TOKENS,
+            &DraftText::from_transcript(WARM_UP_TRANSCRIPT),
+            |_| ControlFlow::Continue(()),
+        )
+        .map(drop)
     }
 
     /// Decodes the reply to `prompt` speculatively from the draft.

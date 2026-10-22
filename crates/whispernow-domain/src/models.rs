@@ -13,6 +13,7 @@ const DEFAULT_SPEECH_MODEL_ID: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int
 pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-lfm2.5-350m-r112-q8_0";
 /// The larger local cleanup model (a `MiniCPM5-1B` fine-tune): slower, but keeps more facts.
 const MINICPM_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-minicpm5-1b-r112-q8_0";
+const LFM_1_2B_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-lfm2.5-1.2b-v2-r112-q8_0";
 /// Every local cleanup model, the default first.
 pub const CLEANUP_MODEL_IDS: [&str; CLEANUP_MODELS.len()] = {
     let mut ids = [""; CLEANUP_MODELS.len()];
@@ -36,7 +37,7 @@ struct CleanupModel {
     sha256: &'static str,
 }
 
-const CLEANUP_MODELS: [CleanupModel; 2] = [
+const CLEANUP_MODELS: [CleanupModel; 3] = [
     // `training/runs/r112-full-inst-1e-5-e3/gguf/model-Q8_0.gguf`: LFM2.5-350M
     // fine-tuned for cleanup, under the
     // LFM Open License v1.0.
@@ -53,6 +54,14 @@ const CLEANUP_MODELS: [CleanupModel; 2] = [
         display_name: "Local cleanup model (MiniCPM5 1B)",
         size_bytes: 1_153_520_640,
         sha256: "9c28d3e0c029907624ad0c2dac0adda77d485ddbcfbfebd67658aceb434e3fbb",
+    },
+    // `training/runs/r112-lfm25-1.2b-full-base-1e-5-e3-v2-no-heard/gguf/model-Q8_0.gguf`:
+    // LFM2.5-1.2B-Base fine-tuned on the v2 targeted data, under the LFM Open License v1.0.
+    CleanupModel {
+        id: LFM_1_2B_CLEANUP_MODEL_ID,
+        display_name: "Local cleanup model (LFM2.5 1.2B)",
+        size_bytes: 1_246_252_256,
+        sha256: "0fbc2316640539df16f99f2ae4cddfb47bbc7674754ce0711a246be1c8ed507e",
     },
 ];
 

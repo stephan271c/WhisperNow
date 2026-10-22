@@ -271,8 +271,11 @@ fn run(commands: &mpsc::Receiver<Command>, shared: &Shared) {
         };
         match command {
             Command::Load(model_id) => {
-                if !shutdown() {
-                    let _ = load(shared, &mut engine, &model_id);
+                if !shutdown()
+                    && let Ok(loaded) = load(shared, &mut engine, &model_id)
+                    && let Err(error) = loaded.warm_up()
+                {
+                    tracing::warn!(target: "whispernow::local_cleanup", %error, "the cleanup model did not warm up");
                 }
             }
             Command::Unload(freed) => {

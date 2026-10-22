@@ -69,5 +69,10 @@ pub(crate) fn DisabledReason(id: String, reason: Option<BlockedReason>) -> Eleme
     let Some(reason) = reason else {
         return rsx! {};
     };
-    rsx! { p { id, class: "disabled-reason", "{reason.message()}" } }
+    // A save in flight ends within moments; showing it would shift the page twice.
+    let class = match reason {
+        BlockedReason::CommandPending => "disabled-reason visually-hidden",
+        BlockedReason::Connecting | BlockedReason::Phase(_) => "disabled-reason",
+    };
+    rsx! { p { id, class, "{reason.message()}" } }
 }

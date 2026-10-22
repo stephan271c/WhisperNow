@@ -561,7 +561,12 @@ fn settings_controls_on_each_blocked_page_are_disabled() {
             }
             open(&mut page, &["nav-settings", route]);
             let html = page.html();
-            assert!(tag(&html, "settings-disabled-reason").is_some(), "{route}");
+            let reason = tag(&html, "settings-disabled-reason").expect(route);
+            assert_eq!(
+                reason.contains("visually-hidden"),
+                saving,
+                "only a save in flight stays out of the layout: {route}"
+            );
             for control in controls {
                 let element = tag(&html, control).unwrap_or_else(|| panic!("{route} {control}"));
                 assert!(element.contains(" disabled="), "{route} {element}");
