@@ -7,13 +7,6 @@ use tauri::{
 };
 use whispernow_domain::ipc::{AppState, ModelState, Phase};
 
-pub(crate) const SETTINGS_MENU_ID: &str = "tray-settings";
-pub(crate) const CHECK_UPDATES_MENU_ID: &str = "tray-check-updates";
-pub(crate) const COPY_LAST_MENU_ID: &str = "tray-copy-last";
-pub(crate) const CANCEL_MENU_ID: &str = "tray-cancel";
-pub(crate) const PAUSE_MENU_ID: &str = "tray-pause";
-pub(crate) const QUIT_MENU_ID: &str = "tray-quit";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrayAction {
     Settings,
@@ -26,16 +19,28 @@ pub(crate) enum TrayAction {
 }
 
 impl TrayAction {
-    pub(crate) fn from_menu_id(id: &str) -> Option<Self> {
-        match id {
-            SETTINGS_MENU_ID => Some(Self::Settings),
-            CHECK_UPDATES_MENU_ID => Some(Self::CheckForUpdates),
-            COPY_LAST_MENU_ID => Some(Self::CopyLastTranscript),
-            CANCEL_MENU_ID => Some(Self::CancelRecording),
-            PAUSE_MENU_ID => Some(Self::TogglePause),
-            QUIT_MENU_ID => Some(Self::Quit),
-            _ => None,
+    const ALL: [Self; 6] = [
+        Self::Settings,
+        Self::CheckForUpdates,
+        Self::CopyLastTranscript,
+        Self::CancelRecording,
+        Self::TogglePause,
+        Self::Quit,
+    ];
+
+    const fn menu_id(self) -> &'static str {
+        match self {
+            Self::Settings => "tray-settings",
+            Self::CheckForUpdates => "tray-check-updates",
+            Self::CopyLastTranscript => "tray-copy-last",
+            Self::CancelRecording => "tray-cancel",
+            Self::TogglePause => "tray-pause",
+            Self::Quit => "tray-quit",
         }
+    }
+
+    pub(crate) fn from_menu_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|action| action.menu_id() == id)
     }
 }
 
@@ -47,6 +52,8 @@ pub(crate) enum TrayState {
     RecordingError,
     Processing,
     Paused,
+    Updating,
+    ClearingData,
     Error,
 }
 
@@ -83,6 +90,14 @@ impl TrayState {
                 status_text: "Status: Paused",
                 tooltip: "WhisperNow — Paused",
             },
+            Self::Updating => TrayPresentation {
+                status_text: "Status: Installing an update",
+                tooltip: "WhisperNow — Installing an update",
+            },
+            Self::ClearingData => TrayPresentation {
+                status_text: "Status: Clearing application data",
+                tooltip: "WhisperNow — Clearing application data",
+            },
             Self::Error => TrayPresentation {
                 status_text: "Status: Error — open WhisperNow",
                 tooltip: "WhisperNow — Error",
@@ -97,6 +112,8 @@ pub(crate) fn tray_state(snapshot: &AppState) -> TrayState {
         Phase::Paused if !failed => TrayState::Paused,
         Phase::Recording { .. } if failed => TrayState::RecordingError,
         _ if failed => TrayState::Error,
+        Phase::Updating => TrayState::Updating,
+        Phase::ClearingData => TrayState::ClearingData,
         Phase::Recording { .. } => TrayState::Recording,
         Phase::Processing { .. } => TrayState::Processing,
         _ if matches!(
@@ -116,8 +133,7 @@ pub(crate) fn tray_state(snapshot: &AppState) -> TrayState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TrayDesired {
     pub(crate) state: TrayState,
-    pub(crate) pause_text: &'static str,
-    pub(crate) pause_enabled: bool,
+    pub(crate) pause: PauseItem,
     pub(crate) copy_last: bool,
     pub(crate) cancel: bool,
 }
@@ -125,22 +141,27 @@ pub(crate) struct TrayDesired {
 impl TrayDesired {
     const LOADING: Self = Self {
         state: TrayState::Loading,
-        pause_text: "Pause",
-        pause_enabled: false,
+        pause: PauseItem::Unavailable,
         copy_last: false,
         cancel: false,
     };
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PauseItem {
+    Pause,
+    Resume,
+    Unavailable,
+}
+
 pub(crate) fn tray_desired(snapshot: &AppState, copy_capable: bool) -> TrayDesired {
     TrayDesired {
         state: tray_state(snapshot),
-        pause_text: if snapshot.phase == Phase::Paused {
-            "Resume"
-        } else {
-            "Pause"
+        pause: match snapshot.phase {
+            Phase::ClearingData | Phase::Updating => PauseItem::Unavailable,
+            Phase::Paused => PauseItem::Resume,
+            _ => PauseItem::Pause,
         },
-        pause_enabled: !matches!(snapshot.phase, Phase::ClearingData | Phase::Updating),
         copy_last: copy_capable && snapshot.last_transcript.is_some(),
         cancel: snapshot.phase.is_busy(),
     }
@@ -162,8 +183,13 @@ impl NativeTray {
         let _ = self.status.set_text(presentation.status_text);
         let _ = self.copy_last.set_enabled(desired.copy_last);
         let _ = self.cancel.set_enabled(desired.cancel);
-        let _ = self.pause.set_text(desired.pause_text);
-        let _ = self.pause.set_enabled(desired.pause_enabled);
+        let _ = self.pause.set_text(match desired.pause {
+            PauseItem::Pause | PauseItem::Unavailable => "Pause",
+            PauseItem::Resume => "Resume",
+        });
+        let _ = self
+            .pause
+            .set_enabled(desired.pause != PauseItem::Unavailable);
         let _ = self.icon.set_tooltip(Some(presentation.tooltip));
         let _ = self.icon.set_icon(Some(state_icon(desired.state)));
     }
@@ -179,12 +205,18 @@ impl TrayController {
     pub(crate) fn new(app: &tauri::App, copy_capable: bool) -> tauri::Result<Self> {
         let presentation = TrayState::Loading.presentation();
         let status = menu_item(app, "tray-status", presentation.status_text, false)?;
-        let copy_last = menu_item(app, COPY_LAST_MENU_ID, "Copy Last Transcript", false)?;
-        let cancel = menu_item(app, CANCEL_MENU_ID, "Cancel Recording", false)?;
-        let pause = menu_item(app, PAUSE_MENU_ID, "Pause", false)?;
-        let settings = menu_item(app, SETTINGS_MENU_ID, "Open WhisperNow", true)?;
-        let check_updates = menu_item(app, CHECK_UPDATES_MENU_ID, "Check for Updates", true)?;
-        let quit = menu_item(app, QUIT_MENU_ID, "Quit WhisperNow", true)?;
+        let item =
+            |action: TrayAction, text, enabled| menu_item(app, action.menu_id(), text, enabled);
+        let copy_last = item(
+            TrayAction::CopyLastTranscript,
+            "Copy Last Transcript",
+            false,
+        )?;
+        let cancel = item(TrayAction::CancelRecording, "Cancel Recording", false)?;
+        let pause = item(TrayAction::TogglePause, "Pause", false)?;
+        let settings = item(TrayAction::Settings, "Open WhisperNow", true)?;
+        let check_updates = item(TrayAction::CheckForUpdates, "Check for Updates", true)?;
+        let quit = item(TrayAction::Quit, "Quit WhisperNow", true)?;
         let menu = Menu::with_items(
             app,
             &[
@@ -288,7 +320,7 @@ fn menu_item(
 }
 
 /// Every state is the app's key with a different face, so status does not depend on
-/// color: an empty key while loading, the logo's bars when idle, a solid key while recording,
+/// color: an empty key while loading, updating or clearing data, the logo's bars when idle, a solid key while recording,
 /// dots while processing, a pause sign when paused and an exclamation mark on error.
 ///
 /// Drawn at 32 px on a 2 px grid so it stays sharp on 2x displays, with 4x4 supersampled edges.
@@ -329,7 +361,7 @@ fn covers(state: TrayState, x: f32, y: f32) -> bool {
         || pill(x, y, 23.0, FACE_Y, 4.0, 8.0);
     let exclamation = pill(x, y, 16.0, 11.5, 4.0, 10.0) || dot(x, y, 16.0, 20.5, 2.25);
     match state {
-        TrayState::Loading => rim,
+        TrayState::Loading | TrayState::Updating | TrayState::ClearingData => rim,
         TrayState::Idle => rim || bars,
         TrayState::Recording => key && !bars,
         TrayState::RecordingError => key && !exclamation,
@@ -380,6 +412,14 @@ mod tests {
     use super::*;
     use crate::tests::{recording, snapshot};
 
+    #[test]
+    fn every_tray_action_is_found_by_its_own_menu_id() {
+        for action in TrayAction::ALL {
+            assert_eq!(TrayAction::from_menu_id(action.menu_id()), Some(action));
+        }
+        assert_eq!(TrayAction::from_menu_id("tray-status"), None);
+    }
+
     fn transcription_failed() -> whispernow_domain::AppError {
         whispernow_domain::AppError {
             category: whispernow_domain::ErrorCategory::Recognition,
@@ -391,8 +431,8 @@ mod tests {
     #[test]
     fn tray_state_and_actions_follow_the_phase() {
         for (phase, background_error, expected) in [
-            (Phase::Updating, false, TrayState::Idle),
-            (Phase::ClearingData, false, TrayState::Idle),
+            (Phase::Updating, false, TrayState::Updating),
+            (Phase::ClearingData, false, TrayState::ClearingData),
             (Phase::Idle, true, TrayState::Error),
             (Phase::Error, true, TrayState::Error),
             (recording(), true, TrayState::RecordingError),
@@ -408,11 +448,19 @@ mod tests {
         loading.model_state = ModelState::Loading;
         assert_eq!(tray_desired(&loading, true).state, TrayState::Loading);
         let updating = tray_desired(&snapshot(Phase::Updating), true);
+        assert_eq!(updating.pause, PauseItem::Unavailable);
         assert_eq!(
-            (updating.pause_text, updating.pause_enabled),
-            ("Pause", false)
+            updating.state.presentation().status_text,
+            "Status: Installing an update"
         );
-        assert!(!tray_desired(&snapshot(Phase::ClearingData), true).pause_enabled);
+        assert_eq!(
+            tray_desired(&snapshot(Phase::ClearingData), true).pause,
+            PauseItem::Unavailable
+        );
+        assert_eq!(
+            tray_desired(&snapshot(Phase::Paused), true).pause,
+            PauseItem::Resume
+        );
     }
 
     #[test]
@@ -442,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn every_tray_state_draws_a_distinct_key() {
+    fn every_tray_face_is_distinct() {
         let states = [
             TrayState::Loading,
             TrayState::Idle,

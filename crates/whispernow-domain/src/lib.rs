@@ -24,8 +24,9 @@ pub use models::{
 };
 pub use provider::{EndpointError, LlmProvider, ProviderEndpoint};
 pub use settings::{
-    ApiKey, InvalidApiKey, ProviderSettings, PythonSettings, Settings, SetupCheckpoint, SetupStep,
-    ThemePreference, VocabularyReplacement, WindowGeometry,
+    ApiKey, InvalidApiKey, ProviderSettings, PythonSettings, SettingChange, Settings,
+    SetupCheckpoint, SetupProgress, SetupStep, ThemePreference, VocabularyReplacement,
+    WindowGeometry,
 };
 pub use shortcut::{RecordingMode, Shortcut, ShortcutKey, ShortcutModifier};
 pub use validation::SettingsError;

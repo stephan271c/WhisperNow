@@ -16,7 +16,7 @@ use whispernow_domain::ipc::{
 };
 use whispernow_platform::open_url;
 
-use crate::services::Dictation;
+use crate::services::{Dictation, NativeServices};
 
 pub(crate) const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_hours(6);
 const MAX_RELEASE_NOTES_BYTES: usize = 8 * 1024;
@@ -279,13 +279,15 @@ impl<U> Updates<U> {
 
 pub(crate) struct UpdateController {
     app: AppHandle,
+    services: Arc<NativeServices>,
     updates: Mutex<Updates<Update>>,
 }
 
 impl UpdateController {
-    pub(crate) fn new(app: AppHandle, enabled: bool) -> Arc<Self> {
+    pub(crate) fn new(app: AppHandle, services: Arc<NativeServices>, enabled: bool) -> Arc<Self> {
         Arc::new(Self {
             app,
+            services,
             updates: Mutex::new(Updates::new(enabled)),
         })
     }
@@ -298,17 +300,17 @@ impl UpdateController {
         self.updates.lock().expect("updater state lock poisoned")
     }
 
-    /// Changes the state and publishes the result.
+    /// Changes the state and publishes the result. It is published under the lock, on the
+    /// channel the application state uses, so events arrive in the order things happened.
     fn update<T>(&self, change: impl FnOnce(&mut Updates<Update>) -> T) -> T {
-        let (result, snapshot) = {
-            let mut updates = self.lock();
-            let result = change(&mut updates);
-            (result, updates.state.clone())
-        };
-        crate::gateway::emit(
-            &self.app,
-            whispernow_domain::ipc::EventPayload::UpdateChanged { state: snapshot },
-        );
+        let mut updates = self.lock();
+        let result = change(&mut updates);
+        self.services
+            .state
+            .events()
+            .publish(whispernow_domain::ipc::EventPayload::UpdateChanged {
+                state: updates.state.clone(),
+            });
         result
     }
 
@@ -325,11 +327,7 @@ impl UpdateController {
 
     /// A check the user asked for, refused while data is being cleared or an update installs.
     pub(crate) async fn check_manual(&self) -> Result<UpdateState, AppError> {
-        self.app
-            .state::<crate::gateway::Gateway>()
-            .services
-            .state
-            .refuse_during_maintenance()?;
+        self.services.state.refuse_during_maintenance()?;
         Ok(self.check(true).await)
     }
 
@@ -414,23 +412,15 @@ impl UpdateController {
     }
 
     pub(crate) async fn restart_to_update(self: &Arc<Self>) -> Result<UpdateState, AppError> {
-        let dictating = self
-            .app
-            .state::<crate::gateway::Gateway>()
-            .services
-            .state
-            .snapshot()
-            .phase
-            .is_busy();
+        let dictating = self.services.state.snapshot().phase.is_busy();
         let Some(ready) = self.update(|updates| updates.take_ready(dictating)) else {
             return Ok(self.snapshot());
         };
         let controller = Arc::clone(self);
         let worker_ready = Arc::clone(&ready);
         let result = tokio::task::spawn_blocking(move || controller.install(worker_ready)).await;
-        let state = self.app.state::<crate::gateway::Gateway>();
         self.update(|updates| {
-            updates.finish_install_worker(result, ready, &state.services.dictation)
+            updates.finish_install_worker(result, ready, &self.services.dictation)
         })?;
         Ok(self.snapshot())
     }
@@ -438,8 +428,8 @@ impl UpdateController {
     /// Runs on a blocking worker: waiting for the dictation in flight, installing, and shutting
     /// down all block on native, filesystem, and process work.
     fn install(&self, ready: Arc<ReadyUpdate<Update>>) -> Result<(), AppError> {
-        let state = self.app.state::<crate::gateway::Gateway>();
-        if let Err(error) = state.services.dictation.begin_update() {
+        let dictation = &self.services.dictation;
+        if let Err(error) = dictation.begin_update() {
             self.update(|updates| updates.restore_ready(ready, None));
             return Err(error);
         }
@@ -450,7 +440,7 @@ impl UpdateController {
                 self.app.request_restart();
             }
             Err(error) => {
-                state.services.dictation.end_update();
+                dictation.end_update();
                 let code = updater_error(error, UpdaterPhase::Install);
                 self.update(|updates| updates.restore_ready(ready, Some(code)));
             }

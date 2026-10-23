@@ -4,7 +4,8 @@ use std::{
 };
 use whispernow_domain::AppError;
 
-use whispernow_domain::{ClearDataCategory, ErrorCategory, ipc::ClearDataItem};
+use whispernow_domain::ipc::{ClearDataItem, DataLocation};
+use whispernow_domain::{ClearDataCategory, ErrorCategory};
 use whispernow_domain::{
     EntryId, HistoryLimit, HistoryPage, HistoryPageRequest, HistoryRetention, NewHistoryEntry,
 };
@@ -36,18 +37,16 @@ impl HistoryStore {
             .map(|removed| removed > 0)
     }
 
-    /// Saves one dictation, with its audio when `keep_audio` is on, and keeps at most `limit`
-    /// entries of at most `retention` age.
+    /// Saves one dictation, with `audio` when given, and keeps at most `limit` entries of at
+    /// most `retention` age.
     pub(super) fn insert(
         &self,
         entry: NewHistoryEntry,
-        audio: &[f32],
-        keep_audio: bool,
+        audio: Option<&[f32]>,
         limit: HistoryLimit,
         retention: HistoryRetention,
     ) -> Result<EntryId, AppError> {
-        self.repository()?
-            .insert(entry, audio, keep_audio, limit, retention)
+        self.repository()?.insert(entry, audio, limit, retention)
     }
 
     /// Records that an entry's text never reached the focused application.
@@ -85,13 +84,17 @@ impl HistoryStore {
     pub(super) fn recordings_dir(&self) -> Result<PathBuf, AppError> {
         let _repository = self.repository()?;
         let directory = self.paths.recordings_dir();
-        std::fs::create_dir_all(&directory).map_err(|_| {
-            AppError::new(
-                ErrorCategory::General,
-                "recordings_folder_unavailable",
-                "The recordings folder could not be created",
+        std::fs::create_dir_all(&directory)
+            .inspect_err(
+                |error| tracing::warn!(%error, "the recordings folder could not be created"),
             )
-        })?;
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCategory::General,
+                    "recordings_folder_unavailable",
+                    "The recordings folder could not be created",
+                )
+            })?;
         Ok(directory)
     }
 
@@ -113,8 +116,10 @@ impl HistoryStore {
                 .iter()
                 .all(|item| item.deleted);
         ClearDataItem {
-            category: ClearDataCategory::History,
-            path: "History entries, recordings, and legacy files".to_owned(),
+            location: DataLocation {
+                category: ClearDataCategory::History,
+                path: "History entries, recordings, and legacy files".into(),
+            },
             deleted,
         }
     }
@@ -129,7 +134,7 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
-    use whispernow_domain::{EntryStatus, HistoryFilter, UtcMillis};
+    use whispernow_domain::{EntryStatus, HistoryFilter, ModelId, UtcMillis};
 
     use super::*;
 
@@ -142,12 +147,12 @@ mod tests {
     fn entry(text: &str) -> NewHistoryEntry {
         NewHistoryEntry {
             created_at: UtcMillis::now(),
-            duration_millis: Some(1_000),
+            duration_millis: 1_000,
             raw_text: Some(text.to_owned()),
             cleaned_text: None,
             status: EntryStatus::Ok,
             error: None,
-            asr_model_id: None,
+            asr_model_id: ModelId::default(),
         }
     }
 
@@ -157,8 +162,7 @@ mod tests {
         let first = store
             .insert(
                 entry("first"),
-                &[],
-                false,
+                None,
                 HistoryLimit::Unlimited,
                 HistoryRetention::Forever,
             )
@@ -172,8 +176,7 @@ mod tests {
             store
                 .insert(
                     entry("later"),
-                    &[],
-                    false,
+                    None,
                     HistoryLimit::Unlimited,
                     HistoryRetention::Forever,
                 )
@@ -203,8 +206,7 @@ mod tests {
             store
                 .insert(
                     entry("later"),
-                    &[],
-                    false,
+                    None,
                     HistoryLimit::Unlimited,
                     HistoryRetention::Forever
                 )

@@ -184,13 +184,19 @@ pub(crate) fn DraftText(
     }
 }
 
-/// A choice between a few options shown side by side, one pressed. Each option is (value, id
-/// suffix, label). It takes the id and label of the `Field` or `SettingRow` around it, and each
-/// option's id is `{id}-{suffix}`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SegmentedOption<T> {
+    pub(crate) value: T,
+    pub(crate) suffix: &'static str,
+    pub(crate) label: &'static str,
+}
+
+/// A choice between a few options shown side by side, one pressed. It takes the id and label of
+/// the `Field` or `SettingRow` around it, and each option's id is `{id}-{suffix}`.
 #[component]
 pub(crate) fn Segmented<T: Clone + PartialEq + 'static>(
     value: T,
-    options: Vec<(T, &'static str, &'static str)>,
+    options: Vec<SegmentedOption<T>>,
     onchange: EventHandler<T>,
     #[props(default)] disabled: bool,
 ) -> Element {
@@ -202,7 +208,7 @@ pub(crate) fn Segmented<T: Clone + PartialEq + 'static>(
             role: "group",
             aria_labelledby: wiring.label_id(),
             aria_describedby: wiring.described_by.clone(),
-            for (option, suffix, label) in options {
+            for SegmentedOption { value: option, suffix, label } in options {
                 button {
                     r#type: "button",
                     class: "segmented-option",

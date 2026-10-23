@@ -3,9 +3,10 @@ use std::collections::BTreeSet;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use whispernow_domain::{
-    ApiKey, HistoryLimit, HistoryRetention, LlmProvider, ModelId, ProviderEndpoint,
-    ProviderSettings, PythonSettings, RecordingMode, Settings, SetupCheckpoint, SetupStep,
-    Shortcut, ShortcutKey, ShortcutModifier, VocabularyReplacement,
+    ApiKey, CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, HistoryLimit, HistoryRetention,
+    LlmProvider, ModelId, ProviderEndpoint, ProviderSettings, PythonSettings, RecordingMode,
+    Settings, SetupCheckpoint, SetupProgress, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
+    VocabularyReplacement, WindowGeometry,
 };
 
 fn parse_json<T: DeserializeOwned>(document: &str) -> T {
@@ -44,29 +45,52 @@ fn settings_round_trip_and_missing_fields_take_defaults() {
         history_limit: HistoryLimit::Last1000,
         history_retention: HistoryRetention::Days30,
         keep_audio: true,
-        setup: Some(SetupCheckpoint {
+        setup: SetupProgress::Unfinished(SetupCheckpoint {
             step: SetupStep::TryIt,
             ..SetupCheckpoint::default()
         }),
+        cleanup_model: ModelId::new(CLEANUP_MODEL_IDS[1]).expect("cleanup model id"),
         api_keys: [LlmProvider::Gemini].into(),
+        vocabulary_replacements: vec![VocabularyReplacement::new("whisper now", "WhisperNow")],
+        window_geometry: Some(WindowGeometry {
+            x: -20,
+            y: 40,
+            width: 900,
+            height: 700,
+        }),
         ..Settings::default()
     };
-    *settings.provider_settings_mut(LlmProvider::Gemini) = ProviderSettings {
-        model: "gemini-test".to_owned(),
-        api_base: None,
-        saved_models: vec!["gemini-test".to_owned()],
-    };
+    settings
+        .provider_settings_mut(LlmProvider::Gemini)
+        .choose_model("gemini-test".to_owned());
     let document = serde_json::to_string(&settings).expect("serialize settings");
     assert_eq!(parse_json::<Settings>(&document), settings);
     let saved: Value = parse_json(&document);
     assert_eq!(saved["history_retention"], "30");
+    assert_eq!(saved["cleanup_model"], CLEANUP_MODEL_IDS[1]);
+    assert_eq!(
+        saved["vocabulary_replacements"],
+        json!([{ "source": "whisper now", "replacement": "WhisperNow" }])
+    );
+    assert_eq!(
+        saved["window_geometry"],
+        json!({ "x": -20, "y": 40, "width": 900, "height": 700 })
+    );
     assert!(saved.get("recording_shortcut").is_some());
     assert!(saved.get("cancel_shortcut").is_some());
-    assert!(saved["setup"].get("recording_shortcut").is_some());
+    let checkpoint = &saved["setup"]["unfinished"];
+    assert!(checkpoint.get("recording_shortcut").is_some());
     for key in ["hotkey", "cancel_hotkey", "auto_start_on_login"] {
         assert!(saved.get(key).is_none());
-        assert!(saved["setup"].get(key).is_none());
+        assert!(checkpoint.get(key).is_none());
     }
+    settings.setup = SetupProgress::Complete;
+    let complete = serde_json::to_value(&settings).expect("serialize settings");
+    assert_eq!(complete["setup"], "complete");
+    assert_eq!(
+        serde_json::from_value::<Settings>(complete).expect("settings"),
+        settings
+    );
 
     let partial: Settings = parse_json(r#"{"keep_audio":true,"unknown":{"nested":true}}"#);
     assert_eq!(
@@ -97,7 +121,7 @@ fn python_settings_import_picks_known_fields() {
     // The fixture's Whisper Small is no longer offered.
     assert_eq!(settings.model_id, ModelId::default());
     assert!(settings.start_minimized && imported.enable_autostart);
-    assert!(settings.first_run_complete);
+    assert_eq!(settings.setup, SetupProgress::Complete);
     assert!(
         settings.cleanup_enabled,
         "any chosen prompt turns cleanup on"
@@ -106,7 +130,7 @@ fn python_settings_import_picks_known_fields() {
     assert_eq!(
         settings.provider_settings(LlmProvider::Ollama),
         &ProviderSettings {
-            model: "llama3.2".to_owned(),
+            model: Some("llama3.2".to_owned()),
             api_base: ProviderEndpoint::parse("http://localhost:11434").ok(),
             saved_models: vec!["llama3.2".to_owned(), "qwen2.5".to_owned()],
         }
@@ -120,7 +144,7 @@ fn python_settings_import_picks_known_fields() {
     );
     assert_eq!(
         settings.window_geometry,
-        Some(whispernow_domain::WindowGeometry {
+        Some(WindowGeometry {
             x: 120,
             y: 80,
             width: 1024,
@@ -147,7 +171,7 @@ fn python_model_names_lose_their_litellm_routing_prefix() {
     assert_eq!(
         settings.provider_settings(LlmProvider::OpenAi),
         &ProviderSettings {
-            model: "gpt-4o".to_owned(),
+            model: Some("gpt-4o".to_owned()),
             api_base: None,
             saved_models: vec!["gpt-4o".to_owned(), "gpt-5".to_owned()],
         }
@@ -155,11 +179,34 @@ fn python_model_names_lose_their_litellm_routing_prefix() {
     assert_eq!(
         settings.provider_settings(LlmProvider::OpenRouter),
         &ProviderSettings {
-            model: "auto".to_owned(),
+            model: Some("auto".to_owned()),
             api_base: None,
-            saved_models: vec!["openai/gpt-5.2".to_owned()],
+            saved_models: vec!["auto".to_owned(), "openai/gpt-5.2".to_owned()],
         },
-        "only the provider's own routing prefix goes"
+        "only the provider's own routing prefix goes, and the active model is saved"
+    );
+}
+
+#[test]
+fn python_setup_progress_and_local_cleanup_model_import() {
+    let unfinished = PythonSettings::import(&json!({
+        "first_run_complete": false,
+        "llm_provider": "local_cleanup",
+        "llm_provider_settings": { "local_cleanup": { "model": CLEANUP_MODEL_IDS[1] } }
+    }));
+    let settings = unfinished.settings;
+    assert_eq!(settings.setup, SetupProgress::default());
+    assert_eq!(settings.cleanup_model.as_str(), CLEANUP_MODEL_IDS[1]);
+    assert!(settings.llm_provider_settings.is_empty());
+
+    let unknown = PythonSettings::import(&json!({
+        "first_run_complete": true,
+        "llm_provider_settings": { "local_cleanup": { "model": "cleanup" } }
+    }));
+    assert_eq!(unknown.settings.setup, SetupProgress::Complete);
+    assert_eq!(
+        unknown.settings.cleanup_model.as_str(),
+        DEFAULT_CLEANUP_MODEL_ID
     );
 }
 
@@ -206,15 +253,18 @@ fn python_settings_import_moves_keys_out_and_reads_the_older_layouts() {
     );
     assert!(!settings.cleanup_enabled);
     assert_eq!(
-        settings.provider_settings(LlmProvider::OpenAi).model,
-        "gpt-test"
+        settings
+            .provider_settings(LlmProvider::OpenAi)
+            .model
+            .as_deref(),
+        Some("gpt-test")
     );
     assert_eq!(
         settings.provider_settings(LlmProvider::OpenRouter),
         &ProviderSettings {
-            model: "anthropic/claude-3-sonnet".to_owned(),
+            model: Some("anthropic/claude-3-sonnet".to_owned()),
             api_base: ProviderEndpoint::parse("https://openrouter.ai/api/v1").ok(),
-            saved_models: Vec::new(),
+            saved_models: vec!["anthropic/claude-3-sonnet".to_owned()],
         }
     );
     assert_eq!(settings.llm_provider_settings.len(), 2);

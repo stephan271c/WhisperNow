@@ -4,12 +4,10 @@ use whispernow_domain::{RecordingMode, SetupStep, Shortcut};
 
 use super::labels;
 use super::microphone_test::MicrophoneTest;
-use super::ui::{
-    Banner, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconName, ShortcutLabel, Tone,
-};
+use super::ui::{Banner, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconName, Tone};
 use super::updates::UpdateStatus;
-use super::{CopyButton, NoticeRegion};
-use crate::{CopyTarget, HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext};
+use super::{CopyButton, NoticeRegion, ShortcutSummary};
+use crate::{Fix, HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext};
 
 /// The steps the setup checklist lists, each done once setup has moved past it.
 const CHECKLIST: [(&str, SetupStep); 4] = [
@@ -119,7 +117,7 @@ fn StatusCard(status: HomeStatus, cleanup_device: Option<CleanupDevice>) -> Elem
                     p { id: "home-cleanup-device", class: "status-detail", "{labels::cleanup_device(device)}" }
                 }
             }
-            if let Some((label, section)) = status.fix {
+            if let Some(Fix { label, section }) = status.fix {
                 Button {
                     id: "home-status-fix",
                     size: ButtonSize::Sm,
@@ -141,9 +139,7 @@ fn ShortcutsCard(shortcut: Option<(RecordingMode, Shortcut)>) -> Element {
             match shortcut {
                 None => rsx! { p { class: "status-detail", "Loading your shortcuts…" } },
                 Some((mode, shortcut)) => rsx! {
-                    dl { class: "shortcut-list",
-                        div { dt { "{labels::recording_mode(mode)}" } dd { ShortcutLabel { shortcut } } }
-                    }
+                    dl { class: "shortcut-list", ShortcutSummary { mode, shortcut } }
                 },
             }
             Button {
@@ -178,7 +174,7 @@ fn LatestTranscript(transcript: Option<String>) -> Element {
             if let Some(text) = transcript {
                 p { id: "latest-transcript", class: "transcript-text", "{text}" }
                 div { class: "card-actions",
-                    CopyButton { id: "copy-latest", target: CopyTarget::LatestTranscript,
+                    CopyButton { id: "copy-latest",
                         text, label: "Copy", size: ButtonSize::Sm, icon: true,
                     }
                     Button {

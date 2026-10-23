@@ -1,70 +1,88 @@
 use whispernow_domain::{AppError, ErrorCategory};
-use whispernow_domain::{HistoryFilter, HistoryPage, HistoryPageRequest};
+use whispernow_domain::{HistoryEntry, HistoryFilter, HistoryPage, HistoryPageRequest};
 
 use super::ManagementState;
 use crate::NoticeScope;
 use crate::components::ui::Tone;
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum HistoryRows {
+    #[default]
+    Loading,
+    /// The store cannot be read; the reason replaces the page.
+    Unavailable(String),
+    /// The current search could not be read; the reason replaces the list.
+    SearchFailed(String),
+    Loaded {
+        /// The search and failed filter the rows were read with.
+        filter: HistoryFilter,
+        entries: Vec<HistoryEntry>,
+        has_more: bool,
+    },
+}
+
+impl HistoryRows {
+    #[must_use]
+    pub fn entries(&self) -> &[HistoryEntry] {
+        match self {
+            Self::Loaded { entries, .. } => entries,
+            _ => &[],
+        }
+    }
+
+    #[must_use]
+    pub const fn has_more(&self) -> bool {
+        matches!(self, Self::Loaded { has_more: true, .. })
+    }
+}
+
 impl ManagementState {
-    pub(crate) fn history_request(&mut self) -> (u64, HistoryPageRequest) {
-        // Reads with the same filter can finish out of order after Load more or deletion.
-        self.history_request_id += 1;
-        let request = HistoryPageRequest {
+    #[must_use]
+    pub(crate) fn history_request(&self) -> HistoryPageRequest {
+        HistoryPageRequest {
             limit: self
                 .history_window_pages()
                 .saturating_mul(HistoryPageRequest::DEFAULT_PAGE_SIZE),
             ..HistoryPageRequest::first_page(self.history_filter.clone())
-        };
-        (self.history_request_id, request)
+        }
     }
 
     /// Grows the window by one page and returns the read for it.
-    pub(crate) fn older_history_request(&mut self) -> (u64, HistoryPageRequest) {
-        self.history_pages = self.history_window_pages().saturating_add(1);
+    pub(crate) fn older_history_request(&mut self) -> HistoryPageRequest {
+        self.history_extra_pages = self.history_extra_pages.saturating_add(1);
         self.history_request()
     }
 
     #[must_use]
-    pub const fn history_loaded(&self) -> bool {
-        self.history_rows_filter.is_some()
+    pub const fn history_window_pages(&self) -> u32 {
+        self.history_extra_pages.saturating_add(1)
     }
 
-    #[must_use]
-    pub fn history_window_pages(&self) -> u32 {
-        self.history_pages.max(1)
+    pub fn finish_history_refresh(&mut self, page: HistoryPage) {
+        self.history = HistoryRows::Loaded {
+            filter: self.history_filter.clone(),
+            entries: page.entries,
+            has_more: page.has_more,
+        };
     }
 
-    pub fn finish_history_refresh(&mut self, request_id: u64, page: HistoryPage) {
-        if request_id != self.history_request_id {
-            return;
-        }
-        self.history_unavailable = None;
-        self.history_search_error = None;
-        self.history_rows_filter = Some(self.history_filter.clone());
-        self.history = page.entries;
-        self.history_has_more = page.has_more;
-    }
-
-    pub fn fail_history_refresh(&mut self, request_id: u64, error: &AppError) {
-        if request_id != self.history_request_id {
-            return;
-        }
+    pub fn fail_history_refresh(&mut self, error: &AppError) {
         let summary = error.summary.clone();
-        let unreadable = error.category == ErrorCategory::HistoryUnavailable;
-        if !self.history_loaded() || unreadable {
-            // Degraded mode: show the reason instead of rows that can no longer be confirmed.
-            self.history.clear();
-            self.history_rows_filter = None;
-            self.history_has_more = false;
-            self.history_unavailable = Some(summary);
-        } else if self.history_rows_filter.as_ref() != Some(&self.history_filter) {
-            // The rows answer an earlier search; showing them under this one would mislead.
-            self.history.clear();
-            self.history_has_more = false;
-            self.history_search_error = Some(summary);
-        } else {
-            self.notify(Tone::Error, NoticeScope::History, summary);
-        }
+        self.history = match &self.history {
+            // Rows that can no longer be confirmed give way to the reason.
+            _ if error.category == ErrorCategory::HistoryUnavailable => {
+                HistoryRows::Unavailable(summary)
+            }
+            HistoryRows::Loading | HistoryRows::Unavailable(_) => HistoryRows::Unavailable(summary),
+            HistoryRows::Loaded { filter, .. } if *filter == self.history_filter => {
+                self.notify(Tone::Error, NoticeScope::History, summary);
+                return;
+            }
+            // Rows read for another search would mislead under this one.
+            HistoryRows::Loaded { .. } | HistoryRows::SearchFailed(_) => {
+                HistoryRows::SearchFailed(summary)
+            }
+        };
     }
 
     /// Applies the typed search text; returns whether the window must be read again from its
@@ -74,7 +92,7 @@ impl ManagementState {
             return false;
         }
         self.history_filter.query.clone_from(&self.history_search);
-        self.history_pages = 1;
+        self.history_extra_pages = 0;
         true
     }
 
@@ -84,7 +102,7 @@ impl ManagementState {
             return false;
         }
         self.history_filter.failed_only = failed_only;
-        self.history_pages = 1;
+        self.history_extra_pages = 0;
         true
     }
 
@@ -95,7 +113,7 @@ impl ManagementState {
             return false;
         }
         self.history_filter = HistoryFilter::default();
-        self.history_pages = 1;
+        self.history_extra_pages = 0;
         true
     }
 }

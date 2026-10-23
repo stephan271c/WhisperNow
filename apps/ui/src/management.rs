@@ -8,13 +8,14 @@ use std::collections::BTreeMap;
 use dioxus::core::Task;
 use whispernow_domain::ipc::{
     AudioDevice, ClearDataResult, DataLocation, MicrophoneTestResponse, ModelSummary,
-    PermissionKind, PermissionsResponse, SettingsView,
+    PermissionsResponse, SettingsView,
 };
-use whispernow_domain::{EntryId, HistoryEntry, HistoryFilter, Settings, SetupCheckpoint};
+use whispernow_domain::{HistoryFilter, SetupCheckpoint};
 
 use crate::components::ui::Tone;
 use crate::{Notice, NoticeScope, UiOperation};
 
+pub(crate) use history::HistoryRows;
 pub(crate) use settings::SettingKey;
 pub(crate) use setup::SetupTest;
 
@@ -25,26 +26,10 @@ pub(crate) fn replace_task(slot: &mut Option<Task>, next: Option<Task>) {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CopyTarget {
-    LatestTranscript,
-    HistoryEntry(EntryId),
-    PasteHelperCommand,
-    VocabularyRules,
-}
-
-/// The outcome of the latest copy, shown on the Copy button it came from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Copied {
-    pub target: CopyTarget,
-    pub succeeded: bool,
-}
-
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct ManagementState {
     pub settings: Option<SettingsView>,
-    edited: Option<Settings>,
-    saving: Option<SettingKey>,
+    pending_save: Option<settings::PendingSave>,
     setting_errors: BTreeMap<SettingKey, String>,
     /// The checkpoint setup shows, including choices not saved yet.
     pub setup: Option<SetupCheckpoint>,
@@ -52,30 +37,20 @@ pub(crate) struct ManagementState {
     pub devices_listed: bool,
     pub models: Vec<ModelSummary>,
     pub models_loaded: bool,
-    pub history: Vec<HistoryEntry>,
-    pub history_unavailable: Option<String>,
-    pub history_has_more: bool,
+    pub history: HistoryRows,
     /// The search and failed filter the latest window request reads with.
     pub history_filter: HistoryFilter,
-    /// The filter the rows in `history` were read with; `None` until a window is installed
-    /// and once it can no longer be read.
-    pub(crate) history_rows_filter: Option<HistoryFilter>,
-    /// Why the rows for the current search could not be read; shown in place of the list.
-    pub history_search_error: Option<String>,
     /// The search text as typed, applied once typing pauses.
     pub history_search: String,
-    /// Pages in the loaded history window; "Load more" grows it by one.
-    history_pages: u32,
-    history_request_id: u64,
-    pub copied: Option<Copied>,
-    /// The latest copy, which clears its outcome after a moment.
-    pub(crate) copy_task: Option<Task>,
+    /// Pages beyond the first in the history window; "Load more" adds one.
+    history_extra_pages: u32,
+    /// The window read in flight; a newer read cancels it, so an older answer never lands.
+    pub(crate) history_read: Option<Task>,
     /// The application data a clear would remove, once the user asked to review it.
     pub data_locations: Option<Vec<DataLocation>>,
     pub clear_result: Option<ClearDataResult>,
     /// Controls whose call is in flight, once per call.
     pub(crate) busy: Vec<UiOperation>,
-    pub(crate) requested_permission: Option<PermissionKind>,
     pub notice: Option<Notice>,
     next_notice: u64,
     pub microphone_test: Option<MicrophoneTestResponse>,

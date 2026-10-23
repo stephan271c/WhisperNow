@@ -5,8 +5,8 @@ use whispernow_domain::ipc::{
 };
 use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{
-    DownloadPhase, ModelAvailability, ModelId, RecordingMode, SetupCheckpoint, SetupStep, Shortcut,
-    ShortcutKey, ShortcutModifier,
+    DownloadPhase, ModelAvailability, ModelId, RecordingMode, SetupCheckpoint, SetupProgress,
+    SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
 };
 
 use super::super::actions::PERMISSION_POLLS;
@@ -41,8 +41,7 @@ fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState
 
 fn finished(mut management: ManagementState) -> ManagementState {
     let mut view = management.settings.clone().expect("settings loaded");
-    view.settings.first_run_complete = true;
-    view.settings.setup = None;
+    view.settings.setup = SetupProgress::Complete;
     management.install_settings(view);
     management
 }
@@ -65,7 +64,7 @@ fn at(step: SetupStep) -> Page {
 fn saved_with(page: &Page, checkpoint: SetupCheckpoint) -> SettingsView {
     let management = page.context().management;
     let mut view = management.read().settings.clone().expect("settings loaded");
-    view.settings.setup = Some(checkpoint);
+    view.settings.setup = SetupProgress::Unfinished(checkpoint);
     view
 }
 
@@ -84,7 +83,8 @@ fn settings_checkpoint(page: &Page) -> Option<SetupCheckpoint> {
         .expect("settings loaded")
         .settings
         .setup
-        .clone()
+        .checkpoint()
+        .cloned()
 }
 
 fn start_test(page: &mut Page) {
@@ -146,8 +146,7 @@ fn a_window_resumes_setup_from_the_settings_it_reads() {
         ..SetupCheckpoint::default()
     };
     let mut settings = editable_settings();
-    settings.first_run_complete = false;
-    settings.setup = Some(checkpoint.clone());
+    settings.setup = SetupProgress::Unfinished(checkpoint.clone());
     let mut window = home(ManagementState::default());
     window.act(crate::UiContext::refresh_all);
     assert_eq!(
@@ -368,7 +367,7 @@ fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cance
             model_id: ModelId::new("stream").expect("fixture model id"),
             phase: DownloadPhase::Downloading,
             downloaded_bytes: 25,
-            total_bytes: Some(100),
+            total_bytes: 100,
             bytes_per_second: None,
         });
     }));
@@ -683,21 +682,21 @@ fn try_it_shows_the_test_result_and_can_run_again() {
         setup.answer("start_test_dictation", Ok(()));
         setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
         setup.publish(EventPayload::AudioLevel {
-            rms: 0.4,
+            rms: 0.25,
             peak: 0.8,
             elapsed_ms: 1_000,
         });
         let html = setup.html();
         let meter = tag(&html, "setup-test-level").expect("live level");
         assert!(meter.contains("role=\"meter\""), "{meter}");
-        assert!(meter.contains("aria-valuenow=\"40\""), "{meter}");
+        assert!(meter.contains("aria-valuenow=\"50\""), "{meter}");
         let start = html.find(meter).expect("meter position") + meter.len();
         let meter_content = &html[start..];
         let graphic = &meter_content[..meter_content.find("</svg>").expect("meter graphic")];
         let fill = element(graphic, "<rect").expect("visible level fill");
         assert!(
-            fill.contains("width=\"40\""),
-            "RMS 0.4 fills forty percent of the meter: {fill}"
+            fill.contains("width=\"50\""),
+            "the meter shows the square root of RMS 0.25: {fill}"
         );
         setup.click("setup-test-stop");
         assert_eq!(fake::count("stop_recording"), 1);
@@ -829,8 +828,7 @@ fn finishing_setup_shows_a_refusal_then_saves_the_checkpoint_and_stops_permissio
         fake::requests::<SetupCheckpoint>("complete_setup"),
         [checkpoint.clone(), checkpoint.clone()]
     );
-    settings.first_run_complete = true;
-    settings.setup = None;
+    settings.setup = SetupProgress::Complete;
     settings.model_id = checkpoint.model_id;
     settings.input_device = checkpoint.input_device;
     settings.recording_shortcut = checkpoint.recording_shortcut;
@@ -843,7 +841,7 @@ fn finishing_setup_shows_a_refusal_then_saves_the_checkpoint_and_stops_permissio
         }),
     );
     assert!(tag(&setup.html(), "setup-continue").is_none());
-    assert!(setup.context().management.read().first_run_complete());
+    assert!(setup.context().management.read().setup_complete());
     setup.click("setup-done-home");
     assert_eq!(text(&setup.html(), "page-heading"), "Home");
     assert!(tag(&setup.html(), "setup-wizard").is_none());
@@ -868,8 +866,7 @@ fn a_warning_from_finishing_setup_shows_on_the_done_step() {
         .expect("settings loaded")
         .settings;
     setup.click("setup-continue");
-    settings.first_run_complete = true;
-    settings.setup = None;
+    settings.setup = SetupProgress::Complete;
     setup.answer(
         "complete_setup",
         Ok(SaveSettingsResponse {
@@ -927,13 +924,12 @@ fn settings_runs_setup_again_after_it_finished() {
         step: SetupStep::Welcome,
         ..window.context().management.read().checkpoint()
     };
-    let mut restarted = saved_with(&window, welcome.clone());
-    restarted.settings.first_run_complete = false;
+    let restarted = saved_with(&window, welcome.clone());
     window.answer("restart_setup", Ok(restarted));
     let html = window.html();
     assert_eq!(text(&html, "page-heading"), "Set up WhisperNow");
     assert_eq!(current_step(&html), 1);
-    assert!(!window.context().management.read().first_run_complete());
+    assert!(!window.context().management.read().setup_complete());
     assert_eq!(settings_checkpoint(&window), Some(welcome));
 }
 

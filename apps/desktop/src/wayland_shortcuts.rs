@@ -878,7 +878,7 @@ mod tests {
 
         let coordinator = crate::shortcuts::ShortcutCoordinator::new(
             Arc::new(registrar),
-            Ok(crate::shortcuts::RecordingBinding {
+            Some(crate::shortcuts::RecordingBinding {
                 mode: whispernow_domain::RecordingMode::Hold,
                 binding: binding(1),
             }),

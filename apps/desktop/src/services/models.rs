@@ -60,22 +60,19 @@ impl ModelCoordinator {
             .list()
             .map_err(|error| model_list_error(&error))?
             .into_iter()
-            .map(|entry| ModelSummary {
-                recommended: entry.definition.id == ModelId::default(),
-                family: entry.definition.family(),
-                id: entry.definition.id,
-                display_name: entry.definition.display_name,
-                availability: entry.availability,
-                languages: entry.definition.languages,
-                size_bytes: entry.definition.source.archive_size_bytes,
-                benchmark: entry.definition.benchmark,
-            })
+            .map(|entry| entry.definition.summary(entry.availability))
             .collect();
         Ok(models)
     }
 
     pub(crate) fn download(&self, model_id: &ModelId) -> Result<(), AppError> {
         let _transition = self.transition();
+        let total_bytes = self
+            .store
+            .definition(model_id)
+            .map_err(|_| unknown_model())?
+            .source
+            .archive_size_bytes;
         let token = CancellationToken::default();
         self.state.update(|state| {
             state.require_not_in_maintenance()?;
@@ -96,7 +93,7 @@ impl ModelCoordinator {
                         model_id: model_id.clone(),
                         phase: DownloadPhase::Downloading,
                         downloaded_bytes: 0,
-                        total_bytes: None,
+                        total_bytes,
                         bytes_per_second: None,
                     },
                     cancellation: token.clone(),
@@ -196,13 +193,19 @@ impl ModelCoordinator {
         } else {
             None
         };
-        self.store.remove(model_id).map_err(|_| {
-            AppError::new(
-                ErrorCategory::Model,
-                "model_delete",
-                "The model could not be deleted",
+        self.store
+            .remove(model_id)
+            .inspect_err(
+                |error| tracing::warn!(%error, %model_id, "the model could not be deleted"),
             )
-        })?;
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCategory::Model,
+                    "model_delete",
+                    "The model could not be deleted",
+                )
+            })?;
+        self.state.events().models_changed();
         Ok(())
     }
 
@@ -321,6 +324,7 @@ fn run_model_download(
             current.last_error = Some(error);
         }
     });
+    state.events().models_changed();
 }
 
 const MIN_RATE_INTERVAL: Duration = Duration::from_millis(500);

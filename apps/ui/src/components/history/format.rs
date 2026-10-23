@@ -189,10 +189,7 @@ fn system_now() -> UtcMillis {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn system_now() -> UtcMillis {
-    let elapsed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    UtcMillis(i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
+    UtcMillis::now()
 }
 
 /// Minutes east of UTC in the browser's zone at `at`.

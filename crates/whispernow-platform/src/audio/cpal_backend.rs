@@ -281,6 +281,44 @@ struct CallbackPorts {
     dropped_frames: Arc<AtomicUsize>,
 }
 
+impl CallbackPorts {
+    /// Converts one callback's samples into a pooled buffer and sends it, never blocking or
+    /// allocating more than the pool holds; frames that find no buffer or no room are counted
+    /// as dropped.
+    fn deliver<T>(&self, data: &[T])
+    where
+        T: Sample + Copy,
+        f32: FromSample<T>,
+    {
+        let mut buffer = match self.available.try_recv() {
+            Ok(buffer) => buffer,
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
+                add_dropped(&self.dropped_frames, data.len() / self.channels.get());
+                return;
+            }
+        };
+        buffer.clear();
+        // Hosts such as WASAPI shared mode or PipeWire may ignore the requested
+        // period. Growing keeps the whole callback; the grown buffer returns to the
+        // pool, so this allocates at most once per pooled buffer per larger period.
+        buffer.reserve(data.len());
+        buffer.extend(data.iter().map(|sample| {
+            let normalized = f32::from_sample(*sample);
+            if normalized.is_finite() {
+                normalized.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        }));
+        if let Err(TrySendError::Full(buffer) | TrySendError::Disconnected(buffer)) =
+            self.chunks.try_send(buffer)
+        {
+            add_dropped(&self.dropped_frames, buffer.len() / self.channels.get());
+            let _returned = self.recycle.try_send(buffer).is_ok();
+        }
+    }
+}
+
 fn build_stream(
     device: &Device,
     format: SampleFormat,
@@ -323,59 +361,11 @@ where
     device
         .build_input_stream::<T, _, _>(
             config,
-            move |data, _| {
-                copy_callback_samples(
-                    data,
-                    callback.channels,
-                    &callback.chunks,
-                    &callback.available,
-                    &callback.recycle,
-                    &callback.dropped_frames,
-                );
-            },
+            move |data, _| callback.deliver(data),
             move |error| map_stream_fault(error.kind()).store(&fault),
             Some(STREAM_BUILD_TIMEOUT),
         )
         .map_err(|error| map_device_error(&error, "build input stream"))
-}
-
-fn copy_callback_samples<T>(
-    data: &[T],
-    channels: NonZeroUsize,
-    chunks: &SyncSender<Vec<f32>>,
-    available: &Receiver<Vec<f32>>,
-    recycle: &SyncSender<Vec<f32>>,
-    dropped_frames: &AtomicUsize,
-) where
-    T: Sample + Copy,
-    f32: FromSample<T>,
-{
-    let mut buffer = match available.try_recv() {
-        Ok(buffer) => buffer,
-        Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
-            add_dropped(dropped_frames, data.len() / channels.get());
-            return;
-        }
-    };
-    buffer.clear();
-    // Hosts such as WASAPI shared mode or PipeWire may ignore the requested
-    // period. Growing keeps the whole callback; the grown buffer returns to the
-    // pool, so this allocates at most once per pooled buffer per larger period.
-    buffer.reserve(data.len());
-    buffer.extend(data.iter().map(|sample| {
-        let normalized = f32::from_sample(*sample);
-        if normalized.is_finite() {
-            normalized.clamp(-1.0, 1.0)
-        } else {
-            0.0
-        }
-    }));
-    if let Err(TrySendError::Full(buffer) | TrySendError::Disconnected(buffer)) =
-        chunks.try_send(buffer)
-    {
-        add_dropped(dropped_frames, buffer.len() / channels.get());
-        let _returned = recycle.try_send(buffer).is_ok();
-    }
 }
 
 fn add_dropped(counter: &AtomicUsize, frames: usize) {
@@ -452,22 +442,27 @@ mod tests {
         assert_eq!(selected.sample_rate(), 32_000);
     }
 
+    /// Ports with one pool slot, seeded with `buffer` when given, and their chunks' receiver.
+    fn ports(channels: usize, buffer: Option<Vec<f32>>) -> (CallbackPorts, Receiver<Vec<f32>>) {
+        let (chunks, chunks_rx) = sync_channel(1);
+        let (recycle, available) = sync_channel(1);
+        if let Some(buffer) = buffer {
+            recycle.send(buffer).expect("seed buffer pool");
+        }
+        let ports = CallbackPorts {
+            channels: NonZeroUsize::new(channels).expect("channels"),
+            chunks,
+            available,
+            recycle,
+            dropped_frames: Arc::new(AtomicUsize::new(0)),
+        };
+        (ports, chunks_rx)
+    }
+
     #[test]
     fn callback_conversion_is_nonblocking_bounded_and_normalized() {
-        let (chunks_tx, chunks_rx) = sync_channel(1);
-        let (pool_tx, pool_rx) = sync_channel(1);
-        pool_tx
-            .send(Vec::with_capacity(6))
-            .expect("seed buffer pool");
-        let dropped = AtomicUsize::new(0);
-        copy_callback_samples(
-            &[i16::MIN, -16_384, 0, 16_384, i16::MAX, 0],
-            NonZeroUsize::new(2).expect("channels"),
-            &chunks_tx,
-            &pool_rx,
-            &pool_tx,
-            &dropped,
-        );
+        let (ports, chunks_rx) = ports(2, Some(Vec::with_capacity(6)));
+        ports.deliver(&[i16::MIN, -16_384, 0, 16_384, i16::MAX, 0]);
         let chunk = chunks_rx.recv().expect("callback chunk");
         assert_eq!(chunk.len(), 6);
         // The positive i16 maximum is one 1/32768 step below full scale.
@@ -478,7 +473,7 @@ mod tests {
                 "sample {index}: expected {expected}, got {actual}"
             );
         }
-        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(ports.dropped_frames.load(Ordering::Relaxed), 0);
     }
 
     fn converted<T>(samples: &[T]) -> Vec<f32>
@@ -486,61 +481,37 @@ mod tests {
         T: Sample + Copy,
         f32: FromSample<T>,
     {
-        let (chunks_tx, chunks_rx) = sync_channel(1);
-        let (pool_tx, pool_rx) = sync_channel(1);
-        pool_tx
-            .send(Vec::with_capacity(samples.len()))
-            .expect("seed buffer pool");
-        copy_callback_samples(
-            samples,
-            NonZeroUsize::new(1).expect("channels"),
-            &chunks_tx,
-            &pool_rx,
-            &pool_tx,
-            &AtomicUsize::new(0),
-        );
+        let (ports, chunks_rx) = ports(1, Some(Vec::with_capacity(samples.len())));
+        ports.deliver(samples);
         chunks_rx.recv().expect("converted chunk")
     }
 
     #[test]
     fn callback_larger_than_the_negotiated_period_is_fully_captured() {
         const FRAMES: usize = 2_048;
-        let channels = NonZeroUsize::new(2).expect("channels");
-        let (chunks_tx, chunks_rx) = sync_channel(1);
-        let (pool_tx, pool_rx) = sync_channel(1);
-        pool_tx
-            .send(Vec::with_capacity(
-                PREFERRED_BUFFER_FRAMES as usize * channels.get(),
-            ))
-            .expect("seed buffer pool");
-        let dropped = AtomicUsize::new(0);
-        let callback = (0..FRAMES * channels.get())
+        const CHANNELS: usize = 2;
+        let (ports, chunks_rx) = ports(
+            CHANNELS,
+            Some(Vec::with_capacity(
+                PREFERRED_BUFFER_FRAMES as usize * CHANNELS,
+            )),
+        );
+        let callback = (0..FRAMES * CHANNELS)
             .map(|index| i16::try_from(index % 1_000).expect("sample value"))
             .collect::<Vec<_>>();
 
-        copy_callback_samples(
-            &callback, channels, &chunks_tx, &pool_rx, &pool_tx, &dropped,
-        );
+        ports.deliver(&callback);
 
         let chunk = chunks_rx.recv().expect("oversized callback chunk");
-        assert_eq!(chunk.len(), FRAMES * channels.get());
+        assert_eq!(chunk.len(), FRAMES * CHANNELS);
         assert_eq!(chunk, converted(&callback));
-        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(ports.dropped_frames.load(Ordering::Relaxed), 0);
     }
 
     #[test]
     fn callback_drops_instead_of_allocating_or_blocking_when_pool_is_empty() {
-        let (chunks_tx, _chunks_rx) = sync_channel(1);
-        let (pool_tx, pool_rx) = sync_channel(1);
-        let dropped = AtomicUsize::new(0);
-        copy_callback_samples(
-            &[0.0_f32; 8],
-            NonZeroUsize::new(2).expect("channels"),
-            &chunks_tx,
-            &pool_rx,
-            &pool_tx,
-            &dropped,
-        );
-        assert_eq!(dropped.load(Ordering::Relaxed), 4);
+        let (ports, _chunks_rx) = ports(2, None);
+        ports.deliver(&[0.0_f32; 8]);
+        assert_eq!(ports.dropped_frames.load(Ordering::Relaxed), 4);
     }
 }

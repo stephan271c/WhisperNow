@@ -14,8 +14,8 @@ use components::Navigator;
 use operations::UiOperation;
 // The two windows' roots; `app` picks one.
 pub use components::{AppShell, RecordingBar};
-use home_status::{HomeStatus, HomeStatusKind};
-use management::{Copied, CopyTarget, ManagementState, SettingKey, SetupTest};
+use home_status::{Fix, HomeStatus, HomeStatusKind};
+use management::{ManagementState, SettingKey, SetupTest};
 use notice::{Notice, NoticeScope};
 use overlay::OverlayView;
 use route::{Route, SettingsRoute, TopLevel, nav_keyboard_target};
@@ -36,7 +36,7 @@ impl UiContext {
     async fn hydrate_state(mut self) {
         match client::call("get_state").await {
             Ok(snapshot) => self.state.write().hydrate(snapshot),
-            Err(error) => self.state.write().report_client_error(error),
+            Err(_) => self.state.write().report_state_read_failure(),
         }
     }
 }
@@ -78,7 +78,7 @@ pub fn app() -> Element {
                 listeners.set(Some(owner));
                 state.write().event_stream_failed = false;
             }
-            Err(error) => state.write().report_event_stream_failure(error),
+            Err(_) => state.write().event_stream_failed = true,
         }
 
         if recording_bar {

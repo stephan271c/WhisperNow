@@ -14,7 +14,7 @@ use super::ui::{
     Button, ButtonSize, ConfirmButton, EmptyState, Icon, IconName, ShortcutLabel, TextInput,
 };
 use crate::blocked_reason::DisabledReason;
-use crate::management::replace_task;
+use crate::management::{HistoryRows, replace_task};
 use crate::{Route, SettingsRoute, UiContext, UiOperation};
 
 // Page-level control ids; as expressions they render as attributes tests can locate.
@@ -42,13 +42,20 @@ pub(super) fn HistoryScreen() -> Element {
     let blocked = |operation| context.blocked(operation);
     let settings = management.read().shown_settings().cloned();
     let change_blocked = blocked(UiOperation::ChangeHistory);
-    let unavailable = management.read().history_unavailable.clone();
-    let loading = !management.read().history_loaded();
-    let entries = management.read().history.clone();
-    let has_more = management.read().history_has_more;
+    let rows = management.read().history.clone();
+    let unavailable = match &rows {
+        HistoryRows::Unavailable(summary) => Some(summary.clone()),
+        _ => None,
+    };
+    let search_error = match &rows {
+        HistoryRows::SearchFailed(problem) => Some(problem.clone()),
+        _ => None,
+    };
+    let loading = rows == HistoryRows::Loading;
+    let entries = rows.entries().to_vec();
+    let has_more = rows.has_more();
     let filter = management.read().history_filter.clone();
     let search_text = management.read().history_search.clone();
-    let search_error = management.read().history_search_error.clone();
     let filtered = filter != HistoryFilter::default();
     let groups = group_by_day(clock, &entries);
     let folder_blocked = blocked(UiOperation::OpenRecordingsFolder).is_some();

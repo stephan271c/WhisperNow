@@ -123,7 +123,7 @@ impl SettingsStore {
     /// The API key of `provider` in the credential store. Callers ask only when
     /// [`Settings::api_keys`] says it holds one.
     pub fn api_key(&self, provider: LlmProvider) -> Result<Option<ApiKey>, AppError> {
-        self.credentials.read(&account(provider)).map_err(|_| {
+        self.credentials.read(provider).map_err(|_| {
             redacted(
                 "credential_store_unavailable",
                 "The OS credential store is unavailable, so the API key cannot be used",
@@ -138,11 +138,11 @@ impl SettingsStore {
         provider: LlmProvider,
         key: &ApiKey,
     ) -> Result<(), CredentialStoreUnavailable> {
-        self.credentials.write(&account(provider), key)
+        self.credentials.write(provider, key)
     }
 
     pub fn delete_api_key(&self, provider: LlmProvider) -> Result<(), CredentialStoreUnavailable> {
-        self.credentials.delete(&account(provider))
+        self.credentials.delete(provider)
     }
 
     /// Imports the Python release's settings: its API keys move into the credential
@@ -180,10 +180,6 @@ impl SettingsStore {
             enable_autostart: imported.enable_autostart,
         })
     }
-}
-
-fn account(provider: LlmProvider) -> String {
-    format!("llm-provider:{}", provider.as_str())
 }
 
 fn redacted(code: &'static str, summary: &'static str) -> AppError {

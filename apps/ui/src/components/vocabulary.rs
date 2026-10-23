@@ -1,8 +1,7 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use serde::{Deserialize, Serialize};
-use whispernow_domain::{Settings, VocabularyReplacement};
+use whispernow_domain::VocabularyReplacement;
 
 use super::CopyButton;
 use super::configuration::SettingsLoading;
@@ -11,18 +10,10 @@ use super::ui::{
     Button, ButtonVariant, DraftText, Field, IconButton, IconName, Section, TextInput,
 };
 use crate::blocked_reason::DisabledReason;
-use crate::{CopyTarget, SettingKey, UiContext};
+use crate::{SettingKey, UiContext};
 
 /// The add form's id; tests submit it as Enter does.
 const ADD_FORM: &str = "vocabulary-add-form";
-
-/// A rule as import and export write it: `{"source": …, "replacement": …}`, named fields a
-/// person can read, where settings store a `[source, replacement]` pair.
-#[derive(Deserialize, Serialize)]
-struct TransferRule {
-    source: String,
-    replacement: String,
-}
 
 /// How a rule is named in the accessible names of its controls.
 fn rule_name(entry: &VocabularyReplacement) -> String {
@@ -89,10 +80,7 @@ pub(super) fn VocabularyPage() -> Element {
                 onsubmit: move |event: FormEvent| {
                     event.prevent_default();
                     let entry = VocabularyReplacement::new(source().trim(), replacement().trim());
-                    let add = move |settings: &mut Settings| {
-                        settings.vocabulary_replacements.push(entry.clone());
-                    };
-                    context.change_setting(SettingKey::Vocabulary, add);
+                    context.change_vocabulary(move |rules| rules.push(entry));
                     source.set(String::new());
                     replacement.set(String::new());
                 },
@@ -156,13 +144,11 @@ fn VocabularyRow(
     let name = rule_name(&entry);
     let number = index + 1;
     let change = move |edit: fn(&mut Vec<VocabularyReplacement>, usize)| {
-        context.change_setting(SettingKey::Vocabulary, move |settings| {
-            edit(&mut settings.vocabulary_replacements, index);
-        });
+        context.change_vocabulary(move |rules| edit(rules, index));
     };
     let edit = move |edited: VocabularyReplacement| {
-        context.change_setting(SettingKey::Vocabulary, move |settings| {
-            if let Some(rule) = settings.vocabulary_replacements.get_mut(index) {
+        context.change_vocabulary(move |rules| {
+            if let Some(rule) = rules.get_mut(index) {
                 *rule = edited;
             }
         });
@@ -211,21 +197,13 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>, disabled: bool) -> Elem
     let context = use_context::<UiContext>();
     let mut management = context.management;
     let mut pasted = use_signal(String::new);
-    let export = (!rules.is_empty()).then(|| {
-        let rules = rules
-            .iter()
-            .map(|rule| TransferRule {
-                source: rule.source.clone(),
-                replacement: rule.replacement.clone(),
-            })
-            .collect::<Vec<_>>();
-        serde_json::to_string_pretty(&rules).expect("a list of text pairs serializes")
-    });
+    let export = (!rules.is_empty())
+        .then(|| serde_json::to_string_pretty(&rules).expect("a list of text pairs serializes"));
     rsx! {
         Section { id: "vocabulary-transfer", title: "Import and export",
             description: "A JSON list of {{\"source\": …, \"replacement\": …}} pairs.",
             div { class: "card-actions",
-                CopyButton { id: "vocabulary-export", target: CopyTarget::VocabularyRules,
+                CopyButton { id: "vocabulary-export",
                     text: export, label: "Copy rules as JSON",
                 }
             }
@@ -239,9 +217,9 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>, disabled: bool) -> Elem
             div { class: "card-actions",
                 Button { id: "vocabulary-import-submit", variant: ButtonVariant::Secondary,
                     disabled: disabled || pasted().trim().is_empty(),
-                    onclick: move |_| match serde_json::from_str::<Vec<TransferRule>>(pasted().trim()) {
+                    onclick: move |_| match serde_json::from_str::<Vec<VocabularyReplacement>>(pasted().trim()) {
                         Ok(entries) => {
-                            context.change_setting(SettingKey::Vocabulary, move |settings| import_rules(settings, &entries));
+                            context.change_vocabulary(move |rules| import_rules(rules, &entries));
                             pasted.set(String::new());
                         },
                         Err(_) => management.write().reject_setting(
@@ -258,15 +236,11 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>, disabled: bool) -> Elem
 
 /// Adds imported rules; an imported rule for text that already has one replaces its
 /// replacement.
-fn import_rules(settings: &mut Settings, entries: &[TransferRule]) {
-    let rules = &mut settings.vocabulary_replacements;
+fn import_rules(rules: &mut Vec<VocabularyReplacement>, entries: &[VocabularyReplacement]) {
     for entry in entries {
         match rules.iter_mut().find(|rule| rule.source == entry.source) {
             Some(rule) => rule.replacement.clone_from(&entry.replacement),
-            None => rules.push(VocabularyReplacement::new(
-                entry.source.clone(),
-                entry.replacement.clone(),
-            )),
+            None => rules.push(entry.clone()),
         }
     }
 }

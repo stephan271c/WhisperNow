@@ -1,10 +1,10 @@
 use serde_json::to_value;
 
 use super::{
-    AppState, EventPayload, ModelState, Phase, RecordingTrigger, UpdatePhase, UpdateProgress,
-    UpdateState,
+    AppState, ClearDataItem, DataLocation, EventPayload, ModelState, Phase, RecordingTrigger,
+    UpdatePhase, UpdateProgress, UpdateState,
 };
-use crate::{AppError, ErrorCategory, ModelId};
+use crate::{AppError, ClearDataCategory, ErrorCategory, ModelId};
 
 #[test]
 fn phase_carries_the_recording_trigger() {
@@ -108,6 +108,7 @@ fn every_event_carries_its_variant_in_the_type_tag() {
             "update_changed",
         ),
         (EventPayload::HistoryChanged, "history_changed"),
+        (EventPayload::ModelsChanged, "models_changed"),
         (
             EventPayload::NavigationRequested {
                 section: super::MainWindowSection::History,
@@ -123,4 +124,24 @@ fn every_event_carries_its_variant_in_the_type_tag() {
             event
         );
     }
+}
+
+#[test]
+fn a_clear_data_item_keeps_its_location_fields_at_the_top_level() {
+    let item = ClearDataItem {
+        location: DataLocation {
+            category: ClearDataCategory::Settings,
+            path: "/data/settings.json".into(),
+        },
+        deleted: true,
+    };
+    let json = to_value(&item).expect("serialize");
+    assert_eq!(
+        json,
+        serde_json::json!({"category": "settings", "path": "/data/settings.json", "deleted": true})
+    );
+    assert_eq!(
+        serde_json::from_value::<ClearDataItem>(json).expect("deserialize"),
+        item
+    );
 }

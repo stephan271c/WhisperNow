@@ -31,19 +31,19 @@ const MODEL_STAGE_PREFIX: &str = ".model-stage-";
 pub struct DownloadProgress {
     pub phase: DownloadPhase,
     pub downloaded_bytes: u64,
-    pub total_bytes: Option<u64>,
+    pub total_bytes: u64,
 }
 
 impl DownloadProgress {
-    fn new(phase: DownloadPhase, downloaded_bytes: u64, total_bytes: u64) -> Self {
+    const fn new(phase: DownloadPhase, downloaded_bytes: u64, total_bytes: u64) -> Self {
         Self {
             phase,
             downloaded_bytes,
-            total_bytes: Some(total_bytes),
+            total_bytes,
         }
     }
 
-    fn after_transfer(phase: DownloadPhase, total_bytes: u64) -> Self {
+    const fn after_transfer(phase: DownloadPhase, total_bytes: u64) -> Self {
         Self::new(phase, total_bytes, total_bytes)
     }
 }
@@ -338,15 +338,19 @@ impl ModelStore {
         }))
     }
 
-    /// An installed cleanup model's GGUF; `None` while it is not installed, or the id is not a
-    /// cleanup model's.
-    #[must_use]
-    pub fn cleanup_model_path(&self, model_id: &ModelId) -> Option<PathBuf> {
-        let model = self.resolve(model_id).ok().flatten()?;
-        let ModelLayout::Gguf { model: file } = &model.definition.layout else {
-            return None;
+    /// An installed cleanup model's GGUF; `None` while it is not installed, or the id is a
+    /// speech model's.
+    pub fn cleanup_model_path(
+        &self,
+        model_id: &ModelId,
+    ) -> Result<Option<PathBuf>, ModelStoreError> {
+        let Some(model) = self.resolve(model_id)? else {
+            return Ok(None);
         };
-        Some(model.root.join(file))
+        let ModelLayout::Gguf { model: file } = &model.definition.layout else {
+            return Ok(None);
+        };
+        Ok(Some(model.root.join(file)))
     }
 
     pub fn list(&self) -> Result<Vec<ModelListEntry>, ModelStoreError> {

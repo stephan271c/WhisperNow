@@ -1,5 +1,3 @@
-use whispernow_domain::AppError;
-
 use whispernow_domain::ipc::{AppState, EventPayload, Phase, UpdateState};
 
 use crate::OverlayView;
@@ -9,7 +7,6 @@ pub struct UiState {
     pub snapshot: Option<AppState>,
     pub update_snapshot: Option<UpdateState>,
     pub audio_rms: f32,
-    pub error: Option<AppError>,
     pub update_command_error: Option<String>,
     pub connection_failed: bool,
     pub event_stream_failed: bool,
@@ -45,7 +42,9 @@ impl UiState {
             }
             EventPayload::UpdateChanged { state } => self.apply_update_state(state),
             // The main window's listener follows navigation requests.
-            EventPayload::NavigationRequested { .. } | EventPayload::HistoryChanged => {}
+            EventPayload::NavigationRequested { .. }
+            | EventPayload::HistoryChanged
+            | EventPayload::ModelsChanged => {}
         }
     }
 
@@ -70,24 +69,17 @@ impl UiState {
         if !matches!(state.phase, Phase::Recording { .. }) {
             self.audio_rms = 0.0;
         }
-        self.error.clone_from(&state.error);
         self.snapshot = Some(state);
     }
 
-    pub fn report_client_error(&mut self, error: AppError) {
-        if error.code == "desktop_unreachable" {
+    /// A state read that fails before any snapshot arrived means the desktop is out of reach.
+    pub fn report_state_read_failure(&mut self) {
+        if self.snapshot.is_none() {
             self.connection_failed = true;
-        } else {
-            self.error = Some(error);
         }
     }
 
     pub fn report_update_command_failure(&mut self, summary: String) {
         self.update_command_error = Some(summary);
-    }
-
-    pub fn report_event_stream_failure(&mut self, error: AppError) {
-        self.event_stream_failed = true;
-        self.error = Some(error);
     }
 }

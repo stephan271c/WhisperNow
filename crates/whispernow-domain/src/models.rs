@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use crate::ipc::ModelSummary;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
@@ -354,6 +355,25 @@ impl ModelDefinition {
     pub const fn family(&self) -> ModelFamily {
         self.layout.family()
     }
+
+    #[must_use]
+    pub fn is_recommended(&self) -> bool {
+        self.id == ModelId::default()
+    }
+
+    #[must_use]
+    pub fn summary(self, availability: ModelAvailability) -> ModelSummary {
+        ModelSummary {
+            recommended: self.is_recommended(),
+            family: self.family(),
+            size_bytes: self.source.archive_size_bytes,
+            id: self.id,
+            display_name: self.display_name,
+            availability,
+            languages: self.languages,
+            benchmark: self.benchmark,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -379,6 +399,7 @@ impl ModelRegistry {
             transducer(
                 "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
                 "Parakeet TDT v2 0.6B (Int8)",
+                Precision::Int8,
                 482_468_385,
                 "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad",
                 ENGLISH,
@@ -387,6 +408,7 @@ impl ModelRegistry {
             transducer(
                 "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16",
                 "Parakeet TDT v2 0.6B (FP16)",
+                Precision::Fp16,
                 1_120_982_957,
                 "37f67a1a6c942dae27d345ee395fbd19e25ee48996faf70fca25779026054cf0",
                 ENGLISH,
@@ -395,6 +417,7 @@ impl ModelRegistry {
             transducer(
                 "sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
                 "Parakeet Unified 0.6B",
+                Precision::Int8,
                 501_350_460,
                 "99f63605b3a85a54c250c0869670a687b7d6598a47bf2421515e1f839a76e150",
                 ENGLISH,
@@ -403,6 +426,7 @@ impl ModelRegistry {
             transducer(
                 "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
                 "Parakeet TDT v3 0.6B",
+                Precision::Int8,
                 487_170_055,
                 "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
                 PARAKEET_V3_LANGUAGES,
@@ -411,6 +435,7 @@ impl ModelRegistry {
             transducer(
                 "sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8",
                 "Parakeet TDT 110M",
+                Precision::Int8,
                 108_035_095,
                 "f628312e9fdf8686374cb01a69425c41732529d540860311f16f37cbc32cfe9b",
                 ENGLISH,
@@ -508,18 +533,31 @@ fn tags(languages: &[&str]) -> Vec<String> {
     languages.iter().map(|&tag| tag.to_owned()).collect()
 }
 
+#[derive(Clone, Copy)]
+enum Precision {
+    Int8,
+    Fp16,
+}
+
+impl Precision {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Int8 => "int8",
+            Self::Fp16 => "fp16",
+        }
+    }
+}
+
 fn transducer(
     id: &str,
     display_name: &str,
+    precision: Precision,
     archive_size_bytes: u64,
     sha256: &str,
     languages: &[&str],
     benchmark: SpeechBenchmark,
 ) -> ModelDefinition {
-    let precision = id
-        .rsplit('-')
-        .find(|part| ["fp16", "int8"].contains(part))
-        .expect("a transducer id names its precision");
+    let precision = precision.as_str();
     ModelDefinition {
         id: ModelId::new(id).expect("built-in identifiers are non-empty"),
         display_name: display_name.to_owned(),

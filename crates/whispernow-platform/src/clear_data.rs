@@ -55,8 +55,7 @@ impl ClearPlan {
                 let deleted = remove_path(&location.path)
                     .map_or_else(|error| error.kind() == io::ErrorKind::NotFound, |()| true);
                 ClearDataItem {
-                    category: location.category,
-                    path: location.path.to_string_lossy().into_owned(),
+                    location: location.clone(),
                     deleted,
                 }
             })
@@ -362,7 +361,7 @@ mod tests {
         assert!(
             report
                 .iter()
-                .all(|item| item.category == ClearDataCategory::History && item.deleted)
+                .all(|item| item.location.category == ClearDataCategory::History && item.deleted)
         );
         for path in [&later, &earlier, &imported] {
             assert!(!path.exists());

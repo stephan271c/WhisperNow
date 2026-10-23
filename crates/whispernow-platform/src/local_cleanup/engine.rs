@@ -3,7 +3,7 @@
 use std::{ops::ControlFlow, path::Path, rc::Rc};
 
 use whispernow_core::llm::{
-    DraftText, LlmPrompt, build_local_cleanup_prompt,
+    DraftText,
     local::{self, DecodeContext, LocalDecodeError, LocalDecodeOutput, LocalDecodeRequest},
 };
 use whispernow_domain::ipc::CleanupDevice;
@@ -63,7 +63,7 @@ impl LocalCleanupEngine {
             return Ok(());
         }
         self.decode(
-            &build_local_cleanup_prompt(WARM_UP_TRANSCRIPT),
+            WARM_UP_TRANSCRIPT,
             WARM_UP_TOKENS,
             &DraftText::from_transcript(WARM_UP_TRANSCRIPT),
             |_| ControlFlow::Continue(()),
@@ -71,16 +71,16 @@ impl LocalCleanupEngine {
         .map(drop)
     }
 
-    /// Decodes the reply to `prompt` speculatively from the draft.
+    /// Decodes the reply to `transcript` speculatively from the draft.
     /// `between_passes` sees the reply so far and stops the decode by breaking.
     pub(crate) fn decode(
         &mut self,
-        prompt: &LlmPrompt,
+        transcript: &str,
         max_output_tokens: usize,
         draft: &DraftText,
         between_passes: impl FnMut(&[u8]) -> ControlFlow<()>,
     ) -> Result<LocalDecodeOutput, EngineError> {
-        let rendered = local::render_prompt(&self.model.bos_text(), prompt);
+        let rendered = local::render_prompt(&self.model.bos_text(), transcript);
         let tokens = self
             .model
             .tokenize(rendered.as_bytes(), true)

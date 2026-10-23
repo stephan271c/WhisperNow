@@ -1,7 +1,8 @@
 use whispernow_domain::{
     ApiKey, CLEANUP_MODEL_IDS, CleanupTarget, DEFAULT_CLEANUP_MODEL_ID, InvalidApiKey, LlmProvider,
-    MissingCleanupField, ProviderEndpoint, ProviderSettings, RemoteProvider, Settings,
-    SettingsError, SetupCheckpoint, Shortcut, ShortcutKey, ShortcutModifier, VocabularyReplacement,
+    MissingCleanupField, ModelId, ProviderEndpoint, ProviderSettings, RecordingMode,
+    RemoteProvider, SettingChange, Settings, SettingsError, SetupCheckpoint, Shortcut, ShortcutKey,
+    ShortcutModifier, VocabularyReplacement,
 };
 
 fn shortcut(modifiers: &[ShortcutModifier], key: &str) -> Shortcut {
@@ -87,15 +88,13 @@ fn model_names_are_checked_for_every_provider() {
 
 #[test]
 fn the_model_list_keeps_the_active_model_and_follows_choices_and_removals() {
-    let mut openai = ProviderSettings {
-        model: "gpt-5".to_owned(),
-        ..ProviderSettings::default()
-    };
-    assert_eq!(openai.listed_models(), ["gpt-5"]);
+    let mut openai = ProviderSettings::default();
+    openai.choose_model("gpt-5".to_owned());
+    assert_eq!(openai.saved_models, ["gpt-5"]);
 
     openai.choose_model("gpt-5-mini".to_owned());
     assert_eq!(openai.saved_models, ["gpt-5", "gpt-5-mini"]);
-    assert_eq!(openai.model, "gpt-5-mini");
+    assert_eq!(openai.model.as_deref(), Some("gpt-5-mini"));
 
     openai.choose_model("gpt-5".to_owned());
     assert_eq!(openai.saved_models, ["gpt-5", "gpt-5-mini"]);
@@ -103,13 +102,14 @@ fn the_model_list_keeps_the_active_model_and_follows_choices_and_removals() {
     openai.remove_model("gpt-5");
     assert_eq!(openai.saved_models, ["gpt-5-mini"]);
     assert_eq!(
-        openai.model, "gpt-5-mini",
+        openai.model.as_deref(),
+        Some("gpt-5-mini"),
         "the first saved model takes over"
     );
 
     openai.remove_model("gpt-5-mini");
-    assert_eq!(openai.listed_models(), Vec::<String>::new());
-    assert_eq!(openai.model, "");
+    assert!(openai.saved_models.is_empty());
+    assert_eq!(openai.model, None);
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn the_cleanup_target_keeps_the_model_name_as_saved() {
     };
     settings
         .provider_settings_mut(LlmProvider::OpenRouter)
-        .model = "openrouter/auto".to_owned();
+        .choose_model("openrouter/auto".to_owned());
     let CleanupTarget::Remote(target) = settings.cleanup_target().expect("a remote target") else {
         panic!("remote cleanup target");
     };
@@ -156,7 +156,6 @@ fn incomplete_cleanup_settings_save_with_a_warning_until_repaired() {
         llm_provider: LlmProvider::Custom,
         ..Settings::default()
     };
-    settings.provider_settings_mut(LlmProvider::Custom).model = String::new();
     assert_eq!(settings.validate(), Ok(()));
     assert_eq!(settings.cleanup_warning(), None);
 
@@ -167,7 +166,9 @@ fn incomplete_cleanup_settings_save_with_a_warning_until_repaired() {
         .cleanup_warning()
         .expect("warning for the missing model");
     assert!(warning.contains(LlmProvider::Custom.label()));
-    settings.provider_settings_mut(LlmProvider::Custom).model = "local".to_owned();
+    settings
+        .provider_settings_mut(LlmProvider::Custom)
+        .choose_model("local".to_owned());
     assert_eq!(
         settings.cleanup_target(),
         Err(MissingCleanupField::Endpoint)
@@ -201,12 +202,14 @@ fn cleanup_has_an_active_target_only_while_enabled_and_resolved() {
     assert_eq!(
         settings.active_cleanup_target(),
         Some(CleanupTarget::Local {
-            model: settings.cleanup_model_id()
+            model: settings.cleanup_model.clone()
         })
     );
 
     settings.llm_provider = LlmProvider::Custom;
-    settings.provider_settings_mut(LlmProvider::Custom).model = "local".to_owned();
+    settings
+        .provider_settings_mut(LlmProvider::Custom)
+        .choose_model("local".to_owned());
     assert_eq!(settings.active_cleanup_target(), None);
 
     settings.provider_settings_mut(LlmProvider::Custom).api_base =
@@ -222,58 +225,95 @@ fn cleanup_has_an_active_target_only_while_enabled_and_resolved() {
 }
 
 #[test]
-fn the_cleanup_model_is_the_one_saved_for_its_provider_else_the_default() {
-    let mut settings = Settings::default();
+fn an_unknown_cleanup_model_loads_as_the_default() {
     assert_eq!(
-        settings.cleanup_model_id().as_str(),
+        Settings::default().cleanup_model.as_str(),
         DEFAULT_CLEANUP_MODEL_ID
     );
-    settings
-        .provider_settings_mut(LlmProvider::LocalCleanup)
-        .model = CLEANUP_MODEL_IDS[1].to_owned();
-    assert_eq!(settings.cleanup_model_id().as_str(), CLEANUP_MODEL_IDS[1]);
-    // A model saved before there was a choice, or one no longer offered, is the default.
+    let chosen: Settings =
+        serde_json::from_value(serde_json::json!({ "cleanup_model": CLEANUP_MODEL_IDS[1] }))
+            .expect("settings");
+    assert_eq!(chosen.cleanup_model.as_str(), CLEANUP_MODEL_IDS[1]);
+    // A model no longer offered is the default.
     for saved in ["", "cleanup", "whispernow-cleanup-gone"] {
-        settings
-            .provider_settings_mut(LlmProvider::LocalCleanup)
-            .model = saved.to_owned();
-        assert_eq!(
-            settings.cleanup_model_id().as_str(),
-            DEFAULT_CLEANUP_MODEL_ID
-        );
+        let settings: Settings =
+            serde_json::from_value(serde_json::json!({ "cleanup_model": saved }))
+                .expect("settings");
+        assert_eq!(settings.cleanup_model.as_str(), DEFAULT_CLEANUP_MODEL_ID);
     }
-    // Another provider's model never chooses it.
-    settings.provider_settings_mut(LlmProvider::Custom).model = CLEANUP_MODEL_IDS[1].to_owned();
+}
+
+#[test]
+fn a_change_is_refused_only_for_a_rule_it_breaks() {
+    let saved = Settings {
+        vocabulary_replacements: vec![VocabularyReplacement::new(" ", "x")],
+        ..Settings::default()
+    };
+    let save = |change: SettingChange| {
+        let mut edited = saved.clone();
+        change.clone().apply(&mut edited);
+        change.check(&edited)
+    };
     assert_eq!(
-        settings.cleanup_model_id().as_str(),
-        DEFAULT_CLEANUP_MODEL_ID
+        save(SettingChange::StartMinimized(true)),
+        Ok(()),
+        "a rule broken elsewhere does not block other changes"
+    );
+    assert_eq!(
+        save(SettingChange::CancelShortcut(Some(
+            saved.recording_shortcut.clone()
+        ))),
+        Err(SettingsError::CancelIsRecordingShortcut)
+    );
+    assert_eq!(
+        save(SettingChange::Vocabulary(vec![VocabularyReplacement::new(
+            "", "y"
+        )])),
+        Err(SettingsError::VocabularySource)
+    );
+    assert_eq!(
+        save(SettingChange::Vocabulary(Vec::new())),
+        Ok(()),
+        "the change that repairs a broken rule is accepted"
+    );
+    assert_eq!(
+        save(SettingChange::ChooseProviderModel {
+            provider: LlmProvider::Gemini,
+            model: "a\nb".to_owned(),
+        }),
+        Err(SettingsError::ModelName {
+            provider: LlmProvider::Gemini
+        })
     );
 }
 
 #[test]
-fn an_update_is_refused_only_for_a_rule_it_breaks() {
-    let before = Settings {
-        vocabulary_replacements: vec![VocabularyReplacement::new(" ", "x")],
+fn a_change_edits_only_its_own_setting() {
+    let mut settings = Settings::default();
+    SettingChange::ChooseProviderModel {
+        provider: LlmProvider::Gemini,
+        model: "gemini-test".to_owned(),
+    }
+    .apply(&mut settings);
+    SettingChange::RecordingShortcut {
+        shortcut: shortcut(&[ShortcutModifier::Alt], "f8"),
+        mode: RecordingMode::Toggle,
+    }
+    .apply(&mut settings);
+    SettingChange::CleanupModel(ModelId::new("whispernow-cleanup-gone").expect("model id"))
+        .apply(&mut settings);
+
+    let mut expected = Settings {
+        recording_shortcut: shortcut(&[ShortcutModifier::Alt], "f8"),
+        recording_mode: RecordingMode::Toggle,
         ..Settings::default()
     };
-    let mut edited = Settings {
-        start_minimized: !before.start_minimized,
-        ..before.clone()
-    };
+    expected
+        .provider_settings_mut(LlmProvider::Gemini)
+        .choose_model("gemini-test".to_owned());
     assert_eq!(
-        edited.validate_update(&before),
-        Ok(()),
-        "a rule broken before the edit does not block other changes"
-    );
-    edited.cancel_shortcut = Some(edited.recording_shortcut.clone());
-    assert_eq!(
-        edited.validate_update(&before),
-        Err(SettingsError::CancelIsRecordingShortcut)
-    );
-    assert_eq!(
-        Settings::default().validate_update(&before),
-        Ok(()),
-        "the edit that repairs a broken rule is accepted"
+        settings, expected,
+        "an unknown cleanup model is the default"
     );
 }
 

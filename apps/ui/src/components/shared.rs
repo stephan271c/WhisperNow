@@ -1,11 +1,16 @@
-use crate::{CopyTarget, UiContext};
+use crate::client;
+use crate::management::replace_task;
 use std::collections::BTreeSet;
 
+use dioxus::core::Task;
 use dioxus::prelude::*;
 use whispernow_domain::ipc::PasteHelperSetup;
-use whispernow_domain::{Shortcut, ShortcutKey, ShortcutModifier};
+use whispernow_domain::{RecordingMode, Shortcut, ShortcutKey, ShortcutModifier};
 
-use super::ui::{Banner, Button, ButtonSize, Icon, IconName, Kbd, Tone, shortcut_parts};
+use super::labels;
+use super::ui::{
+    Banner, Button, ButtonSize, Icon, IconName, Kbd, ShortcutLabel, Tone, shortcut_parts,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CaptureStatus {
@@ -26,26 +31,24 @@ impl CaptureStatus {
     }
 }
 
+const COPIED_MS: u32 = 2_000;
+
 /// Copies `text` and shows the outcome in its label for a moment; without `text` it is
 /// disabled. In a repeated row, `names` says what it copies; it follows the label in the
 /// accessible name.
 #[component]
 pub(super) fn CopyButton(
     id: String,
-    target: CopyTarget,
     text: Option<String>,
     label: String,
     names: Option<String>,
     #[props(default)] size: ButtonSize,
     #[props(default)] icon: bool,
 ) -> Element {
-    let context = use_context::<UiContext>();
-    let succeeded = context
-        .management
-        .read()
-        .copied
-        .filter(|copied| copied.target == target)
-        .map(|copied| copied.succeeded);
+    let mut outcome = use_signal(|| None::<bool>);
+    // The latest copy, which clears its outcome after a moment; a newer copy replaces it.
+    let mut copy_task = use_signal(|| None::<Task>);
+    let succeeded = outcome();
     let shown = match succeeded {
         Some(true) => "Copied",
         Some(false) => "Copy failed",
@@ -56,7 +59,15 @@ pub(super) fn CopyButton(
             aria_label: names.as_ref().map(|names| format!("{shown} {names}")),
             onclick: move |_| {
                 if let Some(text) = text.clone() {
-                    context.copy_text(text, target);
+                    outcome.set(None);
+                    let copying = spawn(async move {
+                        let copied = client::invoke::<_, ()>("copy_text", text).await.is_ok();
+                        outcome.set(Some(copied));
+                        client::delay(COPIED_MS).await;
+                        outcome.set(None);
+                        copy_task.set(None);
+                    });
+                    replace_task(&mut copy_task.write(), Some(copying));
                 }
             },
             if icon {
@@ -83,7 +94,7 @@ pub(super) fn PasteHelperNotice(setup: PasteHelperSetup) -> Element {
                     p { "To paste without it, run this command in a terminal, then restart WhisperNow:" }
                     code { id: "paste-helper-command", class: "command", "{command}" }
                     div { class: "card-actions",
-                        CopyButton { id: "paste-helper-copy", target: CopyTarget::PasteHelperCommand,
+                        CopyButton { id: "paste-helper-copy",
                             text: command, label: "Copy command",
                         }
                     }
@@ -271,6 +282,12 @@ fn is_modifier_code(code: &str) -> bool {
             | "OSLeft"
             | "OSRight"
     )
+}
+
+/// The recording mode and its shortcut, as a pair inside a `dl`.
+#[component]
+pub(super) fn ShortcutSummary(mode: RecordingMode, shortcut: Shortcut) -> Element {
+    rsx! { div { dt { "{labels::recording_mode(mode)}" } dd { ShortcutLabel { shortcut } } } }
 }
 
 #[cfg(test)]

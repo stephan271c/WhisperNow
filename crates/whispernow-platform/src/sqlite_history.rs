@@ -15,7 +15,7 @@ use rusqlite::{
 use whispernow_core::audio::TARGET_SAMPLE_RATE;
 use whispernow_domain::{
     EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryLimit, HistoryPage,
-    HistoryPageRequest, HistoryRetention, ModelId, NewHistoryEntry, UtcMillis,
+    HistoryPageRequest, HistoryRetention, NewHistoryEntry, UtcMillis,
 };
 
 use crate::{
@@ -81,14 +81,13 @@ impl SqliteHistoryRepository {
         ))
     }
 
-    /// Stores one dictation, with its audio when `keep_audio` is on; entries beyond `limit` or
-    /// older than `retention` are then deleted with their audio. A failure to write the audio
-    /// still stores the entry, without audio.
+    /// Stores one dictation, with `audio` when given; entries beyond `limit` or older than
+    /// `retention` are then deleted with their audio. A failure to write the audio still stores
+    /// the entry, without audio.
     pub fn insert(
         &mut self,
         entry: NewHistoryEntry,
-        audio: &[f32],
-        keep_audio: bool,
+        audio: Option<&[f32]>,
         limit: HistoryLimit,
         retention: HistoryRetention,
     ) -> Result<EntryId, AppError> {
@@ -112,19 +111,19 @@ impl SqliteHistoryRepository {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     created_at.get(),
-                    duration_millis.map(sql_u64),
+                    sql_u64(duration_millis),
                     raw_text,
                     cleaned_text,
                     status_text(status),
                     error,
-                    asr_model_id.as_ref().map(ModelId::as_str),
+                    asr_model_id.as_str(),
                 ],
             )
             .map_err(|_| history_error("history_insert"))?;
         let id = EntryId(transaction.last_insert_rowid());
         // Cleanup of a prior rolled-back insert may have failed for this reused id.
         remove_audio(&self.audio_dir, id).map_err(|_| history_error("history_audio_delete"))?;
-        let wrote_audio = if keep_audio && !audio.is_empty() {
+        let wrote_audio = if let Some(audio) = audio {
             if write_wav(&self.audio_dir, id, audio).is_ok() {
                 true
             } else {
@@ -181,7 +180,8 @@ impl SqliteHistoryRepository {
             values.push(Value::Text(pattern));
         }
         if request.filter.failed_only {
-            clauses.push("status = 'failed'");
+            clauses.push("status = ?");
+            values.push(Value::Text(status_text(EntryStatus::Failed).to_owned()));
         }
         let filter = if clauses.is_empty() {
             String::new()
@@ -356,13 +356,14 @@ const fn status_text(status: EntryStatus) -> &'static str {
 }
 
 fn parse_status(text: &str) -> Option<EntryStatus> {
-    match text {
-        "ok" => Some(EntryStatus::Ok),
-        "failed" => Some(EntryStatus::Failed),
-        "cancelled" => Some(EntryStatus::Cancelled),
-        "not_delivered" => Some(EntryStatus::NotDelivered),
-        _ => None,
-    }
+    [
+        EntryStatus::Ok,
+        EntryStatus::Failed,
+        EntryStatus::Cancelled,
+        EntryStatus::NotDelivered,
+    ]
+    .into_iter()
+    .find(|status| status_text(*status) == text)
 }
 
 /// Writes normalized mono 16-kHz samples as a 16-bit WAV, so a crash never leaves a partial

@@ -6,8 +6,11 @@ use std::process;
 #[cfg(target_os = "linux")]
 use x11rb::{
     connection::Connection as _,
+    cookie::Cookie,
+    errors::ConnectionError,
     protocol::xproto::{AtomEnum, ConnectionExt as _, InputFocus, Window},
     rust_connection::RustConnection,
+    x11_utils::TryParse,
 };
 
 #[cfg(target_os = "macos")]
@@ -213,6 +216,16 @@ pub(crate) fn connect_x11() -> Result<(RustConnection, Window), NativePasteError
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) fn reply<R: TryParse>(
+    request: Result<Cookie<'_, RustConnection, R>, ConnectionError>,
+) -> Result<R, NativePasteError> {
+    request
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .ok_or(NativePasteError::Unavailable)
+}
+
+#[cfg(target_os = "linux")]
 pub(crate) fn capture_on(
     connection: &RustConnection,
     root: Window,
@@ -225,12 +238,7 @@ pub(crate) fn capture_on(
     if process_id == 0 {
         return Err(NativePasteError::Unavailable);
     }
-    let focus = connection
-        .get_input_focus()
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .ok_or(NativePasteError::Unavailable)?
-        .focus;
+    let focus = reply(connection.get_input_focus())?.focus;
     if focus == 0 || focus == u32::from(InputFocus::POINTER_ROOT) || focus == root {
         return Err(NativePasteError::Unavailable);
     }
@@ -250,26 +258,17 @@ fn x11_property_u32(
     name: &[u8],
     expected_type: AtomEnum,
 ) -> Result<u32, NativePasteError> {
-    let property = connection
-        .intern_atom(false, name)
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .ok_or(NativePasteError::Unavailable)?
-        .atom;
+    let property = reply(connection.intern_atom(false, name))?.atom;
     let expected_type = u32::from(expected_type);
-    let reply = connection
-        .get_property(false, window, property, expected_type, 0, 1)
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .ok_or(NativePasteError::Unavailable)?;
-    if reply.type_ != expected_type
-        || reply.format != 32
-        || reply.value_len != 1
-        || reply.bytes_after != 0
+    let value = reply(connection.get_property(false, window, property, expected_type, 0, 1))?;
+    if value.type_ != expected_type
+        || value.format != 32
+        || value.value_len != 1
+        || value.bytes_after != 0
     {
         return Err(NativePasteError::Unavailable);
     }
-    reply
+    value
         .value32()
         .and_then(|mut values| values.next())
         .ok_or(NativePasteError::Unavailable)
@@ -279,15 +278,13 @@ fn x11_property_u32(
 /// separated by NUL bytes.
 #[cfg(target_os = "linux")]
 fn x11_paste_keys(connection: &RustConnection, window: Window) -> Option<PasteKeys> {
-    let reply = connection
-        .get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 64)
-        .ok()?
-        .reply()
-        .ok()?;
-    if reply.type_ != u32::from(AtomEnum::STRING) || reply.format != 8 || reply.bytes_after != 0 {
+    let class =
+        reply(connection.get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 64))
+            .ok()?;
+    if class.type_ != u32::from(AtomEnum::STRING) || class.format != 8 || class.bytes_after != 0 {
         return None;
     }
-    let keys = String::from_utf8_lossy(&reply.value)
+    let keys = String::from_utf8_lossy(&class.value)
         .split('\0')
         .map(PasteKeys::for_application)
         .find(|keys| *keys != PasteKeys::ControlV)

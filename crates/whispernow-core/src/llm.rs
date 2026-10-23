@@ -13,7 +13,7 @@ pub mod local;
 mod prompt;
 
 use prompt::EMPTY_TRANSCRIPT_SENTINEL;
-pub use prompt::{LlmPrompt, build_cleanup_prompt, build_local_cleanup_prompt};
+pub use prompt::{LlmPrompt, build_cleanup_prompt};
 
 const TRANSIENT_RETRIES: u32 = 2;
 
@@ -46,7 +46,10 @@ impl fmt::Debug for DraftText {
 pub enum LlmRequest {
     Local {
         model: ModelId,
-        prompt: LlmPrompt,
+        /// The trimmed transcript alone: the local cleanup model was trained without a system
+        /// message, instructions or delimiters. The training side renders the same messages
+        /// from `training/serving/`, and both are held to `prompt_golden.json` there.
+        transcript: String,
         max_output_tokens: usize,
         draft: DraftText,
     },
@@ -61,13 +64,13 @@ impl fmt::Debug for LlmRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Local {
-                prompt,
+                transcript,
                 max_output_tokens,
                 draft,
                 ..
             } => formatter
                 .debug_struct("LlmRequest::Local")
-                .field("prompt", prompt)
+                .field("transcript_character_count", &transcript.chars().count())
                 .field("max_output_tokens", max_output_tokens)
                 .field("draft", draft)
                 .finish_non_exhaustive(),
@@ -215,7 +218,7 @@ pub async fn clean_up(
             let word_count = transcript.split_whitespace().count();
             LlmRequest::Local {
                 model: model.clone(),
-                prompt: build_local_cleanup_prompt(transcript),
+                transcript: transcript.trim().to_owned(),
                 // Evaluation uses 2.5 tokens per input word, with a minimum of 64.
                 max_output_tokens: word_count.saturating_mul(5).div_ceil(2).max(64),
                 draft: DraftText::from_transcript(transcript),

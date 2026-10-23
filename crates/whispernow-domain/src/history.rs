@@ -174,12 +174,12 @@ impl HistoryEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NewHistoryEntry {
     pub created_at: UtcMillis,
-    pub duration_millis: Option<u64>,
+    pub duration_millis: u64,
     pub raw_text: Option<String>,
     pub cleaned_text: Option<String>,
     pub status: EntryStatus,
     pub error: Option<String>,
-    pub asr_model_id: Option<ModelId>,
+    pub asr_model_id: ModelId,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

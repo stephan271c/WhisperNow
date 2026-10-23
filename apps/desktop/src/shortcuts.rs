@@ -99,14 +99,20 @@ impl ShortcutRegistrar for TauriShortcutRegistrar {
         self.0
             .global_shortcut()
             .register(binding.global)
-            .map_err(|_| ShortcutRegistrationError::ConflictOrUnsupported)
+            .map_err(|error| {
+                tracing::warn!(%error, "a global shortcut could not be registered");
+                ShortcutRegistrationError::ConflictOrUnsupported
+            })
     }
 
     fn unregister(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError> {
         self.0
             .global_shortcut()
             .unregister(binding.global)
-            .map_err(|_| ShortcutRegistrationError::ConflictOrUnsupported)
+            .map_err(|error| {
+                tracing::warn!(%error, "a global shortcut could not be unregistered");
+                ShortcutRegistrationError::ConflictOrUnsupported
+            })
     }
 }
 
@@ -135,13 +141,8 @@ pub(crate) fn binding(shortcut: &Shortcut) -> ShortcutBinding {
 }
 
 /// The recording shortcut `settings` turn on; none while the shortcuts break a rule.
-pub(crate) fn recording_binding(
-    settings: &Settings,
-) -> Result<RecordingBinding, ShortcutRegistrationError> {
-    if !settings.shortcuts_valid() {
-        return Err(ShortcutRegistrationError::ConflictOrUnsupported);
-    }
-    Ok(RecordingBinding {
+pub(crate) fn recording_binding(settings: &Settings) -> Option<RecordingBinding> {
+    settings.shortcuts_valid().then(|| RecordingBinding {
         mode: settings.recording_mode,
         binding: binding(&settings.recording_shortcut),
     })
@@ -204,10 +205,11 @@ pub(crate) struct ShortcutCoordinator {
 
 impl ShortcutCoordinator {
     /// Registers the configured shortcuts at once; the application state the probe reads does
-    /// not exist yet. Invalid configured shortcuts leave nothing registered and are reported.
+    /// not exist yet. Without a recording shortcut (the saved shortcuts break a rule, which the
+    /// settings report), nothing is registered and no registration failure is recorded.
     pub(crate) fn new(
         registrar: Arc<dyn ShortcutRegistrar>,
-        recording: Result<RecordingBinding, ShortcutRegistrationError>,
+        recording: Option<RecordingBinding>,
         enabled: LifecycleProbe,
         startup_failure: Option<ShortcutRegistrationError>,
     ) -> Self {
@@ -222,18 +224,15 @@ impl ShortcutCoordinator {
             registrar,
             enabled,
         };
-        match recording {
-            Ok(recording) => {
-                let mut native = coordinator.native();
-                native.recording = Some(recording);
-                if coordinator.sync_locked(&mut native, true)
-                    == Err(ShortcutRegistrationError::PortalUnavailable)
-                    && let Some(error) = startup_failure
-                {
-                    coordinator.published().failure = Some(error);
-                }
+        if let Some(recording) = recording {
+            let mut native = coordinator.native();
+            native.recording = Some(recording);
+            if coordinator.sync_locked(&mut native, true)
+                == Err(ShortcutRegistrationError::PortalUnavailable)
+                && let Some(error) = startup_failure
+            {
+                coordinator.published().failure = Some(error);
             }
-            Err(error) => coordinator.published().failure = Some(error),
         }
         coordinator
     }

@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{ActiveDownload, ModelState, ModelSummary};
-use whispernow_domain::{LlmProvider, ModelAvailability, Rating, SpeechBenchmark, WerSource};
+use whispernow_domain::{
+    ModelAvailability, ModelId, Rating, SettingChange, SpeechBenchmark, WerSource,
+};
 
 use super::NoticeRegion;
 use super::labels::{self, format_bytes};
@@ -8,7 +10,7 @@ use super::ui::{
     Banner, Button, ButtonSize, ButtonVariant, ConfirmButton, ProgressBar, Section, Tone,
 };
 use crate::blocked_reason::DisabledReason;
-use crate::{BlockedReason, NoticeScope, SettingKey, UiContext, UiOperation};
+use crate::{BlockedReason, NoticeScope, UiContext, UiOperation};
 
 #[component]
 pub(super) fn ModelsPage() -> Element {
@@ -95,7 +97,7 @@ pub(super) fn ModelRow(
     let download_blocked = context.model_download_blocked();
     let delete_blocked = context.model_delete_blocked();
     let id = model.id.clone();
-    let slug = id.as_str().replace('.', "-");
+    let slug = model_slug(&id);
     let name = model.display_name.clone();
     let download = context.active_download(&id);
     let active_state = match kind {
@@ -120,10 +122,7 @@ pub(super) fn ModelRow(
                         span { class: "pill", "Recommended" }
                     }
                 }
-                div { class: "model-facts",
-                    span { "{format_bytes(model.size_bytes)} download" }
-                    ModelLanguages { languages: model.languages.clone() }
-                }
+                ModelFacts { model: model.clone() }
                 if let (ModelRowKind::Speech { .. }, Some(benchmark)) = (kind, model.benchmark) {
                     div { class: "model-ratings",
                         RatingBars { label: "Speed", value: benchmark.speed(),
@@ -161,12 +160,7 @@ pub(super) fn ModelRow(
                         id: "model-{slug}-use",
                         variant: ButtonVariant::Primary,
                         aria_label: "Use {name}",
-                        onclick: { let id = id.clone(); move |_| {
-                            let model = id.as_str().to_owned();
-                            context.change_setting(SettingKey::ProviderModel, move |settings| {
-                                settings.provider_settings_mut(LlmProvider::LocalCleanup).model.clone_from(&model);
-                            });
-                        } },
+                        onclick: { let id = id.clone(); move |_| context.change_setting(SettingChange::CleanupModel(id.clone())) },
                         "Use"
                     }
                 }
@@ -200,7 +194,7 @@ pub(super) fn DownloadProgress(download: ActiveDownload, name: String) -> Elemen
                 "{labels::download_phase(download.phase)}"
                 if let Some(rate) = rate { " · {rate}" }
             }
-            ProgressBar { label: "{name} download progress", downloaded: download.downloaded_bytes, total: download.total_bytes }
+            ProgressBar { label: "{name} download progress", downloaded: download.downloaded_bytes, total: Some(download.total_bytes) }
         }
         Button {
             size: ButtonSize::Sm,
@@ -251,14 +245,20 @@ fn RatingBars(label: &'static str, value: Rating, detail: String) -> Element {
 }
 
 /// One language by name, or a count that opens the full list.
+/// A model's id as element ids spell it.
+pub(super) fn model_slug(id: &ModelId) -> String {
+    id.as_str().replace('.', "-")
+}
+
 #[component]
-pub(super) fn ModelLanguages(languages: Vec<String>) -> Element {
-    let mut names: Vec<&str> = languages
+pub(super) fn ModelFacts(model: ModelSummary, id: Option<String>) -> Element {
+    let mut names: Vec<&str> = model
+        .languages
         .iter()
         .map(|tag| labels::language_name(tag))
         .collect();
     names.sort_unstable();
-    match names.as_slice() {
+    let languages = match names.as_slice() {
         [] => rsx! {},
         [name] => rsx! { span { "{name}" } },
         names => {
@@ -270,6 +270,12 @@ pub(super) fn ModelLanguages(languages: Vec<String>) -> Element {
                     p { "{list}" }
                 }
             }
+        }
+    };
+    rsx! {
+        div { id, class: "model-facts",
+            span { "{format_bytes(model.size_bytes)} download" }
+            {languages}
         }
     }
 }

@@ -3,7 +3,7 @@ use wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_test::*;
 use whispernow_domain::ipc::{ModelSummary, Phase};
 use whispernow_domain::{
-    ModelAvailability, ModelId, Settings, Shortcut, ShortcutKey, ShortcutModifier,
+    ModelAvailability, ModelId, SettingChange, Settings, Shortcut, ShortcutKey, ShortcutModifier,
 };
 
 use crate::test_fixtures::{management_with, snapshot};
@@ -86,14 +86,19 @@ async fn shortcut_capture_suspends_global_shortcuts_and_saves_recording_and_canc
             adapter_count("resume_shortcuts") > resumed
         })
         .await;
-        let saved = js_sys::eval("JSON.stringify(window.__whispernowAdapterCalls.filter(({command}) => command === 'update_settings').at(-1).payload.request)")
-            .expect("saved settings").as_string().expect("settings JSON");
-        let saved: Settings = serde_json::from_str(&saved).expect("settings request");
-        if id == "recording-shortcut" {
-            assert_eq!(saved.recording_shortcut, expected);
+        let sent = js_sys::eval("JSON.stringify(window.__whispernowAdapterCalls.filter(({command}) => command === 'update_settings').at(-1).payload.request)")
+            .expect("sent change").as_string().expect("change JSON");
+        let sent: SettingChange = serde_json::from_str(&sent).expect("setting change");
+        let settings = browser_settings();
+        let expected = if id == "recording-shortcut" {
+            SettingChange::RecordingShortcut {
+                shortcut: expected,
+                mode: settings.recording_mode,
+            }
         } else {
-            assert_eq!(saved.cancel_shortcut, Some(expected));
-        }
+            SettingChange::CancelShortcut(Some(expected))
+        };
+        assert_eq!(sent, expected);
     }
 }
 
@@ -125,21 +130,23 @@ fn adapter_calls() -> String {
         .expect("adapter call JSON")
 }
 
+/// Answers every settings save with the surface's unchanged settings.
 fn install_tauri_probe() {
-    install_tauri(
+    let settings = serde_json::to_string(&browser_settings()).expect("settings JSON");
+    install_tauri(&format!(
         r#"
-        if (command === "update_settings") {
-          return { settings: { settings: payload.request, warnings: [] }, warnings: [] };
-        }
-        if (command === "suspend_shortcuts" || command === "resume_shortcuts") {
+        if (command === "update_settings") {{
+          return {{ settings: {{ settings: {settings}, warnings: [] }}, warnings: [] }};
+        }}
+        if (command === "suspend_shortcuts" || command === "resume_shortcuts") {{
           return null;
-        }
-        if (command === "copy_text") {
+        }}
+        if (command === "copy_text") {{
           return null;
-        }
-        throw new Error(`unexpected command: ${command}`);
+        }}
+        throw new Error(`unexpected command: ${{command}}`);
         "#,
-    );
+    ));
 }
 
 fn click(id: &str) {
@@ -165,16 +172,22 @@ fn model_id() -> ModelId {
     snapshot(Phase::Idle).selected_model_id
 }
 
-fn management_with_history() -> ManagementState {
-    let mut management = management_with(Settings {
+fn browser_settings() -> Settings {
+    Settings {
         model_id: model_id(),
-        first_run_complete: true,
+        setup: whispernow_domain::SetupProgress::Complete,
         ..Settings::default()
-    });
-    management.history_rows_filter = Some(whispernow_domain::HistoryFilter::default());
+    }
+}
+
+fn management_with_history() -> ManagementState {
+    let mut management = management_with(browser_settings());
     let mut entry = crate::test_fixtures::history_entry(7, "raw 7");
     entry.cleaned_text = Some("cleaned 7".to_owned());
-    management.history = vec![entry];
+    management.finish_history_refresh(whispernow_domain::HistoryPage {
+        entries: vec![entry],
+        has_more: false,
+    });
     management.models = vec![ModelSummary {
         id: model_id(),
         display_name: "Current model".to_owned(),

@@ -65,10 +65,10 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn first_run_complete(&self) -> bool {
+    pub fn setup_complete(&self) -> bool {
         self.settings
             .as_ref()
-            .is_some_and(|view| view.settings.first_run_complete)
+            .is_some_and(|view| view.settings.setup.is_complete())
     }
 
     /// The step first-run setup is on; `None` once it has finished, or before it loads.
@@ -76,7 +76,7 @@ impl ManagementState {
     pub fn unfinished_setup_step(&self) -> Option<SetupStep> {
         self.setup
             .as_ref()
-            .filter(|_| !self.first_run_complete())
+            .filter(|_| !self.setup_complete())
             .map(|setup| setup.step)
     }
 
@@ -120,7 +120,13 @@ impl ManagementState {
 
     /// Installs `view` and its checkpoint as the one setup shows; a fresh installation holds none.
     pub fn install_setup(&mut self, view: SettingsView) {
-        self.setup = Some(view.settings.setup.clone().unwrap_or_default());
+        self.setup = Some(
+            view.settings
+                .setup
+                .checkpoint()
+                .cloned()
+                .unwrap_or_default(),
+        );
         self.install_settings(view);
     }
 

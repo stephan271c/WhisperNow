@@ -4,7 +4,10 @@ use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::ipc::{
     ClearDataResult, SaveSettingsResponse, SetApiKeyRequest, SettingsView,
 };
-use whispernow_domain::{ClearDataCategory, LlmProvider, Settings, SetupCheckpoint};
+use whispernow_domain::{
+    ClearDataCategory, LlmProvider, RecordingMode, SettingChange, Settings, SetupCheckpoint,
+    Shortcut,
+};
 
 use super::{Failure, Gateway, run_blocking};
 use crate::shortcuts::{
@@ -45,10 +48,8 @@ impl Gateway {
             view.warnings.push("The cancel shortcut could not be activated during the last dictation; choose another key, or cancel from the recording bar or the tray".to_owned());
         }
         match self.autostart.is_enabled() {
-            Some(enabled) => view.start_on_login = enabled,
-            None => view
-                .warnings
-                .push("The OS startup registration could not be inspected".to_owned()),
+            Ok(enabled) => view.start_on_login = enabled,
+            Err(error) => view.warnings.push(error.summary),
         }
         view
     }
@@ -100,34 +101,41 @@ impl Gateway {
         Ok(self.finish_view(view))
     }
 
+    /// Registers a new recording shortcut before it is saved and swaps the cancel shortcut
+    /// after; the services run the change's other side effects.
     pub(crate) async fn update_settings(
         &self,
-        request: Settings,
+        mut change: SettingChange,
     ) -> Result<SaveSettingsResponse, AppError> {
         let _native_settings = self.native_settings.lock().await;
         let saved = self
             .saved_settings("update_settings", Failure::Local)
             .await?;
-        let mut edited = request;
-        let (refused, registered) = self.register_shortcuts(&saved, &mut edited).await;
+        let swap = match &mut change {
+            SettingChange::RecordingShortcut { shortcut, mode } => {
+                self.register_shortcuts(&saved, shortcut, mode).await?
+            }
+            _ => ShortcutSwap::Unchanged,
+        };
+        let swaps_cancel = matches!(change, SettingChange::CancelShortcut(_));
         let saving = self
             .run_command("update_settings", Failure::Local, move |services| {
-                services.update_settings(edited)
+                services.update_settings(&change)
             })
             .await;
-        let (before, mut response) = match saving {
+        let mut response = match saving {
             Ok(saved) => saved,
             Err(error) => {
-                if registered {
+                if swap == ShortcutSwap::Registered {
                     self.restore_shortcuts(&saved).await;
                 }
                 return Err(error);
             }
         };
-        response
-            .warnings
-            .extend(refused.map(|warning| warning.summary));
-        if before.cancel_shortcut != response.settings.settings.cancel_shortcut {
+        if swap == ShortcutSwap::Refused {
+            response.warnings.push(SHORTCUT_REFUSED.to_owned());
+        }
+        if swaps_cancel {
             self.apply_cancel_shortcut(cancel_binding(&response.settings.settings))
                 .await;
         }
@@ -145,14 +153,13 @@ impl Gateway {
         let saved = self
             .saved_settings("complete_setup", Failure::Published)
             .await?;
-        let mut chosen = saved.clone();
-        chosen
-            .recording_shortcut
-            .clone_from(&checkpoint.recording_shortcut);
-        chosen.recording_mode = checkpoint.recording_mode;
-        let (refused, registered) = self.register_shortcuts(&saved, &mut chosen).await;
-        checkpoint.recording_shortcut = chosen.recording_shortcut;
-        checkpoint.recording_mode = chosen.recording_mode;
+        let swap = self
+            .register_shortcuts(
+                &saved,
+                &mut checkpoint.recording_shortcut,
+                &mut checkpoint.recording_mode,
+            )
+            .await?;
         let completing = self
             .run_command("complete_setup", Failure::Published, move |services| {
                 services.complete_setup(&checkpoint)
@@ -161,13 +168,16 @@ impl Gateway {
         let settings = match completing {
             Ok(settings) => settings,
             Err(error) => {
-                if registered {
+                if swap == ShortcutSwap::Registered {
                     self.restore_shortcuts(&saved).await;
                 }
                 return Err(error);
             }
         };
-        let warnings = refused.map(|warning| warning.summary).into_iter().collect();
+        let warnings = (swap == ShortcutSwap::Refused)
+            .then(|| SHORTCUT_REFUSED.to_owned())
+            .into_iter()
+            .collect();
         Ok(SaveSettingsResponse {
             settings: self.finish_view(settings),
             warnings,
@@ -183,34 +193,33 @@ impl Gateway {
             .await
     }
 
-    /// Registers the recording shortcut `chosen` names in place of `saved`'s, before `chosen`
-    /// is saved. A refusal leaves `saved`'s registered and writes it into `chosen`. Shortcuts
-    /// that break a rule are left to the save, which refuses them unless `saved` broke the
-    /// rule too; either way they register nothing. Returns the refusal, and whether
-    /// `chosen`'s shortcut replaced `saved`'s.
+    /// Registers the chosen recording `shortcut` and `mode` in place of `saved`'s, before they
+    /// are saved. A refusal leaves `saved`'s registered and writes them back. Shortcuts that
+    /// break a rule are left to the save, which refuses them; they register nothing.
     async fn register_shortcuts(
         &self,
         saved: &Settings,
-        chosen: &mut Settings,
-    ) -> (Option<AppError>, bool) {
-        if saved.recording_shortcut == chosen.recording_shortcut
-            && saved.recording_mode == chosen.recording_mode
-        {
-            return (None, false);
+        shortcut: &mut Shortcut,
+        mode: &mut RecordingMode,
+    ) -> Result<ShortcutSwap, AppError> {
+        if saved.recording_shortcut == *shortcut && saved.recording_mode == *mode {
+            return Ok(ShortcutSwap::Unchanged);
         }
-        let Ok(recording) = recording_binding(chosen) else {
-            return (None, false);
+        let chosen = Settings {
+            recording_shortcut: shortcut.clone(),
+            recording_mode: *mode,
+            ..saved.clone()
         };
-        match self.apply_shortcuts(recording).await {
-            None => (None, true),
-            Some(mut refused) => {
-                chosen
-                    .recording_shortcut
-                    .clone_from(&saved.recording_shortcut);
-                chosen.recording_mode = saved.recording_mode;
-                "The recording shortcut could not be activated; the previous shortcut is still in use"
-                    .clone_into(&mut refused.summary);
-                (Some(refused), false)
+        let Some(recording) = recording_binding(&chosen) else {
+            return Ok(ShortcutSwap::Unchanged);
+        };
+        match self.apply_shortcuts(recording).await? {
+            Ok(()) => Ok(ShortcutSwap::Registered),
+            Err(error) => {
+                tracing::warn!(?error, "the new recording shortcut was refused");
+                shortcut.clone_from(&saved.recording_shortcut);
+                *mode = saved.recording_mode;
+                Ok(ShortcutSwap::Refused)
             }
         }
     }
@@ -241,27 +250,32 @@ impl Gateway {
 
     /// Registers `saved`'s shortcut again after a save that registered another failed.
     async fn restore_shortcuts(&self, saved: &Settings) {
-        let restored = match recording_binding(saved) {
-            Ok(recording) => self.apply_shortcuts(recording).await,
-            Err(error) => Some(shortcut_error(error)),
+        let Some(recording) = recording_binding(saved) else {
+            tracing::warn!("the saved shortcuts break a rule; none is registered again");
+            return;
         };
-        if let Some(error) = restored {
-            tracing::warn!(
-                code = error.code,
-                "the saved shortcuts could not be registered again"
-            );
+        match self.apply_shortcuts(recording).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(?error, "the saved shortcuts could not be registered again");
+            }
+            Err(error) => {
+                tracing::warn!(
+                    code = error.code,
+                    "the saved shortcuts could not be registered again"
+                );
+            }
         }
     }
 
     /// Registers `recording` in place of the current shortcut, which stays registered on a
-    /// refusal.
-    async fn apply_shortcuts(&self, recording: RecordingBinding) -> Option<AppError> {
+    /// refusal. The outer error is a registration worker that stopped.
+    async fn apply_shortcuts(
+        &self,
+        recording: RecordingBinding,
+    ) -> Result<Result<(), ShortcutRegistrationError>, AppError> {
         let shortcuts = Arc::clone(&self.shortcuts);
-        match run_blocking(move || shortcuts.apply_update(recording)).await {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(shortcut_error(error)),
-            Err(error) => Some(error),
-        }
+        run_blocking(move || shortcuts.apply_update(recording)).await
     }
 
     /// Swaps the cancel shortcut. It is registered only while a dictation
@@ -309,6 +323,18 @@ impl Gateway {
         Ok(result)
     }
 }
+
+/// What a settings save did to the registered recording shortcut.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShortcutSwap {
+    Unchanged,
+    Registered,
+    /// The new shortcut was refused, so the saved one stays registered and is saved again.
+    Refused,
+}
+
+const SHORTCUT_REFUSED: &str =
+    "The recording shortcut could not be activated; the previous shortcut is still in use";
 
 pub(crate) fn shortcut_error(error: ShortcutRegistrationError) -> AppError {
     AppError {

@@ -19,7 +19,7 @@ use whispernow_core::{
 use whispernow_domain::ipc::SetApiKeyRequest;
 use whispernow_domain::{
     ApiKey, AppError, EntryStatus, ErrorCategory, HistoryEntry, HistoryFilter, HistoryPageRequest,
-    LlmProvider, ModelId, ModelRegistry, Settings,
+    LlmProvider, ModelId, ModelRegistry, SettingChange, Settings,
 };
 use whispernow_platform::{AppPaths, MemoryCredentialStore, ModelStore};
 
@@ -353,6 +353,25 @@ fn a_dictation_is_transcribed_saved_and_pasted() {
 }
 
 #[test]
+fn a_dictation_keeps_no_audio_with_keep_audio_off() {
+    let fixture = Fixture::new();
+    fixture
+        .settings
+        .update(
+            &SettingChange::KeepAudio(false),
+            &FakeAudioInput::recording(Vec::new()),
+        )
+        .expect("keep audio off");
+    fixture.start();
+    fixture.dictation.stop().expect("stop");
+
+    assert_eq!(fixture.settled(), Phase::Idle);
+    let history = fixture.history();
+    assert_eq!(history.len(), 1);
+    assert!(!history[0].audio_kept);
+}
+
+#[test]
 fn vocabulary_that_empties_a_transcript_clears_the_last_transcript() {
     let fixture = Fixture::new();
     fixture.state.lock().last_transcript = Some("earlier dictation".to_owned());
@@ -622,7 +641,9 @@ impl Fixture {
         self.settings
             .edit(|settings| {
                 settings.cleanup_enabled = true;
-                settings.provider_settings_mut(LlmProvider::OpenAi).model = "gpt-test".to_owned();
+                settings
+                    .provider_settings_mut(LlmProvider::OpenAi)
+                    .choose_model("gpt-test".to_owned());
                 Ok(())
             })
             .expect("save settings");
@@ -719,15 +740,15 @@ fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
     assert_eq!(requests.len(), 1);
     let LlmRequest::Local {
         model,
-        prompt,
+        transcript,
         draft,
         ..
     } = &requests[0]
     else {
         panic!("local cleanup request");
     };
-    assert_eq!(*model, saved.cleanup_model_id());
-    assert_eq!(prompt.user(), "hello from the WhisperNow team");
+    assert_eq!(*model, saved.cleanup_model);
+    assert_eq!(transcript, "hello from the WhisperNow team");
     assert_eq!(draft.as_str(), "Hello from the WhisperNow team");
     drop(requests);
     let history = fixture.history();
@@ -741,13 +762,14 @@ fn a_dictation_cleaned_by_the_local_model_drafts_from_the_transcript() {
 #[test]
 fn an_incomplete_cleanup_provider_keeps_the_transcript_without_calling_the_provider() {
     let fixture = Fixture::new();
-    let mut edited = fixture.settings.get().settings;
-    edited.cleanup_enabled = true;
-    edited.llm_provider = LlmProvider::Custom;
-    edited.provider_settings_mut(LlmProvider::Custom).model = String::new();
-    let (_, view) = fixture
+    let audio = FakeAudioInput::recording(Vec::new());
+    fixture
         .settings
-        .update(edited, &FakeAudioInput::recording(Vec::new()))
+        .update(&SettingChange::CleanupEnabled(true), &audio)
+        .expect("enable cleanup");
+    let view = fixture
+        .settings
+        .update(&SettingChange::ActiveProvider(LlmProvider::Custom), &audio)
         .expect("save incomplete provider");
     assert_eq!(view.warnings.len(), 1);
 

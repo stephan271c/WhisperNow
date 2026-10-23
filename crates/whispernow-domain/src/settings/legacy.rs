@@ -5,9 +5,11 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use super::known_cleanup_model;
 use crate::{
     ApiKey, HistoryLimit, HistoryRetention, LlmProvider, ModelId, ModelRegistry, ProviderEndpoint,
-    ProviderSettings, RecordingMode, Settings, Shortcut,
+    ProviderSettings, RecordingMode, Settings, SetupProgress, Shortcut, VocabularyReplacement,
+    WindowGeometry,
 };
 
 /// Settings read from the Python release's `settings.json`, and the API keys it held in
@@ -41,21 +43,29 @@ impl PythonSettings {
             settings.model_id = ModelId::default();
         }
         pick(document, "start_minimized", &mut settings.start_minimized);
-        pick(
-            document,
-            "first_run_complete",
-            &mut settings.first_run_complete,
-        );
+        let mut first_run_complete = false;
+        pick(document, "first_run_complete", &mut first_run_complete);
+        if first_run_complete {
+            settings.setup = SetupProgress::Complete;
+        }
         settings.cleanup_enabled = document
             .get("active_enhancement_id")
             .is_some_and(Value::is_string);
         pick(document, "llm_provider", &mut settings.llm_provider);
-        pick(
-            document,
-            "vocabulary_replacements",
-            &mut settings.vocabulary_replacements,
-        );
-        pick(document, "window_geometry", &mut settings.window_geometry);
+        let mut vocabulary = Vec::<(String, String)>::new();
+        pick(document, "vocabulary_replacements", &mut vocabulary);
+        settings.vocabulary_replacements = vocabulary
+            .into_iter()
+            .map(|(source, replacement)| VocabularyReplacement::new(source, replacement))
+            .collect();
+        let mut geometry = None::<(i32, i32, u32, u32)>;
+        pick(document, "window_geometry", &mut geometry);
+        settings.window_geometry = geometry.map(|(x, y, width, height)| WindowGeometry {
+            x,
+            y,
+            width,
+            height,
+        });
         // A stored shortcut missing its modifiers or key takes the default's.
         if let Some(Value::Object(stored)) = document.get("hotkey") {
             let mut shortcut_fields = serde_json::to_value(&settings.recording_shortcut)
@@ -174,35 +184,68 @@ fn import_providers(document: &Value, settings: &mut Settings) -> BTreeMap<LlmPr
         let Some(provider) = LlmProvider::from_name(name) else {
             continue;
         };
-        let provider_settings = settings.provider_settings_mut(provider);
-        pick(entry, "model", &mut provider_settings.model);
-        pick(entry, "api_base", &mut provider_settings.api_base);
-        pick(entry, "saved_models", &mut provider_settings.saved_models);
-        provider_settings.model = provider_model(provider, &provider_settings.model);
-        for saved in &mut provider_settings.saved_models {
-            *saved = provider_model(provider, saved);
+        let mut model = None::<String>;
+        pick(entry, "model", &mut model);
+        if provider == LlmProvider::LocalCleanup {
+            if let Some(model) = model {
+                settings.cleanup_model = known_cleanup_model(&model);
+            }
+            continue;
         }
+        let mut api_base = None;
+        let mut saved_models = Vec::new();
+        pick(entry, "api_base", &mut api_base);
+        pick(entry, "saved_models", &mut saved_models);
+        settings.llm_provider_settings.insert(
+            provider,
+            provider_settings(provider, model, api_base, saved_models),
+        );
         if let Some(key) = text(entry, "api_key").and_then(|key| ApiKey::new(key).ok()) {
             api_keys.insert(provider, key);
         }
     }
     // The earliest release kept one provider's settings at the top level.
     let provider = settings.llm_provider;
-    if let Entry::Vacant(entry) = settings.llm_provider_settings.entry(provider) {
+    if provider != LlmProvider::LocalCleanup
+        && let Entry::Vacant(entry) = settings.llm_provider_settings.entry(provider)
+    {
         let model = text(document, "llm_model");
         let api_base = text(document, "llm_api_base");
         if model.is_some() || api_base.is_some() {
-            entry.insert(ProviderSettings {
-                model: model.map_or_else(String::new, |model| provider_model(provider, &model)),
-                api_base: api_base.and_then(|api_base| ProviderEndpoint::parse(api_base).ok()),
-                saved_models: Vec::new(),
-            });
+            let api_base = api_base.and_then(|api_base| ProviderEndpoint::parse(api_base).ok());
+            entry.insert(provider_settings(provider, model, api_base, Vec::new()));
         }
         if let Some(key) = text(document, "llm_api_key").and_then(|key| ApiKey::new(key).ok()) {
             api_keys.insert(provider, key);
         }
     }
     api_keys
+}
+
+/// Saves the active model with the others, every name without its routing prefix.
+fn provider_settings(
+    provider: LlmProvider,
+    model: Option<String>,
+    api_base: Option<ProviderEndpoint>,
+    saved_models: Vec<String>,
+) -> ProviderSettings {
+    let mut saved_models: Vec<String> = saved_models
+        .into_iter()
+        .map(|saved| provider_model(provider, &saved))
+        .collect();
+    let model = model
+        .map(|model| provider_model(provider, &model))
+        .filter(|model| !model.is_empty());
+    if let Some(model) = &model
+        && !saved_models.contains(model)
+    {
+        saved_models.insert(0, model.clone());
+    }
+    ProviderSettings {
+        model,
+        api_base,
+        saved_models,
+    }
 }
 
 /// Drops the `LiteLLM` routing prefix the Python release saved with a model name

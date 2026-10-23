@@ -17,7 +17,7 @@ fn request_debug_keeps_captured_text_credentials_models_and_endpoints_private() 
     let requests = [
         LlmRequest::Local {
             model: ModelId::new("private-model").expect("model ID"),
-            prompt: build_local_cleanup_prompt(transcript),
+            transcript: transcript.to_owned(),
             max_output_tokens: 64,
             draft: DraftText::from_transcript(transcript),
         },
@@ -271,21 +271,9 @@ async fn local_cleanup_request_matches_the_training_golden_fixture() {
     for case in cases {
         let name = case["name"].as_str().expect("case name");
         let transcript = case["transcript"].as_str().expect("case transcript");
-        let prompt = build_local_cleanup_prompt(transcript);
-        assert_eq!(prompt.system(), "", "{name}: no system message");
-        let messages = case["messages"].as_array().expect("case messages");
-        assert_eq!(messages.len(), 1, "{name}");
-        assert_eq!(messages[0]["role"], "user", "{name}");
-        assert_eq!(messages[0]["content"], prompt.user(), "{name}");
-        assert_eq!(
-            local::render_prompt("<|startoftext|>", &prompt),
-            case["rendered"].as_str().expect("case rendered"),
-            "{name}"
-        );
-
         let service = FakeService::new([Behavior::Text("Cleaned.")]);
         let target = CleanupTarget::Local {
-            model: Settings::default().cleanup_model_id(),
+            model: Settings::default().cleanup_model,
         };
         clean_up(
             &service,
@@ -298,6 +286,7 @@ async fn local_cleanup_request_matches_the_training_golden_fixture() {
         .expect("local request");
         let sent = service.sent.lock().expect("sent lock");
         let LlmRequest::Local {
+            transcript,
             max_output_tokens,
             draft,
             ..
@@ -305,6 +294,15 @@ async fn local_cleanup_request_matches_the_training_golden_fixture() {
         else {
             panic!("local request");
         };
+        let messages = case["messages"].as_array().expect("case messages");
+        assert_eq!(messages.len(), 1, "{name}: no system message");
+        assert_eq!(messages[0]["role"], "user", "{name}");
+        assert_eq!(messages[0]["content"], transcript.as_str(), "{name}");
+        assert_eq!(
+            local::render_prompt("<|startoftext|>", transcript),
+            case["rendered"].as_str().expect("case rendered"),
+            "{name}"
+        );
         assert_eq!(
             serde_json::json!(max_output_tokens),
             case["max_tokens"],
@@ -343,12 +341,14 @@ async fn the_local_cleanup_model_gets_only_the_transcript() {
         assert!(result.is_ok());
     }
     let sent = service.sent.lock().expect("sent lock");
-    let LlmRequest::Local { model, prompt, .. } = &sent[0] else {
+    let LlmRequest::Local {
+        model, transcript, ..
+    } = &sent[0]
+    else {
         panic!("local request");
     };
     assert_eq!(model.as_str(), "cleanup");
-    assert_eq!(prompt.system(), "");
-    assert_eq!(prompt.user(), "hello world");
+    assert_eq!(transcript, "hello world");
     let LlmRequest::Remote { prompt, .. } = &sent[1] else {
         panic!("remote request");
     };

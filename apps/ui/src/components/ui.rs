@@ -15,7 +15,9 @@ mod select;
 pub(crate) use buttons::{Button, ButtonSize, ButtonVariant, ConfirmButton, IconButton};
 pub(crate) use combobox::Combobox;
 pub(crate) use feedback::{Banner, ProgressBar, Tone};
-pub(crate) use fields::{DraftText, Field, Segmented, SettingRow, TextInput, Toggle};
+pub(crate) use fields::{
+    DraftText, Field, Segmented, SegmentedOption, SettingRow, TextInput, Toggle,
+};
 pub(crate) use icon::{BrandMark, Icon, IconName};
 pub(crate) use keys::{Kbd, ShortcutLabel, shortcut_parts};
 pub(crate) use layout::{EmptyState, Section};

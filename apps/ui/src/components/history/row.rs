@@ -4,18 +4,23 @@ use whispernow_domain::{EntryStatus, HistoryEntry};
 
 use super::audio::AudioPlayer;
 use super::format::{LocalClock, duration_label, machine_time};
-use crate::CopyTarget;
 use crate::components::CopyButton;
 use crate::components::ui::{ButtonSize, ConfirmButton, Icon, IconName};
 
+struct Badge {
+    label: &'static str,
+    class: &'static str,
+}
+
 /// The marker a row shows; a dictation that was pasted needs none.
-pub(super) const fn status_badge(status: EntryStatus) -> Option<(&'static str, &'static str)> {
-    match status {
-        EntryStatus::Ok => None,
-        EntryStatus::Failed => Some(("Failed", "history-status-badge failed")),
-        EntryStatus::Cancelled => Some(("Cancelled", "history-status-badge cancelled")),
-        EntryStatus::NotDelivered => Some(("Not pasted", "history-status-badge not-pasted")),
-    }
+const fn status_badge(status: EntryStatus) -> Option<Badge> {
+    let (label, class) = match status {
+        EntryStatus::Ok => return None,
+        EntryStatus::Failed => ("Failed", "history-status-badge failed"),
+        EntryStatus::Cancelled => ("Cancelled", "history-status-badge cancelled"),
+        EntryStatus::NotDelivered => ("Not pasted", "history-status-badge not-pasted"),
+    };
+    Some(Badge { label, class })
 }
 
 #[component]
@@ -40,7 +45,7 @@ pub(super) fn HistoryRow(entry: HistoryEntry, delete_blocked: bool, clock: Local
                     if let Some(duration) = &duration {
                         span { class: "history-row-duration", "{duration}" }
                     }
-                    if let Some((label, class)) = badge {
+                    if let Some(Badge { label, class }) = badge {
                         span { class, "{label}" }
                     }
                     if original.is_some() {
@@ -65,7 +70,7 @@ pub(super) fn HistoryRow(entry: HistoryEntry, delete_blocked: bool, clock: Local
                 }
             }
             div { class: "history-row-actions",
-                CopyButton { id: "history-copy-{rid}", target: CopyTarget::HistoryEntry(id),
+                CopyButton { id: "history-copy-{rid}",
                     text, label: "Copy", names: target.clone(), size: ButtonSize::Sm, icon: true,
                 }
                 ConfirmButton { id: "history-delete-{rid}", size: ButtonSize::Sm,

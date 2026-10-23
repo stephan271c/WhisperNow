@@ -19,6 +19,8 @@ use thiserror::Error;
 use whispernow_core::llm::local::{DecodeContext, LocalDecodeError, Outputs, Token};
 use whispernow_domain::ipc::CleanupDevice;
 
+use crate::models::ModelStoreError;
+
 /// The release's libraries, in load order: each needs the ones before it.
 #[cfg(target_os = "linux")]
 const LIBRARIES: [&str; 3] = ["libggml-base.so.0", "libggml.so.0", "libllama.so.0"];
@@ -45,10 +47,18 @@ static LOADED: Mutex<Option<&'static Llama>> = Mutex::new(None);
 
 #[derive(Debug, Error)]
 pub(crate) enum LlamaError {
-    #[error("llama.cpp could not be loaded from {directory}: {message}")]
-    Library { directory: PathBuf, message: String },
+    #[error("llama.cpp could not be loaded from {directory}: {source}")]
+    Library {
+        directory: PathBuf,
+        #[source]
+        source: libloading::Error,
+    },
+    #[error("the model is held unloaded")]
+    Held,
     #[error("the model is not installed")]
     NotInstalled,
+    #[error("the model store could not be read: {0}")]
+    Store(#[from] ModelStoreError),
     #[error("the model could not be loaded")]
     Model,
     #[error("the model's context could not be created")]
@@ -75,25 +85,24 @@ impl Llama {
         if let Some(llama) = *loaded {
             return Ok(llama);
         }
-        let failed = |message: String| LlamaError::Library {
+        let failed = |source| LlamaError::Library {
             directory: directory.to_owned(),
-            message,
+            source,
         };
         let mut libraries = Vec::new();
         for name in PRELOAD {
             let path = directory.join(name);
             if path.is_file() {
-                libraries.push(open(&path).map_err(|error| failed(error.to_string()))?);
+                libraries.push(open(&path).map_err(failed)?);
             }
         }
         let mut core = Vec::with_capacity(LIBRARIES.len());
         for name in LIBRARIES {
-            core.push(open(&directory.join(name)).map_err(|error| failed(error.to_string()))?);
+            core.push(open(&directory.join(name)).map_err(failed)?);
         }
         // SAFETY: these are the pinned release's libraries, and `Llama` keeps them loaded
         // for the life of the process.
-        let api = unsafe { ffi::Api::resolve(&core[0], &core[1], &core[2]) }
-            .map_err(|error| failed(error.to_string()))?;
+        let api = unsafe { ffi::Api::resolve(&core[0], &core[1], &core[2]) }.map_err(failed)?;
         libraries.extend(core);
         // SAFETY: the callback is a plain function that never unwinds.
         unsafe {
@@ -101,7 +110,7 @@ impl Llama {
             (api.llama_log_set)(Some(log), std::ptr::null_mut());
             if (api.ggml_backend_reg_count)() == 0 {
                 let directory = CString::new(directory.as_os_str().as_encoded_bytes())
-                    .map_err(|error| failed(error.to_string()))?;
+                    .expect("an OS path has no NUL byte");
                 (api.ggml_backend_load_all_from_path)(directory.as_ptr());
             }
             (api.llama_backend_init)();

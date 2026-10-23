@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use crate::components::ui::{Button, ButtonVariant};
 use crate::{UiContext, UiOperation};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,4 +76,29 @@ pub(crate) fn DisabledReason(id: String, reason: Option<BlockedReason>) -> Eleme
         BlockedReason::Connecting | BlockedReason::Phase(_) => "disabled-reason",
     };
     rsx! { p { id, class, "{reason.message()}" } }
+}
+
+/// A button that `blocked` disables, followed by the reason, which describes it as
+/// `{id}-disabled-reason`. `disabled` disables it without a reason.
+#[component]
+pub(crate) fn BlockedButton(
+    id: String,
+    blocked: Option<BlockedReason>,
+    #[props(default)] disabled: bool,
+    #[props(default)] variant: ButtonVariant,
+    onclick: EventHandler<MouseEvent>,
+    children: Element,
+) -> Element {
+    let reason_id = format!("{id}-disabled-reason");
+    rsx! {
+        Button {
+            id,
+            variant,
+            disabled: disabled || blocked.is_some(),
+            aria_describedby: blocked.is_some().then(|| reason_id.clone()),
+            onclick: move |event| onclick.call(event),
+            {children}
+        }
+        DisabledReason { id: reason_id, reason: blocked }
+    }
 }

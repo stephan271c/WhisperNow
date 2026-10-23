@@ -24,15 +24,13 @@ impl Settings {
         let mut problems = Vec::new();
         problems.extend(self.shortcut_problems());
         for (&provider, settings) in &self.llm_provider_settings {
+            let bad_name = |model: &String| model.trim().is_empty() || model.contains(['\n', '\r']);
             let mut unique_models = settings.saved_models.clone();
             unique_models.sort_unstable();
             unique_models.dedup();
-            if settings.model.contains(['\n', '\r'])
-                || unique_models.len() != settings.saved_models.len()
-                || settings
-                    .saved_models
-                    .iter()
-                    .any(|model| model.trim().is_empty() || model.contains(['\n', '\r']))
+            if unique_models.len() != settings.saved_models.len()
+                || settings.model.as_ref().is_some_and(bad_name)
+                || settings.saved_models.iter().any(bad_name)
             {
                 problems.push(SettingsError::ModelName { provider });
             }
@@ -49,21 +47,6 @@ impl Settings {
 
     pub fn validate(&self) -> Result<(), SettingsError> {
         self.problems().into_iter().next().map_or(Ok(()), Err)
-    }
-
-    /// Checks settings an edit turned `before` into. A rule `before` already broke does not
-    /// block the edit: settings saved by an older version, or before a provider changed its
-    /// rules, still accept other changes and the change that repairs them.
-    pub fn validate_update(&self, before: &Self) -> Result<(), SettingsError> {
-        let problems = self.problems();
-        if problems.is_empty() {
-            return Ok(());
-        }
-        let existing = before.problems();
-        problems
-            .into_iter()
-            .find(|problem| !existing.contains(problem))
-            .map_or(Ok(()), Err)
     }
 
     /// Whether the recording and cancel shortcuts break no rule; none may be registered while

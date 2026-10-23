@@ -18,15 +18,14 @@ fn retained_entry(services: &NativeServices) -> (HistoryEntry, Vec<u8>) {
         .insert(
             NewHistoryEntry {
                 created_at: UtcMillis::now(),
-                duration_millis: Some(1_000),
+                duration_millis: 1_000,
                 raw_text: Some("keep this dictation".to_owned()),
                 cleaned_text: None,
                 status: EntryStatus::Ok,
                 error: None,
-                asr_model_id: Some(ModelId::default()),
+                asr_model_id: ModelId::default(),
             },
-            &[0.25; 160],
-            true,
+            Some(&[0.25; 160]),
             HistoryLimit::Unlimited,
             HistoryRetention::Forever,
         )
@@ -52,13 +51,15 @@ fn assert_retained(services: &NativeServices, entry: &HistoryEntry, audio: &[u8]
 
 #[test]
 fn clearing_settings_resets_memory_before_the_next_edit_even_when_the_file_is_missing() {
-    use whispernow_domain::{ThemePreference, VocabularyReplacement};
+    use whispernow_domain::{SettingChange, ThemePreference, VocabularyReplacement};
 
     for missing_file in [false, true] {
         let (services, _root) = native_services(Fixture::new());
-        let mut edited = services.settings.load();
-        edited.vocabulary_replacements = vec![VocabularyReplacement::new("teh", "the")];
-        services.update_settings(edited).expect("save vocabulary");
+        services
+            .update_settings(&SettingChange::Vocabulary(vec![
+                VocabularyReplacement::new("teh", "the"),
+            ]))
+            .expect("save vocabulary");
         if missing_file {
             fs::remove_file(services.paths.settings_file()).expect("external deletion");
         }
@@ -67,10 +68,8 @@ fn clearing_settings_resets_memory_before_the_next_edit_even_when_the_file_is_mi
             .clear_data(&[ClearDataCategory::Settings])
             .expect("clear settings");
         assert_eq!(services.settings.load(), Settings::default());
-        let mut edited = services.settings.load();
-        edited.theme = ThemePreference::Dark;
         services
-            .update_settings(edited)
+            .update_settings(&SettingChange::Theme(ThemePreference::Dark))
             .expect("edit after clearing");
         let expected = Settings {
             theme: ThemePreference::Dark,
@@ -180,7 +179,7 @@ fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
         result
             .items
             .iter()
-            .all(|item| item.category == ClearDataCategory::History && item.deleted)
+            .all(|item| item.location.category == ClearDataCategory::History && item.deleted)
     );
     assert!(!result.restart_required);
     assert!(services.paths.history_database_file().exists());
@@ -203,15 +202,14 @@ fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
         .insert(
             NewHistoryEntry {
                 created_at: UtcMillis::now(),
-                duration_millis: Some(1_000),
+                duration_millis: 1_000,
                 raw_text: Some("after clear".to_owned()),
                 cleaned_text: None,
                 status: EntryStatus::Ok,
                 error: None,
-                asr_model_id: None,
+                asr_model_id: ModelId::default(),
             },
-            &[0.25; 160],
-            true,
+            Some(&[0.25; 160]),
             HistoryLimit::Unlimited,
             HistoryRetention::Forever,
         )
@@ -223,7 +221,7 @@ fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
 
 #[test]
 fn clearing_every_category_reports_files_and_unavailable_credentials_separately() {
-    use crate::services::clear_data::CREDENTIAL_STORE_CLEAR_TARGET;
+    use crate::services::clear_data::credential_store_location;
 
     for available in [true, false] {
         let fixture = Fixture::new();
@@ -248,14 +246,14 @@ fn clearing_every_category_reports_files_and_unavailable_credentials_separately(
         for item in &result.items {
             assert_eq!(
                 item.deleted,
-                item.path != CREDENTIAL_STORE_CLEAR_TARGET || available
+                item.location != credential_store_location() || available
             );
         }
         assert!(
             result
                 .items
                 .iter()
-                .any(|item| item.path == CREDENTIAL_STORE_CLEAR_TARGET)
+                .any(|item| item.location == credential_store_location())
         );
         assert!(!services.paths.settings_file().exists());
         assert!(services.paths.history_database_file().exists());
@@ -298,7 +296,10 @@ fn a_recordings_deletion_failure_keeps_history_recoverable() {
     let result = result.expect("partial deletion report");
 
     assert_eq!(result.items.len(), 1);
-    assert_eq!(result.items[0].category, ClearDataCategory::History);
+    assert_eq!(
+        result.items[0].location.category,
+        ClearDataCategory::History
+    );
     assert!(!result.items[0].deleted);
     assert!(recordings.exists());
     assert!(services.paths.history_database_file().exists());

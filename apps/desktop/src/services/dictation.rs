@@ -26,7 +26,7 @@ use whispernow_core::{
 };
 use whispernow_domain::ipc::MicrophoneTestResponse;
 use whispernow_domain::{
-    EntryStatus, HistoryLimit, HistoryRetention, ModelId, UtcMillis, VocabularyReplacement,
+    HistoryLimit, HistoryRetention, ModelId, UtcMillis, VocabularyReplacement,
 };
 use whispernow_platform::ModelStore;
 
@@ -34,7 +34,7 @@ use super::{Phase, RecordingTrigger};
 use super::{
     capture_start_error,
     history::HistoryStore,
-    microphone_test,
+    microphone_test::{self, MicrophoneTestError},
     models::installed,
     output::TranscriptOutput,
     settings::SettingsCoordinator,
@@ -48,7 +48,7 @@ mod outcome;
 
 use capture::{CapturedSpeech, RecordingSink};
 pub(crate) use cleanup::{AiCleanup, CleanupPlan};
-use outcome::{DecodeFailure, Outcome, cleanup_fallback_warning, interruption_warning};
+use outcome::{DecodeFailure, NewEntry, Outcome, cleanup_fallback_warning, interruption_warning};
 
 const MAX_RECORDING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 60 * 30;
 
@@ -114,7 +114,7 @@ pub(super) enum Message {
     MicTest {
         device: AudioDeviceChoice,
         duration: Duration,
-        reply: Reply<MicrophoneTestResponse>,
+        reply: Reply<Result<MicrophoneTestResponse, MicrophoneTestError>>,
     },
     BeginUpdate {
         reply: Reply<()>,
@@ -325,12 +325,13 @@ impl Dictation {
         &self,
         device: AudioDeviceChoice,
         duration: Duration,
-    ) -> Result<MicrophoneTestResponse, AppError> {
+    ) -> Result<MicrophoneTestResponse, MicrophoneTestError> {
         self.ask(|reply| Message::MicTest {
             device,
             duration,
             reply,
         })
+        .map_err(MicrophoneTestError::Unavailable)?
     }
 
     /// Waits until no dictation is in flight, then enters `Updating`.
@@ -450,7 +451,7 @@ impl Worker {
                     duration,
                     reply,
                 } => {
-                    let _caller_left = reply.send(self.test_microphone(device, duration));
+                    let _caller_left = reply.send(Ok(self.test_microphone(device, duration)));
                 }
                 Message::BeginUpdate { reply } => self.begin_update(reply),
                 Message::Shutdown => break,
@@ -665,13 +666,12 @@ impl Worker {
         samples: &[f32],
         prepared: PreparedTranscription,
     ) -> Outcome {
-        let history = self.save_entry(recording, samples, EntryStatus::Ok, None, Some(&prepared));
+        let history = self.save_entry(recording, samples, NewEntry::Transcribed(&prepared));
         let notice = self
             .parts
             .output
             .output(&prepared.final_text, &recording.cancellation);
-        let (delivery_failure, delivery_error) = notice.failure();
-        if let (Some(reason), Ok(entry)) = (delivery_failure, &history) {
+        if let (Some(reason), Ok(entry)) = (notice.history_reason(), &history) {
             match self.parts.history.mark_not_delivered(*entry, reason) {
                 Ok(()) => self.parts.state.events().history_changed(),
                 Err(error) => {
@@ -691,7 +691,7 @@ impl Worker {
             .or(cleanup_warning);
         Outcome::Delivered {
             transcript: prepared.final_text,
-            failure: delivery_error,
+            failure: notice.error(),
             warning,
         }
     }
@@ -849,8 +849,13 @@ impl Worker {
         &self,
         device: AudioDeviceChoice,
         duration: Duration,
-    ) -> Result<MicrophoneTestResponse, AppError> {
-        self.parts.state.lock().phase.require_idle()?;
+    ) -> Result<MicrophoneTestResponse, MicrophoneTestError> {
+        self.parts
+            .state
+            .lock()
+            .phase
+            .require_idle()
+            .map_err(MicrophoneTestError::Unavailable)?;
         microphone_test::run(self.parts.audio.as_ref(), device, duration, || {
             self.stopping.load(Ordering::Acquire)
         })

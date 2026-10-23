@@ -7,8 +7,9 @@ use whispernow_domain::ipc::{
 use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{
     ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability, ModelId, ProviderEndpoint,
-    ProviderSettings, RecordingMode, Settings, SetupCheckpoint, SetupStep, Shortcut, ShortcutKey,
-    ShortcutModifier, SpeechBenchmark, VocabularyReplacement, WerSource,
+    ProviderSettings, RecordingMode, SettingChange, Settings, SetupCheckpoint, SetupProgress,
+    SetupStep, Shortcut, ShortcutKey, ShortcutModifier, SpeechBenchmark, VocabularyReplacement,
+    WerSource,
 };
 
 use crate::client::fake;
@@ -17,7 +18,7 @@ use crate::test_support::{
     Page, editable_settings, focused, label_in_name_violations, management_with, settings_view,
     snapshot, tag, text,
 };
-use crate::{ManagementState, NoticeScope, SettingKey, UiState};
+use crate::{ManagementState, NoticeScope, UiState};
 
 pub(super) fn shell(snapshot: AppState, management: ManagementState) -> Page {
     let mut state = UiState::default();
@@ -41,8 +42,7 @@ pub(super) fn loaded() -> ManagementState {
 pub(super) fn unfinished_setup(checkpoint: SetupCheckpoint) -> ManagementState {
     let mut management = loaded();
     let mut settings = editable_settings();
-    settings.first_run_complete = false;
-    settings.setup = Some(checkpoint.clone());
+    settings.setup = SetupProgress::Unfinished(checkpoint.clone());
     management.install_settings(SettingsView::new(&settings));
     management.setup = Some(checkpoint);
     management
@@ -401,8 +401,30 @@ fn open(page: &mut Page, ids: &[&str]) {
 }
 
 /// Every settings change sent to the desktop so far.
-fn sent_settings() -> Vec<Settings> {
-    fake::requests::<Settings>("update_settings")
+fn sent_changes() -> Vec<SettingChange> {
+    fake::requests::<SettingChange>("update_settings")
+}
+
+/// What the page shows while a save is pending, which is what the desktop saves for its change.
+fn shown(page: &Page) -> Settings {
+    page.context()
+        .management
+        .read()
+        .shown_settings()
+        .cloned()
+        .expect("loaded")
+}
+
+fn confirm_save(page: &mut Page) -> Settings {
+    let saved = shown(page);
+    page.answer(
+        "update_settings",
+        Ok(SaveSettingsResponse {
+            settings: SettingsView::new(&saved),
+            warnings: Vec::new(),
+        }),
+    );
+    saved
 }
 
 pub(super) fn model(id: &str, name: &str, availability: ModelAvailability) -> ModelSummary {
@@ -425,7 +447,7 @@ fn configured() -> ManagementState {
     settings.cleanup_enabled = true;
     settings
         .provider_settings_mut(LlmProvider::OpenAi)
-        .saved_models = vec!["gpt-5-mini".to_owned()];
+        .saved_models = vec!["gpt-5".to_owned(), "gpt-5-mini".to_owned()];
     settings.vocabulary_replacements = vec![
         VocabularyReplacement::new("teh", "the"),
         VocabularyReplacement::new("whisper now", "WhisperNow"),
@@ -493,9 +515,7 @@ fn a_settings_toggle_becomes_available_when_recording_finishes_then_saves() {
             .contains(" disabled=")
     );
     page.click("start-minimized");
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 1);
-    assert!(sent[0].start_minimized);
+    assert_eq!(sent_changes(), [SettingChange::StartMinimized(true)]);
 }
 
 #[test]
@@ -554,9 +574,7 @@ fn settings_controls_on_each_blocked_page_are_disabled() {
             let mut page = shell(snapshot(phase), configured());
             if saving {
                 page.act(|actions| {
-                    actions.change_setting(SettingKey::StartMinimized, |settings| {
-                        settings.start_minimized = true;
-                    });
+                    actions.change_setting(SettingChange::StartMinimized(true));
                 });
             }
             open(&mut page, &["nav-settings", route]);
@@ -593,15 +611,19 @@ fn a_refused_shortcut_save_blocks_theme_until_it_finishes_then_theme_saves_confi
     let mut page = shell(snapshot(Phase::Idle), loaded());
     open(&mut page, &["nav-settings"]);
     page.act(|actions| {
-        actions.change_setting(SettingKey::RecordingShortcut, |settings| {
-            settings.recording_shortcut.key = ShortcutKey::R;
+        actions.change_setting(SettingChange::RecordingShortcut {
+            shortcut: Shortcut {
+                key: ShortcutKey::R,
+                ..shortcut()
+            },
+            mode: RecordingMode::Hold,
         });
     });
-    assert_eq!(sent_settings().len(), 1);
+    assert_eq!(sent_changes().len(), 1);
     assert!(text(&page.html(), "recording-shortcut-keys").contains('R'));
     try_theme(&mut page);
     assert_eq!(
-        sent_settings().len(),
+        sent_changes().len(),
         1,
         "a second edit is unavailable while saving"
     );
@@ -621,17 +643,14 @@ fn a_refused_shortcut_save_blocks_theme_until_it_finishes_then_theme_saves_confi
             .contains(" disabled=")
     );
     page.choose("theme", "Dark");
-    let requests = sent_settings();
+    let requests = sent_changes();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].recording_shortcut, shortcut());
-    assert_eq!(requests[1].theme, whispernow_domain::ThemePreference::Dark);
-    page.answer(
-        "update_settings",
-        Ok(SaveSettingsResponse {
-            settings: SettingsView::new(&requests[1]),
-            warnings: Vec::new(),
-        }),
+    assert_eq!(
+        requests[1],
+        SettingChange::Theme(whispernow_domain::ThemePreference::Dark)
     );
+    assert_eq!(shown(&page).recording_shortcut, shortcut());
+    confirm_save(&mut page);
     assert!(text(&page.html(), "theme").contains("Dark"));
     assert!(tag(&page.html(), "theme-error").is_none());
     assert!(text(&page.html(), "recording-mode-error").contains("shortcut is taken"));
@@ -662,7 +681,7 @@ fn a_credential_mutation_blocks_document_saves_until_its_confirmed_settings_arri
             .contains(" disabled=")
     );
     try_theme(&mut page);
-    assert!(sent_settings().is_empty());
+    assert!(sent_changes().is_empty());
     let mut confirmed = editable_settings();
     confirmed.api_keys.insert(LlmProvider::OpenAi);
     page.answer("set_api_key", Ok(SettingsView::new(&confirmed)));
@@ -672,8 +691,13 @@ fn a_credential_mutation_blocks_document_saves_until_its_confirmed_settings_arri
             .contains(" disabled=")
     );
     page.choose("theme", "Dark");
-    assert_eq!(sent_settings().len(), 1);
-    assert!(sent_settings()[0].api_keys.contains(&LlmProvider::OpenAi));
+    assert_eq!(
+        sent_changes(),
+        [SettingChange::Theme(
+            whispernow_domain::ThemePreference::Dark
+        )]
+    );
+    assert!(shown(&page).api_keys.contains(&LlmProvider::OpenAi));
 }
 
 #[test]
@@ -687,7 +711,7 @@ fn a_settings_reload_blocks_edits_until_it_installs_the_desktops_confirmed_value
             .contains(" disabled=")
     );
     try_theme(&mut page);
-    assert!(sent_settings().is_empty());
+    assert!(sent_changes().is_empty());
     let mut confirmed = editable_settings();
     confirmed.recording_shortcut.key = ShortcutKey::T;
     confirmed.theme = whispernow_domain::ThemePreference::Light;
@@ -698,8 +722,13 @@ fn a_settings_reload_blocks_edits_until_it_installs_the_desktops_confirmed_value
             .contains(" disabled=")
     );
     page.choose("theme", "Dark");
-    assert_eq!(sent_settings().len(), 1);
-    assert_eq!(sent_settings()[0].recording_shortcut.key, ShortcutKey::T);
+    assert_eq!(
+        sent_changes(),
+        [SettingChange::Theme(
+            whispernow_domain::ThemePreference::Dark
+        )]
+    );
+    assert_eq!(shown(&page).recording_shortcut.key, ShortcutKey::T);
 }
 
 #[test]
@@ -738,9 +767,11 @@ fn a_settings_toggle_saves_once_and_a_refusal_restores_it_with_the_error_beside_
     );
 
     open(&mut page, &["start-minimized"]);
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 1, "one click saves once");
-    assert!(sent[0].start_minimized);
+    assert_eq!(
+        sent_changes(),
+        [SettingChange::StartMinimized(true)],
+        "one click saves once"
+    );
     let html = page.html();
     assert!(
         tag(&html, "start-minimized")
@@ -762,12 +793,14 @@ fn a_settings_toggle_saves_once_and_a_refusal_restores_it_with_the_error_beside_
     let error = tag(&html, "start-minimized-error").expect("error beside the control");
     assert!(error.contains("role=\"alert\""), "{error}");
     assert!(!text(&html, "start-minimized-error").is_empty());
-    assert_eq!(sent_settings().len(), 1, "a refusal is not retried");
+    assert_eq!(sent_changes().len(), 1, "a refusal is not retried");
 
     page.click("start-minimized");
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 2, "the next attempt saves once");
-    assert!(sent[1].start_minimized);
+    assert_eq!(
+        sent_changes(),
+        vec![SettingChange::StartMinimized(true); 2],
+        "the next attempt saves once"
+    );
     assert!(
         tag(&page.html(), "start-minimized-error").is_none(),
         "a new attempt clears the old error"
@@ -782,7 +815,7 @@ fn text_fields_save_when_committed_not_on_each_keystroke() {
     for typed in ["h", "https://", "https://api.example.com", endpoint] {
         page.fire("provider-endpoint", "input", typed);
     }
-    assert!(sent_settings().is_empty(), "typing saves nothing");
+    assert!(sent_changes().is_empty(), "typing saves nothing");
     let html = page.html();
     assert!(
         tag(&html, "provider-endpoint")
@@ -792,14 +825,14 @@ fn text_fields_save_when_committed_not_on_each_keystroke() {
     );
 
     page.fire("provider-endpoint", "change", endpoint);
-    let sent = sent_settings();
+    let sent = sent_changes();
     assert_eq!(sent.len(), 1, "leaving the field saves once");
+    let SettingChange::ProviderEndpoint { provider, api_base } = &sent[0] else {
+        panic!("{sent:?}");
+    };
+    assert_eq!(*provider, LlmProvider::OpenAi);
     assert_eq!(
-        sent[0]
-            .provider_settings(LlmProvider::OpenAi)
-            .api_base
-            .as_ref()
-            .map(ProviderEndpoint::expose_url),
+        api_base.as_ref().map(ProviderEndpoint::expose_url),
         Some(endpoint)
     );
 }
@@ -809,32 +842,25 @@ fn the_model_picker_chooses_adds_and_removes_saved_models() {
     let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
     let saved = |page: &mut Page| {
-        let sent = sent_settings();
-        let last = sent.last().expect("a save").clone();
-        page.answer(
-            "update_settings",
-            Ok(SaveSettingsResponse {
-                settings: SettingsView::new(&last),
-                warnings: Vec::new(),
-            }),
-        );
-        last.provider_settings(LlmProvider::OpenAi).clone()
+        confirm_save(page)
+            .provider_settings(LlmProvider::OpenAi)
+            .clone()
     };
     assert_eq!(text(&page.html(), "provider-model"), "gpt-5");
 
     page.choose("provider-model", "gpt-5-mini");
     let openai = saved(&mut page);
-    assert_eq!(openai.model, "gpt-5-mini");
-    assert_eq!(
-        openai.saved_models,
-        ["gpt-5", "gpt-5-mini"],
-        "the active model, never saved before, stays listed"
-    );
+    assert_eq!(openai.model.as_deref(), Some("gpt-5-mini"));
+    assert_eq!(openai.saved_models, ["gpt-5", "gpt-5-mini"]);
 
     page.input("provider-model-name", " gpt-5.1 ")
         .fire("provider-model-form", "submit", "");
     let openai = saved(&mut page);
-    assert_eq!(openai.model, "gpt-5.1", "an added model is chosen");
+    assert_eq!(
+        openai.model.as_deref(),
+        Some("gpt-5.1"),
+        "an added model is chosen"
+    );
     assert_eq!(openai.saved_models, ["gpt-5", "gpt-5-mini", "gpt-5.1"]);
     assert!(
         tag(&page.html(), "provider-model-name")
@@ -851,7 +877,29 @@ fn the_model_picker_chooses_adds_and_removes_saved_models() {
     page.click("provider-model-remove");
     let openai = saved(&mut page);
     assert_eq!(openai.saved_models, ["gpt-5", "gpt-5-mini"]);
-    assert_eq!(openai.model, "gpt-5", "the first remaining model is chosen");
+    assert_eq!(
+        openai.model.as_deref(),
+        Some("gpt-5"),
+        "the first remaining model is chosen"
+    );
+    let provider = LlmProvider::OpenAi;
+    assert_eq!(
+        sent_changes(),
+        [
+            SettingChange::ChooseProviderModel {
+                provider,
+                model: "gpt-5-mini".to_owned()
+            },
+            SettingChange::ChooseProviderModel {
+                provider,
+                model: "gpt-5.1".to_owned()
+            },
+            SettingChange::RemoveProviderModel {
+                provider,
+                model: "gpt-5.1".to_owned()
+            },
+        ]
+    );
 }
 
 #[test]
@@ -859,7 +907,7 @@ fn saved_models_without_an_active_one_ask_for_a_choice() {
     let mut management = configured();
     let mut settings = management.shown_settings().cloned().expect("loaded");
     let openai = settings.provider_settings_mut(LlmProvider::OpenAi);
-    openai.model = String::new();
+    openai.model = None;
     openai.saved_models = vec!["gpt-5-mini".to_owned()];
     management.install_settings(SettingsView::new(&settings));
     let mut page = shell(snapshot(Phase::Idle), management);
@@ -895,18 +943,14 @@ fn the_model_name_field_suggests_the_provider_models_starting_with_the_typed_tex
 
     page.click("provider-model-name-option-0")
         .fire("provider-model-form", "submit", "");
-    let sent = sent_settings();
     assert_eq!(
-        sent[0].provider_settings(LlmProvider::OpenAi).model,
-        "gpt-6-nano"
+        sent_changes(),
+        [SettingChange::ChooseProviderModel {
+            provider: LlmProvider::OpenAi,
+            model: "gpt-6-nano".to_owned(),
+        }]
     );
-    page.answer(
-        "update_settings",
-        Ok(SaveSettingsResponse {
-            settings: SettingsView::new(&sent[0]),
-            warnings: Vec::new(),
-        }),
-    );
+    confirm_save(&mut page);
     assert_eq!(
         asked(),
         [LlmProvider::OpenAi],
@@ -914,14 +958,7 @@ fn the_model_name_field_suggests_the_provider_models_starting_with_the_typed_tex
     );
 
     page.fire("provider-endpoint", "change", "https://proxy.example/v1");
-    let sent = sent_settings();
-    page.answer(
-        "update_settings",
-        Ok(SaveSettingsResponse {
-            settings: SettingsView::new(&sent[1]),
-            warnings: Vec::new(),
-        }),
-    );
+    confirm_save(&mut page);
     assert_eq!(
         asked(),
         [LlmProvider::OpenAi; 2],
@@ -960,10 +997,12 @@ fn a_model_list_that_cannot_load_leaves_the_name_to_be_typed() {
     );
 
     page.fire("provider-model-form", "submit", "");
-    let sent = sent_settings();
     assert_eq!(
-        sent[0].provider_settings(LlmProvider::OpenAi).model,
-        "gpt-typed"
+        sent_changes(),
+        [SettingChange::ChooseProviderModel {
+            provider: LlmProvider::OpenAi,
+            model: "gpt-typed".to_owned(),
+        }]
     );
 }
 
@@ -1032,15 +1071,18 @@ fn a_new_vocabulary_rule_is_added_with_enter() {
     open(&mut page, &["nav-settings", "nav-settings-vocabulary"]);
     page.fire("vocabulary-source", "input", "recieve");
     page.fire("vocabulary-replacement", "input", "receive");
-    assert!(sent_settings().is_empty());
+    assert!(sent_changes().is_empty());
     let html = page.html();
     let form = tag(&html, "vocabulary-add-form").expect("add form");
     assert!(form.starts_with("<form"), "{form}");
     page.fire("vocabulary-add-form", "submit", "");
-    let sent = sent_settings();
+    let sent = sent_changes();
     assert_eq!(sent.len(), 1);
+    let SettingChange::Vocabulary(rules) = &sent[0] else {
+        panic!("{sent:?}");
+    };
     assert_eq!(
-        sent[0].vocabulary_replacements.last(),
+        rules.last(),
         Some(&VocabularyReplacement::new("recieve", "receive"))
     );
 }
@@ -1054,7 +1096,7 @@ fn typed_text_survives_a_refused_or_failed_save_until_the_user_reverts() {
     // Refused before it is sent.
     page.fire("provider-endpoint", "input", "http://api.example.com");
     page.fire("provider-endpoint", "change", "http://api.example.com");
-    assert!(sent_settings().is_empty());
+    assert!(sent_changes().is_empty());
     let html = page.html();
     let field = tag(&html, "provider-endpoint").expect("endpoint field");
     assert!(
@@ -1066,8 +1108,7 @@ fn typed_text_survives_a_refused_or_failed_save_until_the_user_reverts() {
     // Taken, then refused by the desktop.
     page.fire("provider-endpoint", "input", "https://api.example.com");
     page.fire("provider-endpoint", "change", "https://api.example.com");
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 1);
+    assert_eq!(sent_changes().len(), 1);
     fake::fail("update_settings");
     page.settle();
     let html = page.html();
@@ -1108,18 +1149,12 @@ fn an_incomplete_provider_saves_with_a_warning_and_adding_a_model_repairs_it() {
     management.install_settings(SettingsView::new(&settings));
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
-    let saved = |settings: &Settings| {
-        let view = SettingsView::new(settings);
-        Ok::<_, AppError>(SaveSettingsResponse {
-            warnings: Vec::new(),
-            settings: view,
-        })
-    };
-
     page.choose("provider-name", "Anthropic");
-    let sent = sent_settings();
-    fake::answer("update_settings", saved(&sent[0]));
-    page.settle();
+    assert_eq!(
+        sent_changes(),
+        [SettingChange::ActiveProvider(LlmProvider::Anthropic)]
+    );
+    confirm_save(&mut page);
     assert!(
         page.html()
             .contains("AI cleanup needs a model for Anthropic")
@@ -1130,13 +1165,17 @@ fn an_incomplete_provider_saves_with_a_warning_and_adding_a_model_repairs_it() {
     );
     page.input("provider-model-name", "claude-test")
         .fire("provider-model-form", "submit", "");
-    let sent = sent_settings();
-    assert_eq!(sent[1].llm_provider, LlmProvider::Anthropic);
-    let anthropic = sent[1].provider_settings(LlmProvider::Anthropic);
-    assert_eq!(anthropic.model, "claude-test");
+    assert_eq!(
+        sent_changes()[1],
+        SettingChange::ChooseProviderModel {
+            provider: LlmProvider::Anthropic,
+            model: "claude-test".to_owned(),
+        }
+    );
+    let saved = confirm_save(&mut page);
+    let anthropic = saved.provider_settings(LlmProvider::Anthropic);
+    assert_eq!(anthropic.model.as_deref(), Some("claude-test"));
     assert_eq!(anthropic.saved_models, ["claude-test"]);
-    fake::answer("update_settings", saved(&sent[1]));
-    page.settle();
     assert!(!page.html().contains("AI cleanup needs a model"));
 }
 
@@ -1146,18 +1185,30 @@ fn standing_settings_warnings_and_save_warnings_are_shown_together() {
     let mut settings = management.shown_settings().cloned().expect("loaded");
     settings.cleanup_enabled = true;
     settings.llm_provider = LlmProvider::Anthropic;
-    settings.provider_settings_mut(LlmProvider::Anthropic).model = "claude-initial".to_owned();
+    settings
+        .provider_settings_mut(LlmProvider::Anthropic)
+        .choose_model("claude-initial".to_owned());
     management.install_settings(SettingsView::new(&settings));
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
 
     page.click("provider-model-remove");
-    let sent = sent_settings();
-    assert_eq!(sent[0].provider_settings(LlmProvider::Anthropic).model, "");
+    assert_eq!(
+        sent_changes(),
+        [SettingChange::RemoveProviderModel {
+            provider: LlmProvider::Anthropic,
+            model: "claude-initial".to_owned(),
+        }]
+    );
+    let removed = shown(&page);
+    assert_eq!(
+        removed.provider_settings(LlmProvider::Anthropic).model,
+        None
+    );
     page.answer(
         "update_settings",
         Ok(SaveSettingsResponse {
-            settings: SettingsView::new(&sent[0]),
+            settings: SettingsView::new(&removed),
             warnings: vec!["A native setting could not take effect".to_owned()],
         }),
     );
@@ -1168,14 +1219,7 @@ fn standing_settings_warnings_and_save_warnings_are_shown_together() {
 
     page.input("provider-model-name", "claude-test")
         .fire("provider-model-form", "submit", "");
-    let sent = sent_settings();
-    page.answer(
-        "update_settings",
-        Ok(SaveSettingsResponse {
-            settings: SettingsView::new(&sent[1]),
-            warnings: Vec::new(),
-        }),
-    );
+    confirm_save(&mut page);
     let html = page.html();
     assert!(!html.contains("AI cleanup needs a model"));
     assert!(text(&html, "notice").contains("A native setting could not take effect"));
@@ -1195,11 +1239,7 @@ fn local_cleanup(small: &str, large: &str) -> ManagementState {
     let mut management = configured();
     let mut settings = management.shown_settings().cloned().expect("loaded");
     settings.llm_provider = LlmProvider::LocalCleanup;
-    small.clone_into(
-        &mut settings
-            .provider_settings_mut(LlmProvider::LocalCleanup)
-            .model,
-    );
+    settings.cleanup_model = ModelId::new(small).expect("cleanup model id");
     management.install_settings(settings_view(settings));
     management.models = vec![
         model(
@@ -1251,7 +1291,7 @@ fn speech_model_controls_use_download_cancel_and_refresh_the_finished_download()
         model_id: small.clone(),
         phase: DownloadPhase::Downloading,
         downloaded_bytes: 512,
-        total_bytes: Some(1_024),
+        total_bytes: 1_024,
         bytes_per_second: None,
     });
     page.publish(EventPayload::StateChanged {
@@ -1268,6 +1308,8 @@ fn speech_model_controls_use_download_cancel_and_refresh_the_finished_download()
     page.publish(EventPayload::StateChanged {
         state: active.clone(),
     });
+    assert_eq!(fake::count("list_models"), 0);
+    page.publish(EventPayload::ModelsChanged);
     assert_eq!(fake::count("list_models"), 1);
     page.answer(
         "list_models",
@@ -1384,14 +1426,25 @@ fn ai_cleanup_lists_the_cleanup_models_and_saves_the_choice() {
         &mut page,
         &["model-whispernow-cleanup-minicpm5-1b-r112-q8_0-use"],
     );
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].cleanup_model_id().as_str(), LARGE);
+    assert_eq!(
+        sent_changes(),
+        [SettingChange::CleanupModel(
+            ModelId::new(LARGE).expect("fixture model id")
+        )]
+    );
     let other = "model-whispernow-cleanup-lfm2-5-350m-r112-q8_0-use";
     assert!(
         tag(&page.html(), other)
             .expect("other cleanup model")
             .contains(" disabled=")
+    );
+
+    assert!(tag(&page.html(), "cleanup-model-error").is_none());
+    fake::fail("update_settings");
+    page.settle();
+    assert!(
+        tag(&page.html(), "cleanup-model-error").is_some(),
+        "a refused choice says why"
     );
 }
 
@@ -1433,9 +1486,7 @@ fn the_gpu_switch_shows_only_for_the_apps_own_models_and_saves() {
             .contains("aria-checked=\"true\"")
     );
     page.click("cleanup-uses-gpu");
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 1);
-    assert!(!sent[0].cleanup_uses_gpu);
+    assert_eq!(sent_changes(), [SettingChange::CleanupUsesGpu(false)]);
 }
 
 #[test]
@@ -1451,9 +1502,10 @@ fn choosing_a_cleanup_source_picks_its_first_provider_and_shows_its_fields() {
     assert!(tag(&html, "provider-credential").is_some());
 
     open(&mut page, &["cleanup-source-local"]);
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].llm_provider, LlmProvider::Ollama);
+    assert_eq!(
+        sent_changes(),
+        [SettingChange::ActiveProvider(LlmProvider::Ollama)]
+    );
     let html = page.html();
     assert!(tag(&html, "provider-model-name").is_some());
     assert!(
@@ -1474,10 +1526,14 @@ fn the_recording_shortcut_switches_between_hold_and_toggle() {
     );
 
     open(&mut page, &["recording-mode-toggle"]);
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].recording_mode, RecordingMode::Toggle);
-    assert_eq!(sent[0].recording_shortcut, shortcut(), "the keys stay");
+    assert_eq!(
+        sent_changes(),
+        [SettingChange::RecordingShortcut {
+            shortcut: shortcut(),
+            mode: RecordingMode::Toggle,
+        }],
+        "the keys stay"
+    );
 }
 
 #[test]
@@ -1490,11 +1546,12 @@ fn deleting_a_rule_names_it_and_moves_focus_to_its_neighbour() {
 
     open(&mut page, &["vocabulary-rule-1-delete"]);
     page.settle();
-    let sent = sent_settings();
-    assert_eq!(sent.len(), 1);
     assert_eq!(
-        sent[0].vocabulary_replacements,
-        [VocabularyReplacement::new("whisper now", "WhisperNow")]
+        sent_changes(),
+        [SettingChange::Vocabulary(vec![VocabularyReplacement::new(
+            "whisper now",
+            "WhisperNow"
+        )])]
     );
     let html = page.html();
     assert!(
@@ -1508,13 +1565,7 @@ fn deleting_a_rule_names_it_and_moves_focus_to_its_neighbour() {
         "the remaining rule, now first, takes focus"
     );
 
-    page.answer(
-        "update_settings",
-        Ok(SaveSettingsResponse {
-            settings: SettingsView::new(&sent[0]),
-            warnings: Vec::new(),
-        }),
-    );
+    confirm_save(&mut page);
 
     open(&mut page, &["vocabulary-rule-1-delete"]);
     page.settle();
@@ -1556,8 +1607,10 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
         "clear_data",
         Ok(ClearDataResult {
             items: vec![ClearDataItem {
-                category: ClearDataCategory::History,
-                path: "/data/history.sqlite3".to_owned(),
+                location: DataLocation {
+                    category: ClearDataCategory::History,
+                    path: "/data/history.sqlite3".into(),
+                },
                 deleted: true,
             }],
             restart_required: false,
@@ -1578,8 +1631,8 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
 /// Asks for the dark theme as the theme select would, for a select that is disabled.
 fn try_theme(page: &mut Page) {
     page.act(|actions| {
-        actions.change_setting(SettingKey::Theme, |settings| {
-            settings.theme = whispernow_domain::ThemePreference::Dark;
-        });
+        actions.change_setting(SettingChange::Theme(
+            whispernow_domain::ThemePreference::Dark,
+        ));
     });
 }

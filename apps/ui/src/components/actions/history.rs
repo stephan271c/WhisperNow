@@ -6,28 +6,34 @@ use dioxus::prelude::*;
 use whispernow_domain::{EntryId, HistoryPageRequest};
 
 use crate::client;
+use crate::management::replace_task;
 use crate::{NoticeScope, UiContext, UiOperation};
 
 impl UiContext {
-    pub(crate) fn refresh_history(mut self) {
-        let (request_id, request) = self.management.write().history_request();
-        self.read_history(request_id, request);
+    pub(crate) fn refresh_history(self) {
+        let request = self.management.peek().history_request();
+        self.read_history(request);
     }
 
     pub(crate) fn load_older_history(mut self) {
-        let (request_id, request) = self.management.write().older_history_request();
-        self.read_history(request_id, request);
+        let request = self.management.write().older_history_request();
+        self.read_history(request);
     }
 
-    fn read_history(self, request_id: u64, request: HistoryPageRequest) {
-        spawn_forever(async move {
+    /// Reads with the same filter can finish out of order after Load more or deletion, so a
+    /// new read cancels the one in flight.
+    fn read_history(self, request: HistoryPageRequest) {
+        let mut management = self.management;
+        let read = spawn_forever(async move {
             let answer = client::invoke("get_history", request).await;
-            let mut management = self.management;
+            let mut management = management.write();
+            management.history_read = None;
             match answer {
-                Ok(page) => management.write().finish_history_refresh(request_id, page),
-                Err(error) => management.write().fail_history_refresh(request_id, &error),
+                Ok(page) => management.finish_history_refresh(page),
+                Err(error) => management.fail_history_refresh(&error),
             }
         });
+        replace_task(&mut management.write().history_read, Some(read));
     }
 
     /// Searches for the typed search text, unless it is already the search shown.
@@ -64,8 +70,7 @@ impl UiContext {
     /// Changes history, then reads it again whatever the answer: last write wins, and a row
     /// another surface already removed is the refresh's result rather than an error.
     fn change_history(self, call: impl Future<Output = Result<(), AppError>> + 'static) {
-        let operation = UiOperation::ChangeHistory;
-        self.run(operation, call, move |actions, answer| {
+        self.run(UiOperation::ChangeHistory, call, move |actions, answer| {
             actions.refresh_history();
             if let Err(error) = answer
                 && error.category != ErrorCategory::NotFound
@@ -76,15 +81,10 @@ impl UiContext {
     }
 
     pub(crate) fn open_recordings_folder(self) {
-        let operation = UiOperation::OpenRecordingsFolder;
-        self.run(
-            operation,
-            client::call::<()>("open_recordings_folder"),
-            move |actions, answer| {
-                if let Err(error) = answer {
-                    actions.report(NoticeScope::History, &error);
-                }
-            },
+        self.run_reporting(
+            UiOperation::OpenRecordingsFolder,
+            client::call("open_recordings_folder"),
+            NoticeScope::History,
         );
     }
 }

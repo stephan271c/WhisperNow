@@ -1,7 +1,7 @@
 //! One control saves at a time; its edit is shown until the desktop confirms or refuses it.
 
 use whispernow_domain::ipc::{SaveSettingsResponse, SettingsView};
-use whispernow_domain::{AppError, Settings, ThemePreference};
+use whispernow_domain::{AppError, SettingChange, Settings, ThemePreference};
 
 use super::ManagementState;
 use crate::NoticeScope;
@@ -20,10 +20,42 @@ pub enum SettingKey {
     KeepAudio,
     ActiveProvider,
     ProviderModel,
-    ProviderApiBase,
+    ProviderEndpoint,
     CleanupEnabled,
     CleanupUsesGpu,
+    CleanupModel,
     Vocabulary,
+}
+
+impl SettingKey {
+    #[must_use]
+    pub const fn of(change: &SettingChange) -> Self {
+        match change {
+            SettingChange::InputDevice(_) => Self::InputDevice,
+            SettingChange::RecordingShortcut { .. } => Self::RecordingShortcut,
+            SettingChange::CancelShortcut(_) => Self::CancelShortcut,
+            SettingChange::StartMinimized(_) => Self::StartMinimized,
+            SettingChange::Theme(_) => Self::Theme,
+            SettingChange::HistoryLimit(_) => Self::HistoryLimit,
+            SettingChange::HistoryRetention(_) => Self::HistoryRetention,
+            SettingChange::KeepAudio(_) => Self::KeepAudio,
+            SettingChange::ActiveProvider(_) => Self::ActiveProvider,
+            SettingChange::ChooseProviderModel { .. }
+            | SettingChange::RemoveProviderModel { .. } => Self::ProviderModel,
+            SettingChange::ProviderEndpoint { .. } => Self::ProviderEndpoint,
+            SettingChange::CleanupEnabled(_) => Self::CleanupEnabled,
+            SettingChange::CleanupUsesGpu(_) => Self::CleanupUsesGpu,
+            SettingChange::CleanupModel(_) => Self::CleanupModel,
+            SettingChange::Vocabulary(_) => Self::Vocabulary,
+        }
+    }
+}
+
+/// A control's change, shown until the desktop confirms or refuses it.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct PendingSave {
+    key: SettingKey,
+    settings: Settings,
 }
 
 impl ManagementState {
@@ -33,8 +65,9 @@ impl ManagementState {
 
     #[must_use]
     pub fn shown_settings(&self) -> Option<&Settings> {
-        self.edited
+        self.pending_save
             .as_ref()
+            .map(|pending| &pending.settings)
             .or_else(|| self.settings.as_ref().map(|view| &view.settings))
     }
 
@@ -54,30 +87,31 @@ impl ManagementState {
 
     #[must_use]
     pub fn settings_pending(&self) -> bool {
-        self.saving.is_some()
+        self.pending_save.is_some()
             || self
                 .busy
                 .iter()
                 .any(|operation| operation.changes_settings())
     }
 
+    /// Shows `edit` applied to the shown settings until the desktop answers; `false`, with nothing
+    /// changed, while another save is pending.
     pub fn begin_settings_update(
         &mut self,
         key: SettingKey,
         edit: impl FnOnce(&mut Settings),
-    ) -> Option<Settings> {
+    ) -> bool {
         if self.settings_pending() {
-            return None;
+            return false;
         }
         let mut settings = self
             .shown_settings()
             .cloned()
             .expect("settings controls render after loading");
         edit(&mut settings);
-        self.edited = Some(settings.clone());
-        self.saving = Some(key);
+        self.pending_save = Some(PendingSave { key, settings });
         self.setting_errors.remove(&key);
-        Some(settings)
+        true
     }
 
     /// Shows why a value typed into a control cannot be saved; nothing is sent.
@@ -92,7 +126,10 @@ impl ManagementState {
     }
 
     pub fn finish_settings_update(&mut self, answer: Result<SaveSettingsResponse, AppError>) {
-        let key = self.saving.take().expect("a settings save is pending");
+        let PendingSave { key, .. } = self
+            .pending_save
+            .take()
+            .expect("a settings save is pending");
         match answer {
             Ok(SaveSettingsResponse { settings, warnings }) => {
                 self.install_settings(settings);
@@ -102,6 +139,5 @@ impl ManagementState {
             }
             Err(error) => self.reject_setting(key, error.summary),
         }
-        self.edited = None;
     }
 }

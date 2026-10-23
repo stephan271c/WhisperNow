@@ -146,7 +146,11 @@ impl Worker {
         if recording.trigger.is_setup_test() || !has_microphone_audio(samples) {
             return;
         }
-        if let Err(error) = self.save_entry(recording, samples, status, error, None) {
+        let entry = NewEntry::Untranscribed {
+            status,
+            reason: error,
+        };
+        if let Err(error) = self.save_entry(recording, samples, entry) {
             tracing::warn!(
                 code = error.code,
                 "untranscribed recording could not be saved"
@@ -159,30 +163,42 @@ impl Worker {
         &self,
         recording: &Recording,
         samples: &[f32],
-        status: EntryStatus,
-        error: Option<String>,
-        transcript: Option<&PreparedTranscription>,
+        entry: NewEntry<'_>,
     ) -> Result<EntryId, AppError> {
+        let (status, error, raw_text, cleaned_text) = match entry {
+            NewEntry::Transcribed(prepared) => (
+                EntryStatus::Ok,
+                None,
+                Some(prepared.raw_text.clone()),
+                (prepared.final_text != prepared.raw_text).then(|| prepared.final_text.clone()),
+            ),
+            NewEntry::Untranscribed { status, reason } => (status, reason, None, None),
+        };
         let saved = self.parts.history.insert(
             NewHistoryEntry {
                 created_at: recording.started_at,
-                duration_millis: Some(capture_duration_millis(samples)),
-                raw_text: transcript.map(|prepared| prepared.raw_text.clone()),
-                cleaned_text: transcript
-                    .filter(|prepared| prepared.final_text != prepared.raw_text)
-                    .map(|prepared| prepared.final_text.clone()),
+                duration_millis: capture_duration_millis(samples),
+                raw_text,
+                cleaned_text,
                 status,
                 error,
-                asr_model_id: Some(recording.settings.model_id.clone()),
+                asr_model_id: recording.settings.model_id.clone(),
             },
-            samples,
-            recording.settings.keep_audio,
+            recording.settings.keep_audio.then_some(samples),
             recording.settings.history_limit,
             recording.settings.history_retention,
         );
         self.parts.state.events().history_changed();
         saved
     }
+}
+
+pub(super) enum NewEntry<'a> {
+    Transcribed(&'a PreparedTranscription),
+    Untranscribed {
+        status: EntryStatus,
+        reason: Option<String>,
+    },
 }
 
 fn capture_duration_millis(samples: &[f32]) -> u64 {
@@ -193,36 +209,40 @@ fn capture_duration_millis(samples: &[f32]) -> u64 {
 }
 
 impl OutputNotice {
-    pub(super) fn failure(self) -> (Option<&'static str>, Option<AppError>) {
-        let (reason, error) = match self {
-            Self::PermissionDenied => (
-                "The text was not pasted because WhisperNow lacks permission to type",
-                Some(AppError::new(
-                    ErrorCategory::Settings,
-                    "text_output_permission_denied",
-                    "Automatic text output needs desktop accessibility or portal permission. Enable it in system settings, then retry.",
-                )),
-            ),
-            Self::CapabilityUnavailable => (
-                "The text was not pasted because automatic typing is unavailable",
-                Some(AppError::new(
-                    ErrorCategory::Output,
-                    "wayland_portal_unavailable",
-                    "Automatic text output is unavailable because the required desktop portal capability could not be started.",
-                )),
-            ),
-            Self::PasteFailed => (
-                "The text could not be pasted",
-                Some(AppError::new(
-                    ErrorCategory::Output,
-                    "paste_failed",
-                    "The text was not pasted; copy it instead",
-                )),
-            ),
-            Self::Cancelled => ("Pasting was cancelled", None),
-            Self::Pasted => return (None, None),
-        };
-        (Some(reason), error)
+    /// Why the history entry's text never reached the focused application.
+    pub(super) const fn history_reason(self) -> Option<&'static str> {
+        match self {
+            Self::PermissionDenied => {
+                Some("The text was not pasted because WhisperNow lacks permission to type")
+            }
+            Self::CapabilityUnavailable => {
+                Some("The text was not pasted because automatic typing is unavailable")
+            }
+            Self::PasteFailed => Some("The text could not be pasted"),
+            Self::Cancelled => Some("Pasting was cancelled"),
+            Self::Pasted => None,
+        }
+    }
+
+    pub(super) fn error(self) -> Option<AppError> {
+        match self {
+            Self::PermissionDenied => Some(AppError::new(
+                ErrorCategory::Settings,
+                "text_output_permission_denied",
+                "Automatic text output needs desktop accessibility or portal permission. Enable it in system settings, then retry.",
+            )),
+            Self::CapabilityUnavailable => Some(AppError::new(
+                ErrorCategory::Output,
+                "wayland_portal_unavailable",
+                "Automatic text output is unavailable because the required desktop portal capability could not be started.",
+            )),
+            Self::PasteFailed => Some(AppError::new(
+                ErrorCategory::Output,
+                "paste_failed",
+                "The text was not pasted; copy it instead",
+            )),
+            Self::Cancelled | Self::Pasted => None,
+        }
     }
 }
 

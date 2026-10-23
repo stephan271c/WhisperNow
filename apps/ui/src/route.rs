@@ -1,3 +1,4 @@
+use dioxus::prelude::Key;
 use whispernow_domain::ipc::MainWindowSection;
 
 use crate::notice::NoticeScope;
@@ -151,16 +152,16 @@ impl Route {
 }
 
 #[must_use]
-pub fn nav_keyboard_target(key: &str, current: usize, count: usize) -> Option<usize> {
+pub fn nav_keyboard_target(key: &Key, current: usize, count: usize) -> Option<usize> {
     if count == 0 {
         return None;
     }
     let last = count - 1;
     match key {
-        "ArrowDown" => Some(if current >= last { 0 } else { current + 1 }),
-        "ArrowUp" => Some(if current == 0 { last } else { current - 1 }),
-        "Home" => Some(0),
-        "End" => Some(last),
+        Key::ArrowDown => Some(if current >= last { 0 } else { current + 1 }),
+        Key::ArrowUp => Some(if current == 0 { last } else { current - 1 }),
+        Key::Home => Some(0),
+        Key::End => Some(last),
         _ => None,
     }
 }
@@ -168,23 +169,23 @@ pub fn nav_keyboard_target(key: &str, current: usize, count: usize) -> Option<us
 #[cfg(test)]
 mod tests {
 
-    use super::{Route, SettingsRoute, nav_keyboard_target};
+    use super::{Key, Route, SettingsRoute, nav_keyboard_target};
     use crate::NoticeScope;
 
     #[test]
     fn arrow_home_and_end_keys_move_through_the_sidebar_and_wrap() {
-        assert_eq!(nav_keyboard_target("ArrowDown", 0, 3), Some(1));
-        assert_eq!(nav_keyboard_target("ArrowDown", 2, 3), Some(0));
-        assert_eq!(nav_keyboard_target("ArrowUp", 0, 3), Some(2));
-        assert_eq!(nav_keyboard_target("ArrowUp", 2, 3), Some(1));
-        assert_eq!(nav_keyboard_target("Home", 2, 10), Some(0));
-        assert_eq!(nav_keyboard_target("End", 0, 10), Some(9));
+        assert_eq!(nav_keyboard_target(&Key::ArrowDown, 0, 3), Some(1));
+        assert_eq!(nav_keyboard_target(&Key::ArrowDown, 2, 3), Some(0));
+        assert_eq!(nav_keyboard_target(&Key::ArrowUp, 0, 3), Some(2));
+        assert_eq!(nav_keyboard_target(&Key::ArrowUp, 2, 3), Some(1));
+        assert_eq!(nav_keyboard_target(&Key::Home, 2, 10), Some(0));
+        assert_eq!(nav_keyboard_target(&Key::End, 0, 10), Some(9));
         assert_eq!(
-            nav_keyboard_target("Enter", 1, 3),
+            nav_keyboard_target(&Key::Enter, 1, 3),
             None,
             "activation stays native"
         );
-        assert_eq!(nav_keyboard_target("ArrowDown", 0, 0), None);
+        assert_eq!(nav_keyboard_target(&Key::ArrowDown, 0, 0), None);
     }
 
     #[test]

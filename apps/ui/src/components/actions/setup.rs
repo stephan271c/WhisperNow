@@ -30,9 +30,8 @@ impl UiContext {
         request: SetupCheckpoint,
         install: impl FnOnce(&mut ManagementState, SettingsView) + 'static,
     ) {
-        let operation = UiOperation::SaveSetup;
         self.run(
-            operation,
+            UiOperation::SaveSetup,
             client::invoke("save_setup_checkpoint", request),
             move |mut actions, answer| match answer {
                 Ok(view) => {
@@ -52,10 +51,9 @@ impl UiContext {
     }
 
     pub(crate) fn complete_setup(self) {
-        let operation = UiOperation::CompleteSetup;
         let request = self.management.peek().checkpoint();
         self.run(
-            operation,
+            UiOperation::CompleteSetup,
             client::invoke("complete_setup", request),
             move |mut actions, answer| match answer {
                 Ok(saved) => actions.management.write().finish_setup(saved),
@@ -65,9 +63,8 @@ impl UiContext {
     }
 
     pub(crate) fn restart_setup(self) {
-        let operation = UiOperation::RestartSetup;
         self.run(
-            operation,
+            UiOperation::RestartSetup,
             client::call("restart_setup"),
             move |mut actions, answer| match answer {
                 Ok(view) => actions.management.write().restart_setup(view),
@@ -88,12 +85,8 @@ impl UiContext {
     }
 
     pub(super) fn list_devices(self) {
-        let operation = UiOperation::ListDevices;
-        if self.management.peek().is_busy(operation) {
-            return;
-        }
-        self.run(
-            operation,
+        self.run_unless_busy(
+            UiOperation::ListDevices,
             client::call("list_audio_devices"),
             move |actions, answer| match answer {
                 Ok(devices) => {
@@ -110,12 +103,8 @@ impl UiContext {
     /// Reads the permission cards unless a read is already waiting for its answer. A read
     /// that fails is followed by the next poll.
     pub(crate) fn load_permissions(self) {
-        let operation = UiOperation::LoadPermissions;
-        if self.management.peek().is_busy(operation) {
-            return;
-        }
-        self.run(
-            operation,
+        self.run_unless_busy(
+            UiOperation::LoadPermissions,
             client::call("get_permissions"),
             |actions, answer| {
                 if let Ok(permissions) = answer {
@@ -134,30 +123,24 @@ impl UiContext {
     }
 
     /// Asks for `kind`, then watches the cards until none can change any more.
-    pub(crate) fn request_permission(mut self, kind: PermissionKind) {
-        self.management.write().requested_permission = Some(kind);
-        spawn_forever(async move {
-            let answer = client::invoke("request_permission", kind).await;
-            self.management.write().requested_permission = None;
-            match answer {
-                Ok(permissions) => self.install_permissions(permissions),
-                Err(error) => self.report(NoticeScope::Setup, &error),
-            }
-        });
+    pub(crate) fn request_permission(self, kind: PermissionKind) {
+        self.run(
+            UiOperation::RequestPermission(kind),
+            client::invoke("request_permission", kind),
+            |actions, answer| match answer {
+                Ok(permissions) => actions.install_permissions(permissions),
+                Err(error) => actions.report(NoticeScope::Setup, &error),
+            },
+        );
         self.watch_permissions();
     }
 
     /// Opens the system page that grants `kind`, then watches the cards for the grant.
     pub(crate) fn open_permission_settings(self, kind: PermissionKind) {
-        let operation = UiOperation::OpenPermissionSettings;
-        self.run(
-            operation,
-            client::invoke::<_, ()>("open_permission_settings", kind),
-            move |actions, answer| {
-                if let Err(error) = answer {
-                    actions.report(NoticeScope::Setup, &error);
-                }
-            },
+        self.run_reporting(
+            UiOperation::OpenPermissionSettings,
+            client::invoke("open_permission_settings", kind),
+            NoticeScope::Setup,
         );
         self.watch_permissions();
     }

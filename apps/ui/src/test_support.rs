@@ -10,7 +10,9 @@ use dioxus_html::{
 use whispernow_domain::ipc::EventPayload;
 use whispernow_domain::ipc::{AppState, Phase};
 use whispernow_domain::{HistoryEntry, ModelId};
-use whispernow_domain::{HistoryLimit, HistoryPage, LlmProvider, ProviderSettings, Settings};
+use whispernow_domain::{
+    HistoryLimit, HistoryPage, LlmProvider, ProviderSettings, Settings, SetupProgress,
+};
 
 use crate::{UiContext, client::fake};
 
@@ -334,28 +336,25 @@ pub(crate) const RECORDING: Phase = Phase::Recording {
 pub(crate) const PROCESSING: Phase = Phase::Processing { cleaning_up: false };
 
 pub(crate) fn show_history(management: &mut crate::ManagementState, entries: Vec<HistoryEntry>) {
-    let (request_id, _) = management.history_request();
-    management.finish_history_refresh(
-        request_id,
-        HistoryPage {
-            entries,
-            has_more: false,
-        },
-    );
+    management.finish_history_refresh(HistoryPage {
+        entries,
+        has_more: false,
+    });
 }
 
 /// Valid saved settings with a hold-to-record shortcut and AI cleanup off.
 pub(crate) fn editable_settings() -> Settings {
     Settings {
         model_id: ModelId::new("model").expect("test model id"),
-        first_run_complete: true,
+        setup: SetupProgress::Complete,
         history_limit: HistoryLimit::Last20,
         llm_provider: LlmProvider::OpenAi,
         llm_provider_settings: [(
             LlmProvider::OpenAi,
             ProviderSettings {
-                model: "gpt-5".to_owned(),
-                ..ProviderSettings::default()
+                model: Some("gpt-5".to_owned()),
+                api_base: None,
+                saved_models: vec!["gpt-5".to_owned()],
             },
         )]
         .into(),

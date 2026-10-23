@@ -7,7 +7,7 @@ use std::{
 };
 
 use thiserror::Error;
-use whispernow_domain::ApiKey;
+use whispernow_domain::{ApiKey, LlmProvider};
 
 /// Failure to reach or use the credential store, such as a
 /// headless Linux session without a Secret Service provider or a locked keychain.
@@ -17,12 +17,12 @@ pub struct CredentialStoreUnavailable;
 
 pub trait CredentialStore: Send + Sync {
     /// Reads a stored key; `Ok(None)` means the store has no entry.
-    fn read(&self, account: &str) -> Result<Option<ApiKey>, CredentialStoreUnavailable>;
+    fn read(&self, provider: LlmProvider) -> Result<Option<ApiKey>, CredentialStoreUnavailable>;
 
-    fn write(&self, account: &str, key: &ApiKey) -> Result<(), CredentialStoreUnavailable>;
+    fn write(&self, provider: LlmProvider, key: &ApiKey) -> Result<(), CredentialStoreUnavailable>;
 
     /// Removes a stored key; removing an absent entry succeeds.
-    fn delete(&self, account: &str) -> Result<(), CredentialStoreUnavailable>;
+    fn delete(&self, provider: LlmProvider) -> Result<(), CredentialStoreUnavailable>;
 }
 
 /// The platform keychain: macOS Keychain, Windows Credential Manager, or the
@@ -32,14 +32,16 @@ pub(crate) struct OsCredentialStore;
 const SERVICE: &str = "WhisperNow";
 
 impl OsCredentialStore {
-    fn entry(account: &str) -> Result<keyring::Entry, CredentialStoreUnavailable> {
-        keyring::Entry::new(SERVICE, account).map_err(|_| unavailable("entry"))
+    fn entry(provider: LlmProvider) -> Result<keyring::Entry, CredentialStoreUnavailable> {
+        // Saved keys are found again by this account name; changing it loses them.
+        let account = format!("llm-provider:{}", provider.as_str());
+        keyring::Entry::new(SERVICE, &account).map_err(|_| unavailable("entry"))
     }
 }
 
 impl CredentialStore for OsCredentialStore {
-    fn read(&self, account: &str) -> Result<Option<ApiKey>, CredentialStoreUnavailable> {
-        match Self::entry(account)?.get_password() {
+    fn read(&self, provider: LlmProvider) -> Result<Option<ApiKey>, CredentialStoreUnavailable> {
+        match Self::entry(provider)?.get_password() {
             // A key that is no longer one line reads as no key.
             Ok(secret) => Ok(ApiKey::new(secret).ok()),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -47,14 +49,14 @@ impl CredentialStore for OsCredentialStore {
         }
     }
 
-    fn write(&self, account: &str, key: &ApiKey) -> Result<(), CredentialStoreUnavailable> {
-        Self::entry(account)?
+    fn write(&self, provider: LlmProvider, key: &ApiKey) -> Result<(), CredentialStoreUnavailable> {
+        Self::entry(provider)?
             .set_password(key.expose_secret())
             .map_err(|_| unavailable("write"))
     }
 
-    fn delete(&self, account: &str) -> Result<(), CredentialStoreUnavailable> {
-        match Self::entry(account)?.delete_credential() {
+    fn delete(&self, provider: LlmProvider) -> Result<(), CredentialStoreUnavailable> {
+        match Self::entry(provider)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(unavailable("delete")),
         }
@@ -74,7 +76,7 @@ fn unavailable(operation: &'static str) -> CredentialStoreUnavailable {
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default)]
 pub struct MemoryCredentialStore {
-    entries: Mutex<BTreeMap<String, ApiKey>>,
+    entries: Mutex<BTreeMap<LlmProvider, ApiKey>>,
     unavailable: std::sync::atomic::AtomicBool,
 }
 
@@ -87,7 +89,7 @@ impl MemoryCredentialStore {
 
     fn entries(
         &self,
-    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, ApiKey>>, CredentialStoreUnavailable>
+    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<LlmProvider, ApiKey>>, CredentialStoreUnavailable>
     {
         if self.unavailable.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(CredentialStoreUnavailable);
@@ -98,17 +100,17 @@ impl MemoryCredentialStore {
 
 #[cfg(any(test, feature = "test-support"))]
 impl CredentialStore for MemoryCredentialStore {
-    fn read(&self, account: &str) -> Result<Option<ApiKey>, CredentialStoreUnavailable> {
-        Ok(self.entries()?.get(account).cloned())
+    fn read(&self, provider: LlmProvider) -> Result<Option<ApiKey>, CredentialStoreUnavailable> {
+        Ok(self.entries()?.get(&provider).cloned())
     }
 
-    fn write(&self, account: &str, key: &ApiKey) -> Result<(), CredentialStoreUnavailable> {
-        self.entries()?.insert(account.to_owned(), key.clone());
+    fn write(&self, provider: LlmProvider, key: &ApiKey) -> Result<(), CredentialStoreUnavailable> {
+        self.entries()?.insert(provider, key.clone());
         Ok(())
     }
 
-    fn delete(&self, account: &str) -> Result<(), CredentialStoreUnavailable> {
-        self.entries()?.remove(account);
+    fn delete(&self, provider: LlmProvider) -> Result<(), CredentialStoreUnavailable> {
+        self.entries()?.remove(&provider);
         Ok(())
     }
 }

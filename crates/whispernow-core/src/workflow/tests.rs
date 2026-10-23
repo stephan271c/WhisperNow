@@ -6,10 +6,7 @@ use super::*;
 
 #[test]
 fn segments_are_joined_before_deterministic_processing() {
-    let vocabulary = [VocabularyReplacement::from((
-        "hello world".to_owned(),
-        "Hello, World".to_owned(),
-    ))];
+    let vocabulary = [VocabularyReplacement::new("hello world", "Hello, World")];
     let segments = ["So hello", "World. Next", "Thanks for watching!"].map(str::to_owned);
 
     let result = prepare_segmented(&segments, &vocabulary).expect("prepared");
@@ -42,9 +39,9 @@ fn joined_unknown_tokens_blank_text_and_missing_segments_fail() {
 #[test]
 fn vocabulary_rules_are_literal_sequential_and_case_sensitive() {
     let rules = [
-        VocabularyReplacement::from(("cat".to_owned(), "dog".to_owned())),
-        VocabularyReplacement::from(("dog".to_owned(), "fox".to_owned())),
-        VocabularyReplacement::from((String::new(), "x".to_owned())),
+        VocabularyReplacement::new("cat", "dog"),
+        VocabularyReplacement::new("dog", "fox"),
+        VocabularyReplacement::new("", "x"),
     ];
 
     assert_eq!(
@@ -65,10 +62,7 @@ fn blank_vocabulary_sources_are_skipped() {
 
 #[test]
 fn failed_cleanup_keeps_the_vocabulary_output_and_successful_cleanup_replaces_it() {
-    let vocabulary = [VocabularyReplacement::from((
-        "wrong".to_owned(),
-        "right".to_owned(),
-    ))];
+    let vocabulary = [VocabularyReplacement::new("wrong", "right")];
     let mut failed = prepare_segmented(&["wrong word".to_owned()], &vocabulary).expect("prepared");
     failed.apply_cleanup(Err(CleanupFallback::EmptyOutput));
     assert_eq!(failed.raw_text, "wrong word");

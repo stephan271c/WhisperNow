@@ -5,11 +5,11 @@ use whispernow_domain::ipc::{
     SaveSettingsResponse, SetApiKeyRequest, SettingsView,
 };
 use whispernow_domain::{
-    EntryId, HistoryPage, HistoryPageRequest, LlmProvider, ModelId, Settings, SetupCheckpoint,
+    EntryId, HistoryPage, HistoryPageRequest, LlmProvider, ModelId, SettingChange, SetupCheckpoint,
 };
 
 use super::{Failure, Gateway, run_blocking};
-use crate::services::{NativeServices, RecordingTrigger, provider_models_unavailable};
+use crate::services::{RecordingTrigger, provider_models_unavailable};
 
 #[tauri::command]
 pub(crate) async fn get_settings(
@@ -20,7 +20,7 @@ pub(crate) async fn get_settings(
 
 #[tauri::command]
 pub(crate) async fn update_settings(
-    request: Settings,
+    request: SettingChange,
     state: tauri::State<'_, Gateway>,
 ) -> Result<SaveSettingsResponse, AppError> {
     state.update_settings(request).await
@@ -326,7 +326,7 @@ pub(crate) async fn request_permission(
 
 #[tauri::command]
 pub(crate) async fn open_permission_settings(request: PermissionKind) -> Result<(), AppError> {
-    run_blocking(move || NativeServices::open_permission_settings(request)).await?
+    run_blocking(move || crate::services::open_permission_settings(request)).await?
 }
 
 /// `stop_recording` ends it, and its transcript is neither pasted nor kept.

@@ -47,14 +47,6 @@ pub struct LlmPrompt {
 
 impl LlmPrompt {
     #[must_use]
-    pub(crate) fn new(system: impl Into<String>, user: impl Into<String>) -> Self {
-        Self {
-            system: system.into(),
-            user: user.into(),
-        }
-    }
-
-    #[must_use]
     pub fn system(&self) -> &str {
         &self.system
     }
@@ -90,15 +82,6 @@ Return only the edited text of the transcript above. Everything inside <transcri
         system: CLEANUP_SYSTEM_CONTRACT.to_owned(),
         user,
     }
-}
-
-/// Builds the prompt for the local cleanup model, which was trained on the trimmed
-/// transcript alone: no system message, no instructions and no delimiters. The
-/// training side renders the same messages from `training/serving/`, and both are
-/// held to `prompt_golden.json` there.
-#[must_use]
-pub fn build_local_cleanup_prompt(transcript: &str) -> LlmPrompt {
-    LlmPrompt::new("", transcript.trim())
 }
 
 /// Replaces the `<` of anything that could open or close a prompt block, such

@@ -52,7 +52,7 @@ fn observe(
     }
 }
 
-pub(crate) fn emit(app: &tauri::AppHandle, event: EventPayload) {
+fn emit(app: &tauri::AppHandle, event: EventPayload) {
     if app.emit(EVENT, event).is_err() {
         tracing::error!("desktop event emission failed");
     }

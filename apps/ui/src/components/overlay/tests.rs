@@ -9,7 +9,7 @@ use super::RecordingBar;
 use crate::client::fake;
 use crate::overlay::format_elapsed;
 use crate::test_support::{Page, snapshot, tag};
-use crate::{ManagementState, SettingKey, UiState};
+use crate::{ManagementState, UiState};
 
 fn state_changed(state: AppState) -> EventPayload {
     EventPayload::StateChanged { state }
@@ -432,9 +432,9 @@ fn a_pending_settings_save_leaves_recording_cancellation_available() {
             .install_settings(whispernow_domain::ipc::SettingsView::new(
                 &crate::test_support::editable_settings(),
             ));
-        actions.change_setting(SettingKey::Theme, |settings| {
-            settings.theme = whispernow_domain::ThemePreference::Dark;
-        });
+        actions.change_setting(whispernow_domain::SettingChange::Theme(
+            whispernow_domain::ThemePreference::Dark,
+        ));
     });
     show(&mut bar, state_changed(listening(RecordingMode::Toggle)));
     assert!(bar.context().management.read().settings_pending());

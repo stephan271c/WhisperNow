@@ -37,7 +37,9 @@ fn cleanup_to(provider: LlmProvider, api_base: Option<&str>) -> Settings {
     let mut settings = editable_settings();
     settings.llm_provider = provider;
     settings.cleanup_enabled = true;
-    "cleanup-test".clone_into(&mut settings.provider_settings_mut(provider).model);
+    settings
+        .provider_settings_mut(provider)
+        .choose_model("cleanup-test".to_owned());
     settings.provider_settings_mut(provider).api_base = api_base.map(|api_base| {
         whispernow_domain::ProviderEndpoint::parse(api_base).expect("a safe endpoint")
     });
@@ -56,10 +58,9 @@ fn failed_refresh_keeps_loaded_rows() {
     let mut management = ManagementState::default();
     show_history(&mut management, vec![history_entry(10, "loaded")]);
 
-    let (request_id, _) = management.history_request();
-    management.fail_history_refresh(request_id, &crate::client::connection_error());
+    management.fail_history_refresh(&crate::client::connection_error());
     assert_eq!(
-        management.history,
+        management.history.entries(),
         [history_entry(10, "loaded")],
         "a transient failure keeps rows"
     );
@@ -67,8 +68,6 @@ fn failed_refresh_keeps_loaded_rows() {
         notice_message(&management),
         Some("The desktop connection failed")
     );
-    assert!(management.history_unavailable.is_none());
-    assert!(management.history_loaded());
 }
 
 fn start_minimized(settings: &mut Settings) {
@@ -231,13 +230,10 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
     ));
     let mut audio_problem = UiState::default();
     audio_problem.hydrate(failed);
-    let mut disconnected = ui_state(Phase::Idle);
-    disconnected.report_event_stream_failure(crate::client::connection_error());
-    disconnected.error = Some(AppError::new(
-        ErrorCategory::Audio,
-        "microphone_unavailable",
-        "Choose an available microphone",
-    ));
+    let mut disconnected = audio_problem.clone();
+    disconnected.event_stream_failed = true;
+    let mut unreachable = UiState::default();
+    unreachable.report_state_read_failure();
 
     for (state, kind, title, detail) in [
         (
@@ -259,6 +255,12 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
             "Live updates are unavailable",
             Some("Close and reopen this window to reconnect."),
         ),
+        (
+            unreachable,
+            HomeStatusKind::Problem,
+            "WhisperNow could not connect",
+            Some("Close and reopen this window to retry."),
+        ),
     ] {
         let status = HomeStatus::from_state(&state);
         assert_eq!(status.kind, kind, "{title}");
@@ -275,20 +277,20 @@ fn a_saved_native_warning_keeps_the_desktops_substituted_shortcut() {
         .expect("loaded")
         .recording_shortcut
         .clone();
-    let request = management
-        .begin_settings_update(SettingKey::RecordingShortcut, |settings| {
+    assert!(
+        management.begin_settings_update(SettingKey::RecordingShortcut, |settings| {
             settings.recording_shortcut = Shortcut {
                 modifiers: [ShortcutModifier::Alt].into(),
                 key: ShortcutKey::R,
             };
         })
-        .expect("loaded settings can be saved");
+    );
     let warning = AppError {
         category: ErrorCategory::General,
         code: "shortcut_registration_failed".to_owned(),
         summary: "The recording shortcut is taken by another app".to_owned(),
     };
-    let mut returned = request;
+    let mut returned = management.shown_settings().cloned().expect("loaded");
     returned.recording_shortcut = substituted.clone();
 
     management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
@@ -318,21 +320,19 @@ fn a_saved_native_warning_keeps_the_desktops_substituted_shortcut() {
 #[test]
 fn an_unrelated_save_keeps_an_unresolved_native_settings_warning() {
     let mut management = management_with(editable_settings());
-    let request = management
-        .begin_settings_update(SettingKey::StartMinimized, start_minimized)
-        .expect("startup edit");
+    assert!(management.begin_settings_update(SettingKey::StartMinimized, start_minimized));
+    let request = management.shown_settings().cloned().expect("loaded");
     management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
         settings: SettingsView::new(&request),
         warnings: vec!["The recording shortcut could not be activated".to_owned()],
     }));
     let warning = management.notice.clone();
 
-    let request = management
-        .begin_settings_update(
-            SettingKey::Theme,
-            theme(whispernow_domain::ThemePreference::Dark),
-        )
-        .expect("theme edit");
+    assert!(management.begin_settings_update(
+        SettingKey::Theme,
+        theme(whispernow_domain::ThemePreference::Dark),
+    ));
+    let request = management.shown_settings().cloned().expect("loaded");
     management.finish_settings_update(Ok(whispernow_domain::ipc::SaveSettingsResponse {
         settings: SettingsView::new(&request),
         warnings: Vec::new(),
@@ -350,14 +350,10 @@ fn theme_attribute_follows_a_theme_change_at_once_and_its_rollback() {
     management.install_settings(settings_view(settings));
     assert_eq!(management.theme_attribute(), Some("dark"));
 
-    assert!(
-        management
-            .begin_settings_update(
-                SettingKey::Theme,
-                theme(whispernow_domain::ThemePreference::Light),
-            )
-            .is_some()
-    );
+    assert!(management.begin_settings_update(
+        SettingKey::Theme,
+        theme(whispernow_domain::ThemePreference::Light),
+    ));
     assert_eq!(management.theme_attribute(), Some("light"));
 
     management.finish_settings_update(Err(AppError::new(
@@ -367,13 +363,9 @@ fn theme_attribute_follows_a_theme_change_at_once_and_its_rollback() {
     )));
     assert_eq!(management.theme_attribute(), Some("dark"));
 
-    assert!(
-        management
-            .begin_settings_update(
-                SettingKey::Theme,
-                theme(whispernow_domain::ThemePreference::System),
-            )
-            .is_some()
-    );
+    assert!(management.begin_settings_update(
+        SettingKey::Theme,
+        theme(whispernow_domain::ThemePreference::System),
+    ));
     assert_eq!(management.theme_attribute(), None);
 }

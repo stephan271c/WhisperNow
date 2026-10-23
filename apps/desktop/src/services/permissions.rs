@@ -1,13 +1,13 @@
 //! Permission facts become the cards and actions setup offers on each platform.
 
-use std::sync::atomic::{AtomicU8, Ordering};
-use whispernow_domain::{AppError, ErrorCategory};
+use std::sync::Mutex;
 
 use whispernow_domain::ipc::{
     PasteHelperSetup, Permission, PermissionKind, PermissionStatus, PermissionsResponse,
 };
 use whispernow_platform::AppPaths;
 
+use super::microphone_test::MicrophoneTestError;
 use super::output::OutputCoordinator;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -201,40 +201,39 @@ fn paste_helper_setup_command(paths: &AppPaths) -> Option<String> {
 
 /// The microphone answer the last capture showed. No platform API here reports
 /// microphone permission without asking, so the answer comes from listening.
-#[derive(Default)]
-pub(crate) struct MicrophoneAccess(AtomicU8);
+pub(crate) struct MicrophoneAccess(Mutex<PermissionStatus>);
+
+impl Default for MicrophoneAccess {
+    fn default() -> Self {
+        Self(Mutex::new(PermissionStatus::NotDetermined))
+    }
+}
 
 impl MicrophoneAccess {
-    const GRANTED: u8 = 1;
-    const DENIED: u8 = 2;
-
     pub(crate) fn status(&self) -> PermissionStatus {
-        match self.0.load(Ordering::Acquire) {
-            Self::GRANTED => PermissionStatus::Granted,
-            Self::DENIED => PermissionStatus::Denied,
-            _ => PermissionStatus::NotDetermined,
-        }
+        *self.0.lock().expect("microphone access lock poisoned")
     }
 
     /// Records what a capture attempt showed. A failure other than a refused
     /// permission, such as a missing device, says nothing about permission.
-    pub(crate) fn observe<T>(&self, result: &Result<T, AppError>) {
+    pub(crate) fn observe<T>(&self, result: &Result<T, MicrophoneTestError>) {
         let observed = match result {
-            Ok(_) => Self::GRANTED,
-            Err(error) if error.category == ErrorCategory::Permission => Self::DENIED,
+            Ok(_) => PermissionStatus::Granted,
+            Err(error) if error.permission_denied() => PermissionStatus::Denied,
             Err(_) => return,
         };
-        self.0.store(observed, Ordering::Release);
+        *self.0.lock().expect("microphone access lock poisoned") = observed;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use whispernow_domain::ErrorCategory;
+    use whispernow_core::audio::AudioInputError;
     use whispernow_domain::ipc::{PermissionKind as Kind, PermissionStatus as Status};
 
     use super::{
-        AppError, MicrophoneAccess, PasteHelperSetup, SessionFacts, WaylandPaste, permission_states,
+        MicrophoneAccess, MicrophoneTestError, PasteHelperSetup, SessionFacts, WaylandPaste,
+        permission_states,
     };
 
     fn cards(microphone: Status, session: SessionFacts) -> Vec<(Kind, Status, bool, bool)> {
@@ -388,18 +387,19 @@ mod tests {
 
     #[test]
     fn only_a_capture_result_changes_the_microphone_answer() {
-        let error = |category| AppError::new(category, "fixture", "");
         let access = MicrophoneAccess::default();
         assert_eq!(access.status(), Status::NotDetermined);
-        access.observe(&Err::<(), _>(error(ErrorCategory::Permission)));
+        access.observe(&Err::<(), _>(MicrophoneTestError::Start(
+            AudioInputError::PermissionDenied,
+        )));
         assert_eq!(access.status(), Status::Denied);
-        access.observe(&Err::<(), _>(error(ErrorCategory::Audio)));
+        access.observe(&Err::<(), _>(MicrophoneTestError::Lost));
         assert_eq!(
             access.status(),
             Status::Denied,
             "a device failure is no answer"
         );
-        access.observe(&Ok::<_, AppError>(()));
+        access.observe(&Ok::<_, MicrophoneTestError>(()));
         assert_eq!(access.status(), Status::Granted);
     }
 }

@@ -34,8 +34,8 @@ use crate::PasteKeys;
 use super::{
     accessibility::active_paste_keys,
     clipboard::{
-        MAX_FORMAT_BYTES, PortalClipboardSnapshot, PortalClipboardState, READ_TIMEOUT,
-        SNAPSHOT_MIME_TYPES, SecretBytes, TRANSCRIPT_MIME_TYPES,
+        ClipboardOffer, MAX_FORMAT_BYTES, PortalClipboardState, READ_TIMEOUT, SNAPSHOT_MIME_TYPES,
+        SecretBytes,
     },
     token::RemoteDesktopRestoreTokenStore,
 };
@@ -296,11 +296,7 @@ impl WaylandOutput {
                     .ok(),
                 () = cancellation.cancelled() => return Err(WaylandPortalError::Cancelled),
             };
-            let transcript_offer = TRANSCRIPT_MIME_TYPES
-                .iter()
-                .map(|mime| (*mime, transcript.as_bytes()))
-                .collect();
-            set_offer(output, transcript_offer).await?;
+            set_offer(output, ClipboardOffer::transcript(transcript)).await?;
             let delivered = async {
                 // Cancellation may shorten only the wait before the keystroke.
                 let keys = tokio::select! {
@@ -342,7 +338,7 @@ impl WaylandOutput {
 
 async fn restore_if_current(
     output: &mut OutputSession,
-    snapshot: Option<PortalClipboardSnapshot>,
+    snapshot: Option<ClipboardOffer>,
 ) -> PasteOutcome<WaylandPortalError> {
     let Some(snapshot) = snapshot else {
         return PasteOutcome::PastedWithoutRestore;
@@ -357,7 +353,7 @@ async fn restore_if_current(
     {
         return PasteOutcome::RestoreSkippedClipboardChanged;
     }
-    match set_offer(output, snapshot.as_offer()).await {
+    match set_offer(output, snapshot).await {
         Ok(()) => PasteOutcome::PastedAndRestored,
         Err(error) => {
             tracing::warn!(%error, "clipboard restore failed");
@@ -368,7 +364,7 @@ async fn restore_if_current(
 
 async fn snapshot_clipboard(
     output: &mut OutputSession,
-) -> Result<PortalClipboardSnapshot, WaylandPortalError> {
+) -> Result<ClipboardOffer, WaylandPortalError> {
     let advertised = loop {
         if let Some(advertised) = output.advertised_mime_types.clone() {
             break advertised;
@@ -394,7 +390,7 @@ async fn snapshot_clipboard(
     if !advertised.is_empty() && formats.is_empty() {
         return Err(WaylandPortalError::ClipboardUnavailable);
     }
-    PortalClipboardSnapshot::bounded(formats)
+    ClipboardOffer::snapshot(formats)
 }
 
 async fn read_selection(
@@ -427,9 +423,9 @@ async fn read_selection(
 
 async fn set_offer(
     output: &mut OutputSession,
-    offer: Vec<(&str, &[u8])>,
+    offer: ClipboardOffer,
 ) -> Result<(), WaylandPortalError> {
-    let mime_types: Vec<&str> = offer.iter().map(|(mime, _)| *mime).collect();
+    let mime_types = offer.mime_types();
     output
         .clipboard
         .set_selection(

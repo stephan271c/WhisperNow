@@ -1,15 +1,15 @@
 use dioxus::prelude::*;
 use whispernow_domain::{
     ApiKey, LlmProvider, ModelAvailability, ModelFamily, ModelId, ProviderEndpoint,
-    ProviderSettings,
+    ProviderSettings, SettingChange,
 };
 
 use super::NoticeRegion;
 use super::configuration::{AutosaveRow, SettingsLoading};
 use super::models::{ModelRow, ModelRowKind};
 use super::ui::{
-    Button, ButtonVariant, Combobox, ConfirmButton, DraftText, Section, Segmented, Select,
-    SettingRow, TextInput, Toggle,
+    Button, ButtonVariant, Combobox, ConfirmButton, DraftText, Section, Segmented, SegmentedOption,
+    Select, SettingRow, TextInput, Toggle,
 };
 use crate::blocked_reason::DisabledReason;
 use crate::client;
@@ -51,10 +51,22 @@ impl CleanupSource {
     }
 }
 
-const SOURCES: [(CleanupSource, &str, &str); 3] = [
-    (CleanupSource::WhisperNow, "whispernow", "WhisperNow model"),
-    (CleanupSource::LocalLlm, "local", "Local LLM"),
-    (CleanupSource::Api, "api", "API provider"),
+const SOURCES: [SegmentedOption<CleanupSource>; 3] = [
+    SegmentedOption {
+        value: CleanupSource::WhisperNow,
+        suffix: "whispernow",
+        label: "WhisperNow model",
+    },
+    SegmentedOption {
+        value: CleanupSource::LocalLlm,
+        suffix: "local",
+        label: "Local LLM",
+    },
+    SegmentedOption {
+        value: CleanupSource::Api,
+        suffix: "api",
+        label: "API provider",
+    },
 ];
 
 #[component]
@@ -69,9 +81,7 @@ pub(super) fn AiCleanupPage() -> Element {
     let provider = settings.llm_provider;
     let source = CleanupSource::of(provider);
     let pick = move |provider: LlmProvider| {
-        context.change_setting(SettingKey::ActiveProvider, move |settings| {
-            settings.llm_provider = provider;
-        });
+        context.change_setting(SettingChange::ActiveProvider(provider));
     };
     rsx! { div { class: "settings-stack",
         DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
@@ -82,9 +92,7 @@ pub(super) fn AiCleanupPage() -> Element {
                 Toggle { checked: settings.cleanup_enabled,
                     disabled,
                     onchange: move |enabled: bool| {
-                        context.change_setting(SettingKey::CleanupEnabled, move |settings| {
-                            settings.cleanup_enabled = enabled;
-                        });
+                        context.change_setting(SettingChange::CleanupEnabled(enabled));
                     }
                 }
             }
@@ -111,9 +119,7 @@ pub(super) fn AiCleanupPage() -> Element {
                     Toggle { checked: settings.cleanup_uses_gpu,
                         disabled,
                         onchange: move |enabled: bool| {
-                            context.change_setting(SettingKey::CleanupUsesGpu, move |settings| {
-                                settings.cleanup_uses_gpu = enabled;
-                            });
+                            context.change_setting(SettingChange::CleanupUsesGpu(enabled));
                         }
                     }
                 }
@@ -122,7 +128,7 @@ pub(super) fn AiCleanupPage() -> Element {
             }
         }
         if source == CleanupSource::WhisperNow {
-            CleanupModels { chosen_model: settings.cleanup_model_id(), disabled }
+            CleanupModels { chosen_model: settings.cleanup_model.clone(), disabled }
         }
     } }
 }
@@ -144,8 +150,8 @@ fn ProviderRows(
         .or(context.settings_pending());
     let mut credential = use_signal(String::new);
     let mut new_model = use_signal(String::new);
-    let models = provider_settings.listed_models();
-    let active = provider_settings.model.clone();
+    let models = provider_settings.saved_models.clone();
+    let active = provider_settings.model.clone().unwrap_or_default();
     let key_saved = management
         .read()
         .settings
@@ -175,9 +181,7 @@ fn ProviderRows(
                     event.prevent_default();
                     let model = new_model().trim().to_owned();
                     if !model.is_empty() {
-                        context.change_setting(SettingKey::ProviderModel, move |settings| {
-                            settings.provider_settings_mut(provider).choose_model(model);
-                        });
+                        context.change_setting(SettingChange::ChooseProviderModel { provider, model });
                         new_model.set(String::new());
                     }
                 },
@@ -186,19 +190,14 @@ fn ProviderRows(
                         options: models.iter().map(|model| (model.clone(), model.clone())).collect::<Vec<_>>(),
                         disabled,
                         onchange: move |model: String| {
-                            context.change_setting(SettingKey::ProviderModel, move |settings| {
-                                settings.provider_settings_mut(provider).choose_model(model);
-                            });
+                            context.change_setting(SettingChange::ChooseProviderModel { provider, model });
                         },
                     }
                     Button { id: "provider-model-remove", variant: ButtonVariant::Ghost,
                         aria_label: "Remove {active}",
                         disabled: disabled || active.is_empty(),
                         onclick: move |_| {
-                            let removed = active.clone();
-                            context.change_setting(SettingKey::ProviderModel, move |settings| {
-                                settings.provider_settings_mut(provider).remove_model(&removed);
-                            });
+                            context.change_setting(SettingChange::RemoveProviderModel { provider, model: active.clone() });
                         },
                         "Remove"
                     }
@@ -212,18 +211,18 @@ fn ProviderRows(
         }
         AutosaveRow { id: "provider-endpoint", title: "API endpoint",
             description: (provider != LlmProvider::Custom).then(|| "Leave empty for the default address.".to_owned()),
-            setting: SettingKey::ProviderApiBase,
+            setting: SettingKey::ProviderEndpoint,
             DraftText { value: provider_settings.api_base.as_ref().map(ProviderEndpoint::expose_url).unwrap_or_default().to_owned(),
                 disabled,
                 oncommit: move |value: String| {
                     let value = value.trim();
                     match (!value.is_empty()).then(|| ProviderEndpoint::parse(value)).transpose() {
                         Ok(api_base) => {
-                            context.change_setting(SettingKey::ProviderApiBase, move |settings| settings.provider_settings_mut(provider).api_base = api_base);
+                            context.change_setting(SettingChange::ProviderEndpoint { provider, api_base });
                             true
                         },
                         Err(error) => {
-                            management.write().reject_setting(SettingKey::ProviderApiBase, error.to_string());
+                            management.write().reject_setting(SettingKey::ProviderEndpoint, error.to_string());
                             false
                         }
                     }
@@ -277,6 +276,7 @@ fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
         .cloned()
         .collect::<Vec<_>>();
     let loaded = management.read().models_loaded;
+    let error = management.read().setting_error(SettingKey::CleanupModel);
     let reason = context
         .model_download_blocked()
         .or(context.model_delete_blocked());
@@ -284,6 +284,9 @@ fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
         Section { id: "cleanup-models", title: "WhisperNow models",
             div { class: "section-note",
                 DisabledReason { id: "models-disabled-reason", reason }
+            }
+            if let Some(error) = error {
+                p { id: "cleanup-model-error", class: "field-error-message", role: "alert", "{error}" }
             }
             if !loaded {
                 p { class: "section-note", role: "status", "Loading models…" }

@@ -28,6 +28,10 @@ impl Events {
     pub(crate) fn history_changed(&self) {
         self.publish(EventPayload::HistoryChanged);
     }
+
+    pub(crate) fn models_changed(&self) {
+        self.publish(EventPayload::ModelsChanged);
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -264,7 +268,7 @@ mod tests {
                     model_id: model_id.clone(),
                     phase: DownloadPhase::Downloading,
                     downloaded_bytes: 0,
-                    total_bytes: None,
+                    total_bytes: 1_024,
                     bytes_per_second: None,
                 },
                 cancellation: CancellationToken::default(),

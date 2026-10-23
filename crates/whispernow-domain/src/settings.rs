@@ -11,8 +11,10 @@ use crate::{
     ModelId, ProviderEndpoint, RecordingMode, Shortcut,
 };
 
+mod change;
 mod legacy;
 
+pub use change::SettingChange;
 pub use legacy::PythonSettings;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -60,6 +62,34 @@ pub struct SetupCheckpoint {
     pub recording_mode: RecordingMode,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetupProgress {
+    Unfinished(SetupCheckpoint),
+    Complete,
+}
+
+impl Default for SetupProgress {
+    fn default() -> Self {
+        Self::Unfinished(SetupCheckpoint::default())
+    }
+}
+
+impl SetupProgress {
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        matches!(self, Self::Complete)
+    }
+
+    #[must_use]
+    pub const fn checkpoint(&self) -> Option<&SetupCheckpoint> {
+        match self {
+            Self::Unfinished(checkpoint) => Some(checkpoint),
+            Self::Complete => None,
+        }
+    }
+}
+
 /// A secret API key, kept in the OS credential store. It crosses to the desktop only when the
 /// user enters it, and is never saved with the settings.
 ///
@@ -101,53 +131,40 @@ impl fmt::Debug for ApiKey {
     }
 }
 
+/// A remote provider's model choices. The active model is always one of `saved_models`.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct ProviderSettings {
-    pub model: String,
+    pub model: Option<String>,
     pub api_base: Option<ProviderEndpoint>,
     pub saved_models: Vec<String>,
 }
 
 static DEFAULT_PROVIDER_SETTINGS: ProviderSettings = ProviderSettings {
-    model: String::new(),
+    model: None,
     api_base: None,
     saved_models: Vec::new(),
 };
 
 impl ProviderSettings {
-    /// The saved models, after the active model if it was never saved.
-    #[must_use]
-    pub fn listed_models(&self) -> Vec<String> {
-        let mut models = self.saved_models.clone();
-        if !self.model.is_empty() && !models.contains(&self.model) {
-            models.insert(0, self.model.clone());
-        }
-        models
-    }
-
     /// Makes `model` the active model, saving it if it is new.
     pub fn choose_model(&mut self, model: String) {
-        self.saved_models = self.listed_models();
         if !self.saved_models.contains(&model) {
             self.saved_models.push(model.clone());
         }
-        self.model = model;
+        self.model = Some(model);
     }
 
     /// Forgets the saved model `removed`; if it was active, the first saved model takes over.
     pub fn remove_model(&mut self, removed: &str) {
-        self.saved_models = self.listed_models();
         self.saved_models.retain(|saved| saved != removed);
-        if self.model == removed {
-            self.model = self.saved_models.first().cloned().unwrap_or_default();
+        if self.model.as_deref() == Some(removed) {
+            self.model = self.saved_models.first().cloned();
         }
     }
 }
 
-/// A literal vocabulary replacement, stored as a `[source, replacement]` pair.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(from = "(String, String)", into = "(String, String)")]
 pub struct VocabularyReplacement {
     pub source: String,
     pub replacement: String,
@@ -168,46 +185,13 @@ impl VocabularyReplacement {
     }
 }
 
-impl From<(String, String)> for VocabularyReplacement {
-    fn from((source, replacement): (String, String)) -> Self {
-        Self {
-            source,
-            replacement,
-        }
-    }
-}
-
-impl From<VocabularyReplacement> for (String, String) {
-    fn from(rule: VocabularyReplacement) -> Self {
-        (rule.source, rule.replacement)
-    }
-}
-
-/// Settings-window bounds in physical pixels, stored as an `[x, y, width, height]` array.
+/// Settings-window bounds in physical pixels.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(from = "(i32, i32, u32, u32)", into = "(i32, i32, u32, u32)")]
 pub struct WindowGeometry {
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
-}
-
-impl From<(i32, i32, u32, u32)> for WindowGeometry {
-    fn from((x, y, width, height): (i32, i32, u32, u32)) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-}
-
-impl From<WindowGeometry> for (i32, i32, u32, u32) {
-    fn from(geometry: WindowGeometry) -> Self {
-        (geometry.x, geometry.y, geometry.width, geometry.height)
-    }
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -223,11 +207,13 @@ pub struct Settings {
     pub model_id: ModelId,
     pub start_minimized: bool,
     pub theme: ThemePreference,
-    pub first_run_complete: bool,
-    pub setup: Option<SetupCheckpoint>,
+    pub setup: SetupProgress,
     pub cleanup_enabled: bool,
     /// Whether the local cleanup model may load on a GPU; off keeps it on the CPU.
     pub cleanup_uses_gpu: bool,
+    /// The model the Local cleanup model provider runs; an unknown id loads as the default.
+    #[serde(deserialize_with = "cleanup_model")]
+    pub cleanup_model: ModelId,
     pub llm_provider: LlmProvider,
     pub llm_provider_settings: BTreeMap<LlmProvider, ProviderSettings>,
     /// Providers whose API key is saved in the OS credential store.
@@ -252,10 +238,10 @@ impl Default for Settings {
             model_id: ModelId::default(),
             start_minimized: false,
             theme: ThemePreference::System,
-            first_run_complete: false,
-            setup: None,
+            setup: SetupProgress::default(),
             cleanup_enabled: false,
             cleanup_uses_gpu: true,
+            cleanup_model: default_cleanup_model(),
             llm_provider: LlmProvider::OpenAi,
             llm_provider_settings: BTreeMap::new(),
             api_keys: BTreeSet::new(),
@@ -268,19 +254,25 @@ impl Default for Settings {
     }
 }
 
-impl Settings {
-    /// The local cleanup model AI cleanup uses with the Local cleanup model provider: the one
-    /// saved as that provider's model, or the default when none, or an unknown one, is saved.
-    #[must_use]
-    pub fn cleanup_model_id(&self) -> ModelId {
-        let id = self
-            .llm_provider_settings
-            .get(&LlmProvider::LocalCleanup)
-            .and_then(|saved| CLEANUP_MODEL_IDS.into_iter().find(|id| *id == saved.model))
-            .unwrap_or(DEFAULT_CLEANUP_MODEL_ID);
-        ModelId::new(id).expect("cleanup registry IDs are valid")
-    }
+fn default_cleanup_model() -> ModelId {
+    ModelId::new(DEFAULT_CLEANUP_MODEL_ID).expect("cleanup registry IDs are valid")
+}
 
+/// A known local cleanup model, else the default.
+pub(crate) fn known_cleanup_model(id: &str) -> ModelId {
+    CLEANUP_MODEL_IDS
+        .into_iter()
+        .find(|known| *known == id)
+        .map_or_else(default_cleanup_model, |known| {
+            ModelId::new(known).expect("cleanup registry IDs are valid")
+        })
+}
+
+fn cleanup_model<'de, D: Deserializer<'de>>(deserializer: D) -> Result<ModelId, D::Error> {
+    Ok(known_cleanup_model(&String::deserialize(deserializer)?))
+}
+
+impl Settings {
     #[must_use]
     pub fn provider_settings(&self, provider: LlmProvider) -> &ProviderSettings {
         self.llm_provider_settings

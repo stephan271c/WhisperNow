@@ -12,13 +12,20 @@ pub enum HomeStatusKind {
     Problem,
 }
 
-/// Home's live status line, with a link to the page that fixes a problem.
+/// A link to the page that fixes a problem.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Fix {
+    pub label: &'static str,
+    pub section: MainWindowSection,
+}
+
+/// Home's live status line.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HomeStatus {
     pub kind: HomeStatusKind,
     pub title: String,
     pub detail: Option<String>,
-    pub fix: Option<(&'static str, MainWindowSection)>,
+    pub fix: Option<Fix>,
 }
 
 impl HomeStatus {
@@ -46,7 +53,11 @@ impl HomeStatus {
                 None,
             );
         }
-        if let Some(error) = &state.error {
+        if let Some(error) = state
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.error.as_ref())
+        {
             return problem(
                 "Dictation needs attention",
                 &error.summary,
@@ -110,22 +121,21 @@ impl HomeStatus {
     }
 }
 
-pub(crate) const fn category_fix(
-    category: whispernow_domain::ErrorCategory,
-) -> Option<(&'static str, MainWindowSection)> {
+pub(crate) const fn category_fix(category: whispernow_domain::ErrorCategory) -> Option<Fix> {
     use whispernow_domain::ErrorCategory;
-    match category {
+    let (label, section) = match category {
         ErrorCategory::Audio | ErrorCategory::Permission => {
-            Some(("Check audio settings", MainWindowSection::Audio))
+            ("Check audio settings", MainWindowSection::Audio)
         }
         ErrorCategory::Model | ErrorCategory::Recognition => {
-            Some(("Open speech models", MainWindowSection::SpeechModels))
+            ("Open speech models", MainWindowSection::SpeechModels)
         }
-        ErrorCategory::Cleanup => Some(("Open AI cleanup", MainWindowSection::AiCleanup)),
-        ErrorCategory::Settings => Some(("Open settings", MainWindowSection::Settings)),
-        ErrorCategory::Output => Some(("Open history", MainWindowSection::History)),
+        ErrorCategory::Cleanup => ("Open AI cleanup", MainWindowSection::AiCleanup),
+        ErrorCategory::Settings => ("Open settings", MainWindowSection::Settings),
+        ErrorCategory::Output => ("Open history", MainWindowSection::History),
         ErrorCategory::General | ErrorCategory::NotFound | ErrorCategory::HistoryUnavailable => {
-            None
+            return None;
         }
-    }
+    };
+    Some(Fix { label, section })
 }

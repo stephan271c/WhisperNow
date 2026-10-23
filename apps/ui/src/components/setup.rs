@@ -12,15 +12,13 @@ use whispernow_domain::{
 };
 
 use super::configuration::{RECORDING_MODES, device_options};
-use super::labels::{self, format_bytes};
-use super::microphone_test::percent;
-use super::models::{DownloadProgress, ModelLanguages};
+use super::labels;
+use super::microphone_test::{level_fraction, percent};
+use super::models::{DownloadProgress, ModelFacts, model_slug};
 use super::ui::focus::take_focus;
-use super::ui::{
-    Banner, Button, ButtonVariant, Field, Icon, IconName, Segmented, Select, ShortcutLabel, Tone,
-};
-use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture};
-use crate::blocked_reason::DisabledReason;
+use super::ui::{Banner, Button, ButtonVariant, Field, Icon, IconName, Segmented, Select, Tone};
+use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture, ShortcutSummary};
+use crate::blocked_reason::{BlockedButton, DisabledReason};
 use crate::{BlockedReason, NoticeScope, Route, SettingsRoute, SetupTest, UiContext, UiOperation};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -249,7 +247,10 @@ fn PermissionCard(permission: Permission, blocked: bool) -> Element {
     let kind = permission.kind;
     let slug = permission_slug(kind);
     let (title, purpose) = permission_text(kind);
-    let asking = context.management.read().requested_permission == Some(kind);
+    let asking = context
+        .management
+        .read()
+        .is_busy(UiOperation::RequestPermission(kind));
     let granted = permission.status == PermissionStatus::Granted;
     let (state, icon) = match permission.status {
         PermissionStatus::Granted => ("Granted", IconName::CheckCircle),
@@ -419,7 +420,7 @@ fn ModelChoice(
     let context = use_context::<UiContext>();
     let mut management = context.management;
     let id = model.id.clone();
-    let slug = id.as_str().replace('.', "-");
+    let slug = model_slug(&id);
     let name = model.display_name.clone();
     let download = context.active_download(&id);
     let edit_blocked = context.settings_pending();
@@ -441,10 +442,7 @@ fn ModelChoice(
                 if model.recommended { span { class: "pill", "Recommended" } }
             }
         }
-        div { id: "setup-model-{slug}-facts", class: "model-facts",
-            span { "{format_bytes(model.size_bytes)}" }
-            ModelLanguages { languages: model.languages.clone() }
-        }
+        ModelFacts { id: facts_id, model: model.clone() }
         div { class: "model-actions",
             if let Some(download) = download {
                 DownloadProgress { download, name: name.clone() }
@@ -527,28 +525,23 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
     let devices = management.read().devices.clone();
     let test = management.read().setup_test.clone();
     let running = matches!(test, Some(SetupTest::Running { .. }));
-    let level = percent(context.state.read().audio_rms);
+    let level = percent(level_fraction(context.state.read().audio_rms));
     let start_blocked = context
         .blocked(UiOperation::StartSetupTest)
         .or(context.phase_blocked());
     let stop_blocked = context.blocked(UiOperation::StopSetupTest);
-    let selected = checkpoint.input_device.clone().unwrap_or_default();
     let settings_pending = context.settings_pending().is_some();
     rsx! { div { class: "setup-content",
         dl { id: "setup-summary", class: "setup-summary",
             div { dt { "Speech model" } dd { "{model_name}" } }
-            div { dt { "{labels::recording_mode(checkpoint.recording_mode)}" }
-                dd { ShortcutLabel { shortcut: checkpoint.recording_shortcut.clone() } }
-            }
+            ShortcutSummary { mode: checkpoint.recording_mode, shortcut: checkpoint.recording_shortcut.clone() }
         }
         Field { id: "setup-microphone", label: "Microphone",
-            Select { value: selected.clone(),
-                placeholder: selected,
+            Select { value: checkpoint.input_device.clone(),
+                placeholder: checkpoint.input_device.clone(),
                 options: device_options(&devices),
                 disabled: running || settings_pending,
-                onchange: move |value: String| {
-                    context.save_setup_edit(|setup| setup.input_device = (!value.is_empty()).then_some(value));
-                },
+                onchange: move |device| context.save_setup_edit(|setup| setup.input_device = device),
             }
         }
         section { class: "setup-test", aria_labelledby: "setup-test-title",
@@ -570,14 +563,12 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
                         "Stop"
                     }
                 } else {
-                    Button { id: "setup-test-start", variant: ButtonVariant::Primary,
-                        disabled: start_blocked.is_some(),
-                        aria_describedby: start_blocked.as_ref().map(|_| "setup-test-disabled-reason"),
+                    BlockedButton { id: "setup-test-start", variant: ButtonVariant::Primary,
+                        blocked: start_blocked,
                         onclick: move |_| context.start_setup_test(),
                         Icon { name: IconName::Mic }
                         if test.is_some() { "Test again" } else { "Start test" }
                     }
-                    DisabledReason { id: "setup-test-disabled-reason", reason: start_blocked }
                 }
             } else {
                 p { class: "field-help", "The test is available once {model_name} has downloaded." }
@@ -646,7 +637,7 @@ fn DoneStep() -> Element {
         div { class: "setup-hero-icon complete", Icon { name: IconName::CheckCircle } }
         dl { id: "setup-done-shortcuts", class: "setup-summary",
             if let Some((mode, shortcut)) = shortcut {
-                div { dt { "{labels::recording_mode(mode)}" } dd { ShortcutLabel { shortcut } } }
+                ShortcutSummary { mode, shortcut }
             }
         }
         p { class: "field-help", "Optional: AI cleanup can fix punctuation and remove filler words." }

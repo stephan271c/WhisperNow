@@ -8,6 +8,7 @@ use whispernow_domain::{
 use super::format::{group_by_day, retention_summary};
 use super::{HistoryScreen, LocalClock};
 use crate::client::fake;
+use crate::management::HistoryRows;
 use crate::test_support::{
     Page, editable_settings, management_with, show_history, snapshot, tag, text,
 };
@@ -50,6 +51,14 @@ fn management(entries: Vec<HistoryEntry>) -> ManagementState {
 /// Entry 7, an hour old.
 fn one_entry() -> ManagementState {
     management(vec![entry(7, UtcMillis(NOW.0 - HOUR))])
+}
+
+/// Marks the loaded window as having an older page to load.
+fn more_to_load(management: &mut ManagementState) {
+    let HistoryRows::Loaded { has_more, .. } = &mut management.history else {
+        panic!("history is loaded");
+    };
+    *has_more = true;
 }
 
 #[test]
@@ -168,7 +177,7 @@ fn a_failed_entry_shows_its_error_and_its_audio_can_be_played() {
 #[test]
 fn search_is_debounced_and_paged_within_the_search() {
     let mut management = one_entry();
-    management.history_has_more = true;
+    more_to_load(&mut management);
     let mut page = history_page(management);
     page.input("history-search", "inv")
         .input("history-search", "invoice")
@@ -203,7 +212,7 @@ fn search_is_debounced_and_paged_within_the_search() {
 #[test]
 fn a_delayed_refresh_cannot_shrink_the_window_requested_by_load_more() {
     let mut management = one_entry();
-    management.history_has_more = true;
+    more_to_load(&mut management);
     let mut page = history_page(management);
     page.publish(EventPayload::HistoryChanged)
         .click("history-load-more");
@@ -228,8 +237,8 @@ fn a_delayed_refresh_cannot_shrink_the_window_requested_by_load_more() {
     page.settle();
     let context = page.context();
     let management = context.management.read();
-    assert_eq!(management.history, expanded.entries);
-    assert_eq!(management.history_has_more, expanded.has_more);
+    assert_eq!(management.history.entries(), expanded.entries);
+    assert_eq!(management.history.has_more(), expanded.has_more);
     assert_eq!(management.history_window_pages(), 2);
     drop(management);
     assert!(tag(&page.html(), "history-entry-6").is_some());
@@ -244,7 +253,7 @@ fn a_delayed_refresh_cannot_shrink_the_window_requested_by_load_more() {
 fn a_read_overlapping_deletion_cannot_restore_the_row_or_report_an_obsolete_failure() {
     for obsolete in [
         Ok(HistoryPage {
-            entries: one_entry().history,
+            entries: one_entry().history.entries().to_vec(),
             has_more: true,
         }),
         Err(AppError::new(
@@ -273,12 +282,15 @@ fn a_read_overlapping_deletion_cannot_restore_the_row_or_report_an_obsolete_fail
         page.settle();
         let context = page.context();
         let management = context.management.read();
-        assert!(management.history.is_empty());
-        assert!(!management.history_has_more);
+        assert_eq!(
+            management.history,
+            HistoryRows::Loaded {
+                filter: HistoryFilter::default(),
+                entries: Vec::new(),
+                has_more: false,
+            }
+        );
         assert_eq!(management.history_window_pages(), 1);
-        assert!(management.history_loaded());
-        assert!(management.history_unavailable.is_none());
-        assert!(management.history_search_error.is_none());
         assert!(management.notice.is_none());
         assert!(tag(&page.html(), "history-entry-7").is_none());
     }
@@ -385,8 +397,10 @@ fn deleting_an_entry_or_the_history_requires_confirmation() {
 
 #[test]
 fn copy_confirms_on_the_button_that_was_pressed() {
-    let mut state = one_entry();
-    state.history.push(entry(8, UtcMillis(NOW.0 - 2 * HOUR)));
+    let state = management(vec![
+        entry(7, UtcMillis(NOW.0 - HOUR)),
+        entry(8, UtcMillis(NOW.0 - 2 * HOUR)),
+    ]);
     let mut page = history_page(state);
     page.click("history-copy-7");
     assert_eq!(fake::requests::<String>("copy_text"), ["cleaned 7"]);
@@ -438,7 +452,7 @@ fn storage_unavailability_replaces_the_list_with_a_reload() {
         entry(7, UtcMillis(NOW.0 - HOUR)),
         entry(8, UtcMillis(NOW.0 - 2 * HOUR)),
     ]);
-    management.history_has_more = true;
+    more_to_load(&mut management);
     let mut page = history_page(management);
     let loaded = page.html();
     for present in [
@@ -481,12 +495,9 @@ fn storage_unavailability_replaces_the_list_with_a_reload() {
     }
     let context = page.context();
     let management = context.management.read();
-    assert!(management.history.is_empty());
-    assert!(!management.history_loaded());
-    assert!(!management.history_has_more);
     assert_eq!(
-        management.history_unavailable.as_deref(),
-        Some("History storage is unavailable")
+        management.history,
+        HistoryRows::Unavailable("History storage is unavailable".to_owned())
     );
     drop(management);
     page.click("history-reload");
@@ -501,15 +512,11 @@ fn a_search_that_cannot_run_explains_itself_in_place_of_stale_rows() {
     let mut management = one_entry();
     management.history_search = "x".repeat(300);
     assert!(management.apply_history_search());
-    let (request_id, _) = management.history_request();
-    management.fail_history_refresh(
-        request_id,
-        &whispernow_domain::AppError {
-            category: whispernow_domain::ErrorCategory::General,
-            code: "text_too_large".to_owned(),
-            summary: "This search is too long. Shorten it and try again.".to_owned(),
-        },
-    );
+    management.fail_history_refresh(&whispernow_domain::AppError {
+        category: whispernow_domain::ErrorCategory::General,
+        code: "text_too_large".to_owned(),
+        summary: "This search is too long. Shorten it and try again.".to_owned(),
+    });
     assert!(management.notice.is_none(), "no page-wide notice");
 
     let page = history_page(management.clone());
@@ -527,14 +534,10 @@ fn a_search_that_cannot_run_explains_itself_in_place_of_stale_rows() {
         "the field stops at the length a search accepts"
     );
 
-    let (request_id, _) = management.history_request();
-    management.finish_history_refresh(
-        request_id,
-        HistoryPage {
-            entries: one_entry().history,
-            has_more: false,
-        },
-    );
+    management.finish_history_refresh(HistoryPage {
+        entries: one_entry().history.entries().to_vec(),
+        has_more: false,
+    });
     let page = history_page(management);
     let html = page.html();
     assert!(tag(&html, "history-search-error").is_none());

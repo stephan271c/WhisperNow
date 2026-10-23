@@ -2,7 +2,9 @@ use std::{fs, sync::Arc};
 
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
-use whispernow_domain::{ApiKey, HistoryLimit, LlmProvider, Settings, SetupCheckpoint, SetupStep};
+use whispernow_domain::{
+    ApiKey, HistoryLimit, LlmProvider, Settings, SetupCheckpoint, SetupProgress, SetupStep,
+};
 
 use crate::{
     AppPaths, CredentialStore, CredentialStoreUnavailable, MemoryCredentialStore, SettingsLoad,
@@ -52,7 +54,7 @@ fn settings_round_trip() {
     let settings = Settings {
         keep_audio: true,
         history_limit: HistoryLimit::Last100,
-        setup: Some(SetupCheckpoint {
+        setup: SetupProgress::Unfinished(SetupCheckpoint {
             step: SetupStep::Shortcuts,
             ..SetupCheckpoint::default()
         }),
@@ -124,7 +126,7 @@ fn python_settings_are_imported_once_with_their_keys_moved_to_the_store() {
         notice,
         enable_autostart,
     } = fixture.persistence.load().expect("import");
-    assert!(imported.first_run_complete);
+    assert!(imported.setup.is_complete());
     assert!(enable_autostart);
     assert_eq!(
         imported.recording_shortcut.key,
@@ -173,7 +175,13 @@ fn a_python_key_the_store_refuses_stays_in_the_kept_file() {
         ..
     } = fixture.persistence.load().expect("import");
     assert!(imported.api_keys.is_empty());
-    assert_eq!(imported.provider_settings(LlmProvider::Gemini).model, "g");
+    assert_eq!(
+        imported
+            .provider_settings(LlmProvider::Gemini)
+            .model
+            .as_deref(),
+        Some("g")
+    );
     assert_eq!(
         serde_json::from_slice::<Value>(
             &fs::read(fixture.paths.python_settings_file()).expect("kept")
@@ -192,20 +200,20 @@ fn a_python_key_the_store_refuses_stays_in_the_kept_file() {
 struct RefusingGeminiStore(MemoryCredentialStore);
 
 impl CredentialStore for RefusingGeminiStore {
-    fn read(&self, account: &str) -> Result<Option<ApiKey>, CredentialStoreUnavailable> {
-        self.0.read(account)
+    fn read(&self, provider: LlmProvider) -> Result<Option<ApiKey>, CredentialStoreUnavailable> {
+        self.0.read(provider)
     }
 
-    fn write(&self, account: &str, key: &ApiKey) -> Result<(), CredentialStoreUnavailable> {
-        if account == "llm-provider:gemini" {
+    fn write(&self, provider: LlmProvider, key: &ApiKey) -> Result<(), CredentialStoreUnavailable> {
+        if provider == LlmProvider::Gemini {
             Err(CredentialStoreUnavailable)
         } else {
-            self.0.write(account, key)
+            self.0.write(provider, key)
         }
     }
 
-    fn delete(&self, account: &str) -> Result<(), CredentialStoreUnavailable> {
-        self.0.delete(account)
+    fn delete(&self, provider: LlmProvider) -> Result<(), CredentialStoreUnavailable> {
+        self.0.delete(provider)
     }
 }
 

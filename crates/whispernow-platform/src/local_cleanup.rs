@@ -18,7 +18,7 @@ use std::{
 
 use tokio::sync::oneshot;
 use whispernow_core::llm::{
-    DraftText, LlmError, LlmFinishReason, LlmFuture, LlmPrompt, LlmResponse,
+    DraftText, LlmError, LlmFinishReason, LlmResponse,
     local::{LocalDecodeError, LocalDecodeOutput, LocalFinish},
 };
 
@@ -35,7 +35,7 @@ enum Command {
 
 struct Job {
     model_id: ModelId,
-    prompt: LlmPrompt,
+    transcript: String,
     max_output_tokens: usize,
     draft: DraftText,
     /// Closed when the caller stops waiting, as on cancellation or timeout.
@@ -171,31 +171,29 @@ impl Drop for LocalCleanupService {
 }
 
 impl LocalCleanupService {
-    pub fn complete(
+    pub async fn complete(
         &self,
         model: ModelId,
-        prompt: LlmPrompt,
+        transcript: String,
         max_output_tokens: usize,
         draft: DraftText,
-    ) -> LlmFuture<'_> {
-        Box::pin(async move {
-            let (reply, replied) = oneshot::channel();
-            self.send(Command::Decode(Job {
-                model_id: model,
-                prompt,
-                max_output_tokens,
-                draft,
-                reply,
-            }))?;
-            match replied.await {
-                Ok(Ok(output)) => Ok(response(&output)),
-                Ok(Err(EngineError::Decode(LocalDecodeError::Stopped))) => Err(LlmError::Cancelled),
-                Ok(Err(
-                    EngineError::Decode(LocalDecodeError::PromptTooLong) | EngineError::Load(_),
-                )) => Err(LlmError::InvalidRequest),
-                Ok(Err(EngineError::Decode(_))) | Err(_) => Err(LlmError::InvalidResponse),
-            }
-        })
+    ) -> Result<LlmResponse, LlmError> {
+        let (reply, replied) = oneshot::channel();
+        self.send(Command::Decode(Job {
+            model_id: model,
+            transcript,
+            max_output_tokens,
+            draft,
+            reply,
+        }))?;
+        match replied.await {
+            Ok(Ok(output)) => Ok(response(&output)),
+            Ok(Err(EngineError::Decode(LocalDecodeError::Stopped))) => Err(LlmError::Cancelled),
+            Ok(Err(
+                EngineError::Decode(LocalDecodeError::PromptTooLong) | EngineError::Load(_),
+            )) => Err(LlmError::InvalidRequest),
+            Ok(Err(EngineError::Decode(_))) | Err(_) => Err(LlmError::InvalidResponse),
+        }
     }
 }
 
@@ -225,11 +223,11 @@ fn load<'engine>(
 
 fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine, LlamaError> {
     if shared.held.load(Ordering::Acquire) {
-        return Err(LlamaError::NotInstalled);
+        return Err(LlamaError::Held);
     }
     let path = shared
         .store
-        .cleanup_model_path(model_id)
+        .cleanup_model_path(model_id)?
         .ok_or(LlamaError::NotInstalled)?;
     let threads = default_threads();
     let loaded = LocalCleanupEngine::load(
@@ -291,7 +289,7 @@ fn run(commands: &mpsc::Receiver<Command>, shared: &Shared) {
                 }
                 let result = match load(shared, &mut engine, &job.model_id) {
                     Ok(loaded) => {
-                        loaded.decode(&job.prompt, job.max_output_tokens, &job.draft, |_| {
+                        loaded.decode(&job.transcript, job.max_output_tokens, &job.draft, |_| {
                             if stopped() {
                                 ControlFlow::Break(())
                             } else {
@@ -325,7 +323,7 @@ mod tests {
     use whispernow_domain::{ModelDefinition, ModelLayout, ModelRegistry, ModelSource};
 
     use super::*;
-    use crate::{AppPaths, DownloadTimeouts};
+    use crate::{AppPaths, DownloadTimeouts, ModelStoreError};
 
     const MODEL_FILE: &str = "model.gguf";
 
@@ -373,7 +371,7 @@ mod tests {
             .expect("runtime")
             .block_on(service.complete(
                 model_id(model),
-                whispernow_core::llm::build_local_cleanup_prompt(transcript),
+                transcript.to_owned(),
                 64,
                 DraftText::from_transcript(transcript),
             ))
@@ -396,7 +394,7 @@ mod tests {
             .hold_unloaded(Duration::from_secs(5))
             .expect("an idle model is freed at once");
         let load = || load_engine(&service.shared, &model_id("small")).err();
-        assert!(matches!(load(), Some(LlamaError::NotInstalled)));
+        assert!(matches!(load(), Some(LlamaError::Held)));
         let result = complete(&service, "small");
         assert!(matches!(result, Err(LlmError::InvalidRequest)));
         drop(held);
@@ -410,5 +408,9 @@ mod tests {
         let load = |model| load_engine(&service.shared, &model_id(model)).err();
         assert!(matches!(load("small"), Some(LlamaError::Library { .. })));
         assert!(matches!(load("large"), Some(LlamaError::NotInstalled)));
+        assert!(matches!(
+            load("unknown"),
+            Some(LlamaError::Store(ModelStoreError::UnknownModel))
+        ));
     }
 }

@@ -1,3 +1,5 @@
+use whispernow_domain::ipc::PermissionKind;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiOperation {
     LoadSettings,
@@ -8,6 +10,7 @@ pub enum UiOperation {
     CompleteSetup,
     RestartSetup,
     OpenPermissionSettings,
+    RequestPermission(PermissionKind),
     LoadPermissions,
     ListDevices,
     StartSetupTest,

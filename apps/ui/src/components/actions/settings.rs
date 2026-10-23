@@ -1,6 +1,6 @@
 use serde::Serialize;
-use whispernow_domain::ipc::SetApiKeyRequest;
-use whispernow_domain::{ApiKey, LlmProvider, Settings};
+use whispernow_domain::ipc::{SetApiKeyRequest, SettingsView};
+use whispernow_domain::{ApiKey, AppError, LlmProvider, SettingChange, VocabularyReplacement};
 
 use crate::UiContext;
 use crate::client;
@@ -10,11 +10,28 @@ use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 
 impl UiContext {
-    pub(crate) fn change_setting(mut self, key: SettingKey, edit: impl FnOnce(&mut Settings)) {
-        let Some(request) = self.management.write().begin_settings_update(key, edit) else {
-            return;
-        };
-        self.save_setting("update_settings", request);
+    pub(crate) fn change_setting(mut self, change: SettingChange) {
+        let shown = change.clone();
+        let begun = self
+            .management
+            .write()
+            .begin_settings_update(SettingKey::of(&change), |settings| shown.apply(settings));
+        if begun {
+            self.save_setting("update_settings", change);
+        }
+    }
+
+    /// Saves the vocabulary rules `edit` makes of the shown ones.
+    pub(crate) fn change_vocabulary(self, edit: impl FnOnce(&mut Vec<VocabularyReplacement>)) {
+        let shown = self
+            .management
+            .read()
+            .shown_settings()
+            .map(|settings| settings.vocabulary_replacements.clone());
+        if let Some(mut rules) = shown {
+            edit(&mut rules);
+            self.change_setting(SettingChange::Vocabulary(rules));
+        }
     }
 
     pub(crate) fn set_start_on_login(mut self, enabled: bool) {
@@ -22,7 +39,7 @@ impl UiContext {
             .management
             .write()
             .begin_settings_update(SettingKey::StartOnLogin, |_| {});
-        if begun.is_some() {
+        if begun {
             self.save_setting("set_start_on_login", enabled);
         }
     }
@@ -38,10 +55,7 @@ impl UiContext {
         self.run(
             UiOperation::CredentialMutation,
             client::invoke("set_api_key", SetApiKeyRequest { provider, key }),
-            |mut actions, answer| match answer {
-                Ok(settings) => actions.management.write().install_settings(settings),
-                Err(error) => actions.report(NoticeScope::Settings, &error),
-            },
+            Self::finish_credential_change,
         );
     }
 
@@ -49,10 +63,14 @@ impl UiContext {
         self.run(
             UiOperation::CredentialMutation,
             client::invoke("clear_api_key", provider),
-            |mut actions, answer| match answer {
-                Ok(settings) => actions.management.write().install_settings(settings),
-                Err(error) => actions.report(NoticeScope::Settings, &error),
-            },
+            Self::finish_credential_change,
         );
+    }
+
+    fn finish_credential_change(mut self, answer: Result<SettingsView, AppError>) {
+        match answer {
+            Ok(settings) => self.management.write().install_settings(settings),
+            Err(error) => self.report(NoticeScope::Settings, &error),
+        }
     }
 }

@@ -171,8 +171,8 @@ pub struct ClearDataResult {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClearDataItem {
-    pub category: ClearDataCategory,
-    pub path: String,
+    #[serde(flatten)]
+    pub location: DataLocation,
     pub deleted: bool,
 }
 
@@ -277,7 +277,7 @@ pub struct ActiveDownload {
     pub model_id: ModelId,
     pub phase: DownloadPhase,
     pub downloaded_bytes: u64,
-    pub total_bytes: Option<u64>,
+    pub total_bytes: u64,
     /// Average transfer rate since the download started; `None` until it can be measured.
     pub bytes_per_second: Option<u64>,
 }
@@ -444,6 +444,8 @@ pub enum EventPayload {
     },
     /// History may have changed; listeners re-fetch what they show.
     HistoryChanged,
+    /// A download ended or a model was deleted; listeners re-fetch the model list.
+    ModelsChanged,
     NavigationRequested {
         section: MainWindowSection,
     },

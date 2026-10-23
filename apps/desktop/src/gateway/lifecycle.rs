@@ -82,14 +82,9 @@ impl Gateway {
         }
     }
 
-    /// Refuses new commands and cancels the running ones. Returns false when shutdown had
-    /// already begun.
+    /// Refuses new commands. Returns false when shutdown had already begun.
     pub(crate) fn begin_shutdown(&self) -> bool {
-        if self.shutdown_begun.swap(true, Ordering::AcqRel) {
-            return false;
-        }
-        self.shutdown.cancel();
-        true
+        !self.shutdown_begun.swap(true, Ordering::AcqRel)
     }
 
     /// Stops shortcuts, waits for the running commands, and releases services.

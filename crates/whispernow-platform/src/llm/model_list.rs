@@ -8,7 +8,7 @@ use whispernow_core::llm::LlmError;
 use whispernow_domain::{ApiKey, RemoteProvider};
 
 use super::{
-    OLLAMA_BASE_URL, OPENAI_BASE_URL, OPENROUTER_BASE_URL, base_url, http_client, required_key,
+    OPENAI_BASE_URL, OPENROUTER_BASE_URL, base_url, http_client, ollama_root, required_key,
     status_error,
 };
 
@@ -79,8 +79,7 @@ pub async fn list_models(
             ids(fetch::<IdList>(optional_bearer(request)).await?)
         }
         RemoteProvider::Ollama(endpoint) => {
-            let base = base_url(endpoint.as_ref(), OLLAMA_BASE_URL);
-            let root = base.strip_suffix("/v1").unwrap_or(base);
+            let root = ollama_root(endpoint.as_ref());
             let request = http.get(format!("{root}/api/tags"));
             fetch::<OllamaTags>(optional_bearer(request))
                 .await?

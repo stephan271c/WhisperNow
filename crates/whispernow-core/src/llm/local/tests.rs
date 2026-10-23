@@ -5,7 +5,6 @@ use super::{
     LocalFinish, Outputs, PromptBatching, Reply, State, Token, decode, ngram_draft, prompt_chunks,
     render_prompt,
 };
-use crate::llm::build_local_cleanup_prompt;
 
 const SPECIAL: [&str; 3] = ["<s>", "<|im_start|>", "<|im_end|>"];
 const END: Token = 2;
@@ -225,7 +224,7 @@ fn run(
     draft: Option<&str>,
     max_tokens: usize,
 ) -> Result<LocalDecodeOutput, LocalDecodeError> {
-    let prompt = render_prompt("<s>", &build_local_cleanup_prompt(transcript));
+    let prompt = render_prompt("<s>", transcript.trim());
     let tokens = fake.tokenize(prompt.as_bytes(), true)?;
     decode(
         fake,
@@ -462,7 +461,7 @@ fn a_full_context_cuts_the_reply_off_and_a_long_prompt_is_refused() {
 #[test]
 fn breaking_between_passes_stops_the_decode() {
     let mut fake = fake_following(" the cat sat on the mat", &[]);
-    let prompt = render_prompt("<s>", &build_local_cleanup_prompt("q"));
+    let prompt = render_prompt("<s>", "q");
     let tokens = fake.tokenize(prompt.as_bytes(), true).expect("tokenizes");
     let mut seen = Vec::new();
     let result = decode(

@@ -10,10 +10,7 @@ impl NativeServices {
         let locations = self.paths.data_locations().map_err(inspect_error)?;
         Ok(locations
             .into_iter()
-            .chain([DataLocation {
-                category: ClearDataCategory::Settings,
-                path: CREDENTIAL_STORE_CLEAR_TARGET.into(),
-            }])
+            .chain([credential_store_location()])
             .collect())
     }
 
@@ -47,10 +44,7 @@ impl NativeServices {
         if let Some(saved) = &mut settings_lock
             && entries
                 .iter()
-                .filter(|entry| {
-                    entry.category == ClearDataCategory::Settings
-                        && entry.path == self.paths.settings_file().to_string_lossy()
-                })
+                .filter(|entry| entry.location.path == self.paths.settings_file())
                 .all(|entry| entry.deleted)
         {
             **saved = whispernow_domain::Settings::default();
@@ -58,14 +52,13 @@ impl NativeServices {
         }
         let restart_required = entries.iter().any(|entry| {
             matches!(
-                entry.category,
+                entry.location.category,
                 ClearDataCategory::Settings | ClearDataCategory::Models
             ) && entry.deleted
         });
         drop(settings_lock);
         let credential_item = clears_settings.then(|| ClearDataItem {
-            category: ClearDataCategory::Settings,
-            path: CREDENTIAL_STORE_CLEAR_TARGET.to_owned(),
+            location: credential_store_location(),
             deleted: self.settings.delete_api_keys(),
         });
         let credential_warning = credential_item
@@ -97,7 +90,12 @@ impl NativeServices {
     }
 }
 
-pub(super) const CREDENTIAL_STORE_CLEAR_TARGET: &str = "OS credential store: saved LLM API keys";
+pub(super) fn credential_store_location() -> DataLocation {
+    DataLocation {
+        category: ClearDataCategory::Settings,
+        path: "OS credential store: saved LLM API keys".into(),
+    }
+}
 
 fn inspect_error(_: std::io::Error) -> AppError {
     AppError::new(

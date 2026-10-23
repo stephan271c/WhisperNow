@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use whispernow_domain::ipc::{ManualUpdatePackage, UpdateError, UpdatePhase};
 
 use super::ui::{Banner, Button, ButtonVariant, ProgressBar, Tone};
-use crate::blocked_reason::DisabledReason;
+use crate::blocked_reason::{BlockedButton, DisabledReason};
 use crate::{UiContext, UiOperation};
 
 #[component]
@@ -25,14 +25,13 @@ pub(super) fn AboutPage() -> Element {
             h2 { id: "about-title", "WhisperNow" }
             p { id: "about-version", "Version {env!(\"CARGO_PKG_VERSION\")}" }
             UpdateStatus {}
-            Button {
+            BlockedButton {
                 id: "check-for-updates",
-                disabled: checking || updates_disabled || check_blocked.is_some(),
-                aria_describedby: check_blocked.as_ref().map(|_| "check-disabled-reason"),
+                blocked: check_blocked,
+                disabled: checking || updates_disabled,
                 onclick: move |_| context.check_for_updates(),
                 if checking { "Checking…" } else { "Check for updates" }
             }
-            DisabledReason { id: "check-disabled-reason", reason: check_blocked }
             if updates_disabled {
                 p { class: "status-detail", "Updates are not available in this build." }
             }
@@ -83,10 +82,8 @@ pub(super) fn UpdateStatus() -> Element {
                             p { "The restart waits until the current dictation finishes." }
                         }
                     }
-                    Button { disabled: restart_blocked.is_some(),
-                        aria_describedby: restart_blocked.as_ref().map(|_| "restart-disabled-reason"),
+                    BlockedButton { id: "restart-to-update", blocked: restart_blocked,
                         onclick: move |_| context.restart_to_update(), "Restart to update" }
-                    DisabledReason { id: "restart-disabled-reason", reason: restart_blocked }
                 }
             }
         }
@@ -112,13 +109,14 @@ pub(super) fn UpdateStatus() -> Element {
                     }
                 }
                 div { class: "update-actions",
-                    Button { variant: ButtonVariant::Primary, disabled: restart_blocked.is_some(),
-                        aria_describedby: restart_blocked.as_ref().map(|_| "restart-disabled-reason"),
+                    Button { id: "restart-to-update", variant: ButtonVariant::Primary,
+                        disabled: restart_blocked.is_some(),
+                        aria_describedby: restart_blocked.as_ref().map(|_| "restart-to-update-disabled-reason"),
                         onclick: move |_| context.restart_to_update(), "Restart to update" }
                     Button { variant: ButtonVariant::Ghost, disabled: dismiss_blocked.is_some(),
                         onclick: move |_| context.dismiss_update(), "Dismiss" }
                 }
-                DisabledReason { id: "restart-disabled-reason", reason: restart_blocked }
+                DisabledReason { id: "restart-to-update-disabled-reason", reason: restart_blocked }
             }
         },
         UpdatePhase::ManualInstallAvailable { version, error, .. }
@@ -194,10 +192,8 @@ fn UpdateFailure(title: &'static str, message: String, retryable: bool) -> Eleme
         h3 { "{title}" }
         p { "{message}" }
         if retryable {
-            Button { disabled: check_blocked.is_some(),
-                aria_describedby: check_blocked.as_ref().map(|_| "update-retry-disabled-reason"),
+            BlockedButton { id: "update-retry", blocked: check_blocked,
                 onclick: move |_| context.check_for_updates(), "Try again" }
-            DisabledReason { id: "update-retry-disabled-reason", reason: check_blocked }
         }
     } }
 }

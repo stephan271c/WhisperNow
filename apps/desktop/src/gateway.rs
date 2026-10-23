@@ -4,10 +4,11 @@ pub(crate) mod lifecycle;
 mod permissions;
 mod settings;
 
-use std::sync::{Arc, RwLock, atomic::AtomicBool};
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicBool, Ordering},
+};
 use whispernow_domain::{AppError, ErrorCategory};
-
-use whispernow_core::CancellationToken;
 
 use crate::{
     activation::ActivationGate,
@@ -17,13 +18,13 @@ use crate::{
     tray::TrayController,
 };
 
-pub(crate) use events::{emit, forward_events};
+pub(crate) use events::forward_events;
 pub(crate) use settings::shortcut_error;
 
 pub(crate) struct Gateway {
     pub(crate) services: Arc<NativeServices>,
-    /// Cancelled when shutdown begins; running commands see it and new ones are refused.
-    shutdown: CancellationToken,
+    /// Set when shutdown begins; commands that start after it are refused.
+    shutdown_begun: Arc<AtomicBool>,
     /// Held for reading by every running command, so shutdown, which takes it for writing,
     /// releases the services only after they finished.
     commands: Arc<RwLock<()>>,
@@ -36,7 +37,6 @@ pub(crate) struct Gateway {
     native_settings: tokio::sync::Mutex<()>,
     activation: Arc<ActivationGate>,
     tray: TrayController,
-    shutdown_begun: AtomicBool,
     shutdown_complete: AtomicBool,
 }
 
@@ -50,14 +50,13 @@ impl Gateway {
     ) -> Self {
         Self {
             services,
-            shutdown: CancellationToken::default(),
+            shutdown_begun: Arc::new(AtomicBool::new(false)),
             commands: Arc::new(RwLock::new(())),
             shortcuts,
             autostart,
             native_settings: tokio::sync::Mutex::new(()),
             activation,
             tray,
-            shutdown_begun: AtomicBool::new(false),
             shutdown_complete: AtomicBool::new(false),
         }
     }
@@ -71,11 +70,11 @@ impl Gateway {
     ) -> Result<R, AppError> {
         let services = Arc::clone(&self.services);
         let commands = Arc::clone(&self.commands);
-        let shutdown = self.shutdown.clone();
+        let shutdown_begun = Arc::clone(&self.shutdown_begun);
         tracing::info!(operation, "desktop command started");
         let result = run_blocking(move || {
             let _running = commands.read().expect("command barrier lock poisoned");
-            if shutdown.is_cancelled() {
+            if shutdown_begun.load(Ordering::Acquire) {
                 return Err(shutting_down());
             }
             work(services)

@@ -7,8 +7,6 @@
 
 use x11rb::{
     connection::Connection,
-    cookie::Cookie,
-    errors::ConnectionError,
     protocol::{
         xkb::{self, ConnectionExt as _},
         xproto::{
@@ -18,13 +16,12 @@ use x11rb::{
         xtest::ConnectionExt as _,
     },
     rust_connection::RustConnection,
-    x11_utils::TryParse,
 };
 
 use super::{NativePasteError, NativePasteInjection, wait_until_modifiers_released};
 use crate::{
     PasteKeys,
-    destination::{NativeDestination, capture_on, connect_x11},
+    destination::{NativeDestination, capture_on, connect_x11, reply},
 };
 
 const XK_V_LOWER: u32 = 0x0076;
@@ -77,15 +74,6 @@ pub(super) fn xtest_available() -> Option<bool> {
     x11rb::connect(None)
         .ok()
         .map(|(connection, _)| reply(connection.xtest_get_version(2, 1)).is_ok())
-}
-
-fn reply<R: TryParse>(
-    request: Result<Cookie<'_, RustConnection, R>, ConnectionError>,
-) -> Result<R, NativePasteError> {
-    request
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .ok_or(NativePasteError::Unavailable)
 }
 
 fn read_keys(connection: &RustConnection) -> Result<Keys, NativePasteError> {

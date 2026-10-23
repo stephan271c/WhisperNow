@@ -31,13 +31,15 @@ impl NativeServices {
         native_wayland: bool,
         resource_dir: &Path,
     ) -> Result<(Self, bool), AppError> {
-        let paths = AppPaths::discover().map_err(|_| {
-            AppError::new(
-                ErrorCategory::General,
-                "app_paths",
-                "Application storage is unavailable",
-            )
-        })?;
+        let paths = AppPaths::discover()
+            .inspect_err(|error| tracing::warn!(%error, "application storage could not be found"))
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCategory::General,
+                    "app_paths",
+                    "Application storage is unavailable",
+                )
+            })?;
         let wayland_token_path = native_wayland.then(|| paths.wayland_remote_desktop_token_file());
         let output = Arc::new(OutputCoordinator::native(wayland_token_path));
         let audio: Arc<dyn AudioInput> = Arc::new(CpalAudioInput::new());
@@ -70,11 +72,11 @@ impl NativeServices {
             move |device| cleanup_state.apply(|state| state.cleanup_device = device),
         ));
         follow_cleanup_provider(&local_cleanup, &persisted);
-        let models = Arc::new(ModelCoordinator::new(
+        let models = ModelCoordinator::new(
             Arc::clone(&store),
             Arc::clone(&state),
             Arc::clone(&local_cleanup),
-        ));
+        );
         let cleanup = Arc::new(AiCleanup {
             service: Arc::new(ProviderRouter {
                 local: Arc::clone(&local_cleanup),
@@ -136,10 +138,13 @@ impl LlmService for ProviderRouter {
         match request {
             LlmRequest::Local {
                 model,
-                prompt,
+                transcript,
                 max_output_tokens,
                 draft,
-            } => self.local.complete(model, prompt, max_output_tokens, draft),
+            } => Box::pin(
+                self.local
+                    .complete(model, transcript, max_output_tokens, draft),
+            ),
             LlmRequest::Remote {
                 target,
                 api_key,

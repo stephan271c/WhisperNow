@@ -9,13 +9,42 @@ use std::{
 use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_core::audio::{
-    AudioBlock, AudioDeviceChoice, AudioEvent, AudioInput, AudioLevelSummary, AudioSink,
+    AudioBlock, AudioDeviceChoice, AudioEvent, AudioInput, AudioInputError, AudioLevelSummary,
+    AudioSink,
 };
 use whispernow_domain::ipc::MicrophoneTestResponse;
 
 use super::capture_start_error;
 
 pub(super) const TEST_DURATION: Duration = Duration::from_secs(3);
+
+#[derive(Debug)]
+pub(crate) enum MicrophoneTestError {
+    /// The dictation worker is busy or stopping.
+    Unavailable(AppError),
+    Start(AudioInputError),
+    Lost,
+}
+
+impl MicrophoneTestError {
+    pub(crate) const fn permission_denied(&self) -> bool {
+        matches!(self, Self::Start(AudioInputError::PermissionDenied))
+    }
+}
+
+impl From<MicrophoneTestError> for AppError {
+    fn from(error: MicrophoneTestError) -> Self {
+        match error {
+            MicrophoneTestError::Unavailable(error) => error,
+            MicrophoneTestError::Start(error) => capture_start_error(&error),
+            MicrophoneTestError::Lost => Self::new(
+                ErrorCategory::Audio,
+                "microphone_lost",
+                "The microphone stopped during the test. Check that it is connected and try again.",
+            ),
+        }
+    }
+}
 /// How long setup listens to make the system ask for the microphone.
 pub(super) const PERMISSION_CHECK_DURATION: Duration = Duration::from_millis(300);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -64,11 +93,11 @@ pub(super) fn run(
     device: AudioDeviceChoice,
     duration: Duration,
     cancelled: impl Fn() -> bool,
-) -> Result<MicrophoneTestResponse, AppError> {
+) -> Result<MicrophoneTestResponse, MicrophoneTestError> {
     let probe = Arc::new(LevelProbe::default());
     let capture = audio
         .start(device, probe.clone())
-        .map_err(|error| capture_start_error(&error))?;
+        .map_err(MicrophoneTestError::Start)?;
     let started = Instant::now();
     while started.elapsed() < duration && !cancelled() && !probe.with(|state| state.capture_failed)
     {
@@ -77,11 +106,7 @@ pub(super) fn run(
     let _stopped = capture.stop().is_ok();
     let state = probe.with(std::mem::take);
     if state.capture_failed {
-        return Err(AppError::new(
-            ErrorCategory::Audio,
-            "microphone_lost",
-            "The microphone stopped during the test. Check that it is connected and try again.",
-        ));
+        return Err(MicrophoneTestError::Lost);
     }
     Ok(MicrophoneTestResponse {
         levels: state.levels,
@@ -134,6 +159,6 @@ mod tests {
             || false,
         )
         .expect_err("permission denied");
-        assert_eq!(error.category, whispernow_domain::ErrorCategory::Permission);
+        assert!(error.permission_denied(), "{error:?}");
     }
 }

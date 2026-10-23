@@ -23,11 +23,10 @@ use super::ui::Tone;
 use crate::client;
 
 use crate::management::replace_task;
-use crate::{Copied, CopyTarget, NoticeScope, Route, UiContext, UiOperation};
+use crate::{NoticeScope, Route, UiContext, UiOperation};
 
 /// How long the level meter stays up after a microphone test.
 const METER_MS: u32 = 20_000;
-const COPIED_MS: u32 = 2_000;
 
 impl UiContext {
     pub(crate) fn active_download(
@@ -62,6 +61,32 @@ impl UiContext {
             self.management.write().end_busy(operation);
             finish(self, answer);
         });
+    }
+
+    /// Runs `call` like [`Self::run`] and reports a failure in `scope`.
+    fn run_reporting(
+        self,
+        operation: UiOperation,
+        call: impl Future<Output = Result<(), AppError>> + 'static,
+        scope: NoticeScope,
+    ) {
+        self.run(operation, call, move |actions, answer| {
+            if let Err(error) = answer {
+                actions.report(scope, &error);
+            }
+        });
+    }
+
+    /// Runs `call` like [`Self::run`] unless `operation` is still waiting for its answer.
+    fn run_unless_busy<R: 'static>(
+        self,
+        operation: UiOperation,
+        call: impl Future<Output = Result<R, AppError>> + 'static,
+        finish: impl FnOnce(Self, Result<R, AppError>) + 'static,
+    ) {
+        if !self.management.peek().is_busy(operation) {
+            self.run(operation, call, finish);
+        }
     }
 
     fn report(mut self, scope: NoticeScope, error: &AppError) {
@@ -104,20 +129,10 @@ impl UiContext {
     pub(crate) fn apply_event(mut self, event: EventPayload) {
         match &event {
             EventPayload::StateChanged { state } => {
-                let download_ended = self.state.peek().snapshot.as_ref().is_some_and(|old| {
-                    old.active_downloads.iter().any(|download| {
-                        !state
-                            .active_downloads
-                            .iter()
-                            .any(|active| active.model_id == download.model_id)
-                    })
-                });
                 self.management.write().observe_setup_test(state);
-                if download_ended {
-                    self.reload_models();
-                }
             }
             EventPayload::HistoryChanged => self.refresh_history(),
+            EventPayload::ModelsChanged => self.reload_models(),
             EventPayload::NavigationRequested { section } => {
                 self.navigator.go(Route::from_section(*section));
             }
@@ -126,26 +141,7 @@ impl UiContext {
         self.state.write().apply_event(event);
     }
 
-    /// Copies `text` and shows the outcome on the Copy button for `target` for a moment; a
-    /// newer copy replaces it.
-    pub(crate) fn copy_text(mut self, text: String, target: CopyTarget) {
-        let copy_task = spawn_forever(async move {
-            let succeeded = client::invoke::<_, ()>("copy_text", text).await.is_ok();
-            self.management.write().copied = Some(Copied { target, succeeded });
-            client::delay(COPIED_MS).await;
-            let mut management = self.management;
-            let mut management = management.write();
-            management.copied = None;
-            management.copy_task = None;
-        });
-        let mut management = self.management;
-        let mut management = management.write();
-        management.copied = None;
-        replace_task(&mut management.copy_task, Some(copy_task));
-    }
-
     pub(crate) fn test_microphone(self) {
-        let operation = UiOperation::TestMicrophone;
         {
             let mut management = self.management;
             let mut management = management.write();
@@ -154,7 +150,7 @@ impl UiContext {
             management.clear_notice_scope(NoticeScope::Home);
         }
         self.run(
-            operation,
+            UiOperation::TestMicrophone,
             client::call("test_microphone"),
             move |mut actions, answer| match answer {
                 Ok(result) => {
@@ -183,10 +179,9 @@ impl UiContext {
     }
 
     pub(crate) fn review_data(mut self) {
-        let operation = UiOperation::ListDataLocations;
         self.management.write().clear_result = None;
         self.run(
-            operation,
+            UiOperation::ListDataLocations,
             client::call("data_locations"),
             move |mut actions, answer| match answer {
                 Ok(locations) => actions.management.write().data_locations = Some(locations),
@@ -197,9 +192,8 @@ impl UiContext {
 
     /// Removes every kind of application data, then reads everything again.
     pub(crate) fn clear_data(self) {
-        let operation = UiOperation::ClearData;
         self.run(
-            operation,
+            UiOperation::ClearData,
             client::call("clear_data"),
             move |mut actions, answer| {
                 match answer {

@@ -31,7 +31,7 @@ const ANTHROPIC_FALLBACK_MAX_TOKENS: u64 = 64_000;
 
 const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
-const OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
+const OLLAMA_ROOT: &str = "http://localhost:11434";
 
 pub async fn complete(
     target: RemoteCleanupTarget,
@@ -76,16 +76,10 @@ pub async fn complete(
             required_key(key)?,
             base_url(endpoint.as_ref(), OPENROUTER_BASE_URL).to_owned(),
         ),
-        RemoteProvider::Ollama(endpoint) => {
-            // Ollama serves the OpenAI protocol under `/v1`; a bare host means its default path.
-            let base = match endpoint {
-                Some(endpoint) if endpoint.url().path() == "/" => {
-                    format!("{}/v1", endpoint.base())
-                }
-                _ => base_url(endpoint.as_ref(), OLLAMA_BASE_URL).to_owned(),
-            };
-            (required_key(key).unwrap_or_default(), base)
-        }
+        RemoteProvider::Ollama(endpoint) => (
+            required_key(key).unwrap_or_default(),
+            format!("{}/v1", ollama_root(endpoint.as_ref())),
+        ),
         RemoteProvider::Custom(endpoint) => (
             required_key(key).unwrap_or_default(),
             endpoint.base().to_owned(),
@@ -120,6 +114,13 @@ fn base_url<'a>(endpoint: Option<&'a ProviderEndpoint>, default: &'a str) -> &'a
     endpoint.map_or(default, ProviderEndpoint::base)
 }
 
+/// The Ollama server's root. It serves the `OpenAI` protocol under `/v1` and its own API under
+/// `/api`, so an endpoint given with or without `/v1` names the same server.
+fn ollama_root(endpoint: Option<&ProviderEndpoint>) -> &str {
+    let base = base_url(endpoint, OLLAMA_ROOT);
+    base.strip_suffix("/v1").unwrap_or(base)
+}
+
 fn required_key(key: Option<&ApiKey>) -> Result<String, LlmError> {
     key.map(|key| key.expose_secret().to_owned())
         .ok_or(LlmError::Authentication)
@@ -152,12 +153,11 @@ where
     R: FnOnce(Option<&M::StreamingResponse>) -> LlmFinishReason,
 {
     // API providers get no output limit or temperature of ours, so reasoning models keep
-    // their full budget. An empty system prompt sends no system message at all.
-    let mut builder = model.completion_request(prompt.user());
-    if !prompt.system().is_empty() {
-        builder = builder.preamble(prompt.system().to_owned());
-    }
-    let provider_request = builder.build();
+    // their full budget.
+    let provider_request = model
+        .completion_request(prompt.user())
+        .preamble(prompt.system().to_owned())
+        .build();
     let mut stream = model
         .stream(provider_request)
         .await
@@ -219,8 +219,9 @@ fn names_missing_model(error: &CompletionError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ANTHROPIC_FALLBACK_MAX_TOKENS, GeminiFinishReason, OPENROUTER_BASE_URL, base_url, complete,
-        gemini_finish_reason, map_error, required_key, status_error, test_server::serve_once,
+        ANTHROPIC_FALLBACK_MAX_TOKENS, GeminiFinishReason, OLLAMA_ROOT, OPENROUTER_BASE_URL,
+        base_url, complete, gemini_finish_reason, map_error, ollama_root, required_key,
+        status_error, test_server::serve_once,
     };
     use std::{net::TcpListener, time::Duration};
 
@@ -299,6 +300,26 @@ mod tests {
             base_url(Some(&endpoint), OPENROUTER_BASE_URL),
             "http://127.0.0.1:11434/v1"
         );
+    }
+
+    #[test]
+    fn an_ollama_endpoint_names_its_server_root_with_or_without_v1() {
+        assert_eq!(ollama_root(None), OLLAMA_ROOT);
+        for (endpoint, root) in [
+            ("http://127.0.0.1:11434", "http://127.0.0.1:11434"),
+            ("http://127.0.0.1:11434/v1/", "http://127.0.0.1:11434"),
+            (
+                "https://proxy.example/ollama",
+                "https://proxy.example/ollama",
+            ),
+            (
+                "https://proxy.example/ollama/v1",
+                "https://proxy.example/ollama",
+            ),
+        ] {
+            let endpoint = ProviderEndpoint::parse(endpoint).expect("endpoint");
+            assert_eq!(ollama_root(Some(&endpoint)), root);
+        }
     }
 
     #[test]

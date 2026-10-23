@@ -30,7 +30,7 @@ use home::HomePage;
 use models::ModelsPage;
 pub use overlay::RecordingBar;
 use setup::SetupScreen;
-use shared::{CopyButton, PasteHelperNotice, ShortcutCapture};
+use shared::{CopyButton, PasteHelperNotice, ShortcutCapture, ShortcutSummary};
 use titlebar::{TitleBar, use_window_chrome};
 use ui::focus::{focus, take_focus};
 use ui::{Banner, BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName, Tone};
@@ -217,8 +217,7 @@ fn Sidebar(route: Route) -> Element {
     rsx! {
         nav { aria_label: "Main",
             onkeydown: move |event: KeyboardEvent| {
-                let key = event.key().to_string();
-                let Some(target) = nav_keyboard_target(&key, focused(), count) else {
+                let Some(target) = nav_keyboard_target(&event.key(), focused(), count) else {
                     return;
                 };
                 event.prevent_default();

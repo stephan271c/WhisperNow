@@ -10,8 +10,8 @@ use whispernow_domain::ipc::{
     SaveSettingsResponse, SettingsView,
 };
 use whispernow_domain::{
-    CleanupTarget, EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, Settings,
-    SetupCheckpoint, SetupStep,
+    CleanupTarget, EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, SettingChange,
+    Settings, SetupCheckpoint, SetupProgress, SetupStep,
 };
 use whispernow_platform::{
     AppPaths, LocalCleanupService, open_in_file_manager, open_privacy_settings,
@@ -21,6 +21,7 @@ pub(crate) use dictation::Dictation;
 #[cfg(test)]
 pub(crate) use dictation::tests::Fixture;
 use history::HistoryStore;
+use microphone_test::MicrophoneTestError;
 use models::ModelCoordinator;
 use output::OutputCoordinator;
 use permissions::{MicrophoneAccess, SessionFacts, permission_states};
@@ -47,7 +48,7 @@ pub(crate) struct NativeServices {
     pub(crate) settings: Arc<SettingsCoordinator>,
     pub(crate) history: Arc<HistoryStore>,
     audio: Arc<dyn AudioInput>,
-    pub(crate) models: Arc<ModelCoordinator>,
+    pub(crate) models: ModelCoordinator,
     pub(crate) state: Arc<StateCell>,
     pub(crate) dictation: Dictation,
     paths: AppPaths,
@@ -96,31 +97,29 @@ impl NativeServices {
         }
     }
 
-    /// Persists the edited settings and applies the resulting history limit. The
-    /// caller applies native side effects after this returns, from the settings
-    /// before the edit that come back with the response. A pruning failure after
-    /// the save is a warning next to the saved settings.
+    /// Saves one change and runs its side effect on the stored data; the gateway runs the
+    /// native ones. A pruning failure after the save is a warning next to the saved settings.
     pub(crate) fn update_settings(
         &self,
-        edited: Settings,
-    ) -> Result<(Settings, SaveSettingsResponse), AppError> {
-        let (before, settings) = self.settings.update(edited, self.audio.as_ref())?;
-        follow_cleanup_provider(&self.local_cleanup, &settings.settings);
-        let limit = settings.settings.history_limit;
-        let retention = settings.settings.history_retention;
-        let pruning = self.run_history_mutation(|| {
-            if limit == before.history_limit && retention == before.history_retention {
-                Ok(false)
-            } else {
-                self.history.prune(limit, retention)
+        change: &SettingChange,
+    ) -> Result<SaveSettingsResponse, AppError> {
+        let settings = self.settings.update(change, self.audio.as_ref())?;
+        if moves_cleanup(change) {
+            follow_cleanup_provider(&self.local_cleanup, &settings.settings);
+        }
+        let mut warnings = Vec::new();
+        if matches!(
+            change,
+            SettingChange::HistoryLimit(_) | SettingChange::HistoryRetention(_)
+        ) {
+            let limit = settings.settings.history_limit;
+            let retention = settings.settings.history_retention;
+            if let Err(warning) = self.run_history_mutation(|| self.history.prune(limit, retention))
+            {
+                warnings.push(warning.summary);
             }
-        });
-        let warnings = pruning
-            .err()
-            .map(|warning| warning.summary)
-            .into_iter()
-            .collect();
-        Ok((before, SaveSettingsResponse { settings, warnings }))
+        }
+        Ok(SaveSettingsResponse { settings, warnings })
     }
 
     pub(crate) fn copy_last_transcript(&self) -> Result<(), AppError> {
@@ -137,14 +136,14 @@ impl NativeServices {
     pub(crate) fn list_audio_devices(&self) -> Result<Vec<AudioDevice>, AppError> {
         self.audio
             .list_input_devices()
-            .map_err(|_| audio_devices_unavailable())
+            .map_err(|error| audio_devices_unavailable(&error))
     }
 
     /// Listens to the selected microphone for a few seconds and reports its levels. No audio
     /// is kept.
     pub(crate) fn test_microphone(&self) -> Result<MicrophoneTestResponse, AppError> {
         let device = self.settings.input_device()?;
-        self.listen(device, microphone_test::TEST_DURATION)
+        Ok(self.listen(device, microphone_test::TEST_DURATION)?)
     }
 
     /// Captures on the dictation worker and records the permission answer the capture showed.
@@ -152,7 +151,7 @@ impl NativeServices {
         &self,
         device: AudioDeviceChoice,
         duration: Duration,
-    ) -> Result<MicrophoneTestResponse, AppError> {
+    ) -> Result<MicrophoneTestResponse, MicrophoneTestError> {
         let result = self.dictation.test_microphone(device, duration);
         self.microphone_access.observe(&result);
         result
@@ -178,10 +177,6 @@ impl NativeServices {
         }
     }
 
-    pub(crate) fn open_permission_settings(kind: PermissionKind) -> Result<(), AppError> {
-        open_privacy_settings(kind).map_err(|_| no_permission_settings())
-    }
-
     /// Listens to the default microphone briefly, which is how each platform
     /// asks for it. A refusal is an answer, shown on the permission card; any
     /// other failure is returned.
@@ -190,7 +185,7 @@ impl NativeServices {
             AudioDeviceChoice::SystemDefault,
             microphone_test::PERMISSION_CHECK_DURATION,
         ) {
-            Err(error) if error.category != ErrorCategory::Permission => Err(error),
+            Err(error) if !error.permission_denied() => Err(error.into()),
             Ok(_) | Err(_) => Ok(()),
         }
     }
@@ -209,13 +204,11 @@ impl NativeServices {
         &self,
         checkpoint: SetupCheckpoint,
     ) -> Result<SettingsView, AppError> {
-        let model_supported = self
-            .models
+        self.models
             .model_store()
             .definition(&checkpoint.model_id)
-            .is_ok();
-        self.settings
-            .save_setup_checkpoint(checkpoint, model_supported)
+            .map_err(|_| unknown_model())?;
+        self.settings.save_setup_checkpoint(checkpoint)
     }
 
     /// Saves setup's choices and loads the chosen model. A model that cannot load leaves the
@@ -234,18 +227,21 @@ impl NativeServices {
         let before = self.settings.load();
         {
             let state = self.state.lock();
-            if before.first_run_complete {
+            if before.setup.is_complete() {
                 return Err(setup_already_complete());
             }
             state.phase.require_idle()?;
         }
         let device = device_choice(checkpoint.input_device.as_deref())?;
         require_connected_device(self.audio.as_ref(), &device)?;
-        let mut edited = before.clone();
+        let mut edited = before;
         apply_checkpoint(&mut edited, checkpoint);
-        edited
-            .validate_update(&before)
-            .map_err(|error| settings_error(&error))?;
+        SettingChange::RecordingShortcut {
+            shortcut: checkpoint.recording_shortcut.clone(),
+            mode: checkpoint.recording_mode,
+        }
+        .check(&edited)
+        .map_err(|error| settings_error(&error))?;
         self.select_model(checkpoint.model_id.clone())?;
         self.settings.edit(|settings| {
             apply_checkpoint(settings, checkpoint);
@@ -273,13 +269,17 @@ impl NativeServices {
     /// The path never crosses the webview boundary.
     pub(crate) fn open_recordings_folder(&self) -> Result<(), AppError> {
         let directory = self.history.recordings_dir()?;
-        open_in_file_manager(&directory).map_err(|_| {
-            AppError::new(
-                ErrorCategory::General,
-                "recordings_folder_open_failed",
-                "The recordings folder could not be opened",
+        open_in_file_manager(&directory)
+            .inspect_err(
+                |error| tracing::warn!(%error, "the recordings folder could not be opened"),
             )
-        })
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCategory::General,
+                    "recordings_folder_open_failed",
+                    "The recordings folder could not be opened",
+                )
+            })
     }
 
     pub(crate) fn delete_history_entry(&self, request: EntryId) -> Result<(), AppError> {
@@ -311,6 +311,12 @@ impl NativeServices {
 /// bug; it is not reported to the user as a recoverable error.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().expect("service state lock poisoned")
+}
+
+pub(crate) fn open_permission_settings(kind: PermissionKind) -> Result<(), AppError> {
+    open_privacy_settings(kind)
+        .inspect_err(|error| tracing::warn!(%error, ?kind, "privacy settings could not be opened"))
+        .map_err(|_| no_permission_settings())
 }
 
 fn permission_not_requestable() -> AppError {
@@ -346,7 +352,8 @@ pub(crate) fn provider_models_unavailable() -> AppError {
     )
 }
 
-fn audio_devices_unavailable() -> AppError {
+fn audio_devices_unavailable(error: &AudioInputError) -> AppError {
+    tracing::warn!(%error, "audio input devices could not be listed");
     AppError::new(
         ErrorCategory::Audio,
         "audio_devices",
@@ -397,12 +404,22 @@ fn follow_cleanup_provider(local_cleanup: &LocalCleanupService, settings: &Setti
     }
 }
 
+/// Whether saving `change` can load, free or move the local cleanup model.
+const fn moves_cleanup(change: &SettingChange) -> bool {
+    matches!(
+        change,
+        SettingChange::ActiveProvider(_)
+            | SettingChange::CleanupEnabled(_)
+            | SettingChange::CleanupUsesGpu(_)
+            | SettingChange::CleanupModel(_)
+    )
+}
+
 fn apply_checkpoint(settings: &mut Settings, checkpoint: &SetupCheckpoint) {
     settings.input_device.clone_from(&checkpoint.input_device);
     settings
         .recording_shortcut
         .clone_from(&checkpoint.recording_shortcut);
     settings.recording_mode = checkpoint.recording_mode;
-    settings.first_run_complete = true;
-    settings.setup = None;
+    settings.setup = SetupProgress::Complete;
 }

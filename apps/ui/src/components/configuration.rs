@@ -1,12 +1,12 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{AudioDevice, PermissionKind, PermissionStatus};
 use whispernow_domain::{
-    CleanupTarget, HistoryLimit, HistoryRetention, RecordingMode, RemoteProvider, Settings,
-    Shortcut, ThemePreference,
+    CleanupTarget, HistoryLimit, HistoryRetention, RecordingMode, RemoteProvider, SettingChange,
+    Settings, Shortcut, ThemePreference,
 };
 
 use super::microphone_test::MicrophoneTest;
-use super::ui::{Button, Section, Segmented, Select, SettingRow, Toggle};
+use super::ui::{Button, Section, Segmented, SegmentedOption, Select, SettingRow, Toggle};
 use super::{PasteHelperNotice, ShortcutCapture};
 use crate::blocked_reason::DisabledReason;
 use crate::{Route, SettingKey, UiContext, UiOperation};
@@ -17,19 +17,27 @@ const THEMES: [(ThemePreference, &str); 3] = [
     (ThemePreference::Dark, "Dark"),
 ];
 
-pub(super) const RECORDING_MODES: [(RecordingMode, &str, &str); 2] = [
-    (RecordingMode::Hold, "hold", "Hold"),
-    (RecordingMode::Toggle, "toggle", "Toggle"),
+pub(super) const RECORDING_MODES: [SegmentedOption<RecordingMode>; 2] = [
+    SegmentedOption {
+        value: RecordingMode::Hold,
+        suffix: "hold",
+        label: "Hold",
+    },
+    SegmentedOption {
+        value: RecordingMode::Toggle,
+        suffix: "toggle",
+        label: "Toggle",
+    },
 ];
 
-/// Input device choices for a select: the system default (`""`), then each device. Give the select
+/// Input device choices for a select: the system default, then each device. Give the select
 /// the saved device as its placeholder, so one that is no longer connected still shows.
-pub(super) fn device_options(devices: &[AudioDevice]) -> Vec<(String, String)> {
-    std::iter::once((String::new(), "System default".to_owned()))
+pub(super) fn device_options(devices: &[AudioDevice]) -> Vec<(Option<String>, String)> {
+    std::iter::once((None, "System default".to_owned()))
         .chain(
             devices
                 .iter()
-                .map(|device| (device.id.clone(), device.display_name.clone())),
+                .map(|device| (Some(device.id.clone()), device.display_name.clone())),
         )
         .collect()
 }
@@ -81,6 +89,7 @@ fn MicrophonePermissionNotice(status: Option<PermissionStatus>) -> Element {
 #[component]
 pub(super) fn GeneralPage() -> Element {
     let context = use_context::<UiContext>();
+    use_effect(move || context.load_permissions());
     let settings_blocked = context.settings_blocked();
     let disabled = settings_blocked.is_some();
     let management = context.management;
@@ -96,7 +105,8 @@ pub(super) fn GeneralPage() -> Element {
     let restart_blocked = context
         .blocked(UiOperation::RestartSetup)
         .or(context.settings_blocked());
-    use_effect(move || context.load_permissions());
+    let recording_shortcut = settings.recording_shortcut.clone();
+    let recording_mode = settings.recording_mode;
     let paste_helper_setup = management
         .read()
         .permissions
@@ -117,13 +127,13 @@ pub(super) fn GeneralPage() -> Element {
                         value: settings.recording_mode,
                         options: RECORDING_MODES.to_vec(),
                         onchange: move |mode: RecordingMode| {
-                            context.change_setting(SettingKey::RecordingShortcut, move |settings| settings.recording_mode = mode);
+                            context.change_setting(SettingChange::RecordingShortcut { shortcut: recording_shortcut.clone(), mode });
                         },
                     }
                     ShortcutCapture { id: "recording-shortcut", label: "recording shortcut",
                         disabled,
                         shortcut: settings.recording_shortcut.clone(),
-                        oncapture: move |shortcut: Shortcut| { context.change_setting(SettingKey::RecordingShortcut, move |settings| settings.recording_shortcut = shortcut.clone()); } }
+                        oncapture: move |shortcut: Shortcut| context.change_setting(SettingChange::RecordingShortcut { shortcut, mode: recording_mode }) }
                 }
             }
             AutosaveRow { id: "cancel-dictation", title: "Cancel dictation",
@@ -132,9 +142,7 @@ pub(super) fn GeneralPage() -> Element {
                     Toggle { checked: settings.cancel_shortcut.is_some(),
                         disabled,
                         onchange: move |enabled: bool| {
-                            context.change_setting(SettingKey::CancelShortcut, move |settings| {
-                                settings.cancel_shortcut = enabled.then(Shortcut::default_cancel);
-                            });
+                            context.change_setting(SettingChange::CancelShortcut(enabled.then(Shortcut::default_cancel)));
                         }
                     }
                     if let Some(cancel) = settings.cancel_shortcut.clone() {
@@ -142,7 +150,7 @@ pub(super) fn GeneralPage() -> Element {
                             disabled,
                             shortcut: cancel,
                             lone_keys: true,
-                            oncapture: move |shortcut: Shortcut| { context.change_setting(SettingKey::CancelShortcut, move |settings| settings.cancel_shortcut = Some(shortcut.clone())); } }
+                            oncapture: move |shortcut: Shortcut| context.change_setting(SettingChange::CancelShortcut(Some(shortcut))) }
                     }
                 }
             }
@@ -153,7 +161,7 @@ pub(super) fn GeneralPage() -> Element {
                     options: THEMES.map(|(theme, label)| (theme, label.to_owned())).to_vec(),
                     disabled,
                     onchange: move |theme: ThemePreference| {
-                        context.change_setting(SettingKey::Theme, move |settings| settings.theme = theme);
+                        context.change_setting(SettingChange::Theme(theme));
                     },
                 }
             }
@@ -163,7 +171,7 @@ pub(super) fn GeneralPage() -> Element {
                 setting: SettingKey::StartMinimized,
                 Toggle { checked: settings.start_minimized,
                     disabled,
-                    onchange: move |value| { context.change_setting(SettingKey::StartMinimized, move |settings| settings.start_minimized = value); } }
+                    onchange: move |value| context.change_setting(SettingChange::StartMinimized(value)) }
             }
             AutosaveRow { id: "start-on-login", title: "Start on login",
                 setting: SettingKey::StartOnLogin,
@@ -177,7 +185,7 @@ pub(super) fn GeneralPage() -> Element {
                 PasteHelperNotice { setup }
             }
         }
-        if management.read().first_run_complete() {
+        if management.read().setup_complete() {
             Section { id: "setup", title: "Setup",
                 SettingRow { id: "run-setup-again", title: "Run setup again",
                     Button {
@@ -207,7 +215,6 @@ pub(super) fn AudioPage() -> Element {
         return rsx! { SettingsLoading {} };
     };
     let devices = management.read().devices.clone();
-    let saved_device = settings.input_device.clone().unwrap_or_default();
     let permission = management
         .read()
         .permission_status(PermissionKind::Microphone);
@@ -219,14 +226,11 @@ pub(super) fn AudioPage() -> Element {
             }
             AutosaveRow { id: "input-device", title: "Input device",
                 setting: SettingKey::InputDevice,
-                Select { value: saved_device.clone(),
-                    placeholder: saved_device,
+                Select { value: settings.input_device.clone(),
+                    placeholder: settings.input_device.clone(),
                     options: device_options(&devices),
                     disabled,
-                    onchange: move |value: String| {
-                        let device = (!value.is_empty()).then_some(value);
-                        context.change_setting(SettingKey::InputDevice, move |settings| settings.input_device.clone_from(&device));
-                    },
+                    onchange: move |device| context.change_setting(SettingChange::InputDevice(device)),
                 }
             }
             SettingRow { id: "audio-test-microphone", title: "Test microphone",
@@ -260,7 +264,7 @@ pub(super) fn PrivacyPage() -> Element {
                     options: HistoryLimit::ALL.map(|limit| (limit, limit.label().to_owned())).to_vec(),
                     disabled,
                     onchange: move |limit: HistoryLimit| {
-                        context.change_setting(SettingKey::HistoryLimit, move |settings| settings.history_limit = limit);
+                        context.change_setting(SettingChange::HistoryLimit(limit));
                     },
                 }
             }
@@ -271,7 +275,7 @@ pub(super) fn PrivacyPage() -> Element {
                     options: HistoryRetention::ALL.map(|retention| (retention, retention.label().to_owned())).to_vec(),
                     disabled,
                     onchange: move |retention: HistoryRetention| {
-                        context.change_setting(SettingKey::HistoryRetention, move |settings| settings.history_retention = retention);
+                        context.change_setting(SettingChange::HistoryRetention(retention));
                     },
                 }
             }
@@ -280,7 +284,7 @@ pub(super) fn PrivacyPage() -> Element {
                 setting: SettingKey::KeepAudio,
                 Toggle { checked: settings.keep_audio,
                     disabled,
-                    onchange: move |value| { context.change_setting(SettingKey::KeepAudio, move |settings| settings.keep_audio = value); } }
+                    onchange: move |value| context.change_setting(SettingChange::KeepAudio(value)) }
             }
         }
     } }

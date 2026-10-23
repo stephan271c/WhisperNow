@@ -97,14 +97,11 @@ impl Settings {
     pub fn cleanup_target(&self) -> Result<CleanupTarget, MissingCleanupField> {
         if self.llm_provider == LlmProvider::LocalCleanup {
             return Ok(CleanupTarget::Local {
-                model: self.cleanup_model_id(),
+                model: self.cleanup_model.clone(),
             });
         }
         let settings = self.provider_settings(self.llm_provider);
-        let model = &settings.model;
-        if model.is_empty() {
-            return Err(MissingCleanupField::Model);
-        }
+        let model = settings.model.as_ref().ok_or(MissingCleanupField::Model)?;
         let provider = RemoteProvider::new(self.llm_provider, settings.api_base.clone())
             .ok_or(MissingCleanupField::Endpoint)?;
         Ok(CleanupTarget::Remote(RemoteCleanupTarget {

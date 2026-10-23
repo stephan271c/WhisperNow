@@ -26,7 +26,7 @@ use std::{
 
 use thiserror::Error;
 
-use super::{LlmPrompt, align::WordAligner};
+use super::align::WordAligner;
 
 pub type Token = i32;
 
@@ -53,11 +53,8 @@ const CHECKPOINT_OFFSET: usize = 4;
 /// Renders the local cleanup prompt as `training/serving/chat_template.jinja` does with a
 /// generation prompt. `bos` is the model's BOS token as text.
 #[must_use]
-pub fn render_prompt(bos: &str, prompt: &LlmPrompt) -> String {
-    format!(
-        "{bos}{TURN_START}user\n{}<|im_end|>\n{TURN_START}assistant\n",
-        prompt.user()
-    )
+pub fn render_prompt(bos: &str, transcript: &str) -> String {
+    format!("{bos}{TURN_START}user\n{transcript}<|im_end|>\n{TURN_START}assistant\n")
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]

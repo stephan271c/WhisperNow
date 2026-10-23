@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 
-use super::ui::{Banner, Button, ConfirmButton, Section, Tone};
+use super::ui::{Banner, ConfirmButton, Section, Tone};
 use super::{NoticeRegion, labels};
-use crate::blocked_reason::DisabledReason;
+use crate::blocked_reason::{BlockedButton, DisabledReason};
 use crate::{NoticeScope, UiContext, UiOperation};
 
 #[component]
@@ -18,14 +18,12 @@ pub(super) fn ClearDataCard() -> Element {
         Section { id: "clear-data", title: "Application data",
             description: "Settings, history, downloaded models and logs.",
             div { class: "section-body",
-                Button {
+                BlockedButton {
                     id: "preview-clear-data",
-                    disabled: review_blocked.is_some(),
-                    aria_describedby: review_blocked.as_ref().map(|_| "preview-disabled-reason"),
+                    blocked: review_blocked,
                     onclick: move |_| context.review_data(),
                     "Review data to remove"
                 }
-                DisabledReason { id: "preview-disabled-reason", reason: review_blocked }
                 NoticeRegion { scope: NoticeScope::Data }
                 if let Some(locations) = locations {
                     div { class: "danger-zone",
@@ -58,9 +56,9 @@ pub(super) fn ClearDataCard() -> Element {
                     ul { class: "clear-data-list",
                         for item in result.items.iter() {
                             li {
-                                "{labels::clear_category(item.category)}: "
+                                "{labels::clear_category(item.location.category)}: "
                                 if item.deleted { "Removed" } else { "Could not be removed" }
-                                " — {item.path}"
+                                " — {item.location.path.display()}"
                             }
                         }
                     }

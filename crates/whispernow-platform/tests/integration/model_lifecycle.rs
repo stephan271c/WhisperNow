@@ -258,7 +258,7 @@ fn an_installed_gguf_model_has_a_cleanup_model_path_and_nothing_else_does() {
     let gguf = b"GGUF fixture weights".repeat(64);
     let server = serve(Response::ok(gguf.clone()));
     let (_root, _, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
-    assert_eq!(store.cleanup_model_path(&id), None);
+    assert_eq!(store.cleanup_model_path(&id), Ok(None));
 
     let resolved = store
         .download(&id, &CancellationToken::default(), &|_| {})
@@ -266,10 +266,13 @@ fn an_installed_gguf_model_has_a_cleanup_model_path_and_nothing_else_does() {
 
     assert_eq!(
         store.cleanup_model_path(&id),
-        Some(resolved.root.join("model-Q8_0.gguf"))
+        Ok(Some(resolved.root.join("model-Q8_0.gguf")))
     );
     let unknown = ModelId::new(OTHER_MODEL_ID).expect("fixture ID");
-    assert_eq!(store.cleanup_model_path(&unknown), None);
+    assert_eq!(
+        store.cleanup_model_path(&unknown),
+        Err(ModelStoreError::UnknownModel)
+    );
 }
 
 #[test]
@@ -282,7 +285,7 @@ fn an_installed_speech_model_has_no_cleanup_model_path() {
         .expect("fixture download");
 
     assert!(store.resolve(&id).expect("resolve").is_some());
-    assert_eq!(store.cleanup_model_path(&id), None);
+    assert_eq!(store.cleanup_model_path(&id), Ok(None));
 }
 
 #[test]
