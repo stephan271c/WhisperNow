@@ -1,27 +1,10 @@
 use std::sync::Arc;
 
 use thiserror::Error;
+use whispernow_domain::AudioDeviceId;
 use whispernow_domain::ipc::AudioDevice;
 
 use super::{AudioBlock, AudioLevelSummary};
-
-/// Opaque native input-device identity. Callers must not parse this value.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct AudioDeviceId(String);
-
-impl AudioDeviceId {
-    /// `None` for a blank identifier.
-    #[must_use]
-    pub fn new(value: impl Into<String>) -> Option<Self> {
-        let value = value.into();
-        (!value.trim().is_empty()).then_some(Self(value))
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum AudioDeviceChoice {
@@ -29,6 +12,12 @@ pub enum AudioDeviceChoice {
     /// observable transition, never a silent stream replacement.
     SystemDefault,
     Device(AudioDeviceId),
+}
+
+impl From<Option<AudioDeviceId>> for AudioDeviceChoice {
+    fn from(device: Option<AudioDeviceId>) -> Self {
+        device.map_or(Self::SystemDefault, Self::Device)
+    }
 }
 
 /// No event contains captured audio.

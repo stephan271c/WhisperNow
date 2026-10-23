@@ -538,7 +538,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
         }
         Field { id: "setup-microphone", label: "Microphone",
             Select { value: checkpoint.input_device.clone(),
-                placeholder: checkpoint.input_device.clone(),
+                placeholder: checkpoint.input_device.as_ref().map(|id| id.as_str().to_owned()),
                 options: device_options(&devices),
                 disabled: running || settings_pending,
                 onchange: move |device| context.save_setup_edit(|setup| setup.input_device = device),

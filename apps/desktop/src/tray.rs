@@ -108,22 +108,20 @@ impl TrayState {
 
 pub(crate) fn tray_state(snapshot: &AppState) -> TrayState {
     let failed = snapshot.error.is_some() || snapshot.model_state == ModelState::Failed;
+    let loading = matches!(
+        snapshot.model_state,
+        ModelState::Downloading | ModelState::Loading
+    );
     match snapshot.phase {
-        Phase::Paused if !failed => TrayState::Paused,
         Phase::Recording { .. } if failed => TrayState::RecordingError,
         _ if failed => TrayState::Error,
+        Phase::Paused => TrayState::Paused,
         Phase::Updating => TrayState::Updating,
         Phase::ClearingData => TrayState::ClearingData,
         Phase::Recording { .. } => TrayState::Recording,
         Phase::Processing { .. } => TrayState::Processing,
-        _ if matches!(
-            snapshot.model_state,
-            ModelState::Downloading | ModelState::Loading
-        ) =>
-        {
-            TrayState::Loading
-        }
-        _ => TrayState::Idle,
+        Phase::Idle | Phase::Error if loading => TrayState::Loading,
+        Phase::Idle | Phase::Error => TrayState::Idle,
     }
 }
 
@@ -431,6 +429,14 @@ mod tests {
     #[test]
     fn tray_state_and_actions_follow_the_phase() {
         for (phase, background_error, expected) in [
+            (Phase::Idle, false, TrayState::Idle),
+            (recording(), false, TrayState::Recording),
+            (
+                Phase::Processing { cleaning_up: true },
+                false,
+                TrayState::Processing,
+            ),
+            (Phase::Paused, false, TrayState::Paused),
             (Phase::Updating, false, TrayState::Updating),
             (Phase::ClearingData, false, TrayState::ClearingData),
             (Phase::Idle, true, TrayState::Error),

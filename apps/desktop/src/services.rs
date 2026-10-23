@@ -25,7 +25,7 @@ use microphone_test::MicrophoneTestError;
 use models::ModelCoordinator;
 use output::OutputCoordinator;
 use permissions::{MicrophoneAccess, SessionFacts, permission_states};
-use settings::{SettingsCoordinator, device_choice, require_connected_device, settings_error};
+use settings::{SettingsCoordinator, require_connected_device, settings_error};
 pub(crate) use state::{Events, StateCell};
 pub(crate) use whispernow_domain::ipc::{Phase, RecordingTrigger};
 
@@ -142,7 +142,7 @@ impl NativeServices {
     /// Listens to the selected microphone for a few seconds and reports its levels. No audio
     /// is kept.
     pub(crate) fn test_microphone(&self) -> Result<MicrophoneTestResponse, AppError> {
-        let device = self.settings.input_device()?;
+        let device = self.settings.input_device();
         Ok(self.listen(device, microphone_test::TEST_DURATION)?)
     }
 
@@ -232,8 +232,7 @@ impl NativeServices {
             }
             state.phase.require_idle()?;
         }
-        let device = device_choice(checkpoint.input_device.as_deref())?;
-        require_connected_device(self.audio.as_ref(), &device)?;
+        require_connected_device(self.audio.as_ref(), checkpoint.input_device.as_ref())?;
         let mut edited = before;
         apply_checkpoint(&mut edited, checkpoint);
         SettingChange::RecordingShortcut {

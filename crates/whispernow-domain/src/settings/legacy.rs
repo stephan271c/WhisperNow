@@ -28,13 +28,6 @@ impl PythonSettings {
     pub fn import(document: &Value) -> Self {
         let mut settings = Settings::default();
         pick(document, "input_device", &mut settings.input_device);
-        if settings
-            .input_device
-            .as_ref()
-            .is_some_and(|device| device.trim().is_empty())
-        {
-            settings.input_device = None;
-        }
         pick(document, "model_id", &mut settings.model_id);
         if !ModelRegistry::builtin()
             .speech_models()

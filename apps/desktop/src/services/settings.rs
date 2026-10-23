@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use whispernow_domain::{AppError, ErrorCategory};
 
-use whispernow_core::audio::{AudioDeviceChoice, AudioDeviceId, AudioInput};
+use whispernow_core::audio::{AudioDeviceChoice, AudioInput};
 use whispernow_domain::ipc::{SetApiKeyRequest, SettingsView};
-use whispernow_domain::{ApiKey, LlmProvider, RemoteProvider, SettingsError};
+use whispernow_domain::{ApiKey, AudioDeviceId, LlmProvider, RemoteProvider, SettingsError};
 use whispernow_domain::{
     ModelId, SettingChange, Settings, SetupCheckpoint, SetupProgress, SetupStep, WindowGeometry,
 };
@@ -127,35 +127,31 @@ impl SettingsCoordinator {
             .publish_error(AppError::new(ErrorCategory::General, code, summary));
     }
 
-    pub(super) fn input_device(&self) -> Result<AudioDeviceChoice, AppError> {
-        device_choice(self.lock().input_device.as_deref())
+    pub(super) fn input_device(&self) -> AudioDeviceChoice {
+        self.lock().input_device.clone().into()
     }
 
     /// Provider configurations in the snapshot carry no API key.
-    pub(super) fn recording_settings(&self) -> Result<RecordingSettings, AppError> {
+    pub(super) fn recording_settings(&self) -> RecordingSettings {
         let settings = self.load();
-        let input_device = device_choice(settings.input_device.as_deref())?;
+        let input_device = settings.input_device.clone().into();
         let cleanup = cleanup_plan(&settings);
         let model_id = settings.model_id.clone();
-        Ok(recording(settings, model_id, input_device, cleanup))
+        recording(settings, model_id, input_device, cleanup)
     }
 
     /// The snapshot a first-run test dictation records with: the model and microphone setup
     /// has chosen so far, or the saved ones once setup has finished. It never runs AI cleanup,
     /// so the test never reaches a provider.
-    pub(super) fn setup_test_settings(&self) -> Result<RecordingSettings, AppError> {
+    pub(super) fn setup_test_settings(&self) -> RecordingSettings {
         let settings = self.load();
-        let (model_id, selected_device) = match &settings.setup {
-            SetupProgress::Complete => {
-                (settings.model_id.clone(), settings.input_device.as_deref())
+        let (model_id, input_device) = match &settings.setup {
+            SetupProgress::Complete => (settings.model_id.clone(), settings.input_device.clone()),
+            SetupProgress::Unfinished(checkpoint) => {
+                (checkpoint.model_id.clone(), checkpoint.input_device.clone())
             }
-            SetupProgress::Unfinished(checkpoint) => (
-                checkpoint.model_id.clone(),
-                checkpoint.input_device.as_deref(),
-            ),
         };
-        let input_device = device_choice(selected_device)?;
-        Ok(recording(settings, model_id, input_device, None))
+        recording(settings, model_id, input_device.into(), None)
     }
 
     pub(crate) fn load(&self) -> Settings {
@@ -181,7 +177,7 @@ impl SettingsCoordinator {
         audio: &dyn AudioInput,
     ) -> Result<SettingsView, AppError> {
         if let SettingChange::InputDevice(device) = &change {
-            require_connected_device(audio, &device_choice(device.as_deref())?)?;
+            require_connected_device(audio, device.as_ref())?;
         }
         self.edit(|settings| {
             change.clone().apply(settings);
@@ -230,7 +226,6 @@ impl SettingsCoordinator {
             if settings.setup.is_complete() {
                 return Err(setup_already_complete());
             }
-            device_choice(checkpoint.input_device.as_deref())?;
             settings.setup = SetupProgress::Unfinished(checkpoint);
             Ok(SettingsView::new(settings))
         })
@@ -292,34 +287,18 @@ fn recording(
     }
 }
 
-/// What capture opens for the saved input device: the system default when none is chosen.
-pub(super) fn device_choice(selected: Option<&str>) -> Result<AudioDeviceChoice, AppError> {
-    match selected {
-        None => Ok(AudioDeviceChoice::SystemDefault),
-        Some(id) => AudioDeviceId::new(id)
-            .map(AudioDeviceChoice::Device)
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCategory::Audio,
-                    "audio_device_invalid",
-                    "Choose an available microphone or the system default",
-                )
-            }),
-    }
-}
-
-/// Refuses a chosen input device that is not connected; the system default always is.
+/// Refuses a chosen input device that is not connected; the system default (`None`) always is.
 pub(super) fn require_connected_device(
     audio: &dyn AudioInput,
-    choice: &AudioDeviceChoice,
+    device: Option<&AudioDeviceId>,
 ) -> Result<(), AppError> {
-    let AudioDeviceChoice::Device(id) = choice else {
+    let Some(id) = device else {
         return Ok(());
     };
     let devices = audio
         .list_input_devices()
         .map_err(|error| audio_devices_unavailable(&error))?;
-    if devices.iter().any(|device| device.id == id.as_str()) {
+    if devices.iter().any(|device| device.id == *id) {
         Ok(())
     } else {
         Err(AppError::new(
@@ -341,11 +320,11 @@ fn cleanup_plan(settings: &Settings) -> Option<CleanupPlan> {
 mod tests {
     use std::{fs, sync::Arc};
 
-    use whispernow_core::audio::{AudioDeviceChoice, AudioDeviceId};
+    use whispernow_core::audio::AudioDeviceChoice;
     use whispernow_domain::ipc::{AudioDevice, SetApiKeyRequest};
     use whispernow_domain::{
-        ApiKey, AppError, ErrorCategory, LlmProvider, SettingChange, SetupCheckpoint,
-        SetupProgress, ThemePreference, VocabularyReplacement,
+        ApiKey, AppError, AudioDeviceId, ErrorCategory, LlmProvider, SettingChange,
+        ThemePreference, VocabularyReplacement,
     };
     use whispernow_platform::SettingsStore;
 
@@ -448,20 +427,23 @@ mod tests {
             let (ready, snapshot) = mpsc::channel();
             let coordinator = &coordinator;
             scope.spawn(move || {
-                ready
-                    .send(coordinator.recording_settings().is_ok())
-                    .expect("snapshot");
+                coordinator.recording_settings();
+                ready.send(()).expect("snapshot");
             });
             let result = snapshot.recv_timeout(Duration::from_secs(5));
             release.send(()).expect("release keyring before asserting");
-            assert!(result.expect("recording settings returned while keyring blocked"));
+            result.expect("recording settings returned while keyring blocked");
             write.join().expect("writer thread").expect("key saved");
         });
     }
 
+    fn device(id: &str) -> AudioDeviceId {
+        AudioDeviceId::new(id).expect("device id")
+    }
+
     fn connected_microphone() -> FakeAudioInput {
         FakeAudioInput::listing(Ok(vec![AudioDevice {
-            id: "connected microphone".to_owned(),
+            id: device("connected microphone"),
             display_name: "Connected microphone".to_owned(),
             is_default: true,
         }]))
@@ -473,7 +455,7 @@ mod tests {
         fixture
             .settings
             .edit(|settings| {
-                settings.input_device = Some("unplugged microphone".to_owned());
+                settings.input_device = Some(device("unplugged microphone"));
                 Ok(())
             })
             .expect("saved microphone");
@@ -487,42 +469,11 @@ mod tests {
         let error = fixture
             .settings
             .update(
-                &SettingChange::InputDevice(Some("unplugged microphone".to_owned())),
+                &SettingChange::InputDevice(Some(device("unplugged microphone"))),
                 &connected_microphone(),
             )
             .expect_err("choosing it checks it");
         assert_eq!(error.code, "audio_device_missing");
-    }
-
-    #[test]
-    fn malformed_explicit_microphone_updates_and_checkpoints_are_not_saved() {
-        let fixture = fixture();
-        let before = fixture.settings.get();
-        assert_eq!(
-            fixture
-                .settings
-                .update(
-                    &SettingChange::InputDevice(Some(" ".to_owned())),
-                    &connected_microphone()
-                )
-                .expect_err("invalid explicit microphone")
-                .code,
-            "audio_device_invalid"
-        );
-        let checkpoint = SetupCheckpoint {
-            input_device: Some(" ".to_owned()),
-            ..SetupCheckpoint::default()
-        };
-        assert_eq!(
-            fixture
-                .settings
-                .save_setup_checkpoint(checkpoint)
-                .expect_err("invalid checkpoint microphone")
-                .code,
-            "audio_device_invalid"
-        );
-        assert_eq!(fixture.settings.get(), before);
-        assert!(!fixture.paths.settings_file().exists());
     }
 
     #[test]
@@ -531,27 +482,20 @@ mod tests {
         fixture
             .settings
             .update(
-                &SettingChange::InputDevice(Some("connected microphone".to_owned())),
+                &SettingChange::InputDevice(Some(device("connected microphone"))),
                 &connected_microphone(),
             )
             .expect("connected microphone");
-        let choice = AudioDeviceChoice::Device(
-            AudioDeviceId::new("connected microphone").expect("device id"),
-        );
         assert_eq!(
-            fixture
-                .settings
-                .recording_settings()
-                .expect("snapshot")
-                .input_device,
-            choice
+            fixture.settings.recording_settings().input_device,
+            AudioDeviceChoice::Device(device("connected microphone"))
         );
         let before = fs::read(fixture.paths.settings_file()).expect("saved settings");
         assert_eq!(
             fixture
                 .settings
                 .update(
-                    &SettingChange::InputDevice(Some("disconnected microphone".to_owned())),
+                    &SettingChange::InputDevice(Some(device("disconnected microphone"))),
                     &connected_microphone()
                 )
                 .expect_err("disconnected microphone")
@@ -568,59 +512,33 @@ mod tests {
             .expect("system default");
         assert_eq!(saved.settings.input_device, None);
         assert_eq!(
-            fixture
-                .settings
-                .recording_settings()
-                .expect("snapshot")
-                .input_device,
+            fixture.settings.recording_settings().input_device,
             AudioDeviceChoice::SystemDefault
         );
         assert_eq!(
-            fixture.settings.input_device().expect("input device"),
+            fixture.settings.input_device(),
             AudioDeviceChoice::SystemDefault
         );
     }
 
     #[test]
-    fn malformed_saved_microphones_cannot_become_default_recording_snapshots() {
-        for setup in [false, true] {
-            let fixture = fixture();
-            let mut saved = fixture.settings.get().settings;
-            if setup {
-                saved.setup = SetupProgress::Unfinished(SetupCheckpoint {
-                    input_device: Some(" ".to_owned()),
-                    ..SetupCheckpoint::default()
-                });
-            } else {
-                saved.input_device = Some(" ".to_owned());
-            }
-            fixture
-                .settings
-                .edit(|settings| {
-                    *settings = saved;
-                    Ok(())
-                })
-                .expect("hand-edited settings");
-            let snapshot = if setup {
-                fixture.settings.setup_test_settings()
-            } else {
-                fixture.settings.recording_settings()
-            };
-            let Err(error) = snapshot else {
-                panic!("invalid saved microphone accepted");
-            };
-            assert_eq!(error.code, "audio_device_invalid");
-            if !setup {
-                assert_eq!(
-                    fixture
-                        .settings
-                        .input_device()
-                        .expect_err("invalid saved microphone")
-                        .code,
-                    "audio_device_invalid"
-                );
-            }
-        }
+    fn a_blank_saved_microphone_reads_as_the_system_default() {
+        let mut fixture = fixture();
+        fs::write(
+            fixture.paths.settings_file(),
+            r#"{"settings_version": 2, "input_device": " ", "setup": {"unfinished": {"input_device": ""}}}"#,
+        )
+        .expect("hand-edited settings");
+
+        fixture.restart();
+        assert_eq!(
+            fixture.settings.input_device(),
+            AudioDeviceChoice::SystemDefault
+        );
+        assert_eq!(
+            fixture.settings.setup_test_settings().input_device,
+            AudioDeviceChoice::SystemDefault
+        );
     }
 
     #[test]
@@ -669,7 +587,7 @@ mod tests {
                 .update(&change, &audio)
                 .expect("save provider");
         }
-        let recording = fixture.settings.recording_settings().expect("recording");
+        let recording = fixture.settings.recording_settings();
         assert!(recording.dictation.cleanup.is_none());
 
         for change in [
@@ -690,7 +608,7 @@ mod tests {
                 .update(&change, &audio)
                 .expect("repair provider");
         }
-        let recording = fixture.settings.recording_settings().expect("recording");
+        let recording = fixture.settings.recording_settings();
         assert!(recording.dictation.cleanup.is_some());
     }
 
@@ -735,8 +653,6 @@ mod tests {
 
         assert_eq!(fixture.settings.get().settings, before);
         assert!(!fixture.settings.load().setup.is_complete());
-        assert!(fixture.settings.recording_settings().is_ok());
-        assert!(fixture.settings.setup_test_settings().is_ok());
         assert_eq!(
             fs::read_to_string(fixture.paths.settings_file()).expect("original file"),
             malformed

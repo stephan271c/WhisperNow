@@ -3,7 +3,7 @@ mod command_names;
 pub use command_names::COMMAND_NAMES;
 
 use crate::{
-    ApiKey, AppError, ClearDataCategory, DownloadPhase, ErrorCategory, LlmProvider,
+    ApiKey, AppError, AudioDeviceId, ClearDataCategory, DownloadPhase, ErrorCategory, LlmProvider,
     ModelAvailability, ModelFamily, ModelId, Settings, SpeechBenchmark,
 };
 use serde::{Deserialize, Serialize};
@@ -48,7 +48,7 @@ pub struct SetApiKeyRequest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioDevice {
-    pub id: String,
+    pub id: AudioDeviceId,
     pub display_name: String,
     pub is_default: bool,
 }

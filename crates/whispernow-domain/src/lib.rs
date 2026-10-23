@@ -1,3 +1,4 @@
+mod audio_device;
 mod cleanup;
 mod data;
 mod history;
@@ -11,6 +12,7 @@ mod validation;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use audio_device::AudioDeviceId;
 pub use cleanup::{CleanupTarget, MissingCleanupField, RemoteCleanupTarget, RemoteProvider};
 pub use data::ClearDataCategory;
 pub use history::{

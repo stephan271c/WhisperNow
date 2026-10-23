@@ -16,6 +16,7 @@ use cpal::{
 };
 use whispernow_core::audio::{AudioDeviceChoice, AudioInputError, TARGET_SAMPLE_RATE};
 
+use whispernow_domain::AudioDeviceId;
 use whispernow_domain::ipc::AudioDevice;
 
 const CALLBACK_BUFFER_POOL: usize = 8;
@@ -99,10 +100,13 @@ impl CaptureBackend for CpalBackend {
             .input_devices()
             .map_err(|error| map_device_error(&error, "enumerate input devices"))?;
         for device in inputs {
-            let Ok(id) = device.id() else {
+            let Some(id) = device
+                .id()
+                .ok()
+                .and_then(|id| AudioDeviceId::new(id.to_string()))
+            else {
                 continue;
             };
-            let id = id.to_string();
             let display_name = device.description().map_or_else(
                 |_| device.to_string(),
                 |description| description.to_string(),

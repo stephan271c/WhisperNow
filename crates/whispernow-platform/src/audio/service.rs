@@ -551,7 +551,7 @@ mod tests {
     fn invalid_device_does_not_strand_the_service() {
         let backend = Arc::new(FakeBackend::new([]));
         let service = service(Arc::clone(&backend));
-        let missing = whispernow_core::audio::AudioDeviceId::new("missing").expect("ID");
+        let missing = whispernow_domain::AudioDeviceId::new("missing").expect("ID");
         assert_eq!(
             service
                 .start(

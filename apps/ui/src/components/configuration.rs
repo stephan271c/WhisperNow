@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{AudioDevice, PermissionKind, PermissionStatus};
 use whispernow_domain::{
-    CleanupTarget, HistoryLimit, HistoryRetention, RecordingMode, RemoteProvider, SettingChange,
-    Settings, Shortcut, ThemePreference,
+    AudioDeviceId, CleanupTarget, HistoryLimit, HistoryRetention, RecordingMode, RemoteProvider,
+    SettingChange, Settings, Shortcut, ThemePreference,
 };
 
 use super::microphone_test::MicrophoneTest;
@@ -32,7 +32,7 @@ pub(super) const RECORDING_MODES: [SegmentedOption<RecordingMode>; 2] = [
 
 /// Input device choices for a select: the system default, then each device. Give the select
 /// the saved device as its placeholder, so one that is no longer connected still shows.
-pub(super) fn device_options(devices: &[AudioDevice]) -> Vec<(Option<String>, String)> {
+pub(super) fn device_options(devices: &[AudioDevice]) -> Vec<(Option<AudioDeviceId>, String)> {
     std::iter::once((None, "System default".to_owned()))
         .chain(
             devices
@@ -227,7 +227,7 @@ pub(super) fn AudioPage() -> Element {
             AutosaveRow { id: "input-device", title: "Input device",
                 setting: SettingKey::InputDevice,
                 Select { value: settings.input_device.clone(),
-                    placeholder: settings.input_device.clone(),
+                    placeholder: settings.input_device.as_ref().map(|id| id.as_str().to_owned()),
                     options: device_options(&devices),
                     disabled,
                     onchange: move |device| context.change_setting(SettingChange::InputDevice(device)),

@@ -3,10 +3,10 @@ use std::collections::BTreeSet;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use whispernow_domain::{
-    ApiKey, CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, HistoryLimit, HistoryRetention,
-    LlmProvider, ModelId, ProviderEndpoint, ProviderSettings, PythonSettings, RecordingMode,
-    Settings, SetupCheckpoint, SetupProgress, SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
-    VocabularyReplacement, WindowGeometry,
+    ApiKey, AudioDeviceId, CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, HistoryLimit,
+    HistoryRetention, LlmProvider, ModelId, ProviderEndpoint, ProviderSettings, PythonSettings,
+    RecordingMode, Settings, SetupCheckpoint, SetupProgress, SetupStep, Shortcut, ShortcutKey,
+    ShortcutModifier, VocabularyReplacement, WindowGeometry,
 };
 
 fn parse_json<T: DeserializeOwned>(document: &str) -> T {
@@ -109,7 +109,10 @@ fn python_settings_import_picks_known_fields() {
     let imported = PythonSettings::import(&document);
     let settings = imported.settings;
     assert!(imported.api_keys.is_empty());
-    assert_eq!(settings.input_device.as_deref(), Some("Studio Microphone"));
+    assert_eq!(
+        settings.input_device.as_ref().map(AudioDeviceId::as_str),
+        Some("Studio Microphone")
+    );
     assert_eq!(
         settings.recording_shortcut,
         Shortcut {

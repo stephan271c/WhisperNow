@@ -7,8 +7,8 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use thiserror::Error;
 
 use crate::{
-    CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, HistoryLimit, HistoryRetention, LlmProvider,
-    ModelId, ProviderEndpoint, RecordingMode, Shortcut,
+    AudioDeviceId, CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, HistoryLimit, HistoryRetention,
+    LlmProvider, ModelId, ProviderEndpoint, RecordingMode, Shortcut,
 };
 
 mod change;
@@ -57,7 +57,8 @@ pub enum ThemePreference {
 pub struct SetupCheckpoint {
     pub step: SetupStep,
     pub model_id: ModelId,
-    pub input_device: Option<String>,
+    #[serde(deserialize_with = "input_device")]
+    pub input_device: Option<AudioDeviceId>,
     pub recording_shortcut: Shortcut,
     pub recording_mode: RecordingMode,
 }
@@ -198,8 +199,9 @@ pub struct WindowGeometry {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Selected input device name, or the host default.
-    pub input_device: Option<String>,
+    /// The chosen microphone; `None` is the system default, and a blank id reads as `None`.
+    #[serde(deserialize_with = "input_device")]
+    pub input_device: Option<AudioDeviceId>,
     pub recording_shortcut: Shortcut,
     pub recording_mode: RecordingMode,
     /// Shortcut that cancels the active dictation; `None` turns it off.
@@ -270,6 +272,12 @@ pub(crate) fn known_cleanup_model(id: &str) -> ModelId {
 
 fn cleanup_model<'de, D: Deserializer<'de>>(deserializer: D) -> Result<ModelId, D::Error> {
     Ok(known_cleanup_model(&String::deserialize(deserializer)?))
+}
+
+fn input_device<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AudioDeviceId>, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.and_then(AudioDeviceId::new))
 }
 
 impl Settings {

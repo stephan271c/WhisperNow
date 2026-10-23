@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use super::known_cleanup_model;
 use crate::{
-    HistoryLimit, HistoryRetention, LlmProvider, ModelId, ProviderEndpoint, RecordingMode,
-    Settings, SettingsError, Shortcut, ThemePreference, VocabularyReplacement,
+    AudioDeviceId, HistoryLimit, HistoryRetention, LlmProvider, ModelId, ProviderEndpoint,
+    RecordingMode, Settings, SettingsError, Shortcut, ThemePreference, VocabularyReplacement,
 };
 
 /// One edit the settings window saves. The window shows it with [`Self::apply`] until the
@@ -11,7 +11,7 @@ use crate::{
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettingChange {
-    InputDevice(Option<String>),
+    InputDevice(Option<AudioDeviceId>),
     RecordingShortcut {
         shortcut: Shortcut,
         mode: RecordingMode,

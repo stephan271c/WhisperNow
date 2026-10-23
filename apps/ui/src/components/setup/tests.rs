@@ -3,7 +3,7 @@ use whispernow_domain::ipc::{
     ActiveDownload, EventPayload, PasteHelperSetup, Permission, PermissionKind, PermissionStatus,
     PermissionsResponse, Phase, SaveSettingsResponse, SettingsView, SetupTestResult,
 };
-use whispernow_domain::{AppError, ErrorCategory};
+use whispernow_domain::{AppError, AudioDeviceId, ErrorCategory};
 use whispernow_domain::{
     DownloadPhase, ModelAvailability, ModelId, RecordingMode, SetupCheckpoint, SetupProgress,
     SetupStep, Shortcut, ShortcutKey, ShortcutModifier,
@@ -626,11 +626,11 @@ fn a_pending_microphone_checkpoint_rejects_a_later_change_and_unlocks_after_succ
     let mut setup = at(SetupStep::TryIt);
     setup.act(|actions| {
         actions.save_setup_edit(|checkpoint| {
-            checkpoint.input_device = Some("usb-mic".to_owned());
+            checkpoint.input_device = AudioDeviceId::new("usb-mic");
         });
     });
     let submitted = fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[0].clone();
-    assert_eq!(submitted.input_device.as_deref(), Some("usb-mic"));
+    assert_eq!(submitted.input_device, AudioDeviceId::new("usb-mic"));
     assert!(
         tag(&setup.html(), "setup-microphone")
             .expect("microphone")
@@ -638,7 +638,7 @@ fn a_pending_microphone_checkpoint_rejects_a_later_change_and_unlocks_after_succ
     );
     setup.act(|actions| {
         actions.save_setup_edit(|checkpoint| {
-            checkpoint.input_device = Some("headset".to_owned());
+            checkpoint.input_device = AudioDeviceId::new("headset");
         });
     });
     assert_eq!(fake::count("save_setup_checkpoint"), 1);

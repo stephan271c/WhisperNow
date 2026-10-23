@@ -466,9 +466,9 @@ impl Worker {
             input_device: device,
             dictation: settings,
         } = if trigger.is_setup_test() {
-            self.parts.settings.setup_test_settings()?
+            self.parts.settings.setup_test_settings()
         } else {
-            self.parts.settings.recording_settings()?
+            self.parts.settings.recording_settings()
         };
         let model = installed(self.parts.models.as_ref(), &settings.model_id)?;
         self.next_session += 1;
