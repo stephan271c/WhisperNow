@@ -503,7 +503,7 @@ impl Worker {
         };
         self.parts.state.apply(|state| {
             state.last_error = None;
-            state.download_failed = false;
+            state.failed_download = None;
             // A setup test reports to setup alone and leaves the last transcript.
             if trigger.is_setup_test() {
                 state.setup_test = None;

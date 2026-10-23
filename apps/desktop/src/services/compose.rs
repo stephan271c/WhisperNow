@@ -49,18 +49,6 @@ impl NativeServices {
         } = persistence.load()?;
         let (history, startup_history_warning) = HistoryStore::open(paths.clone());
         let history = Arc::new(history);
-        let cleanup_runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("whispernow-llm")
-            .enable_all()
-            .build()
-            .map_err(|_| {
-                AppError::new(
-                    ErrorCategory::General,
-                    "llm_runtime",
-                    "AI cleanup is unavailable",
-                )
-            })?;
         let llama_dir = llama_dir(resource_dir);
         let vad_model = silero_vad_model_path(resource_dir);
         let initial = State::new(persisted.model_id.clone());
@@ -91,7 +79,6 @@ impl NativeServices {
             service: Arc::new(ProviderRouter {
                 local: Arc::clone(&local_cleanup),
             }),
-            runtime: Arc::new(cleanup_runtime),
             api_keys: persistence,
         });
         let dictation = Dictation::spawn(DictationParts {

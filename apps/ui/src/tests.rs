@@ -221,6 +221,8 @@ fn a_recoverable_update_error_offers_another_check() {
 fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
     let mut loading = ui_state(Phase::Idle);
     loading.snapshot.as_mut().expect("snapshot").model_state = ModelState::Loading;
+    let mut recording = ui_state(crate::test_support::RECORDING);
+    recording.snapshot.as_mut().expect("snapshot").model_state = ModelState::Loading;
     let mut failed = snapshot(crate::test_support::RECORDING);
     failed.error = Some(AppError::new(
         ErrorCategory::Audio,
@@ -244,6 +246,7 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
             "Loading speech model",
             None,
         ),
+        (recording, HomeStatusKind::Recording, "Recording", None),
         (
             audio_problem,
             HomeStatusKind::Problem,

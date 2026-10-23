@@ -13,6 +13,7 @@ use row::HistoryRow;
 use super::ui::{
     Button, ButtonSize, ConfirmButton, EmptyState, Icon, IconName, ShortcutLabel, TextInput,
 };
+use crate::blocked_reason::DisabledReason;
 use crate::management::replace_task;
 use crate::{Route, SettingsRoute, UiContext, UiOperation};
 
@@ -26,6 +27,7 @@ const LOAD_MORE_ID: &str = "history-load-more";
 const CLEAR_ID: &str = "history-clear";
 const OPEN_FOLDER_ID: &str = "history-open-folder";
 const RETENTION_ID: &str = "history-retention-settings";
+const CHANGE_REASON_ID: &str = "history-change-reason";
 
 const SEARCH_PAUSE_MS: u32 = 300;
 
@@ -74,14 +76,13 @@ pub(super) fn HistoryScreen() -> Element {
                     ConfirmButton { id: CLEAR_ID, size: ButtonSize::Sm,
                         label: "Clear history", confirm_label: "Delete every transcript",
                         disabled: change_blocked.is_some(),
+                        aria_describedby: change_blocked.as_ref().map(|_| CHANGE_REASON_ID.to_owned()),
                         onconfirm: move |()| context.clear_history(),
                     }
                 }
             }
         }
-        if let Some(reason) = change_blocked.as_ref().filter(|_| !entries.is_empty()) {
-            p { class: "disabled-reason", id: "history-change-reason", "{reason.message()}" }
-        }
+        DisabledReason { id: CHANGE_REASON_ID, reason: change_blocked.clone().filter(|_| !entries.is_empty()) }
         if let Some(summary) = &unavailable {
             div { class: "history-unavailable", role: "alert",
                 p { "{summary}" }

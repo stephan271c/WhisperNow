@@ -87,13 +87,6 @@ impl HomeStatus {
                 None,
                 None,
             ),
-            _ if matches!(
-                snapshot.model_state,
-                ModelState::Downloading | ModelState::Loading
-            ) =>
-            {
-                status(HomeStatusKind::Waiting, "Loading speech model", None, None)
-            }
             Phase::Recording { .. } => status(HomeStatusKind::Recording, "Recording", None, None),
             Phase::Processing { cleaning_up } => status(
                 HomeStatusKind::Working,
@@ -105,6 +98,13 @@ impl HomeStatus {
                 None,
                 None,
             ),
+            _ if matches!(
+                snapshot.model_state,
+                ModelState::Downloading | ModelState::Loading
+            ) =>
+            {
+                status(HomeStatusKind::Waiting, "Loading speech model", None, None)
+            }
             Phase::Idle | Phase::Error => status(HomeStatusKind::Ready, "Ready", None, None),
         }
     }

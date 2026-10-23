@@ -173,8 +173,6 @@ pub(crate) struct HelperPastePlatform {
     helper: Child,
     commands: ChildStdin,
     answers: mpsc::Receiver<String>,
-    /// Runs the accessibility lookup of the active window.
-    runtime: tokio::runtime::Runtime,
 }
 
 impl HelperPastePlatform {
@@ -184,10 +182,6 @@ impl HelperPastePlatform {
         let path = helper_path()?;
         let clipboard = NativeClipboard::connect()
             .inspect_err(|error| tracing::warn!(?error, "the XWayland clipboard is unavailable"))
-            .ok()?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
             .ok()?;
         let (sender, answers) = mpsc::channel();
         let mut helper = spawn(&path, ["--paste"], move |line| {
@@ -204,7 +198,6 @@ impl HelperPastePlatform {
             helper,
             commands,
             answers,
-            runtime,
         };
         match platform.answers.recv_timeout(READY_TIMEOUT).as_deref() {
             Ok("ready") => Some(platform),
@@ -240,7 +233,7 @@ impl PastePlatform for HelperPastePlatform {
     }
 
     fn send_paste_shortcut(&mut self) -> KeystrokeOutcome<NativePasteError> {
-        let command = match self.runtime.block_on(active_paste_keys()) {
+        let command = match tauri::async_runtime::block_on(active_paste_keys()) {
             PasteKeys::ControlV => "ctrl-v",
             PasteKeys::ControlShiftV => "ctrl-shift-v",
         };

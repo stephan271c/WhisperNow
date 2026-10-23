@@ -86,8 +86,8 @@ impl ModelCoordinator {
                     "This model download is already in progress",
                 ));
             }
-            if state.active_downloads.is_empty() {
-                state.download_failed = false;
+            if state.failed_download.as_ref() == Some(model_id) {
+                state.failed_download = None;
             }
             state.active_downloads.insert(
                 model_id.clone(),
@@ -113,7 +113,7 @@ impl ModelCoordinator {
         let Ok(worker) = worker else {
             self.state.apply(|state| {
                 state.active_downloads.remove(model_id);
-                state.download_failed = true;
+                state.failed_download = Some(model_id.clone());
             });
             return Err(AppError::new(
                 ErrorCategory::General,
@@ -317,7 +317,7 @@ fn run_model_download(
     state.apply(|current| {
         current.active_downloads.remove(&model_id);
         if let Some(error) = completion_error {
-            current.download_failed = true;
+            current.failed_download = Some(model_id);
             current.last_error = Some(error);
         }
     });
@@ -447,7 +447,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.flush();
         let download = DownloadFixture::new(&fixture.state);
-        fixture.state.lock().download_failed = true;
+        fixture.state.lock().failed_download = Some(download.model_id.clone());
         let transition = download.models.transition();
         let (started, starting) = mpsc::channel();
 
@@ -474,7 +474,7 @@ mod tests {
 
         assert_eq!(fixture.state.snapshot().phase, Phase::Updating);
         assert!(fixture.state.lock().active_downloads.is_empty());
-        assert!(fixture.state.lock().download_failed);
+        assert!(fixture.state.lock().failed_download.is_some());
         assert!(super::lock(&download.models.workers).is_empty());
     }
 
@@ -483,14 +483,14 @@ mod tests {
         let fixture = Fixture::new();
         fixture.flush();
         let download = DownloadFixture::new(&fixture.state);
-        fixture.state.lock().download_failed = true;
+        fixture.state.lock().failed_download = Some(download.model_id.clone());
         download
             .models
             .download(&download.model_id)
             .expect("download admitted first");
         let mut connection = download.request();
 
-        assert!(!fixture.state.lock().download_failed);
+        assert!(fixture.state.lock().failed_download.is_none());
         assert_eq!(fixture.state.snapshot().active_downloads.len(), 1);
         assert_eq!(
             fixture
@@ -520,7 +520,7 @@ mod tests {
             .expect("release the pending response");
         download.models.shutdown_downloads();
         assert!(fixture.state.snapshot().active_downloads.is_empty());
-        assert!(!fixture.state.lock().download_failed);
+        assert!(fixture.state.lock().failed_download.is_none());
         assert!(fixture.state.snapshot().error.is_none());
         fixture
             .dictation
@@ -562,7 +562,7 @@ mod tests {
             Phase::Recording { .. }
         ));
         assert!(fixture.state.snapshot().active_downloads.is_empty());
-        assert!(!fixture.state.lock().download_failed);
+        assert!(fixture.state.lock().failed_download.is_none());
         assert!(fixture.state.snapshot().error.is_none());
         fixture.dictation.cancel().expect("cancel recording");
         fixture.flush();

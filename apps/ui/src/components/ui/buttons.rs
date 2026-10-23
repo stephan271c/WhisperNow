@@ -93,6 +93,7 @@ pub(crate) fn ConfirmButton(
     confirm_label: String,
     onconfirm: EventHandler<()>,
     target: Option<String>,
+    aria_describedby: Option<String>,
     #[props(default)] disabled: bool,
     #[props(default)] size: ButtonSize,
 ) -> Element {
@@ -110,6 +111,7 @@ pub(crate) fn ConfirmButton(
                 id: "{id}",
                 class: "btn btn-danger {size.class()}",
                 aria_label: named(&label),
+                aria_describedby: aria_describedby.clone(),
                 disabled,
                 onmounted: move |element| async move {
                     if refocus_trigger() {
@@ -137,6 +139,7 @@ pub(crate) fn ConfirmButton(
                 id: "{id}-confirm",
                 class: "btn btn-danger {size.class()}",
                 aria_label: named(&confirm_label),
+                aria_describedby,
                 disabled,
                 onmounted: move |element| async move {
                     let _ = element.set_focus(true).await;

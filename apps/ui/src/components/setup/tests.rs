@@ -857,6 +857,35 @@ fn finishing_setup_shows_a_refusal_then_saves_the_checkpoint_and_stops_permissio
 }
 
 #[test]
+fn a_warning_from_finishing_setup_shows_on_the_done_step() {
+    let mut setup = at(SetupStep::TryIt);
+    let mut settings = setup
+        .context()
+        .management
+        .read()
+        .settings
+        .clone()
+        .expect("settings loaded")
+        .settings;
+    setup.click("setup-continue");
+    settings.first_run_complete = true;
+    settings.setup = None;
+    setup.answer(
+        "complete_setup",
+        Ok(SaveSettingsResponse {
+            settings: SettingsView::new(&settings),
+            warnings: vec!["The microphone could not be opened.".to_owned()],
+        }),
+    );
+    let html = setup.html();
+    assert!(tag(&html, "setup-done-home").is_some());
+    let wizard = text(&html, "setup-wizard");
+    assert!(wizard.contains("Setup finished, but not everything took effect."));
+    assert!(html.contains("notice-inline"));
+    assert!(!html.contains("notice-toast"));
+}
+
+#[test]
 fn finish_later_keeps_the_progress_and_returns_home() {
     let mut setup = at(SetupStep::Shortcuts);
     setup.click("setup-finish-later");

@@ -178,6 +178,10 @@ fn import_providers(document: &Value, settings: &mut Settings) -> BTreeMap<LlmPr
         pick(entry, "model", &mut provider_settings.model);
         pick(entry, "api_base", &mut provider_settings.api_base);
         pick(entry, "saved_models", &mut provider_settings.saved_models);
+        provider_settings.model = provider_model(provider, &provider_settings.model);
+        for saved in &mut provider_settings.saved_models {
+            *saved = provider_model(provider, saved);
+        }
         if let Some(key) = text(entry, "api_key").and_then(|key| ApiKey::new(key).ok()) {
             api_keys.insert(provider, key);
         }
@@ -189,7 +193,7 @@ fn import_providers(document: &Value, settings: &mut Settings) -> BTreeMap<LlmPr
         let api_base = text(document, "llm_api_base");
         if model.is_some() || api_base.is_some() {
             entry.insert(ProviderSettings {
-                model: model.unwrap_or_default(),
+                model: model.map_or_else(String::new, |model| provider_model(provider, &model)),
                 api_base: api_base.and_then(|api_base| ProviderEndpoint::parse(api_base).ok()),
                 saved_models: Vec::new(),
             });
@@ -199,6 +203,21 @@ fn import_providers(document: &Value, settings: &mut Settings) -> BTreeMap<LlmPr
         }
     }
     api_keys
+}
+
+/// Drops the `LiteLLM` routing prefix the Python release saved with a model name
+/// (`LLMProcessor.format_model_name`), so `openrouter/auto` imports as `auto`.
+fn provider_model(provider: LlmProvider, model: &str) -> String {
+    let model = model.trim();
+    let prefix = match provider {
+        LlmProvider::OpenAi => "openai/",
+        LlmProvider::Anthropic => "anthropic/",
+        LlmProvider::Gemini => "gemini/",
+        LlmProvider::Ollama => "ollama/",
+        LlmProvider::OpenRouter => "openrouter/",
+        LlmProvider::LocalCleanup | LlmProvider::Custom => return model.to_owned(),
+    };
+    model.strip_prefix(prefix).unwrap_or(model).to_owned()
 }
 
 fn pick<T: DeserializeOwned>(document: &Value, name: &str, target: &mut T) {

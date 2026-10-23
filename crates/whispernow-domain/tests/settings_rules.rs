@@ -113,16 +113,18 @@ fn the_model_list_keeps_the_active_model_and_follows_choices_and_removals() {
 }
 
 #[test]
-fn requests_drop_the_providers_own_prefix_from_a_model_name() {
-    assert_eq!(
-        LlmProvider::OpenAi.request_model(" openai/gpt-4o "),
-        "gpt-4o"
-    );
-    assert_eq!(
-        LlmProvider::OpenRouter.request_model("anthropic/claude-3"),
-        "anthropic/claude-3"
-    );
-    assert_eq!(LlmProvider::Custom.request_model("openai/x"), "openai/x");
+fn the_cleanup_target_keeps_the_model_name_as_saved() {
+    let mut settings = Settings {
+        llm_provider: LlmProvider::OpenRouter,
+        ..Settings::default()
+    };
+    settings
+        .provider_settings_mut(LlmProvider::OpenRouter)
+        .model = "openrouter/auto".to_owned();
+    let CleanupTarget::Remote(target) = settings.cleanup_target().expect("a remote target") else {
+        panic!("remote cleanup target");
+    };
+    assert_eq!(target.model, "openrouter/auto");
 }
 
 #[test]

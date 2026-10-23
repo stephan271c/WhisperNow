@@ -369,7 +369,10 @@ fn deleting_an_entry_or_the_history_requires_confirmation() {
     );
     let html = page.html();
     assert!(tag(&html, "history-delete-7").is_some_and(|tag| tag.contains("disabled")));
-    assert!(tag(&html, "history-clear").is_some_and(|tag| tag.contains("disabled")));
+    assert!(
+        tag(&html, "history-clear").is_some_and(|tag| tag.contains("disabled")
+            && tag.contains(r#"aria-describedby="history-change-reason""#))
+    );
     assert!(text(&html, "history-change-reason").contains("Wait for the current change"));
     fake::answer("delete_history_entry", Ok(()));
     page.settle();

@@ -17,7 +17,6 @@ pub(crate) struct CleanupPlan {
 
 pub(crate) struct AiCleanup {
     pub(crate) service: Arc<dyn LlmService>,
-    pub(crate) runtime: Arc<tokio::runtime::Runtime>,
     /// Read when a call is prepared, so settings snapshots and recording start never wait on
     /// the OS credential store.
     pub(crate) api_keys: Arc<SettingsStore>,
@@ -74,7 +73,7 @@ impl AiCleanup {
         } else {
             None
         };
-        self.runtime.block_on(clean_up(
+        tauri::async_runtime::block_on(clean_up(
             self.service.as_ref(),
             deterministic_text,
             &plan.target,

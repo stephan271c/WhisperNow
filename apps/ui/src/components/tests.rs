@@ -1546,6 +1546,11 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
     open(&mut page, &["execute-clear-data"]);
     open(&mut page, &["execute-clear-data-confirm"]);
     assert_eq!(fake::count("clear_data"), 1);
+    let pending = page.html();
+    let button = tag(&pending, "execute-clear-data").expect("the remove button");
+    assert!(button.contains("disabled"));
+    assert!(button.contains(r#"aria-describedby="execute-disabled-reason""#));
+    assert!(tag(&pending, "execute-disabled-reason").is_some());
 
     fake::answer(
         "clear_data",

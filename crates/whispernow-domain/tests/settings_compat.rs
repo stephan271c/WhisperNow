@@ -135,6 +135,35 @@ fn python_settings_import_picks_known_fields() {
 }
 
 #[test]
+fn python_model_names_lose_their_litellm_routing_prefix() {
+    let imported = PythonSettings::import(&json!({
+        "llm_provider": "openai",
+        "llm_provider_settings": {
+            "openai": { "model": "openai/gpt-4o", "saved_models": ["openai/gpt-4o", "gpt-5"] },
+            "openrouter": { "model": "openrouter/auto", "saved_models": ["openai/gpt-5.2"] }
+        }
+    }));
+    let settings = imported.settings;
+    assert_eq!(
+        settings.provider_settings(LlmProvider::OpenAi),
+        &ProviderSettings {
+            model: "gpt-4o".to_owned(),
+            api_base: None,
+            saved_models: vec!["gpt-4o".to_owned(), "gpt-5".to_owned()],
+        }
+    );
+    assert_eq!(
+        settings.provider_settings(LlmProvider::OpenRouter),
+        &ProviderSettings {
+            model: "auto".to_owned(),
+            api_base: None,
+            saved_models: vec!["openai/gpt-5.2".to_owned()],
+        },
+        "only the provider's own routing prefix goes"
+    );
+}
+
+#[test]
 fn python_blank_microphones_normalize_to_the_system_default() {
     for input_device in ["", " ", "\t\n"] {
         let imported = PythonSettings::import(&json!({ "input_device": input_device }));

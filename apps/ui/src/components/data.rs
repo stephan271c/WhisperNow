@@ -46,6 +46,7 @@ pub(super) fn ClearDataCard() -> Element {
                                 label: "Remove these items",
                                 confirm_label: "Remove permanently",
                                 disabled: clear_blocked.is_some(),
+                                aria_describedby: clear_blocked.as_ref().map(|_| "execute-disabled-reason".to_owned()),
                                 onconfirm: move |()| context.clear_data(),
                             }
                             DisabledReason { id: "execute-disabled-reason", reason: clear_blocked }

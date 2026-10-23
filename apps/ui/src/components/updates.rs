@@ -84,6 +84,7 @@ pub(super) fn UpdateStatus() -> Element {
                         }
                     }
                     Button { disabled: restart_blocked.is_some(),
+                        aria_describedby: restart_blocked.as_ref().map(|_| "restart-disabled-reason"),
                         onclick: move |_| context.restart_to_update(), "Restart to update" }
                     DisabledReason { id: "restart-disabled-reason", reason: restart_blocked }
                 }
@@ -112,6 +113,7 @@ pub(super) fn UpdateStatus() -> Element {
                 }
                 div { class: "update-actions",
                     Button { variant: ButtonVariant::Primary, disabled: restart_blocked.is_some(),
+                        aria_describedby: restart_blocked.as_ref().map(|_| "restart-disabled-reason"),
                         onclick: move |_| context.restart_to_update(), "Restart to update" }
                     Button { variant: ButtonVariant::Ghost, disabled: dismiss_blocked.is_some(),
                         onclick: move |_| context.dismiss_update(), "Dismiss" }
@@ -193,6 +195,7 @@ fn UpdateFailure(title: &'static str, message: String, retryable: bool) -> Eleme
         p { "{message}" }
         if retryable {
             Button { disabled: check_blocked.is_some(),
+                aria_describedby: check_blocked.as_ref().map(|_| "update-retry-disabled-reason"),
                 onclick: move |_| context.check_for_updates(), "Try again" }
             DisabledReason { id: "update-retry-disabled-reason", reason: check_blocked }
         }

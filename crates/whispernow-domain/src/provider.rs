@@ -70,20 +70,6 @@ impl LlmProvider {
             _ => None,
         }
     }
-
-    #[must_use]
-    pub fn request_model(self, model: &str) -> &str {
-        let trimmed = model.trim();
-        let prefix = match self {
-            Self::OpenAi => "openai/",
-            Self::Anthropic => "anthropic/",
-            Self::Gemini => "gemini/",
-            Self::Ollama => "ollama/",
-            Self::OpenRouter => "openrouter/",
-            Self::LocalCleanup | Self::Custom => return trimmed,
-        };
-        trimmed.strip_prefix(prefix).unwrap_or(trimmed)
-    }
 }
 
 impl Serialize for LlmProvider {

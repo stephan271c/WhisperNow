@@ -66,7 +66,8 @@ pub(crate) struct State {
     /// Where the local cleanup model runs, while it is loaded.
     pub(crate) cleanup_device: Option<CleanupDevice>,
     pub(crate) active_downloads: BTreeMap<ModelId, DownloadTask>,
-    pub(crate) download_failed: bool,
+    /// The model whose latest download failed, until it is downloaded again.
+    pub(crate) failed_download: Option<ModelId>,
     /// Set with `cancellation` when the dictation in flight is asked to end early.
     pub(crate) cancel: Option<CancelReason>,
     /// The dictation in flight's cancellation; the worker replaces it for each recording.
@@ -84,7 +85,7 @@ impl State {
             setup_test: None,
             cleanup_device: None,
             active_downloads: BTreeMap::new(),
-            download_failed: false,
+            failed_download: None,
             cancel: None,
             cancellation: CancellationToken::default(),
         }
@@ -135,7 +136,7 @@ impl State {
     }
 
     fn model_state(&self) -> ModelState {
-        if !self.active_downloads.is_empty() {
+        if self.active_downloads.contains_key(&self.selected_model_id) {
             return ModelState::Downloading;
         }
         match &self.model {
@@ -144,7 +145,9 @@ impl State {
             }
             LoadedModel::Loading => ModelState::Loading,
             LoadedModel::Failed => ModelState::Failed,
-            LoadedModel::Unloaded | LoadedModel::Ready(_) if self.download_failed => {
+            LoadedModel::Unloaded | LoadedModel::Ready(_)
+                if self.failed_download.as_ref() == Some(&self.selected_model_id) =>
+            {
                 ModelState::Failed
             }
             LoadedModel::Unloaded | LoadedModel::Ready(_) => ModelState::Unloaded,
@@ -244,5 +247,50 @@ impl StateCell {
                 state.last_error = Some(error);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use whispernow_domain::DownloadPhase;
+
+    use super::*;
+
+    fn downloading(state: &mut State, model_id: &ModelId) {
+        state.active_downloads.insert(
+            model_id.clone(),
+            DownloadTask {
+                progress: ActiveDownload {
+                    model_id: model_id.clone(),
+                    phase: DownloadPhase::Downloading,
+                    downloaded_bytes: 0,
+                    total_bytes: None,
+                    bytes_per_second: None,
+                },
+                cancellation: CancellationToken::default(),
+            },
+        );
+    }
+
+    #[test]
+    fn the_model_state_follows_only_the_selected_models_download() {
+        let selected = ModelId::default();
+        let other = ModelId::new("lfm25-cleanup").expect("model id");
+        let mut state = State::new(selected.clone());
+        state.model = LoadedModel::Ready(selected.clone());
+
+        downloading(&mut state, &other);
+        assert_eq!(state.model_state(), ModelState::Ready);
+        state.active_downloads.clear();
+        state.failed_download = Some(other);
+        assert_eq!(state.model_state(), ModelState::Ready);
+
+        state.model = LoadedModel::Unloaded;
+        assert_eq!(state.model_state(), ModelState::Unloaded);
+        downloading(&mut state, &selected);
+        assert_eq!(state.model_state(), ModelState::Downloading);
+        state.active_downloads.clear();
+        state.failed_download = Some(selected);
+        assert_eq!(state.model_state(), ModelState::Failed);
     }
 }

@@ -81,8 +81,8 @@ pub(super) fn SetupScreen() -> Element {
             Some(SetupStep::TryIt) => rsx! { TryItStep { checkpoint: setup.clone() } },
             None => rsx! { DoneStep {} },
         }
+        NoticeRegion { scope: NoticeScope::Setup }
         if let Some(step) = step {
-            NoticeRegion { scope: NoticeScope::Setup }
             SetupFooter { step }
         }
     } }

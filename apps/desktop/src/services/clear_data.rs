@@ -88,7 +88,7 @@ impl NativeServices {
             }
             state.last_transcript = None;
             state.last_error = credential_warning;
-            state.download_failed = false;
+            state.failed_download = None;
         });
         Ok(ClearDataResult {
             items: result_items,

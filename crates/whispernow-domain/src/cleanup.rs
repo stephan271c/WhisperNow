@@ -101,7 +101,7 @@ impl Settings {
             });
         }
         let settings = self.provider_settings(self.llm_provider);
-        let model = self.llm_provider.request_model(&settings.model);
+        let model = &settings.model;
         if model.is_empty() {
             return Err(MissingCleanupField::Model);
         }
@@ -109,7 +109,7 @@ impl Settings {
             .ok_or(MissingCleanupField::Endpoint)?;
         Ok(CleanupTarget::Remote(RemoteCleanupTarget {
             provider,
-            model: model.to_owned(),
+            model: model.clone(),
         }))
     }
 

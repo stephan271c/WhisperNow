@@ -72,6 +72,7 @@ pub(super) fn HistoryRow(entry: HistoryEntry, delete_blocked: bool, clock: Local
                     label: "Delete", confirm_label: "Delete this dictation",
                     target: target.clone(),
                     disabled: delete_blocked,
+                    aria_describedby: delete_blocked.then(|| super::CHANGE_REASON_ID.to_owned()),
                     onconfirm: move |()| context.delete_history_entry(id),
                 }
             }

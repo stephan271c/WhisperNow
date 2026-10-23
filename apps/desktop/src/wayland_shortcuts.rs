@@ -1,6 +1,5 @@
 use std::{
-    sync::{Arc, Mutex, mpsc as std_mpsc},
-    thread,
+    sync::{Arc, mpsc as std_mpsc},
     time::Duration,
 };
 
@@ -276,55 +275,41 @@ impl ShortcutPortal for AshpdShortcutPortal {
 /// Synchronous registrar façade over the long-lived portal actor.
 pub(crate) struct WaylandShortcutRegistrar {
     commands: mpsc::UnboundedSender<Command>,
-    worker: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl WaylandShortcutRegistrar {
     /// Registers the portal identity first: the shortcut actor makes this
     /// process's first portal call, and the output portal waits for a paste or
     /// a setup consent request, both of which follow startup.
+    ///
+    /// The actor runs on Tauri's runtime, which outlives every portal user: ashpd opens the
+    /// process's one D-Bus connection on the first portal call and zbus runs its reader on the
+    /// calling runtime, so a private runtime that ended (after a failed connect, or when
+    /// shortcuts shut down first) would leave the output and notification portals waiting on
+    /// a dead connection.
     pub(crate) fn spawn(
         identity: PortalIdentity,
         events: mpsc::UnboundedSender<ShortcutEvent>,
     ) -> (Arc<Self>, Option<ShortcutRegistrationError>) {
         let (commands, receiver) = mpsc::unbounded_channel();
         let (ready, ready_receiver) = std_mpsc::sync_channel(1);
-        let worker = thread::Builder::new()
-            .name("whispernow-wayland-shortcuts".to_owned())
-            .spawn(move || {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build();
-                let Ok(runtime) = runtime else {
-                    let error = ShortcutRegistrationError::PortalUnavailable;
+        tauri::async_runtime::spawn(async move {
+            identity.register().await;
+            match AshpdShortcutPortal::connect().await {
+                Ok((portal, signals)) => {
+                    let _ = ready.send(Ok(()));
+                    actor_loop(portal, receiver, signals, events).await;
+                }
+                Err(error) => {
                     let _ = ready.send(Err(error));
-                    return;
-                };
-                runtime.block_on(async move {
-                    identity.register().await;
-                    match AshpdShortcutPortal::connect().await {
-                        Ok((portal, signals)) => {
-                            let _ = ready.send(Ok(()));
-                            actor_loop(portal, receiver, signals, events).await;
-                        }
-                        Err(error) => {
-                            let _ = ready.send(Err(error));
-                        }
-                    }
-                });
-            })
-            .ok();
+                }
+            }
+        });
         let startup_failure = match ready_receiver.recv_timeout(STARTUP_TIMEOUT) {
             Ok(result) => result.err(),
             Err(_) => Some(ShortcutRegistrationError::PortalUnavailable),
         };
-        (
-            Arc::new(Self {
-                commands,
-                worker: Mutex::new(worker),
-            }),
-            startup_failure,
-        )
+        (Arc::new(Self { commands }), startup_failure)
     }
 
     fn request(
@@ -366,15 +351,12 @@ impl ShortcutRegistrar for WaylandShortcutRegistrar {
         false
     }
 
+    /// The actor answers once its session is closed; after that the channel is closed and
+    /// a second shutdown returns at once.
     fn shutdown(&self) {
-        let mut worker = self.worker.lock().expect("shortcut worker lock poisoned");
-        let Some(worker) = worker.take() else {
-            return;
-        };
         let (reply, receiver) = std_mpsc::sync_channel(1);
         let _ = self.commands.send(Command::Shutdown { reply });
         let _ = receiver.recv_timeout(Duration::from_secs(5));
-        let _ = worker.join();
     }
 }
 
@@ -743,7 +725,10 @@ fn map_portal_error(error: AshpdError) -> ShortcutRegistrationError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
 
     use super::*;
 
@@ -881,10 +866,7 @@ mod tests {
     fn a_stopped_actor_reports_the_portal_unavailable() {
         let (commands, receiver) = mpsc::unbounded_channel();
         drop(receiver);
-        let registrar = WaylandShortcutRegistrar {
-            commands,
-            worker: Mutex::new(None),
-        };
+        let registrar = WaylandShortcutRegistrar { commands };
         assert_eq!(
             registrar.register(&binding(1)),
             Err(ShortcutRegistrationError::PortalUnavailable)
