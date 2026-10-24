@@ -5,7 +5,7 @@ use whispernow_domain::ipc::{Phase, RecordingTrigger};
 use super::ui::{Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
 use crate::management::replace_task;
 use crate::overlay::{LEVEL_BARS, format_elapsed};
-use crate::{Fix, Notice, OverlayView, UiContext, UiOperation, client};
+use crate::{Fix, FixTarget, Notice, OverlayView, UiContext, UiOperation, client};
 
 /// A failure with a button stays longer than one without, so the button can be reached.
 const FAILURE_WITH_ACTION_MS: u32 = 5_000;
@@ -74,7 +74,7 @@ pub fn RecordingBar() -> Element {
                 "overlay-failed",
                 error.summary.as_str(),
                 None,
-                crate::home_status::category_fix(error.category),
+                crate::home_status::error_fix(error),
             )
         }
         Phase::Idle | Phase::Paused | Phase::ClearingData | Phase::Updating => {
@@ -163,10 +163,13 @@ pub fn RecordingBar() -> Element {
                     }
                     if visible {
                         div { class: "overlay-actions",
-                            if let Some(Fix { label, section }) = action {
+                            if let Some(Fix { label, target }) = action {
                                 Button { id: "overlay-action", variant: ButtonVariant::Secondary,
                                     size: ButtonSize::Sm, disabled: action_blocked,
-                                    onclick: move |_| context.overlay_action(section),
+                                    onclick: move |_| match target {
+                                        FixTarget::Page(section) => context.overlay_action(section),
+                                        FixTarget::SystemSettings(kind) => context.overlay_permission_settings(kind),
+                                    },
                                     "{label}"
                                 }
                             }

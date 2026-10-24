@@ -41,6 +41,7 @@ fn state_changed_event_carries_the_whole_snapshot() {
             setup_test: Some(super::SetupTestResult::Heard {
                 text: "hello".to_owned(),
             }),
+            failed_download: None,
             cleanup_device: Some(super::CleanupDevice::Gpu {
                 name: "NVIDIA GeForce RTX 5070".to_owned(),
             }),
@@ -86,6 +87,7 @@ fn every_event_carries_its_variant_in_the_type_tag() {
         error: None,
         active_downloads: Vec::new(),
         setup_test: None,
+        failed_download: None,
         cleanup_device: None,
     };
     let update = UpdateState {

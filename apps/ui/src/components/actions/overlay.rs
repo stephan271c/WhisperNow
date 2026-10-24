@@ -1,7 +1,7 @@
 use std::future::Future;
 use whispernow_domain::AppError;
 
-use whispernow_domain::ipc::{MainWindowSection, Phase};
+use whispernow_domain::ipc::{MainWindowSection, PermissionKind, Phase};
 
 use crate::UiContext;
 use crate::UiOperation;
@@ -30,6 +30,14 @@ impl UiContext {
             {
                 state.overlay.action_error = Some(error.summary);
             }
+        });
+    }
+
+    /// Opens the system page for a permission and then dismisses the failure.
+    pub(crate) fn overlay_permission_settings(self, kind: PermissionKind) {
+        self.overlay_command(UiOperation::OverlayAction, async move {
+            client::invoke::<_, ()>("open_permission_settings", kind).await?;
+            client::call("dismiss_recording_overlay").await
         });
     }
 

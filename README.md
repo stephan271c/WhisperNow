@@ -10,7 +10,7 @@ the official `k2-fsa/sherpa-onnx` Rust bindings. Its design is in
 | Platform | Architectures | Official packages |
 | --- | --- | --- |
 | Windows 11 | x86_64 | current-user NSIS installer |
-| macOS 14+ | Apple Silicon, Intel | self-signed application and DMG (approve the first launch in Privacy & Security) |
+| macOS 13.3+ | Apple Silicon, Intel | self-signed application and DMG (approve the first launch in Privacy & Security) |
 | Linux | x86_64 | AppImage, `.deb`, `.rpm` |
 
 The capability matrix is in

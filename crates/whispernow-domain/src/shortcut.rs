@@ -266,10 +266,16 @@ pub struct Shortcut {
 }
 
 impl Default for Shortcut {
-    /// Hold-to-record's default, Ctrl + Space.
+    /// Hold-to-record's default, Ctrl + Space, or Ctrl + Option + Space on macOS, where Ctrl +
+    /// Space switches the input source.
     fn default() -> Self {
+        let modifiers = if cfg!(target_os = "macos") {
+            BTreeSet::from([ShortcutModifier::Control, ShortcutModifier::Alt])
+        } else {
+            BTreeSet::from([ShortcutModifier::Control])
+        };
         Self {
-            modifiers: BTreeSet::from([ShortcutModifier::Control]),
+            modifiers,
             key: ShortcutKey::Space,
         }
     }

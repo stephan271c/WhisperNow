@@ -30,13 +30,13 @@ pub use file_manager::{open_in_file_manager, open_privacy_settings, open_url};
 pub use llm::{complete, list_models};
 pub use local_cleanup::LocalCleanupService;
 pub use models::{DownloadProgress, DownloadTimeouts, ModelListEntry, ModelStore, ModelStoreError};
-#[cfg(target_os = "macos")]
-pub use paste_delivery::accessibility_trusted;
 #[cfg(target_os = "linux")]
 pub use paste_delivery::x11_paste_injection_available;
 pub use paste_delivery::{
     ClipboardContents, NativeClipboard, NativePasteError, NativePastePlatform,
 };
+#[cfg(target_os = "macos")]
+pub use paste_delivery::{accessibility_trusted, request_accessibility_trust};
 pub use paste_keys::PasteKeys;
 pub use paths::AppPaths;
 pub use settings_store::{SettingsLoad, SettingsNotice, SettingsStore};

@@ -171,9 +171,18 @@ impl NativeServices {
         match kind {
             PermissionKind::Microphone => self.request_microphone(),
             PermissionKind::RemoteDesktop => self.request_remote_desktop(),
-            PermissionKind::Accessibility
-            | PermissionKind::GlobalShortcuts
-            | PermissionKind::PasteSupport => Err(permission_not_requestable()),
+            PermissionKind::Accessibility => {
+                #[cfg(target_os = "macos")]
+                {
+                    whispernow_platform::request_accessibility_trust();
+                    Ok(())
+                }
+                #[cfg(not(target_os = "macos"))]
+                Err(permission_not_requestable())
+            }
+            PermissionKind::GlobalShortcuts | PermissionKind::PasteSupport => {
+                Err(permission_not_requestable())
+            }
         }
     }
 

@@ -73,9 +73,28 @@ impl NativePastePlatform {
 /// keystroke needs. It never prompts.
 #[cfg(target_os = "macos")]
 #[must_use]
+#[allow(unsafe_code)]
 pub fn accessibility_trusted() -> bool {
     // SAFETY: this query has no pointer preconditions and does not prompt.
     unsafe { objc2_application_services::AXIsProcessTrusted() }
+}
+
+/// Shows macOS's Accessibility prompt unless the process is already trusted. The prompt
+/// appears asynchronously and its answer shows in [`accessibility_trusted`] later.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+pub fn request_accessibility_trust() {
+    use objc2_application_services::{AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt};
+    use objc2_core_foundation::{CFBoolean, CFDictionary, CFString, kCFBooleanTrue};
+
+    // SAFETY: both statics are immutable constants that the system frameworks define.
+    let (key, yes) = unsafe { (kAXTrustedCheckOptionPrompt, kCFBooleanTrue) };
+    let Some(yes) = yes else {
+        return;
+    };
+    let options = CFDictionary::<CFString, CFBoolean>::from_slices(&[key], &[yes]);
+    // SAFETY: the dictionary maps a CFString key to a CFBoolean, the type this option takes.
+    let _trusted = unsafe { AXIsProcessTrustedWithOptions(Some(options.as_opaque())) };
 }
 
 /// Whether the X server offers XTEST, the paste keystroke's only injection

@@ -1,5 +1,44 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "settings",
+        "title": "WhisperNow",
+        "url": "/?window=settings",
+        "width": 960,
+        "height": 680,
+        "minWidth": 720,
+        "minHeight": 520,
+        "center": true,
+        "visible": false,
+        "transparent": true,
+        "acceptFirstMouse": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 18, "y": 22 },
+        "decorations": false
+      },
+      {
+        "label": "recording-bar",
+        "title": "WhisperNow Recording Status",
+        "url": "/?window=recording-bar",
+        "width": 360,
+        "height": 132,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "focus": false,
+        "focusable": false,
+        "acceptFirstMouse": true,
+        "skipTaskbar": true,
+        "resizable": false
+      }
+    ]
+  },
   "bundle": {
     "targets": ["nsis"],
     "windows": {

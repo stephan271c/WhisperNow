@@ -4,7 +4,7 @@
     allow(dead_code, reason = "natively only tests call the desktop")
 )]
 
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use whispernow_domain::AppError;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -60,6 +60,40 @@ pub(crate) const fn viewport_height() -> Option<f64> {
     None
 }
 
+/// How the settings window's titlebar is drawn.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum WindowFrame {
+    /// The OS draws the whole frame, or there is no window at all.
+    #[default]
+    Native,
+    /// The window is undecorated; the page draws the titlebar and its buttons.
+    Drawn,
+    /// macOS draws its buttons over the page; the page draws a drag strip under them.
+    Overlay,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Platform {
+    Windows,
+    Macos,
+    Linux,
+    #[default]
+    Other,
+}
+
+impl Platform {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Windows => "windows",
+            Self::Macos => "macos",
+            Self::Linux => "linux",
+            Self::Other => "other",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum WindowAction {
     Minimize,
@@ -92,8 +126,16 @@ pub(crate) fn apply_theme(_theme: Option<&str>) {}
 pub(crate) const fn reset_settings_scroll() {}
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn has_custom_titlebar() -> std::future::Ready<bool> {
-    std::future::ready(false)
+pub(crate) const fn track_scroll_activity() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn window_frame() -> std::future::Ready<WindowFrame> {
+    std::future::ready(fake::frame().0)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn host_platform() -> Platform {
+    fake::frame().1
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -126,7 +168,7 @@ mod wasm {
     use whispernow_domain::EntryId;
     use whispernow_domain::ipc::EventPayload;
 
-    use super::{Answer, AppError, WindowAction, connection_error};
+    use super::{Answer, AppError, Platform, WindowAction, WindowFrame, connection_error};
 
     #[wasm_bindgen]
     extern "C" {
@@ -163,11 +205,17 @@ mod wasm {
         #[wasm_bindgen(js_name = delay)]
         async fn delay_js(ms: u32) -> JsValue;
 
+        #[wasm_bindgen(js_name = trackScrollActivity)]
+        pub fn track_scroll_activity();
+
         #[wasm_bindgen(js_name = applyTheme)]
         pub fn apply_theme(theme: Option<&str>);
 
-        #[wasm_bindgen(catch, js_name = hasCustomTitlebar)]
-        async fn has_custom_titlebar_js() -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = windowFrame)]
+        async fn window_frame_js() -> Result<JsValue, JsValue>;
+
+        #[wasm_bindgen(js_name = hostPlatform)]
+        fn host_platform_js() -> JsValue;
 
         #[wasm_bindgen(catch, js_name = minimizeWindow)]
         async fn minimize_window_js() -> Result<(), JsValue>;
@@ -227,14 +275,14 @@ mod wasm {
         })
     }
 
-    /// Whether this window is undecorated and so draws its own titlebar. A window whose
-    /// decoration cannot be read keeps its native frame, so the answer is `false`.
-    pub(crate) async fn has_custom_titlebar() -> bool {
-        has_custom_titlebar_js()
-            .await
-            .ok()
-            .and_then(|custom| custom.as_bool())
-            .unwrap_or(false)
+    /// A window whose decoration cannot be read keeps its native frame.
+    pub(crate) async fn window_frame() -> WindowFrame {
+        let frame = window_frame_js().await.unwrap_or(JsValue::NULL);
+        serde_wasm_bindgen::from_value(frame).unwrap_or_default()
+    }
+
+    pub(crate) fn host_platform() -> Platform {
+        serde_wasm_bindgen::from_value(host_platform_js()).unwrap_or_default()
     }
 
     pub(crate) fn run_window_action(action: WindowAction) {

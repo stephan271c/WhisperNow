@@ -124,6 +124,7 @@ fn make_store_for_definition(definition: ModelDefinition) -> TempStore {
 
 #[test]
 fn startup_removes_download_staging_and_preserves_installed_models_and_other_files() {
+    #[cfg_attr(not(unix), expect(unused_variables))]
     let (root, paths) = temp_paths();
     let models = paths.models_dir();
     let installed = models.join(MODEL_ID);

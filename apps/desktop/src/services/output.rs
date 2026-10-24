@@ -2,9 +2,11 @@ use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 
+#[cfg(target_os = "linux")]
+use whispernow_core::text_output::PastePlatform;
 use whispernow_core::{
     CancellationToken,
-    text_output::{PasteOutcome, PastePlatform, PasteQueue},
+    text_output::{PasteOutcome, PasteQueue},
 };
 use whispernow_domain::ipc::PermissionStatus;
 use whispernow_domain::{AppError, ErrorCategory};
@@ -28,6 +30,7 @@ use whispernow_platform::{
 pub(crate) enum OutputNotice {
     Pasted,
     PermissionDenied,
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     CapabilityUnavailable,
     PasteFailed,
     Cancelled,
@@ -60,6 +63,7 @@ enum OutputOperation {
 }
 
 impl OutputCoordinator {
+    #[cfg_attr(not(target_os = "linux"), expect(clippy::needless_pass_by_value))]
     pub(crate) fn native(wayland_token_path: Option<PathBuf>) -> Self {
         let stopping = CancellationToken::default();
         #[cfg(target_os = "linux")]
@@ -161,6 +165,7 @@ impl OutputCoordinator {
         })
     }
 
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     pub(crate) const fn native_wayland(&self) -> bool {
         match self.operation {
             #[cfg(target_os = "linux")]
@@ -171,6 +176,7 @@ impl OutputCoordinator {
 
     /// The `RemoteDesktop` portal consent the paste keystroke needs, or `None`
     /// outside a native Wayland session, where no portal is involved.
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     pub(crate) fn remote_desktop_consent(&self) -> Option<PermissionStatus> {
         match &self.operation {
             #[cfg(target_os = "linux")]

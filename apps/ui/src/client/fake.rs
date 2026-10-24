@@ -2,12 +2,14 @@
 //! answers it, and every timer waits until the test runs the timers.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     future::poll_fn,
     rc::Rc,
     task::{Poll, Waker},
 };
 use whispernow_domain::{AppError, ipc::COMMAND_NAMES};
+
+use super::{Platform, WindowFrame};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -35,6 +37,7 @@ struct Timers {
 }
 
 thread_local! {
+    static FRAME: Cell<(WindowFrame, Platform)> = const { Cell::new((WindowFrame::Native, Platform::Other)) };
     static CALLS: RefCell<Vec<Call>> = const { RefCell::new(Vec::new()) };
     static TIMERS: RefCell<Timers> = RefCell::new(Timers::default());
 }
@@ -92,7 +95,17 @@ fn reply(answer: Result<impl Serialize, AppError>) -> Reply {
     answer.map(|value| serde_json::to_value(value).expect("serializable answer"))
 }
 
+/// Makes the window draw its titlebar as `frame` on `platform` from the next render on.
+pub(crate) fn set_frame(frame: WindowFrame, platform: Platform) {
+    FRAME.set((frame, platform));
+}
+
+pub(super) fn frame() -> (WindowFrame, Platform) {
+    FRAME.get()
+}
+
 pub(crate) fn reset() {
+    FRAME.set((WindowFrame::Native, Platform::Other));
     CALLS.with_borrow_mut(Vec::clear);
     TIMERS.with_borrow_mut(|timers| *timers = Timers::default());
 }

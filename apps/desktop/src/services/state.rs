@@ -170,6 +170,7 @@ impl State {
                 .values()
                 .map(|download| download.progress.clone())
                 .collect(),
+            failed_download: self.failed_download.clone(),
             setup_test: self.setup_test.clone(),
             cleanup_device: self.cleanup_device.clone(),
         }

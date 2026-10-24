@@ -71,6 +71,7 @@ pub(crate) fn still_focused(expected: NativeDestination) -> Result<(), NativePas
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn capture_system_destination() -> Result<Option<NativeDestination>, NativePasteError> {
     use objc2_app_kit::NSWorkspace;
     use objc2_application_services::AXUIElement;
@@ -100,6 +101,7 @@ fn capture_system_destination() -> Result<Option<NativeDestination>, NativePaste
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn copy_ax_identity(
     element: &objc2_application_services::AXUIElement,
     attribute: &'static str,
@@ -130,6 +132,7 @@ fn copy_ax_identity(
 }
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 fn capture_system_destination() -> Result<Option<NativeDestination>, NativePasteError> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GUITHREADINFO, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo,

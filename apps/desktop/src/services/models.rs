@@ -302,26 +302,21 @@ fn run_model_download(
             download.progress.bytes_per_second = bytes_per_second;
         });
     };
-    let completion_error = match store.download(&model_id, &cancellation, &observer) {
-        Ok(_) => None,
+    let failed = match store.download(&model_id, &cancellation, &observer) {
+        Ok(_) => false,
         Err(ModelStoreError::Cancelled) => {
             tracing::info!(model_id = %model_id, "model download cancelled");
-            None
+            false
         }
         Err(error) => {
             tracing::warn!(%error, model_id = %model_id, "the model could not be installed");
-            Some(AppError::new(
-                ErrorCategory::Model,
-                "model_download",
-                "The model could not be installed",
-            ))
+            true
         }
     };
     state.apply(|current| {
         current.active_downloads.remove(&model_id);
-        if let Some(error) = completion_error {
+        if failed {
             current.failed_download = Some(model_id);
-            current.last_error = Some(error);
         }
     });
     state.events().models_changed();
@@ -570,6 +565,27 @@ mod tests {
         assert!(fixture.state.snapshot().error.is_none());
         fixture.dictation.cancel().expect("cancel recording");
         fixture.flush();
+    }
+
+    #[test]
+    fn a_failed_download_marks_its_model_without_becoming_the_applications_error() {
+        let fixture = Fixture::new();
+        fixture.flush();
+        let download = DownloadFixture::new(&fixture.state);
+        download
+            .models
+            .download(&download.model_id)
+            .expect("download admitted");
+        let mut connection = download.request();
+        connection
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .expect("failing response");
+        download.models.shutdown_downloads();
+
+        let snapshot = fixture.state.snapshot();
+        assert!(snapshot.active_downloads.is_empty());
+        assert_eq!(snapshot.failed_download, Some(download.model_id.clone()));
+        assert!(snapshot.error.is_none());
     }
 
     #[test]

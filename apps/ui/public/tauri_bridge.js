@@ -62,6 +62,33 @@ export function resetSettingsScroll() {
   window.scrollTo(0, 0);
 }
 
+const SCROLL_IDLE_MS = 900;
+let scrollTracked = false;
+
+// Marks whatever scrolls with `is-scrolling` until it has been still for a moment, so the
+// stylesheet can fade the scrollbar thumb in and out.
+export function trackScrollActivity() {
+  if (scrollTracked) {
+    return;
+  }
+  scrollTracked = true;
+  const timers = new WeakMap();
+  document.addEventListener(
+    "scroll",
+    (event) => {
+      const target =
+        event.target instanceof Element ? event.target : document.documentElement;
+      clearTimeout(timers.get(target));
+      target.classList.add("is-scrolling");
+      timers.set(
+        target,
+        setTimeout(() => target.classList.remove("is-scrolling"), SCROLL_IDLE_MS),
+      );
+    },
+    { capture: true, passive: true },
+  );
+}
+
 export function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -77,9 +104,26 @@ export function applyTheme(theme) {
 }
 
 // Window chrome. The desktop leaves the main window undecorated where the page draws its own
-// titlebar, so the page asks the window rather than guessing from the platform.
-export async function hasCustomTitlebar() {
-  return !(await tauri().window.getCurrentWindow().isDecorated());
+// titlebar, and keeps the native macOS buttons over the page, so the page asks the window
+// rather than guessing from the platform.
+export function hostPlatform() {
+  const agent = window.navigator?.userAgent ?? "";
+  if (agent.includes("Windows")) {
+    return "windows";
+  }
+  if (agent.includes("Macintosh")) {
+    return "macos";
+  }
+  return agent.includes("Linux") ? "linux" : "other";
+}
+
+// "drawn": the page draws the titlebar and its buttons. "overlay": the page draws a drag strip
+// under macOS's own buttons. "native": the OS frame is there and the page adds nothing.
+export async function windowFrame() {
+  if (!(await tauri().window.getCurrentWindow().isDecorated())) {
+    return "drawn";
+  }
+  return hostPlatform() === "macos" ? "overlay" : "native";
 }
 
 export async function minimizeWindow() {

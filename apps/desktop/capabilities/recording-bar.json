@@ -10,6 +10,7 @@
     "allow-stop-recording",
     "allow-cancel-recording",
     "allow-dismiss-recording-overlay",
-    "allow-open-main-window"
+    "allow-open-main-window",
+    "allow-open-permission-settings"
   ]
 }

@@ -244,7 +244,7 @@ pub(crate) async fn download_model(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("download_model", Failure::Published, move |services| {
+        .run_command("download_model", Failure::Local, move |services| {
             services.models.download(&request)
         })
         .await
@@ -256,7 +256,7 @@ pub(crate) async fn cancel_download(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("cancel_download", Failure::Published, move |services| {
+        .run_command("cancel_download", Failure::Local, move |services| {
             services.models.cancel_download(&request)
         })
         .await
@@ -268,7 +268,7 @@ pub(crate) async fn select_model(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("select_model", Failure::Published, move |services| {
+        .run_command("select_model", Failure::Local, move |services| {
             services.select_model(request)
         })
         .await
@@ -280,7 +280,7 @@ pub(crate) async fn delete_model(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("delete_model", Failure::Published, move |services| {
+        .run_command("delete_model", Failure::Local, move |services| {
             services.models.delete(&request)
         })
         .await

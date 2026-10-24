@@ -8,6 +8,7 @@ use whispernow_domain::ipc::PasteHelperSetup;
 use whispernow_domain::{RecordingMode, Shortcut, ShortcutKey, ShortcutModifier};
 
 use super::labels;
+use super::ui::focus::take_focus;
 use super::ui::{
     Banner, Button, ButtonSize, Icon, IconName, Kbd, ShortcutLabel, Tone, shortcut_parts,
 };
@@ -121,6 +122,7 @@ pub(super) fn ShortcutCapture(
     #[props(default)] lone_keys: bool,
 ) -> Element {
     let mut status = use_signal(|| CaptureStatus::Idle);
+    let mut button = use_signal(|| None::<std::rc::Rc<MountedData>>);
     // While listening, the desktop's global shortcuts are suspended so pressing
     // the current shortcut is captured instead of starting a recording.
     use_effect(use_reactive!(|disabled| {
@@ -177,9 +179,12 @@ pub(super) fn ShortcutCapture(
                 aria_describedby: "{keys_id} {help_id}",
                 aria_pressed: capturing,
                 disabled,
+                onmounted: move |event| button.set(Some(event.data())),
+                // Safari does not focus a button on click, and the keys arrive at the focused one.
                 onclick: move |_| {
                     if !disabled {
                         status.set(CaptureStatus::Listening);
+                        take_focus(button);
                     }
                 },
                 onblur: move |_| {

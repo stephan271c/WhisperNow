@@ -100,6 +100,12 @@ pub(super) fn ModelRow(
     let slug = model_slug(&id);
     let name = model.display_name.clone();
     let download = context.active_download(&id);
+    let download_failed = context
+        .state
+        .read()
+        .snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.failed_download.as_ref() == Some(&id));
     let active_state = match kind {
         ModelRowKind::Speech { state } => state,
         ModelRowKind::Cleanup { .. } => None,
@@ -136,13 +142,16 @@ pub(super) fn ModelRow(
                 if let Some(download) = download {
                     DownloadProgress { download, name: name.clone() }
                 } else if model.availability == ModelAvailability::NotInstalled {
+                    if download_failed {
+                        span { class: "download-phase", role: "status", "Download failed" }
+                    }
                     Button {
                         id: "model-{slug}-download",
                         aria_label: "Download {name}",
                         disabled: download_blocked.is_some(),
                         aria_describedby: describe(&download_blocked),
                         onclick: { let id = id.clone(); move |_| context.download_model(id.clone()) },
-                        "Download"
+                        if download_failed { "Retry download" } else { "Download" }
                     }
                 } else if kind == (ModelRowKind::Speech { state: None }) {
                     Button {

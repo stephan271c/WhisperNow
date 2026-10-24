@@ -162,14 +162,13 @@ pub fn AppShell() -> Element {
         .filter(|notice| !route.hosts(notice.scope));
     rsx! {
         div {
-            class: "wn-app settings-shell",
-            class: if chrome.custom { "custom-chrome" },
-            class: if chrome.maximized { "maximized" },
+            class: chrome.shell_class(),
+            "data-platform": chrome.platform_name(),
             a { class: "skip-link", href: "#main-content", "Skip to content" }
             aside { class: "settings-sidebar",
                 header {
                     class: "brand",
-                    "data-tauri-drag-region": chrome.custom.then_some("deep"),
+                    "data-tauri-drag-region": chrome.has_strip().then_some("deep"),
                     span { class: "brand-mark", BrandMark {} }
                     strong { "WhisperNow" }
                 }
@@ -197,8 +196,8 @@ pub fn AppShell() -> Element {
                 Page { route }
             }
             // Last in the document so keyboard focus reaches the page before the window controls.
-            if chrome.custom {
-                TitleBar { maximized: chrome.maximized }
+            if chrome.has_strip() {
+                TitleBar { frame: chrome.frame, maximized: chrome.maximized }
             }
         }
     }

@@ -20,8 +20,8 @@ shortcut, then you talk. It deliberately avoids the microphone used by most dict
 | `icons/whispernow-app-icon-tiny.svg` | Pixel-grid app icon for 16–32 px |
 | `icons/whispernow.ico`, `icons/whispernow.icns`, `icons/png/` | Built icon sets; tiny cut at 16/24/32, full cut above |
 
-`apps/desktop/icons/icon.png` and `icon.icns` are copies of `icons/png/app-icon-512.png` and
-`icons/whispernow.icns`. The tray icons are drawn in `apps/desktop/src/tray.rs` and are not
+`apps/desktop/icons/icon.png`, `icon.icns` and `icon.ico` are copies of
+`icons/png/app-icon-512.png`, `icons/whispernow.icns` and `icons/whispernow.ico`. The tray icons are drawn in `apps/desktop/src/tray.rs` and are not
 part of this set.
 
 All files are paths only: no live text, no rasters, no filters. The reversed files are drawn about

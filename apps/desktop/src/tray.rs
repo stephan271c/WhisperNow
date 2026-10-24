@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::{
     image::Image,
@@ -189,13 +189,15 @@ impl NativeTray {
             .pause
             .set_enabled(desired.pause != PauseItem::Unavailable);
         let _ = self.icon.set_tooltip(Some(presentation.tooltip));
-        let _ = self.icon.set_icon(Some(state_icon(desired.state)));
+        let _ = self
+            .icon
+            .set_icon_with_as_template(Some(state_icon(desired.state, system_ink())), IS_TEMPLATE);
     }
 }
 
 pub(crate) struct TrayController {
     native: Option<NativeTray>,
-    desired: Mutex<TrayDesired>,
+    desired: Arc<Mutex<TrayDesired>>,
     copy_capable: bool,
 }
 
@@ -232,7 +234,8 @@ impl TrayController {
         )?;
         let icon = TrayIconBuilder::with_id("whispernow-tray")
             .menu(&menu)
-            .icon(state_icon(TrayState::Loading))
+            .icon(state_icon(TrayState::Loading, system_ink()))
+            .icon_as_template(IS_TEMPLATE)
             .tooltip(presentation.tooltip)
             .show_menu_on_left_click(false)
             .on_menu_event(|app, event| {
@@ -256,16 +259,23 @@ impl TrayController {
                 }
             })
             .build(app)?;
-        Ok(Self::with(
-            Some(NativeTray {
-                icon,
-                status,
-                copy_last,
-                cancel,
-                pause,
-            }),
-            copy_capable,
-        ))
+        let native = NativeTray {
+            icon,
+            status,
+            copy_last,
+            cancel,
+            pause,
+        };
+        let controller = Self::with(Some(native.clone()), copy_capable);
+        #[cfg(windows)]
+        {
+            let desired = Arc::clone(&controller.desired);
+            taskbar_theme::watch(move || {
+                let current = desired.lock().expect("tray desired lock poisoned");
+                render_later(&native, *current);
+            });
+        }
+        Ok(controller)
     }
 
     #[cfg(test)]
@@ -276,7 +286,7 @@ impl TrayController {
     fn with(native: Option<NativeTray>, copy_capable: bool) -> Self {
         Self {
             native,
-            desired: Mutex::new(TrayDesired::LOADING),
+            desired: Arc::new(Mutex::new(TrayDesired::LOADING)),
             copy_capable,
         }
     }
@@ -300,12 +310,16 @@ impl TrayController {
     }
 
     fn render(&self, desired: TrayDesired) {
-        let Some(native) = self.native.clone() else {
-            return;
-        };
-        let app = native.icon.app_handle().clone();
-        let _ = app.run_on_main_thread(move || native.render(desired));
+        if let Some(native) = &self.native {
+            render_later(native, desired);
+        }
     }
+}
+
+fn render_later(native: &NativeTray, desired: TrayDesired) {
+    let app = native.icon.app_handle().clone();
+    let native = native.clone();
+    let _ = app.run_on_main_thread(move || native.render(desired));
 }
 
 fn menu_item(
@@ -317,15 +331,129 @@ fn menu_item(
     MenuItem::with_id(app, id, text, enabled, None::<&str>)
 }
 
+/// macOS draws template images: the menu bar tints them from the alpha channel alone.
+const IS_TEMPLATE: bool = cfg!(target_os = "macos");
+
+/// The glyph color, which must contrast with the panel the tray icon sits on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Ink {
+    /// Light panels: the Windows light taskbar and, as template alpha, the macOS menu bar.
+    Dark,
+    Light,
+}
+
+impl Ink {
+    const fn rgb(self) -> [u8; 3] {
+        match self {
+            Self::Dark => [32, 32, 32],
+            Self::Light => [245, 245, 245],
+        }
+    }
+
+    const fn for_light_panel(light_panel: Option<bool>) -> Self {
+        match light_panel {
+            Some(true) => Self::Dark,
+            _ => Self::Light,
+        }
+    }
+}
+
+/// Re-read on every render. `None` keeps the light glyph, which suits dark panels and is
+/// the best guess on Linux, where panels vary.
+fn system_ink() -> Ink {
+    #[cfg(target_os = "macos")]
+    let light_panel = Some(true);
+    #[cfg(windows)]
+    let light_panel = Some(taskbar_theme::uses_light_theme());
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let light_panel = None;
+    Ink::for_light_panel(light_panel)
+}
+
+#[cfg(windows)]
+mod taskbar_theme {
+    use std::{ptr, thread};
+
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_NOTIFY, REG_NOTIFY_CHANGE_LAST_SET, RRF_RT_REG_DWORD,
+        RegCloseKey, RegGetValueW, RegNotifyChangeKeyValue, RegOpenKeyExW,
+    };
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain([0]).collect()
+    }
+
+    fn personalize_key() -> Vec<u16> {
+        wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+    }
+
+    /// The taskbar and tray flyout theme, which `AppsUseLightTheme` does not describe.
+    /// A missing value counts as dark, the Windows default before the setting existed.
+    #[allow(unsafe_code)]
+    pub(super) fn uses_light_theme() -> bool {
+        let key = personalize_key();
+        let value = wide("SystemUsesLightTheme");
+        let mut data = 0_u32;
+        let mut size = u32::try_from(size_of::<u32>()).unwrap_or(4);
+        // SAFETY: both names are NUL-terminated and outlive the call, and `data`/`size`
+        // describe a writable u32.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_DWORD,
+                ptr::null_mut(),
+                ptr::addr_of_mut!(data).cast(),
+                &raw mut size,
+            )
+        };
+        status == 0 && data != 0
+    }
+
+    /// Calls `on_change` after every write under the Personalize key, on a background thread.
+    #[allow(unsafe_code)]
+    pub(super) fn watch(on_change: impl Fn() + Send + 'static) {
+        thread::spawn(move || {
+            let subkey = personalize_key();
+            let mut key: HKEY = ptr::null_mut();
+            // SAFETY: `subkey` is NUL-terminated and `key` is a writable HKEY.
+            let opened = unsafe {
+                RegOpenKeyExW(
+                    HKEY_CURRENT_USER,
+                    subkey.as_ptr(),
+                    0,
+                    KEY_NOTIFY,
+                    &raw mut key,
+                )
+            };
+            if opened != 0 {
+                return;
+            }
+            // SAFETY: `key` was opened above and stays open until closed below; a null event
+            // with `fasynchronous` false makes the call block until the key changes.
+            while unsafe {
+                RegNotifyChangeKeyValue(key, 0, REG_NOTIFY_CHANGE_LAST_SET, ptr::null_mut(), 0)
+            } == 0
+            {
+                on_change();
+            }
+            // SAFETY: `key` is still open and not used afterwards.
+            unsafe { RegCloseKey(key) };
+        });
+    }
+}
+
 /// Every state is the app's key with a different face, so status does not depend on
 /// color: an empty key while loading, updating or clearing data, the logo's bars when idle, a solid key while recording,
 /// dots while processing, a pause sign when paused and an exclamation mark on error.
 ///
 /// Drawn at 32 px on a 2 px grid so it stays sharp on 2x displays, with 4x4 supersampled edges.
-fn state_icon(state: TrayState) -> Image<'static> {
+fn state_icon(state: TrayState, ink: Ink) -> Image<'static> {
     const SIDE: u16 = 32;
     const SAMPLES: u16 = 4;
     let side = usize::from(SIDE);
+    let [red, green, blue] = ink.rgb();
     let mut pixels = vec![0_u8; side * side * 4];
     for py in 0..SIDE {
         for px in 0..SIDE {
@@ -340,7 +468,7 @@ fn state_icon(state: TrayState) -> Image<'static> {
             if hits > 0 {
                 let alpha = u8::try_from(255 * hits / (SAMPLES * SAMPLES)).unwrap_or(u8::MAX);
                 let offset = (usize::from(py) * side + usize::from(px)) * 4;
-                pixels[offset..offset + 4].copy_from_slice(&[245, 245, 245, alpha]);
+                pixels[offset..offset + 4].copy_from_slice(&[red, green, blue, alpha]);
             }
         }
     }
@@ -506,7 +634,10 @@ mod tests {
             TrayState::Paused,
             TrayState::Error,
         ];
-        let icons: Vec<_> = states.map(state_icon).into_iter().collect();
+        let icons: Vec<_> = states
+            .map(|state| state_icon(state, Ink::Dark))
+            .into_iter()
+            .collect();
         for (state, icon) in states.iter().zip(&icons) {
             assert!(
                 icon.rgba().chunks(4).any(|pixel| pixel[3] == 255),
@@ -522,6 +653,27 @@ mod tests {
                     states[i],
                     states[j]
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn the_glyph_color_contrasts_with_the_panel_and_only_the_color_changes() {
+        assert_eq!(Ink::for_light_panel(Some(true)), Ink::Dark);
+        assert_eq!(Ink::for_light_panel(Some(false)), Ink::Light);
+        assert_eq!(Ink::for_light_panel(None), Ink::Light);
+        let luminance = |ink: Ink| ink.rgb().map(u16::from).iter().sum::<u16>() / 3;
+        assert!(luminance(Ink::Dark) < 64);
+        assert!(luminance(Ink::Light) > 192);
+        for state in [TrayState::Idle, TrayState::Recording, TrayState::Error] {
+            let dark = state_icon(state, Ink::Dark);
+            let light = state_icon(state, Ink::Light);
+            for (d, l) in dark.rgba().chunks(4).zip(light.rgba().chunks(4)) {
+                assert_eq!(d[3], l[3], "{state:?} changed shape with the ink");
+                if d[3] > 0 {
+                    assert_eq!(d[..3], Ink::Dark.rgb(), "{state:?}");
+                    assert_eq!(l[..3], Ink::Light.rgb(), "{state:?}");
+                }
             }
         }
     }

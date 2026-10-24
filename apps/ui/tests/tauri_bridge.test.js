@@ -5,12 +5,14 @@ import {
   applyTheme,
   audioBlob,
   closeWindow,
-  hasCustomTitlebar,
+  hostPlatform,
   listenMaximized,
   invokeTyped,
   objectUrl,
   revokeObjectUrl,
+  trackScrollActivity,
   unlistenTyped,
+  windowFrame,
 } from "../public/tauri_bridge.js";
 
 function installTauri(invocations) {
@@ -113,9 +115,10 @@ test("a chosen theme sets data-theme and the system theme removes it", () => {
   assert.equal("theme" in root.dataset, false);
 });
 
-function installWindow(calls, state) {
+function installWindow(calls, state, userAgent = "") {
   const resized = new Set();
   globalThis.window = {
+    navigator: { userAgent },
     __TAURI__: {
       core: {},
       event: {},
@@ -153,11 +156,38 @@ function installWindow(calls, state) {
   };
 }
 
-test("only an undecorated window draws its own titlebar", async () => {
-  installWindow([], { decorated: false });
-  assert.equal(await hasCustomTitlebar(), true);
-  installWindow([], { decorated: true });
-  assert.equal(await hasCustomTitlebar(), false);
+function installPlatform(agent) {
+  globalThis.window = { navigator: { userAgent: agent } };
+}
+
+test("the platform is read from the webview's user agent", () => {
+  installPlatform("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Edg/140.0");
+  assert.equal(hostPlatform(), "windows");
+  installPlatform("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15");
+  assert.equal(hostPlatform(), "macos");
+  installPlatform("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15");
+  assert.equal(hostPlatform(), "linux");
+  installPlatform("Mozilla/5.0 (X11; FreeBSD amd64)");
+  assert.equal(hostPlatform(), "other");
+});
+
+test("an undecorated window draws its own titlebar on every platform", async () => {
+  for (const agent of ["Windows NT 10.0", "Macintosh", "X11; Linux x86_64"]) {
+    installWindow([], { decorated: false }, agent);
+    assert.equal(await windowFrame(), "drawn", agent);
+  }
+});
+
+test("a decorated macOS window keeps its own buttons over the page", async () => {
+  installWindow([], { decorated: true }, "Macintosh; Intel Mac OS X 10_15_7");
+  assert.equal(await windowFrame(), "overlay");
+});
+
+test("a decorated window elsewhere keeps its native frame", async () => {
+  installWindow([], { decorated: true }, "Windows NT 10.0");
+  assert.equal(await windowFrame(), "native");
+  installWindow([], { decorated: true }, "X11; Linux x86_64");
+  assert.equal(await windowFrame(), "native");
 });
 
 test("the close button requests a close so the desktop can hide to the tray", async () => {
@@ -207,4 +237,45 @@ test("a failed initial maximize report detaches the abandoned resize subscriptio
   state.maximized = true;
   await current.resize();
   assert.deepEqual(reports, []);
+});
+
+test("the area that scrolls is marked until it has been still for a moment", (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  globalThis.Element = class {
+    constructor() {
+      const names = new Set();
+      this.classList = {
+        add: (name) => names.add(name),
+        remove: (name) => names.delete(name),
+        contains: (name) => names.has(name),
+      };
+    }
+  };
+  const root = new Element();
+  const list = new Element();
+  let onScroll;
+  globalThis.document = {
+    documentElement: root,
+    addEventListener: (type, listener, options) => {
+      assert.equal(type, "scroll");
+      assert.equal(options.capture, true);
+      onScroll = listener;
+    },
+  };
+
+  trackScrollActivity();
+  trackScrollActivity();
+  onScroll({ target: list });
+  onScroll({ target: document });
+  assert.equal(list.classList.contains("is-scrolling"), true);
+  assert.equal(root.classList.contains("is-scrolling"), true);
+
+  context.mock.timers.tick(800);
+  onScroll({ target: list });
+  context.mock.timers.tick(800);
+  assert.equal(list.classList.contains("is-scrolling"), true);
+  assert.equal(root.classList.contains("is-scrolling"), false);
+
+  context.mock.timers.tick(200);
+  assert.equal(list.classList.contains("is-scrolling"), false);
 });

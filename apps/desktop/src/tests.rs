@@ -15,6 +15,7 @@ pub(crate) fn snapshot(phase: Phase) -> AppState {
         error: None,
         active_downloads: Vec::new(),
         setup_test: None,
+        failed_download: None,
         cleanup_device: None,
     }
 }
@@ -111,14 +112,15 @@ fn command_catalog_is_identical_across_handler_permissions_and_capabilities() {
 
     let allowed_by_window = allowed_commands_by_window(manifest_dir);
     let all_commands: BTreeSet<String> = catalog.iter().map(ToString::to_string).collect();
-    // The overlay reads state, and its controls stop, cancel, dismiss, or open the main window;
-    // nothing else.
+    // The overlay reads state, and its controls stop, cancel, dismiss, open the main window or
+    // the system page that grants a permission; nothing else.
     let recording_bar_commands = [
         "get_state",
         "stop_recording",
         "cancel_recording",
         "dismiss_recording_overlay",
         "open_main_window",
+        "open_permission_settings",
     ]
     .map(str::to_owned);
     let recording_bar_commands = BTreeSet::from(recording_bar_commands);
@@ -169,6 +171,80 @@ fn settings_window_is_transparent_so_linux_chrome_can_round_its_corners() {
     assert_eq!(settings_window["transparent"], true);
 }
 
+fn settings_window(config: &serde_json::Value) -> &serde_json::Value {
+    config["app"]["windows"]
+        .as_array()
+        .expect("configured windows")
+        .iter()
+        .find(|window| window["label"] == SETTINGS_WINDOW)
+        .expect("settings window")
+}
+
+#[test]
+fn windows_config_repeats_every_window_with_the_settings_window_undecorated() {
+    let base: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid JSON");
+    let windows: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.windows.conf.json")).expect("valid JSON");
+    let mut expected = base["app"]["windows"].clone();
+    expected
+        .as_array_mut()
+        .expect("configured windows")
+        .iter_mut()
+        .find(|window| window["label"] == SETTINGS_WINDOW)
+        .expect("settings window")["decorations"] = false.into();
+
+    // A platform file replaces `app.windows` whole, so it must repeat every window.
+    assert_eq!(windows["app"]["windows"], expected);
+}
+
+#[test]
+fn settings_window_keeps_the_macos_buttons_over_the_page() {
+    let base: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid JSON");
+    let macos: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.macos.conf.json")).expect("valid JSON");
+    let window = settings_window(&base);
+
+    assert_eq!(window["titleBarStyle"], "Overlay");
+    assert_eq!(window["hiddenTitle"], true);
+    assert!(window["trafficLightPosition"]["x"].is_number());
+    assert!(window["trafficLightPosition"]["y"].is_number());
+    assert_ne!(
+        window["decorations"], false,
+        "the buttons need a decorated window"
+    );
+    assert!(
+        macos["app"]["windows"].is_null(),
+        "a macOS window list would replace the base list"
+    );
+}
+
+#[test]
+fn settings_capability_allows_the_titlebar_window_actions_on_every_platform() {
+    let capability: serde_json::Value =
+        serde_json::from_str(include_str!("../capabilities/default.json")).expect("valid JSON");
+    let permissions: BTreeSet<&str> = capability["permissions"]
+        .as_array()
+        .expect("capability permissions")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+
+    assert!(capability["platforms"].is_null());
+    for needed in [
+        "core:window:allow-is-decorated",
+        "core:window:allow-is-maximized",
+        "core:window:allow-start-dragging",
+        "core:window:allow-internal-toggle-maximize",
+        "core:window:allow-minimize",
+        "core:window:allow-toggle-maximize",
+        "core:window:allow-close",
+    ] {
+        assert!(permissions.contains(needed), "{needed}");
+    }
+}
+
 #[test]
 fn production_csp_allows_the_dioxus_webassembly_frontend() {
     let config: serde_json::Value =
@@ -188,7 +264,7 @@ fn production_csp_allows_the_dioxus_webassembly_frontend() {
 fn macos_bundle_declares_only_required_permissions_and_current_minimum() {
     let config: serde_json::Value =
         serde_json::from_str(include_str!("../tauri.macos.conf.json")).expect("valid JSON");
-    assert_eq!(config["bundle"]["macOS"]["minimumSystemVersion"], "14.0");
+    assert_eq!(config["bundle"]["macOS"]["minimumSystemVersion"], "13.3");
     assert_eq!(
         config["bundle"]["macOS"]["entitlements"],
         "Entitlements.plist"

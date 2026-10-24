@@ -1,7 +1,7 @@
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use whispernow_domain::AppError;
-use whispernow_domain::ipc::{PermissionKind, PermissionsResponse, SettingsView};
+use whispernow_domain::ipc::{PermissionKind, PermissionStatus, PermissionsResponse, SettingsView};
 use whispernow_domain::{SetupCheckpoint, SetupStep};
 
 use crate::client;
@@ -122,13 +122,26 @@ impl UiContext {
         }
     }
 
-    /// Asks for `kind`, then watches the cards until none can change any more.
+    /// Asks for `kind`, then watches the cards until none can change any more. macOS shows one
+    /// prompt at a time and drops the other, so Accessibility is asked once the microphone is
+    /// answered.
     pub(crate) fn request_permission(self, kind: PermissionKind) {
         self.run(
             UiOperation::RequestPermission(kind),
             client::invoke("request_permission", kind),
-            |actions, answer| match answer {
-                Ok(permissions) => actions.install_permissions(permissions),
+            move |actions, answer: Result<PermissionsResponse, AppError>| match answer {
+                Ok(permissions) => {
+                    let accessibility_next = kind == PermissionKind::Microphone
+                        && permissions.permissions.iter().any(|card| {
+                            card.kind == PermissionKind::Accessibility
+                                && card.can_request
+                                && card.status != PermissionStatus::Granted
+                        });
+                    actions.install_permissions(permissions);
+                    if accessibility_next {
+                        actions.request_permission(PermissionKind::Accessibility);
+                    }
+                }
                 Err(error) => actions.report(NoticeScope::Setup, &error),
             },
         );

@@ -7,7 +7,9 @@ use super::microphone_test::MicrophoneTest;
 use super::ui::{Banner, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconName, Tone};
 use super::updates::UpdateStatus;
 use super::{CopyButton, NoticeRegion, ShortcutSummary};
-use crate::{Fix, HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext};
+use crate::{
+    Fix, FixTarget, HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext,
+};
 
 /// The steps the setup checklist lists, each done once setup has moved past it.
 const CHECKLIST: [(&str, SetupStep); 4] = [
@@ -117,11 +119,14 @@ fn StatusCard(status: HomeStatus, cleanup_device: Option<CleanupDevice>) -> Elem
                     p { id: "home-cleanup-device", class: "status-detail", "{labels::cleanup_device(device)}" }
                 }
             }
-            if let Some(Fix { label, section }) = status.fix {
+            if let Some(Fix { label, target }) = status.fix {
                 Button {
                     id: "home-status-fix",
                     size: ButtonSize::Sm,
-                    onclick: move |_| navigator.go(Route::from_section(section)),
+                    onclick: move |_| match target {
+                        FixTarget::Page(section) => navigator.go(Route::from_section(section)),
+                        FixTarget::SystemSettings(kind) => context.open_permission_settings(kind),
+                    },
                     "{label}"
                 }
             }

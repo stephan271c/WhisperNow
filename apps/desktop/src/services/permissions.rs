@@ -76,7 +76,7 @@ pub(crate) fn permission_states(
             } else {
                 PermissionStatus::NotDetermined
             },
-            can_request: false,
+            can_request: true,
             can_open_settings: true,
         }),
         SessionFacts::Windows => {}
@@ -262,7 +262,7 @@ mod tests {
             ),
             [
                 (Kind::Microphone, Status::NotDetermined, true, true),
-                (Kind::Accessibility, Status::NotDetermined, false, true),
+                (Kind::Accessibility, Status::NotDetermined, true, true),
             ]
         );
         assert!(

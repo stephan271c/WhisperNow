@@ -300,6 +300,8 @@ pub struct AppState {
     /// The latest failure a surface should explain. Always present in `Phase::Error`.
     pub error: Option<AppError>,
     pub active_downloads: Vec<ActiveDownload>,
+    /// The model whose latest download failed, until it is downloaded again.
+    pub failed_download: Option<ModelId>,
     /// How setup's latest test dictation ended; cleared when the next test starts.
     pub setup_test: Option<SetupTestResult>,
     /// `None` until the local cleanup model loads, and again once it is freed.

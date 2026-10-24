@@ -15,6 +15,7 @@
     "frontendDist": "../../target/dx/whispernow-ui/release/web/public"
   },
   "app": {
+    "macOSPrivateApi": true,
     "withGlobalTauri": true,
     "windows": [
       {
@@ -27,7 +28,11 @@
         "minHeight": 520,
         "center": true,
         "visible": false,
-        "transparent": true
+        "transparent": true,
+        "acceptFirstMouse": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 18, "y": 22 }
       },
       {
         "label": "recording-bar",
@@ -58,7 +63,7 @@
     "createUpdaterArtifacts": true,
     "publisher": "WhisperNow contributors",
     "homepage": "https://github.com/stephan271c/WhisperNow",
-    "icon": ["icons/icon.png", "icons/icon.icns"],
+    "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"],
     "resources": {
       "../../LICENSE": "licenses/LICENSE",
       "../../release/NATIVE_DEPENDENCIES.md": "licenses/NATIVE_DEPENDENCIES.md",

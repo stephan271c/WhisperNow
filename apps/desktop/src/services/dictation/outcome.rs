@@ -228,7 +228,7 @@ impl OutputNotice {
         match self {
             Self::PermissionDenied => Some(AppError::new(
                 ErrorCategory::Settings,
-                "text_output_permission_denied",
+                whispernow_domain::TEXT_OUTPUT_PERMISSION_DENIED,
                 "Automatic text output needs desktop accessibility or portal permission. Enable it in system settings, then retry.",
             )),
             Self::CapabilityUnavailable => Some(AppError::new(

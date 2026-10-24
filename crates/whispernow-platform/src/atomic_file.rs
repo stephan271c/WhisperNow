@@ -42,6 +42,7 @@ pub(crate) fn sync_directory(directory: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(clippy::unnecessary_wraps)]
 pub(crate) fn sync_directory(_directory: &Path) -> io::Result<()> {
     // std cannot open a directory to sync it on Windows; the file itself was synced.
     Ok(())

@@ -143,6 +143,14 @@ mod tests {
 
     use super::recognizer_config;
 
+    fn path_in(id: &str, file: &str) -> String {
+        PathBuf::from("/models")
+            .join(id)
+            .join(file)
+            .to_string_lossy()
+            .into_owned()
+    }
+
     fn model(id: &str) -> ResolvedModel {
         ResolvedModel {
             definition: ModelRegistry::builtin().get(id).expect("model").clone(),
@@ -156,21 +164,27 @@ mod tests {
             .expect("transducer config");
         assert_eq!(
             transducer.model_config.transducer.joiner.as_deref(),
-            Some("/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16/joiner.fp16.onnx")
+            Some(
+                path_in(
+                    "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16",
+                    "joiner.fp16.onnx"
+                )
+                .as_str()
+            )
         );
 
         let whisper =
             recognizer_config(&model("sherpa-onnx-whisper-turbo")).expect("whisper config");
         assert_eq!(
             whisper.model_config.whisper.encoder.as_deref(),
-            Some("/models/sherpa-onnx-whisper-turbo/turbo-encoder.int8.onnx")
+            Some(path_in("sherpa-onnx-whisper-turbo", "turbo-encoder.int8.onnx").as_str())
         );
 
         let qwen3 = recognizer_config(&model("sherpa-onnx-qwen3-asr-0.6b-int8-2026-03-25"))
             .expect("qwen3 config");
         assert_eq!(
             qwen3.model_config.qwen3_asr.tokenizer.as_deref(),
-            Some("/models/sherpa-onnx-qwen3-asr-0.6b-int8-2026-03-25/tokenizer")
+            Some(path_in("sherpa-onnx-qwen3-asr-0.6b-int8-2026-03-25", "tokenizer").as_str())
         );
 
         let sense_voice = recognizer_config(&model(
@@ -179,7 +193,13 @@ mod tests {
         .expect("sense voice config");
         assert_eq!(
             sense_voice.model_config.sense_voice.model.as_deref(),
-            Some("/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx")
+            Some(
+                path_in(
+                    "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
+                    "model.int8.onnx"
+                )
+                .as_str()
+            )
         );
     }
 }

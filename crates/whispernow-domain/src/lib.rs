@@ -58,6 +58,8 @@ pub struct AppError {
     pub summary: String,
 }
 
+pub const TEXT_OUTPUT_PERMISSION_DENIED: &str = "text_output_permission_denied";
+
 impl AppError {
     #[must_use]
     pub fn new(

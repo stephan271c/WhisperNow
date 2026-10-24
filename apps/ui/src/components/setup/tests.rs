@@ -101,6 +101,14 @@ fn saved_step() -> SetupStep {
 }
 
 fn cards(microphone: PermissionStatus, shortcuts: PermissionStatus) -> PermissionsResponse {
+    cards_with(PermissionKind::GlobalShortcuts, microphone, shortcuts)
+}
+
+fn cards_with(
+    second: PermissionKind,
+    microphone: PermissionStatus,
+    status: PermissionStatus,
+) -> PermissionsResponse {
     let card = |kind, status| Permission {
         kind,
         status,
@@ -110,7 +118,7 @@ fn cards(microphone: PermissionStatus, shortcuts: PermissionStatus) -> Permissio
     PermissionsResponse {
         permissions: vec![
             card(PermissionKind::Microphone, microphone),
-            card(PermissionKind::GlobalShortcuts, shortcuts),
+            card(second, status),
         ],
         paste_helper_setup: None,
     }
@@ -242,6 +250,32 @@ fn granted_permissions_move_setup_on_after_a_request() {
         setup.sent(),
         ["list_audio_devices"],
         "microphones are listed once setup is past the permission step"
+    );
+}
+
+#[test]
+fn accessibility_is_asked_after_the_microphone_answer() {
+    let mut setup = at(SetupStep::Permissions);
+    let macos = |microphone| {
+        cards_with(
+            PermissionKind::Accessibility,
+            microphone,
+            PermissionStatus::NotDetermined,
+        )
+    };
+    setup.answer(
+        "get_permissions",
+        Ok(macos(PermissionStatus::NotDetermined)),
+    );
+
+    setup.click("permission-microphone-grant");
+    setup.sent();
+    setup.answer("request_permission", Ok(macos(PermissionStatus::Granted)));
+    setup.sent();
+
+    assert_eq!(
+        fake::requests::<PermissionKind>("request_permission"),
+        [PermissionKind::Microphone, PermissionKind::Accessibility]
     );
 }
 

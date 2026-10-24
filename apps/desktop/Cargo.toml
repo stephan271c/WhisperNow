@@ -32,6 +32,9 @@ ashpd = { workspace = true, features = ["global_shortcuts", "notification"] }
 futures-util.workspace = true
 gdk.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_System_Registry"] }
+
 [dev-dependencies]
 whispernow-platform = { path = "../../crates/whispernow-platform", features = ["test-support"] }
 rusqlite.workspace = true

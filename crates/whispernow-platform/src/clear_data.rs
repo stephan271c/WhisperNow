@@ -132,6 +132,7 @@ mod tests {
     ];
 
     struct Fixture {
+        #[cfg_attr(not(unix), expect(dead_code))]
         temp: TempDir,
         paths: AppPaths,
     }

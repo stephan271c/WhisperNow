@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use whispernow_domain::ipc::{EventPayload, Phase};
 use whispernow_domain::{
     AppError, EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryFilter, HistoryPage,
-    HistoryPageRequest, UtcMillis,
+    HistoryPageRequest, Shortcut, UtcMillis,
 };
 
 use super::format::{group_by_day, retention_summary};
@@ -346,7 +346,10 @@ fn the_empty_list_shows_the_actual_shortcut() {
             &rest[rest.find('>').expect("kbd tag end") + 1..rest.find("</kbd>").expect("kbd end")]
         })
         .collect();
-    assert_eq!(keys, ["Ctrl", "Space"]);
+    assert_eq!(
+        keys,
+        crate::components::ui::shortcut_parts(&Shortcut::default())
+    );
     assert!(tag(&html, "history-clear").is_none(), "nothing to clear");
 }
 

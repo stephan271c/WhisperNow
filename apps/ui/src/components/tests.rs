@@ -8,8 +8,7 @@ use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{
     ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability, ModelId, ProviderEndpoint,
     ProviderSettings, RecordingMode, SettingChange, Settings, SetupCheckpoint, SetupProgress,
-    SetupStep, Shortcut, ShortcutKey, ShortcutModifier, SpeechBenchmark, VocabularyReplacement,
-    WerSource,
+    SetupStep, Shortcut, ShortcutKey, SpeechBenchmark, VocabularyReplacement, WerSource,
 };
 
 use crate::client::fake;
@@ -27,10 +26,7 @@ pub(super) fn shell(snapshot: AppState, management: ManagementState) -> Page {
 }
 
 pub(super) fn shortcut() -> Shortcut {
-    Shortcut {
-        modifiers: [ShortcutModifier::Control].into(),
-        key: ShortcutKey::Space,
-    }
+    Shortcut::default()
 }
 
 pub(super) fn loaded() -> ManagementState {

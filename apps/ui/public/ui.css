@@ -308,7 +308,7 @@
     color var(--duration-fast) ease;
 }
 
-.segmented-option:hover:not(:disabled) {
+.segmented-option:hover:not(:disabled, [aria-pressed="true"]) {
   color: var(--color-text-primary);
 }
 

@@ -69,3 +69,22 @@ jobs:
       - name: Build Tauri application without bundling
         working-directory: apps/desktop
         run: cargo tauri build --no-bundle
+
+  macos:
+    name: macOS compile and test
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: python3 scripts/check_rust_toolchain.py
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run workspace tests
+        run: cargo test --workspace

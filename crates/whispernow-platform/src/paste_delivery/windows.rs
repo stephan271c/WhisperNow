@@ -1,6 +1,7 @@
 //! Windows paste: one fixed, balanced `SendInput` batch, sent only after the
 //! target's integrity level is no higher than ours, the physical modifiers are
 //! released, and the capture-time window, process and focused child match.
+#![allow(unsafe_code)]
 
 use std::{mem::size_of, ptr};
 

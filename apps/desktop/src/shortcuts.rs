@@ -24,6 +24,7 @@ pub(crate) struct ShortcutBinding {
 
 impl ShortcutBinding {
     /// The trigger a desktop portal is asked for, such as `CTRL+space`.
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     pub(crate) fn portal_trigger(&self) -> String {
         self.shortcut
             .modifiers
@@ -59,6 +60,7 @@ pub(crate) enum ShortcutEvent {
         id: ShortcutId,
         transition: KeyTransition,
     },
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     CapabilityLost(ShortcutRegistrationError),
 }
 
@@ -474,8 +476,10 @@ impl ShortcutCoordinator {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShortcutRegistrationError {
     ConflictOrUnsupported,
+    #[cfg_attr(all(not(test), not(target_os = "linux")), expect(dead_code))]
     PermissionDenied,
     PortalUnavailable,
+    #[cfg_attr(all(not(test), not(target_os = "linux")), expect(dead_code))]
     SessionClosed,
 }
 

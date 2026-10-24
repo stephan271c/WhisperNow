@@ -186,9 +186,10 @@ pub fn run() {
             if let Some(geometry) = settings.window_geometry {
                 restore_settings_geometry(app, geometry);
             }
-            // Linux draws the main window's titlebar in the page, which asks the window
-            // whether it is decorated. Setup finishes before the event loop answers any
-            // page request, so the page only ever sees this frame.
+            // The page draws the titlebar of an undecorated settings window and asks the
+            // window whether it is decorated. Windows is undecorated by
+            // tauri.windows.conf.json; Linux is undecorated here. Setup finishes before the
+            // event loop answers any page request, so the page only ever sees this frame.
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window(SETTINGS_WINDOW)
                 && window.set_decorations(false).is_err()
@@ -348,6 +349,7 @@ pub fn run() {
     });
 }
 
+#[cfg_attr(not(target_os = "linux"), expect(clippy::unnecessary_wraps))]
 fn shortcut_registrar(
     app: tauri::AppHandle,
     native_wayland: bool,

@@ -14,7 +14,7 @@ use components::Navigator;
 use operations::UiOperation;
 // The two windows' roots; `app` picks one.
 pub use components::{AppShell, RecordingBar};
-use home_status::{Fix, HomeStatus, HomeStatusKind};
+use home_status::{Fix, FixTarget, HomeStatus, HomeStatusKind};
 use management::{ManagementState, SettingKey, SetupTest};
 use notice::{Notice, NoticeScope};
 use overlay::OverlayView;
@@ -56,6 +56,7 @@ pub fn app() -> Element {
     });
     // Follows a theme change at once; the recording bar uses theme-independent inverse colours.
     use_effect(move || client::apply_theme(management.read().theme_attribute()));
+    use_effect(client::track_scroll_activity);
     let mut listeners = use_signal(|| None::<ListenerOwner>);
     use_future(move || async move {
         let mut event_state = state;

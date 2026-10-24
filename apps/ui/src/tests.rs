@@ -234,6 +234,20 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
     disconnected.event_stream_failed = true;
     let mut unreachable = UiState::default();
     unreachable.report_state_read_failure();
+    let mut no_model = ui_state(Phase::Idle);
+    no_model.snapshot.as_mut().expect("snapshot").model_state = ModelState::Unloaded;
+    let mut download_failed = ui_state(Phase::Idle);
+    let failed = download_failed.snapshot.as_mut().expect("snapshot");
+    failed.model_state = ModelState::Failed;
+    failed.failed_download = Some(failed.selected_model_id.clone());
+    let mut general = snapshot(Phase::Idle);
+    general.error = Some(AppError::new(
+        ErrorCategory::General,
+        "shortcut_registration_failed",
+        "The recording shortcut is taken by another app",
+    ));
+    let mut shortcut_problem = UiState::default();
+    shortcut_problem.hydrate(general);
 
     for (state, kind, title, detail) in [
         (
@@ -243,6 +257,24 @@ fn home_status_explains_the_phase_or_the_problem_that_takes_priority() {
             None,
         ),
         (recording, HomeStatusKind::Recording, "Recording", None),
+        (
+            no_model,
+            HomeStatusKind::Problem,
+            "Speech model not ready",
+            Some("Download or choose a speech model to start dictating."),
+        ),
+        (
+            download_failed,
+            HomeStatusKind::Problem,
+            "Dictation is unavailable",
+            Some("The speech model could not be downloaded."),
+        ),
+        (
+            shortcut_problem,
+            HomeStatusKind::Problem,
+            "WhisperNow needs attention",
+            Some("The recording shortcut is taken by another app"),
+        ),
         (
             audio_problem,
             HomeStatusKind::Problem,

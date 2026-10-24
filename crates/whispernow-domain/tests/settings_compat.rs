@@ -20,10 +20,12 @@ fn parse_json<T: DeserializeOwned>(document: &str) -> T {
 fn fresh_settings_take_the_defaults() {
     let settings = Settings::default();
 
-    assert_eq!(
-        settings.recording_shortcut.modifiers,
+    let modifiers: BTreeSet<_> = if cfg!(target_os = "macos") {
+        [ShortcutModifier::Control, ShortcutModifier::Alt].into()
+    } else {
         [ShortcutModifier::Control].into()
-    );
+    };
+    assert_eq!(settings.recording_shortcut.modifiers, modifiers);
     assert_eq!(settings.recording_shortcut.key, ShortcutKey::Space);
     assert_eq!(settings.recording_mode, RecordingMode::Hold);
     assert_eq!(
