@@ -270,7 +270,11 @@ A judge model (`gpt-6.1-sol` at high reasoning) compares each output with the re
 | glm-5.3-flash (hosted) | 2.87 | 4.68 | 2.50 | 3.46 | not run |
 | glm-5.3 at max reasoning (hosted) | 1.73 | 2.14 | 2.01 | 1.88 | not run |
 
-The model cards give results by length, speed and the other checks.
+By transcript length, over the same 4,170 rows:
+
+![Facts lost per 1,000 reference words by transcript length, for the three WhisperNow models and the two hosted glm-5.3 models](charts/facts-by-length.png)
+
+The model cards give these rates as a table, compare each model with the hosted ones by length and with seven more hosted models, and give speed and the other checks.
 
 ## Limitations
 

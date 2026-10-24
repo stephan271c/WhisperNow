@@ -20,13 +20,13 @@ datasets:
 
 This model turns a speech recognizer's transcript into the text the speaker meant to write. It removes fillers, false starts and repeats, keeps only the corrected version when the speaker corrects themselves, fixes punctuation, and lays out a list when the speaker dictates one. It is a full fine-tune of [Qwen/Qwen3.5-4B-Base](https://huggingface.co/Qwen/Qwen3.5-4B-Base), made for the local cleanup step of [WhisperNow](https://github.com/stephan271c/WhisperNow), a desktop dictation app.
 
-It is the largest and most accurate of three cleanup models trained the same way. Over the test split and both benchmarks it loses 0.83 times the facts of the hosted glm-5.3-flash (90% interval 0.77–0.90) and 0.63 times those of the LFM2.5 2.6B (0.59–0.67). On dictations of up to 25 words it loses fewer than glm-5.3 at max reasoning; from 25 words on, glm-5.3 at max reasoning loses fewer.
+It is the largest and most accurate of three cleanup models trained the same way. Over the test split and both benchmarks it loses 0.83 times the facts of the hosted glm-5.3-flash (90% interval 0.77–0.90) and 0.63 times those of the LFM2.5 2.6B (0.59–0.67). It loses no more than glm-5.3-flash at any length. Against glm-5.3 at max reasoning, it loses fewer on dictations of up to 25 words, is level at 26–100 words, and loses more above 100.
 
 | model | Q8_0 file | memory in use | facts lost per 1,000 words | 100 / 1,000 words, GPU | 100 / 1,000 words, CPU |
 |---|---|---|---|---|---|
-| [LFM2.5 1.2B](https://huggingface.co/category271/whispernow-lfm2.5-1.2b) | 1.25 GB | **TODO** | 5.88 | **TODO** / **TODO** s | **TODO** / **TODO** s |
-| [LFM2.5 2.6B](https://huggingface.co/category271/whispernow-lfm2.5-2.6b) | 2.87 GB | **TODO** | 4.60 | **TODO** / **TODO** s | **TODO** / **TODO** s |
-| **Qwen3.5 4B** (this model) | 4.48 GB | **TODO** | 2.88 | **TODO** / **TODO** s | **TODO** / **TODO** s |
+| [LFM2.5 1.2B](https://huggingface.co/category271/whispernow-lfm2.5-1.2b) | 1.25 GB | 1.6 GB | 5.88 | 0.18 / 2.0 s | 2.3 / 27 s |
+| [LFM2.5 2.6B](https://huggingface.co/category271/whispernow-lfm2.5-2.6b) | 2.87 GB | 3.3 GB | 4.60 | 0.34 / 3.8 s | 5.4 / 65 s |
+| **Qwen3.5 4B** (this model) | 4.48 GB | 5.3 GB | 2.88 | 0.62 / 7.2 s | 8.9 / 118 s |
 
 Facts lost are over the test split and both benchmarks together; [Evaluation](#evaluation) explains the numbers.
 
@@ -171,14 +171,24 @@ The benchmarks were generated with their own prompts, names and seeds, so no ben
 | WhisperNow LFM2.5 2.6B | 3.54 | 6.65 | 3.90 | 4.60 |
 | **WhisperNow Qwen3.5 4B** | **2.10** | **4.37** | **2.62** | **2.88** |
 
-**On the test split, by length.** One lost fact in a 10-word dictation counts as 100 per 1,000 words, so short dictations have high rates.
+**By transcript length.** All three sets together. One lost fact in a 10-word dictation counts as 100 per 1,000 words, so short dictations have high rates.
+
+![Facts lost per 1,000 reference words by transcript length, for the three WhisperNow models and the two hosted glm-5.3 models](charts/facts-by-length.png)
 
 | transcript words | rows | glm-5.3 max | glm-5.3-flash | 1.2B | 2.6B | **4B** |
 |---|---|---|---|---|---|---|
-| up to 25 | 1,426 | 6.98 | 9.46 | 5.94 | 5.48 | **4.57** |
-| 25–200 | 1,335 | 1.68 | 2.97 | 3.70 | 2.83 | **1.95** |
-| 200–450 | 293 | 1.77 | 2.47 | 4.48 | 3.78 | **1.84** |
-| 450–1,200 | 241 | 1.18 | 2.29 | 4.84 | 3.60 | **2.04** |
+| up to 25 | 1,443 | 7.16 | 9.34 | 6.01 | 5.50 | **4.60** |
+| 26–50 | 1,057 | 2.71 | 3.83 | 5.10 | 4.01 | **2.95** |
+| 51–100 | 465 | 1.47 | 2.26 | 3.33 | 3.05 | **1.90** |
+| 101–200 | 289 | 1.06 | 2.76 | 3.82 | 2.82 | **1.67** |
+| 201–450 | 484 | 2.34 | 3.35 | 6.30 | 5.06 | **2.98** |
+| 451 and more | 432 | 1.39 | 3.33 | 6.36 | 4.83 | **3.00** |
+
+**Against the hosted models.** Each point is a WhisperNow model's facts lost divided by a hosted model's, on the same rows, with a 90% paired bootstrap interval. Below 1×, the local model loses fewer.
+
+![Facts lost by each WhisperNow model divided by glm-5.3-flash's and by glm-5.3 at max reasoning's, by transcript length](charts/against-hosted.png)
+
+It loses fewer facts than glm-5.3-flash up to 50 words (0.49 and 0.77 times as many) and at 101–200 words (0.61), and is level with it at the other lengths. Against glm-5.3 at max reasoning, it loses fewer up to 25 words (0.64, 0.51–0.81), is level at 26–100 words, and loses 1.3–2.2 times as many above 100 words.
 
 **Other checks:**
 
@@ -192,9 +202,28 @@ The benchmarks were generated with their own prompts, names and seeds, so no ben
 | bench-long rows keeping every number, URL, path and code name exactly | 26.5% | 33.9% | **35.9%** | 11.4% |
 | looping outputs, test / bench-long rows | 4 / 5 | 2 / 3 | **2 / 1** | 1 / 1 |
 
-**Speed.** Seconds per dictation, Q8_0, one request at a time.
+**Other models.** Seven more hosted models received WhisperNow's full cleanup prompt on an 800-row sample of the test split and both benchmarks (1,670 rows, judged the same way). Rates are higher than above because bench-long is a larger share of these rows.
 
-**TODO: speed and memory table**
+![Facts lost per 1,000 reference words for every model evaluated, sorted](charts/all-models.png)
+
+![Facts lost per 1,000 reference words for every model evaluated, by transcript length](charts/all-models-by-length.png)
+
+On these rows only glm-5.3 at max reasoning loses fewer facts than the Qwen3.5 4B, and Claude Haiku 5.5 and glm-5.3-flash come next. The LFM2.5 2.6B loses fewer than six of the nine hosted models, and the 1.2B fewer than four. The fastest hosted model, Nemotron 3.5 Lightning, loses 1.8 times the facts of the Qwen3.5 4B.
+
+**Speed.** Seconds for the whole reply, median of 5 runs, one request at a time. Ours ran at Q8_0 in llama.cpp; the hosted models were called over the internet from the same machine with WhisperNow's full prompt.
+
+![Seconds per reply by transcript length on a GPU and a CPU, against the range of hosted models](charts/latency.png)
+
+| transcript words | 1.2B GPU | 2.6B GPU | **4B GPU** | 1.2B CPU | 2.6B CPU | **4B CPU** | glm-5.3-flash | glm-5.3 max | fastest hosted |
+|---|---|---|---|---|---|---|---|---|---|
+| 16 | 0.03 | 0.06 | **0.15** | 0.29 | 0.66 | **1.5** | 1.6 | 2.8 | 0.35 (Gemma 4 26B-A4B) |
+| 100 | 0.18 | 0.34 | **0.62** | 2.3 | 5.4 | **8.9** | 2.6 | 5.6 | 0.65 (Nemotron 3.5 Lightning) |
+| 199 | 0.79 | 1.3 | **2.3** | 8.9 | 21 | **34** | 5.7 | 32 | 0.99 (Nemotron 3.5 Lightning) |
+| 299 | 0.70 | 1.4 | **2.6** | 9.6 | 23 | **42** | 6.8 | 44 | 1.3 (Nemotron 3.5 Lightning) |
+| 500 | 0.79 | 1.5 | **2.8** | 11 | 26 | **47** | 15 | 86 | 1.7 (Nemotron 3.5 Lightning) |
+| 1,005 | 2.0 | 3.8 | **7.2** | 27 | 65 | **118** | 19 | 99 | 2.9 (Nemotron 3.5 Lightning) |
+
+On an RTX 5070 it replies in 0.62 s for 100 words and 7.2 s for 1,000, 2.5–5 times faster than glm-5.3-flash over the internet (2.6 s and 19 s); glm-5.3 at max reasoning took 5.6 s and 99 s. On a Ryzen 9 8945HS CPU it takes 8.9 s for 100 words and 118 s for 1,000: from 100 words up, 3.2–6.2 times slower than glm-5.3-flash. For long dictations without a GPU, a hosted model answers sooner.
 
 These times use WhisperNow's speculative decoding: llama.cpp drafts tokens from a rule-based clean-up of the transcript, and the model keeps only the drafted tokens it would write itself, apart from rare numerical near-ties.
 
@@ -208,7 +237,7 @@ These times use WhisperNow's speculative decoding: llama.cpp drafts tokens from 
 
 ## Limitations
 
-- **Speed depends on the hardware.** **TODO: CPU seconds for 100 and 1,000 words.**
+- **Speed depends on the hardware.** On a CPU it takes 8.9 seconds for 100 words and 118 seconds for 1,000.
 - **English only.**
 - **It loses more facts on long dictations.** On bench-long (151–946 words) it loses at least one fact in 68.6% of dictations, against 63.0% for glm-5.3-flash. Read long outputs before you send them.
 - **It can change or invent a value**: a number, a name, a code token, or a list item merged with another. It invents a fact in about 0.072 per bench-long dictation.
