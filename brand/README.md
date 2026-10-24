@@ -17,8 +17,9 @@ shortcut, then you talk. It deliberately avoids the microphone used by most dict
 | `logo/whispernow-horizontal.svg` (+ `-reversed`, `-white`, `-black`) | Primary lockup |
 | `logo/whispernow-stacked.svg` (+ `-reversed`) | Square-ish spaces |
 | `icons/whispernow-app-icon.svg` | App icon master (macOS grid: 824 px tile on a 1024 canvas), 48 px and up |
-| `icons/whispernow-app-icon-tiny.svg` | Pixel-grid app icon for 16–32 px |
-| `icons/whispernow.ico`, `icons/whispernow.icns`, `icons/png/` | Built icon sets; tiny cut at 16/24/32, full cut above |
+| `icons/whispernow-app-icon-tiny.svg` | Pixel-grid app icon for 16 and 32 px |
+| `icons/whispernow-app-icon-24.svg` | Pixel-grid app icon for 24 px |
+| `icons/whispernow.ico`, `icons/whispernow.icns`, `icons/png/` | Built icon sets; small cuts at 16/24/32, full cut above |
 
 `apps/desktop/icons/icon.png`, `icon.icns` and `icon.ico` are copies of
 `icons/png/app-icon-512.png`, `icons/whispernow.icns` and `icons/whispernow.ico`. The tray icons are drawn in `apps/desktop/src/tray.rs` and are not
@@ -51,8 +52,10 @@ font's own kerning and −1 % tracking. Use Inter for any text set next to the l
 
 - **Clear space:** keep at least one **lip** (the thick bottom edge of the key, 14 % of the
   symbol's width) clear on every side of the symbol or lockup.
+- **App icon:** the exception to clear space. The key fills 88 % of the tile, because on dark docks
+  and taskbars the Ink tile disappears and only the key shows.
 - **Symbol minimum:** 16 px. Use `whispernow-symbol-small.svg` from 24 to 48 px and
-  `whispernow-app-icon-tiny.svg` below 32 px.
+  the small app-icon cuts at 32 px and below.
 - **Horizontal lockup minimum:** 120 px wide on screen, 30 mm in print. Below that, use the symbol.
 
 ## Backgrounds
@@ -72,6 +75,7 @@ font's own kerning and −1 % tracking. Use Inter for any text set next to the l
 ## Rebuilding
 
 The masters were generated from geometric primitives (keycap: 200-unit square, 44 outer radius,
-14 walls, 28 lip; bars 24 wide on a 36 pitch). The tiny icon sits on a 16-unit grid so every edge
-lands on a whole pixel at 16, 32 and 48 px. Edit the SVGs directly, or regenerate from the same
-numbers, then re-render the icon sets.
+14 walls, 28 lip; bars 24 wide on a 36 pitch). The small cuts keep the full cut's colours and are
+drawn in pixels (a 16 px grid, also rendered at 32 px, and a 24 px grid): 1 px walls, a 2 px lip
+and 2 px bars 1 px apart, so every edge lands on a whole pixel. Edit the SVGs directly, or
+regenerate from the same numbers, then re-render the icon sets.
