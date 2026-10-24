@@ -1,14 +1,31 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform == 'win32' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform == 'win32' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform == 'win32' and extra != 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "(python_full_version < '3.13' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu') or (python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu') or (python_full_version == '3.13.*' and sys_platform == 'linux' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu')",
+    "python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
 ]
+conflicts = [[
+    { package = "whispernow-training", extra = "audio" },
+    { package = "whispernow-training", extra = "audio-gpu" },
+]]
 
 [[package]]
 name = "accelerate"
@@ -370,7 +387,7 @@ name = "cuda-bindings"
 version = "13.4.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "cuda-pathfinder" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/65/11/1293429c1c3a3e19b551275e65efddd122a905bbe7e368816a59f3ef2a41/cuda_bindings-13.4.3-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:bfbd3f7d4ac04dd41dc49121b9e408c8283992f47124c2290ecb79bbbadcca8e", size = 6488226, upload-time = "2026-09-23T02:22:00.578Z" },
@@ -401,43 +418,43 @@ wheels = [
 
 [package.optional-dependencies]
 cublas = [
-    { name = "nvidia-cublas", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "nvidia-cuda-nvrtc", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cublas", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cuda-nvrtc", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cuda-runtime", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 cufft = [
-    { name = "nvidia-cufft", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cufft", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-nvjitlink", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 cufile = [
-    { name = "nvidia-cufile", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cufile", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cuda-cupti", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 curand = [
-    { name = "nvidia-curand", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-curand", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 cusolver = [
-    { name = "nvidia-cublas", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "nvidia-cusolver", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "nvidia-cusparse", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cublas", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cusolver", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-cusparse", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-nvjitlink", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cusparse", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "nvidia-nvjitlink", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-nvjitlink", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cuda-nvrtc", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-nvtx", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
 ]
 
 [[package]]
@@ -671,8 +688,8 @@ name = "httpcore2"
 version = "2.13.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cb/f3/1db7aa2bc2524062192bb0e0323969492d1883152a232fe36eea65f4e35c/httpcore2-2.13.1.tar.gz", hash = "sha256:e0aa977abe17e69a3b820a24542a6fa88702676d83880b8d194dcd18408e5103", size = 68071, upload-time = "2026-09-23T07:47:22.372Z" }
 wheels = [
@@ -1213,7 +1230,7 @@ name = "nvidia-cublas"
 version = "13.1.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cuda-nvrtc", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-cuda-nvrtc" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/a1/0bd24ee8c8d03adac032fd2909426a00c88f8c57961b1277ded97f91119f/nvidia_cublas-13.1.1.3-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:b7a210458267ac818974c53038fbec2e969d5c99f305ab15c72522fa9f001dd5", size = 542848918, upload-time = "2026-04-08T18:46:22.985Z" },
@@ -1252,7 +1269,7 @@ name = "nvidia-cudnn-cu13"
 version = "9.24.0.43"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-cublas" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ca/30/7c257e3d5cb4fecb147b93895c66e29c93f8e76d74b45bb418ff0587c4ec/nvidia_cudnn_cu13-9.24.0.43-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:a6812a554a1ff0413e9c52b84c26c050380649ab9615f9c16bded368ce9f421f", size = 650976863, upload-time = "2026-07-02T16:23:39.248Z" },
@@ -1264,7 +1281,7 @@ name = "nvidia-cufft"
 version = "12.0.0.61"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/ae/f417a75c0259e85c1d2f83ca4e960289a5f814ed0cea74d18c353d3e989d/nvidia_cufft-12.0.0.61-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:2708c852ef8cd89d1d2068bdbece0aa188813a0c934db3779b9b1faa8442e5f5", size = 214053554, upload-time = "2025-09-04T08:31:38.196Z" },
@@ -1294,9 +1311,9 @@ name = "nvidia-cusolver"
 version = "12.0.4.66"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "nvidia-cusparse", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
-    { name = "nvidia-nvjitlink", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-cublas" },
+    { name = "nvidia-cusparse" },
+    { name = "nvidia-nvjitlink" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/c3/b30c9e935fc01e3da443ec0116ed1b2a009bb867f5324d3f2d7e533e776b/nvidia_cusolver-12.0.4.66-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:02c2457eaa9e39de20f880f4bd8820e6a1cfb9f9a34f820eb12a155aa5bc92d2", size = 223467760, upload-time = "2025-09-04T08:33:04.222Z" },
@@ -1308,7 +1325,7 @@ name = "nvidia-cusparse"
 version = "12.6.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/94/5c26f33738ae35276672f12615a64bd008ed5be6d1ebcb23579285d960a9/nvidia_cusparse-12.6.3.3-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:80bcc4662f23f1054ee334a15c72b8940402975e0eab63178fc7e670aa59472c", size = 162155568, upload-time = "2025-09-04T08:33:42.864Z" },
@@ -1615,6 +1632,25 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/04/78/0acd37ca84ce3ddffaa92ef0f571e073faa6d8ff1f0559ab1272188ea2be/psutil-7.2.2-cp36-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:b58fabe35e80b264a4e3bb23e6b96f9e45a3df7fb7eed419ac0e5947c61e47cc", size = 148266, upload-time = "2026-01-28T18:15:31.597Z" },
     { url = "https://files.pythonhosted.org/packages/b4/90/e2159492b5426be0c1fef7acba807a03511f97c5f86b3caeda6ad92351a7/psutil-7.2.2-cp37-abi3-win_amd64.whl", hash = "sha256:eb7e81434c8d223ec4a219b5fc1c47d0417b12be7ea866e24fb5ad6e84b3d988", size = 137737, upload-time = "2026-01-28T18:15:33.849Z" },
     { url = "https://files.pythonhosted.org/packages/8c/c7/7bb2e321574b10df20cbde462a94e2b71d05f9bbda251ef27d104668306a/psutil-7.2.2-cp37-abi3-win_arm64.whl", hash = "sha256:8c233660f575a5a89e6d4cb65d9f938126312bca76d8fe087b947b3a1aaac9ee", size = 134617, upload-time = "2026-01-28T18:15:36.514Z" },
+]
+
+[[package]]
+name = "ptts"
+version = "0.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d8/dc/c630b80049d4a63e17c183b4344ec01f6164e4b6c1f7deb9dec1df594037/ptts-0.4.1.tar.gz", hash = "sha256:dfc4efc28d620c3fa043e0842e54b0a00a2d93e833b1663ac93b32424e6492fd", size = 291120, upload-time = "2026-10-21T13:54:31.207Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/c6/9d14f87dc376308755444c821cc0803140718ab5e5d4dd25d036b107c176/ptts-0.4.1-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:a8269a908355a713ee8f36d71cdc3fd2dd0ae9edfdd359b1f7d3fb07e8f8779a", size = 6889502, upload-time = "2026-10-21T13:54:15.714Z" },
+    { url = "https://files.pythonhosted.org/packages/be/e7/6d2194426e74a8f1193930d67ec9234b77688bcbbab92141c176636f9e4c/ptts-0.4.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:95da7d0311c0c19f7ddbc7f90140bbde9d909a4d5cf2cf80497056ec7f0ba968", size = 6818063, upload-time = "2026-10-21T13:54:17.861Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/dc/87a0061431767b8f33941e11e17178520b5883b3a3ee4d029bc610d783c3/ptts-0.4.1-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8af68003dfbe61d03133931341d74917de0cd38b46c604f7c74b74f4ef676876", size = 6791859, upload-time = "2026-10-21T13:54:19.95Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/ae/264eed6f026d051ad2bab6e2a41e49c05a8d0b90346db1d0209895fefe61/ptts-0.4.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d0d4fec6679fc518497af81fb1c462411f61be8bb8e45046b4f620eaa55c7134", size = 7455458, upload-time = "2026-10-21T13:54:22.158Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/1b/b9867f69b6b58648c0d6af5c778c8cc0caadec6660c594bcc882e490d14e/ptts-0.4.1-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:b9fc891199c8c1adf04bd48f5db0306a56b27204ddfaa1b08410ac2566e90094", size = 6970002, upload-time = "2026-10-21T13:54:24.041Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/68/a58ebad204b9fed868e6299a660314f6c40107fec546f5e63422c69e9aa6/ptts-0.4.1-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:9384afbab9c722d6b8c7ecde05472a72c506d3ea53a1ed9c6d866592c9383fb5", size = 7487205, upload-time = "2026-10-21T13:54:25.941Z" },
+    { url = "https://files.pythonhosted.org/packages/33/fb/24c58dc7c0957dbbc9fb57987781ea82abdfe1f708a960d133998a2bab0b/ptts-0.4.1-cp39-abi3-win_amd64.whl", hash = "sha256:fa60a8d6baa29f3241c485831c927418e6e0d71d09423371b646728d9b6426e2", size = 6827087, upload-time = "2026-10-21T13:54:27.56Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/36/714ec6c5faa7ccb3c8c61394da0a17169f88b8be6bfb94f1f3f98ba60f25/ptts-0.4.1-cp39-abi3-win_arm64.whl", hash = "sha256:4df18ba96ae6e3f3936d4c914a5a668350f9b704d223e2494f9aa70e8be4520b", size = 6560910, upload-time = "2026-10-21T13:54:29.411Z" },
 ]
 
 [[package]]
@@ -2056,6 +2092,20 @@ wheels = [
 name = "sherpa-onnx"
 version = "1.13.6"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform == 'win32' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform == 'win32' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform == 'win32' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu'",
+    "python_full_version < '3.14' and sys_platform == 'emscripten' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+    "(python_full_version < '3.13' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu') or (python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu') or (python_full_version == '3.13.*' and sys_platform == 'linux' and extra != 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu')",
+    "python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-19-whispernow-training-audio' and extra != 'extra-19-whispernow-training-audio-gpu'",
+]
 sdist = { url = "https://files.pythonhosted.org/packages/a6/12/ca1900b2ad6308f76b9f744367748ce81adab2fb70a5665acf0a6f3c34f0/sherpa_onnx-1.13.6.tar.gz", hash = "sha256:d55a0e769efd9b014c2d3aaa54754288dc39c7261e9334c575d54ba22214ca27", size = 1037965, upload-time = "2026-08-18T06:55:13.107Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/37/41/242379ed9af259b565d3075b4fa923b305a8ac983897e4f977cd9c339760/sherpa_onnx-1.13.6-cp312-cp312-linux_armv7l.whl", hash = "sha256:3a97f92740696a29bc793b8d3ed95572705bcfbd4212abcde28636a72d0412fe", size = 11999587, upload-time = "2026-08-18T08:29:58.211Z" },
@@ -2085,6 +2135,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ea/12/389b69bb78339d498ffee9f2ce40e8c27d55f46f45606aaafa23c9af586f/sherpa_onnx-1.13.6-cp314-cp314-win32.whl", hash = "sha256:9b0bffb23a428139983c4f42753b924097b0181a74257e2e529bd70f4fb49e9b", size = 2001391, upload-time = "2026-08-18T07:24:22.179Z" },
     { url = "https://files.pythonhosted.org/packages/20/7c/f7f4d89088114a8b861c8b5416f14c67ca3bdae652ea2e9499f438c17dc8/sherpa_onnx-1.13.6-cp314-cp314-win_amd64.whl", hash = "sha256:aa4321c92ec8b12f602664551c72cbe0c920f5002009dc9457d6e092639b0ae2", size = 2345347, upload-time = "2026-08-18T07:51:40.427Z" },
     { url = "https://files.pythonhosted.org/packages/3f/0d/caf428b986911a9027e9e30d2735456557be3e7ea86ab70b8cd2b7fc7514/sherpa_onnx-1.13.6-cp314-cp314-win_arm64.whl", hash = "sha256:6b5861db46d126a6b97b05432e4122ba2b8505f17f2ee16c1b377c9f3251ba36", size = 2303436, upload-time = "2026-08-18T07:33:28.755Z" },
+]
+
+[[package]]
+name = "sherpa-onnx"
+version = "1.13.6+cuda13.cudnn9.onnxruntime1.27.1"
+source = { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.6/sherpa_onnx-1.13.6%2Bcuda13.cudnn9.onnxruntime1.27.1-cp312-cp312-linux_x86_64.whl" }
+resolution-markers = [
+    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux'",
+]
+wheels = [
+    { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.6/sherpa_onnx-1.13.6%2Bcuda13.cudnn9.onnxruntime1.27.1-cp312-cp312-linux_x86_64.whl", hash = "sha256:cae9177489df24a0a4acfbc540e5f837a71b461a97f9b8eb4d8d83f4f220c923" },
 ]
 
 [[package]]
@@ -2344,8 +2405,14 @@ dependencies = [
 
 [package.optional-dependencies]
 audio = [
-    { name = "sherpa-onnx" },
+    { name = "ptts" },
+    { name = "sherpa-onnx", version = "1.13.6", source = { registry = "https://pypi.org/simple" } },
     { name = "sherpa-onnx-core" },
+]
+audio-gpu = [
+    { name = "ptts" },
+    { name = "sherpa-onnx", version = "1.13.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.13' and extra == 'extra-19-whispernow-training-audio-gpu') or (platform_machine != 'x86_64' and extra == 'extra-19-whispernow-training-audio-gpu') or (sys_platform != 'linux' and extra == 'extra-19-whispernow-training-audio-gpu') or (extra == 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu')" },
+    { name = "sherpa-onnx", version = "1.13.6+cuda13.cudnn9.onnxruntime1.27.1", source = { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.6/sherpa_onnx-1.13.6%2Bcuda13.cudnn9.onnxruntime1.27.1-cp312-cp312-linux_x86_64.whl" }, marker = "(python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-19-whispernow-training-audio-gpu') or (extra == 'extra-19-whispernow-training-audio' and extra == 'extra-19-whispernow-training-audio-gpu')" },
 ]
 train = [
     { name = "accelerate" },
@@ -2377,16 +2444,20 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.5.3" },
     { name = "openai", specifier = ">=3.20.0" },
     { name = "peft", marker = "extra == 'train'", specifier = ">=0.21.1" },
+    { name = "ptts", marker = "extra == 'audio'", specifier = "==0.4.1" },
+    { name = "ptts", marker = "extra == 'audio-gpu'", specifier = "==0.4.1" },
     { name = "pyarrow", specifier = ">=25.0.1" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "sentencepiece", marker = "extra == 'train'", specifier = ">=0.2.2" },
+    { name = "sherpa-onnx", marker = "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'audio-gpu'", url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.6/sherpa_onnx-1.13.6%2Bcuda13.cudnn9.onnxruntime1.27.1-cp312-cp312-linux_x86_64.whl" },
+    { name = "sherpa-onnx", marker = "(python_full_version != '3.12.*' and extra == 'audio-gpu') or (platform_machine != 'x86_64' and extra == 'audio-gpu') or (sys_platform != 'linux' and extra == 'audio-gpu')" },
     { name = "sherpa-onnx", marker = "extra == 'audio'", specifier = "==1.13.6" },
     { name = "sherpa-onnx-core", marker = "extra == 'audio'", specifier = "==1.13.6" },
     { name = "torch", marker = "extra == 'train'", specifier = ">=2.14.0", index = "https://download.pytorch.org/whl/cu130" },
     { name = "transformers", marker = "extra == 'train'", specifier = ">=5.17.0" },
     { name = "trl", marker = "extra == 'train'", specifier = ">=1.14.1" },
 ]
-provides-extras = ["audio", "train"]
+provides-extras = ["audio", "audio-gpu", "train"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.1.1" }]

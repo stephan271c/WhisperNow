@@ -128,6 +128,68 @@ def test_splits_follow_seed_groups():
     assert build.assign_splits(rows) == split
 
 
+def test_build_v2_adds_v2_rows_to_train_and_leaves_v1_as_it_is(tmp_path, monkeypatch):
+    monkeypatch.setattr(build.compose, "TARGETED", replace(build.compose.TARGETED, out_dir=tmp_path / "stage4-targeted"))
+    monkeypatch.setattr(build.heard, "OUT_DIR", tmp_path / "heard")
+    monkeypatch.setattr(build.heard, "MEANING", tmp_path / "heard" / "meaning.jsonl")
+    v1_dir, out_dir = tmp_path / "build", tmp_path / "build-v2"
+    v1 = {
+        "train": row("a", "um we need to book the big room for tuesday", "We need to book the big room for Tuesday.", split="train"),
+        "val": row("b", "uh call the plumber about the kitchen sink", "Call the plumber about the kitchen sink.", split="val"),
+        "test": row("c", "so remind me to water the tomatoes tonight", "Remind me to water the tomatoes tonight.", split="test"),
+    }
+    for split, example in v1.items():
+        write_examples(v1_dir / f"{split}.jsonl", [example])
+    new = row(
+        "new", "okay order lunch for the whole team on friday and uh get the vegetarian option",
+        "Order lunch for the whole team on Friday and get the vegetarian option.", source="teacher", tags=["composed"],
+    )
+    repeat = row("repeat", "Um we need to book the big room for Tuesday", "We need to book the big room for Tuesday.", source="teacher")
+    write_examples(build.compose.output_file(build.compose.TARGETED, "revised_choice", "150-300"), [new, repeat])
+
+    report = build.build_v2(v1_dir, out_dir)
+    for split in ("val", "test"):
+        assert (out_dir / f"{split}.jsonl").read_bytes() == (v1_dir / f"{split}.jsonl").read_bytes()
+    assert (v1_dir / "train.jsonl").read_text().splitlines()[0] in (out_dir / "train.jsonl").read_text().splitlines()
+    train = {e.id: e for e in read_examples(out_dir / "train.jsonl")}
+    assert set(train) == {"a", "new"} and build.V2_TAG in train["new"].tags and train["new"].split == "train"
+    assert report["v2"] == {"added": 1, "heard_swapped": 0, "dropped": {"exact duplicate input": 1}}
+
+
+def test_build_v3_swaps_a_repair_row_in_for_its_origin(tmp_path, monkeypatch):
+    base_dir, out_dir = tmp_path / "build-v2-no-heard", tmp_path / "build-v3"
+    write_examples(base_dir / "train.jsonl", [
+        row("a", "um we need to book the big room for tuesday", "We need to book the big room for Tuesday.", split="train"),
+        row("b", "uh call the plumber about the kitchen sink", "Call the plumber about the kitchen sink.", split="train"),
+    ])
+    for split in ("val", "test"):
+        write_examples(base_dir / f"{split}.jsonl", [row(split, f"so remind me about the {split} plan", "Remind me.", split=split)])
+    repaired = row(
+        "heard-a", "We need to book the big room for to's day.", "We need to book the big room for Tuesday.",
+        source="heard", split="train", tags=["heard_from:a", build.v3.REPAIR_TAG, build.V3_TAG],
+    )
+    monkeypatch.setattr(build.v3, "load", lambda: [repaired])
+    monkeypatch.setattr(build.v3, "repair_pool", lambda: [(read_examples(base_dir / "train.jsonl")[0], {"id": "a"})])
+    monkeypatch.setattr(build.review, "verified_fixes", lambda split: {})
+
+    report = build.build_v3(base_dir, out_dir)
+    train = {e.id: e for e in read_examples(out_dir / "train.jsonl")}
+    assert set(train) == {"heard-a", "b"} and train["heard-a"].input == repaired.input
+    assert report["v3"]["repairs_swapped"] == 1 and report["v3"]["added"] == 0
+
+
+def test_a_v2_row_never_displaces_a_v1_row():
+    v2 = [build.V2_TAG]
+    rows = [
+        row("new", "we need milk and eggs and bread for the party on friday", "x1", source="teacher", tags=v2),
+        row("near", "um we need milk and eggs and bread for the party on friday", "x3", source="teacher", tags=v2),
+        row("old", "We need milk and eggs and bread for the party on Friday", "x2", source="injected"),
+    ]
+    kept, dropped = build.deduplicate(rows)
+    assert [e.id for e in kept] == ["old"]
+    assert dict((e.id, reason) for e, reason in dropped) == {"new": "exact duplicate input", "near": "near-duplicate input"}
+
+
 def test_stats_report_counts_everything():
     rows = [row("a", "um hi", "Hi.", split="train"), row("b", "list", "We need:\n- Milk", split="test", tags=["t"])]
     report = build.stats(rows, [(row("c", "x", "y"), "markdown")])
@@ -147,6 +209,7 @@ def test_build_keeps_training_rows_and_leaves_out_noise_and_long_benchmarks(tmp_
     monkeypatch.setattr(build.stage2, "OUT_FILES", {})
     monkeypatch.setattr(build.compose, "TRAIN", replace(build.compose.TRAIN, out_dir=tmp_path / "stage4"))
     monkeypatch.setattr(build.compose, "BENCH", replace(build.compose.BENCH, out_dir=tmp_path / "bench" / "long"))
+    monkeypatch.setattr(build.compose, "TARGETED", replace(build.compose.TARGETED, out_dir=tmp_path / "stage4-targeted"))
     monkeypatch.setattr(noise, "OUT_DIR", tmp_path / "bench" / "noise")
     monkeypatch.setattr(noise, "BENCH_FILE", tmp_path / "bench" / "noise.jsonl")
     monkeypatch.setattr(bench, "LONG_FILE", tmp_path / "bench" / "long.jsonl")
@@ -165,6 +228,7 @@ def test_build_keeps_training_rows_and_leaves_out_noise_and_long_benchmarks(tmp_
     held_out = row("held-out", "cancel the ferry", "Cancel the ferry.")
     for path in (
         build.compose.output_file(build.compose.BENCH, category, bucket),
+        build.compose.output_file(build.compose.TARGETED, category, bucket),
         noise.OUT_DIR / "control.jsonl", noise.BENCH_FILE, bench.LONG_FILE, bench.AMI_FILE,
     ):
         write_examples(path, [held_out])

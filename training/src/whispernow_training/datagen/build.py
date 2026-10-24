@@ -1,7 +1,8 @@
 """Steps 8 and 10: gather every stage's rows, filter, split by seed group, and report.
 
 Writes `data/build/{train,val,test}.jsonl`, `dropped.jsonl` with a reason per
-row, `stats.json` and `stats.md`.
+row, `stats.json` and `stats.md`. That build is dataset v1; `build_v2` writes `data/build-v2/`, v1
+with the v2 rows added to train.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import statistics
 import unicodedata
 from collections import Counter, defaultdict
@@ -22,8 +24,8 @@ from ..text_rules import (
     CASE_SENSITIVE, CODE_TOKEN, CORRECTION, FILLER, FILLER_TOKEN, TRAILING_PUNCTUATION,
     assistant_opener, filler_only, has_markdown, malformed_list, protected_tokens,
 )
-from . import aawaaz, compose, generate, inject, paths, relabel, restyle, sources, stage1, stage2
-from .schema import EMPTY, LENGTH_BUCKETS, Example, hash_bucket, length_bucket, read_examples, write_examples
+from . import aawaaz, compose, cutoff, generate, heard, inject, paths, relabel, restyle, review, sources, stage1, stage2, v3, v5
+from .schema import EMPTY, LENGTH_BUCKETS, V2_TAG, V3_TAG, V5_TAG, Example, hash_bucket, length_bucket, read_examples, write_examples
 
 SEED = 108
 INJECTED = 2000
@@ -59,6 +61,13 @@ PRESET_TEST_SOURCES = {aawaaz.REPO, sources.HANDY, sources.DISFL_QA, sources.SOT
 
 
 def _source_rank(example: Example) -> tuple[int, int]:
+    # Later versions' rows come last, so a duplicate check never drops an earlier row for one.
+    if V5_TAG in example.tags:
+        return (5, 0)
+    if V3_TAG in example.tags:
+        return (3, 0)
+    if V2_TAG in example.tags:
+        return (2, 0)
     rank = SOURCE_ORDER.index(example.source) if example.source in SOURCE_ORDER else len(SOURCE_ORDER)
     return (0 if example.split == "test" else 1, rank)
 
@@ -553,6 +562,257 @@ def build(with_sotto: bool = False, out_dir: Path = paths.BUILD) -> dict:
     (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     (out_dir / "stats.md").write_text(markdown, encoding="utf-8")
     return report
+
+
+def gather_v2() -> list[Example]:
+    """The v2 rows: the targeted compose run's, plus an injected spoken version of each long reference.
+
+    Their references were written by the relabel's teacher and passed the same gates, so they skip
+    `relabel.apply`, which would drop them as rows it never saw. The injected versions come from a pool
+    of their own, as v1's long ones do from theirs.
+    """
+    targeted = compose.load(compose.TARGETED)
+    injected = inject.injected_rows(
+        [e for e in targeted if len(e.output.split()) >= LONG_INJECTION_WORDS], len(targeted), LONG_INJECTION_SEED,
+        layouts=("plain", "paragraphs"),
+    )
+    rows = targeted + [replace(e, tags=[*e.tags, "long_origin", V2_TAG]) for e in injected]
+    return [_empty_sentinel(_bare_fillers(_modal_may(e))) for e in rows]
+
+
+def build_v2(v1_dir: Path = paths.BUILD, out_dir: Path = paths.BUILD_V2, with_heard: bool = True) -> dict:
+    """Dataset v2: v1's rows (val and test copied byte for byte) and the v2 rows in train.
+
+    A v2 row is dropped when it fails a filter or duplicates a v1 row or an earlier v2 row. The v1 rows
+    were deduplicated before their inputs were varied, so the duplicate check below may flag a few of
+    them again; it is used only to drop v2 rows. A heard row (`heard.load`) that passes the filters
+    replaces its origin's train row instead of joining it, so no reference is trained on twice; it skips
+    the duplicate check and the input variant. Every other v1 train line is copied as written.
+    Without `with_heard`, every v1 train line is copied.
+    """
+    v1 = {split: read_examples(v1_dir / f"{split}.jsonl") for split in ("train", "val", "test")}
+    dropped: list[tuple[Example, str]] = []
+    kept = []
+    for example in gather_v2():
+        reason = filter_reason(example)
+        if reason:
+            dropped.append((example, reason))
+        else:
+            kept.append(example)
+    survivors, duplicates = deduplicate([*(e for rows in v1.values() for e in rows), *kept])
+    dropped += [(e, reason) for e, reason in duplicates if V2_TAG in e.tags]
+    added = [spoken_variant(replace(e, split="train")) for e in survivors if V2_TAG in e.tags]
+    swapped: dict[str, Example] = {}
+    for example in heard.load(v1_dir) if with_heard else []:
+        reason = filter_reason(example)
+        if reason:
+            dropped.append((example, reason))
+        else:
+            swapped[heard.origin_id(example)] = example
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # v1's train lines are copied as written, so fields added to the schema since never change them.
+    v1_train = [line for line in (v1_dir / "train.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    v1_lines = [(row_id, line) for line in v1_train if (row_id := json.loads(line)["id"]) not in swapped]
+    new = [*added, *swapped.values()]
+    lines = sorted([*v1_lines, *((e.id, e.to_json()) for e in new)])
+    (out_dir / "train.jsonl").write_text("".join(line + "\n" for _, line in lines), encoding="utf-8")
+    for split in ("val", "test"):
+        shutil.copyfile(v1_dir / f"{split}.jsonl", out_dir / f"{split}.jsonl")
+    with (out_dir / "dropped.jsonl").open("w", encoding="utf-8") as sink:
+        for example, reason in dropped:
+            sink.write(json.dumps({**asdict(example), "dropped": reason}, ensure_ascii=False) + "\n")
+    train = [swapped.get(e.id, e) for e in v1["train"]]
+    report = stats([*train, *added, *v1["val"], *v1["test"]], dropped)
+    report["v2"] = {
+        "added": len(added), "heard_swapped": len(swapped),
+        "dropped": dict(Counter(reason for _, reason in dropped).most_common()),
+    }
+    markdown = stats_markdown(report) + (
+        f"\nv2 rows added to train: {len(added)}; heard inputs swapped in: {len(swapped)}; dropped: {report['v2']['dropped']}\n"
+    )
+    (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    (out_dir / "stats.md").write_text(markdown, encoding="utf-8")
+    return report
+
+
+def build_v3(base_dir: Path = paths.BUILD_V2_NO_HEARD, out_dir: Path = paths.BUILD_V3) -> dict:
+    """Dataset v3: data/build-v2-no-heard with the verified reference fixes (`review.FIXES`) on its train
+    rows, plus the v3 rows (`v3.load`) in train. val and test are copied; the test fixes are already in
+    v1's test file.
+
+    A v3 row is dropped when it fails a filter or duplicates a base row or an earlier v3 row; then each target
+    group keeps its first target count (`v3.capped`). A repair row (`v3.repair`) replaces its origin's train
+    row, as build_v2's heard rows do, and skips the duplicate check and the input variant. Every other base
+    train line is copied as written.
+    """
+    base = {split: read_examples(base_dir / f"{split}.jsonl") for split in ("train", "val", "test")}
+    dropped: list[tuple[Example, str]] = []
+    kept, repairs = [], []
+    for example in (_empty_sentinel(_bare_fillers(_modal_may(e))) for e in v3.load()):
+        reason = filter_reason(example)
+        if reason:
+            dropped.append((example, reason))
+        else:
+            (repairs if v3.REPAIR_TAG in example.tags else kept).append(example)
+    survivors, duplicates = deduplicate([*(e for rows in base.values() for e in rows), *kept])
+    dropped += [(e, reason) for e, reason in duplicates if V3_TAG in e.tags]
+    added = [spoken_variant(e) for e in bare_filler_share(v3.capped([e for e in survivors if V3_TAG in e.tags]))]
+    swapped = {heard.origin_id(e): e for e in v3.capped(repairs)}
+
+    fixes = review.verified_fixes("train")
+    lines, fixed = [], []
+    for line in (base_dir / "train.jsonl").read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if row["id"] in swapped:
+            continue
+        if row["id"] in fixes:
+            example = replace(Example(**row), output=fixes[row["id"]], tags=[*row["tags"], "ref_fixed"])
+            fixed.append(example)
+            line = example.to_json()
+        lines.append((row["id"], line))
+    lines = sorted([*lines, *((e.id, e.to_json()) for e in [*added, *swapped.values()])])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "train.jsonl").write_text("".join(line + "\n" for _, line in lines), encoding="utf-8")
+    for split in ("val", "test"):
+        shutil.copyfile(base_dir / f"{split}.jsonl", out_dir / f"{split}.jsonl")
+    with (out_dir / "dropped.jsonl").open("w", encoding="utf-8") as sink:
+        for example, reason in dropped:
+            sink.write(json.dumps({**asdict(example), "dropped": reason}, ensure_ascii=False) + "\n")
+    fixed_ids = {e.id for e in fixed}
+    train = [*fixed, *(e for e in base["train"] if e.id not in fixed_ids and e.id not in swapped)]
+    report = stats([*train, *added, *swapped.values(), *base["val"], *base["test"]], dropped)
+    report["v3"] = {
+        "added": len(added), "added_by_source": dict(Counter(e.source for e in added)), "references_fixed": len(fixed),
+        "repairs_swapped": len(swapped), "dropped": dict(Counter(reason for _, reason in dropped).most_common()),
+    }
+    counts = Counter(v3.REPAIR if v3.REPAIR_TAG in e.tags else e.category for e in [*added, *swapped.values()])
+    targets = {v3.REPAIR: v3.REPAIR_ROWS, **generate.RUN_TARGETS[V3_TAG]}
+    report["v3"]["targets"] = {name: f"{counts[name]}/{target}" for name, target in targets.items()}
+    markdown = stats_markdown(report) + (
+        f"\nv3 rows added to train: {len(added)} {report['v3']['added_by_source']}; references fixed: {len(fixed)}; "
+        f"repair inputs swapped in: {len(swapped)}; rows per target: {report['v3']['targets']}; "
+        f"dropped: {report['v3']['dropped']}\n"
+    )
+    (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    (out_dir / "stats.md").write_text(markdown, encoding="utf-8")
+    return report
+
+
+def build_v4(base_dir: Path = paths.BUILD_V3, out_dir: Path = paths.BUILD_V4) -> dict:
+    """Dataset v4: data/build-v3 with `cutoff.ROWS` train inputs replaced by their versions with cut-off word starts
+    (`cutoff.load`, every length bucket at its proportional share): the same rows, ids and references. val and
+    test are copied."""
+    cut = _cutoff_records(short_share=1.0)
+    rows, lengths = _swap_cutoff(read_examples(base_dir / "train.jsonl"), cut)
+    held_out = _copy_held_out(base_dir, out_dir)
+    write_examples(out_dir / "train.jsonl", rows)
+    report = stats([*rows, *held_out["val"], *held_out["test"]], [])
+    report["v4"] = _cutoff_report(rows, cut, lengths)
+    _write_report(out_dir, report, f"\nv4 cut-off inputs swapped in: {report['v4']}\n")
+    return report
+
+
+def build_v5(base_dir: Path = paths.BUILD_V3, out_dir: Path = paths.BUILD_V5) -> dict:
+    """Dataset v5: data/build-v3 with `cutoff.ROWS` cut-off inputs swapped in at `cutoff.SHORT_SHARE` for the
+    shortest bucket, plus the v5 rows (`v5.load`) in train. A v5 row is dropped when it fails a filter or
+    duplicates a base row or an earlier v5 row; then each category keeps its first target count (`v5.capped`).
+    val and test are copied."""
+    cut = _cutoff_records()
+    base = {split: read_examples(base_dir / f"{split}.jsonl") for split in ("train", "val", "test")}
+    dropped: list[tuple[Example, str]] = []
+    kept = []
+    held_out_runs = _word_runs(e.input for e in [*base["val"], *base["test"], *_benchmark_rows()])
+    for example in (_empty_sentinel(_bare_fillers(_modal_may(e))) for e in v5.load()):
+        reason = filter_reason(example)
+        if reason:
+            dropped.append((example, reason))
+        else:
+            kept.append(example)
+    survivors, duplicates = deduplicate([*(e for rows in base.values() for e in rows), *kept])
+    dropped += [(e, reason) for e, reason in duplicates if V5_TAG in e.tags]
+    shaped = [spoken_variant(e) for e in bare_filler_share(e for e in survivors if V5_TAG in e.tags)]
+    overlapping = {e.id for e in shaped if _word_runs([e.input]) & held_out_runs}
+    dropped += [(e, f"shares {HELD_OUT_RUN} words with a held-out input") for e in shaped if e.id in overlapping]
+    added = v5.capped([e for e in shaped if e.id not in overlapping])
+    swapped, lengths = _swap_cutoff(base["train"], cut)
+    rows = sorted([*swapped, *added], key=lambda e: e.id)
+    held_out = _copy_held_out(base_dir, out_dir)
+    write_examples(out_dir / "train.jsonl", rows)
+    with (out_dir / "dropped.jsonl").open("w", encoding="utf-8") as sink:
+        for example, reason in dropped:
+            sink.write(json.dumps({**asdict(example), "dropped": reason}, ensure_ascii=False) + "\n")
+    report = stats([*rows, *held_out["val"], *held_out["test"]], dropped)
+    counts = Counter(e.category for e in added)
+    report["v5"] = {
+        "cutoff": _cutoff_report(rows, cut, lengths),
+        "added": {name: f"{counts[name]}/{target}" for name, target in generate.RUN_TARGETS[V5_TAG].items()},
+        "added_words": dict(Counter("<=25" if len(e.input.split()) <= 25 else "26-60" if len(e.input.split()) <= 60 else ">60"
+                                    for e in added)),
+        "dropped": dict(Counter(reason for _, reason in dropped).most_common()),
+    }
+    _write_report(out_dir, report, f"\nv5: {report['v5']}\n")
+    return report
+
+
+# A generated row sharing this many consecutive words with a val, test or benchmark input is dropped, so a
+# phrase the eval asks about is not taught by name.
+HELD_OUT_RUN = 6
+
+
+def _word_runs(texts: Iterable[str]) -> set[str]:
+    runs = set()
+    for text in texts:
+        words = re.findall(r"[a-z0-9']+", text.casefold())
+        runs |= {" ".join(words[i : i + HELD_OUT_RUN]) for i in range(len(words) - HELD_OUT_RUN + 1)}
+    return runs
+
+
+def _benchmark_rows() -> list[Example]:
+    return [e for name in ("long", "noise", "cutoff") if (path := paths.DATA / "bench" / f"{name}.jsonl").exists()
+            for e in read_examples(path)]
+
+
+def _cutoff_records(short_share: float | None = None) -> dict[str, dict]:
+    cut = {record["id"]: record for record in cutoff.load(short_share)}
+    if len(cut) < cutoff.ROWS:
+        raise SystemExit(f"{len(cut)} of {cutoff.ROWS} cut-off rows kept; run `datagen cutoff top-up` first")
+    return cut
+
+
+def _swap_cutoff(rows: Sequence[Example], cut: dict[str, dict]) -> tuple[list[Example], Counter]:
+    """`rows` with the cut-off records' inputs swapped in, and the swapped rows' length buckets."""
+    out, lengths = [], Counter()
+    for e in rows:
+        record = cut.get(e.id)
+        if record is not None:
+            lengths[cutoff.bucket(e)] += 1
+            e = replace(e, input=record["input"], tags=[*e.tags, cutoff.TAG, f"tts:{record['tts']}"])
+        out.append(e)
+    return out, lengths
+
+
+def _cutoff_report(rows: Sequence[Example], cut: dict[str, dict], lengths: Counter) -> dict:
+    swapped = [e for e in rows if cutoff.TAG in e.tags]
+    return {
+        "cutoff_rows": f"{len(swapped)}/{cutoff.ROWS}", "by_tts": dict(Counter(t for e in swapped for t in e.tags if t.startswith("tts:"))),
+        "cuts": sum(len(cut[e.id]["cuts"]) for e in swapped),
+        "by_length": dict(lengths),
+    }
+
+
+def _copy_held_out(base_dir: Path, out_dir: Path) -> dict[str, list[Example]]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for split in ("val", "test"):
+        shutil.copyfile(base_dir / f"{split}.jsonl", out_dir / f"{split}.jsonl")
+    return {split: read_examples(out_dir / f"{split}.jsonl") for split in ("val", "test")}
+
+
+def _write_report(out_dir: Path, report: dict, tail: str) -> None:
+    (out_dir / "stats.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    (out_dir / "stats.md").write_text(stats_markdown(report) + tail, encoding="utf-8")
 
 
 def review_sample(layout: str, n: int, seed: int, out_dir: Path = paths.BUILD) -> str:

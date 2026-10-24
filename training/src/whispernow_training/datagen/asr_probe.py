@@ -1,4 +1,4 @@
-"""Hear what Parakeet writes: speak dataset inputs with Kokoro, transcribe them as the app does.
+"""Hear what Parakeet writes: speak dataset inputs with Kokoro (or Phonon), transcribe them as the app does.
 
 Each sampled input is spoken by a random English Kokoro voice in chunks with pauses between
 them, then segmented and decoded the way WhisperNow does: the same Silero VAD asset and
@@ -38,6 +38,15 @@ QWEN3_DIR = paths.TRAINING_ROOT / ".cache/asr/sherpa-onnx-qwen3-asr-0.6B-int8-20
 MODELS = ("parakeet", "whisper", "qwen3")
 VAD_MODEL = APP_MODELS / "silero_vad.onnx"
 KOKORO_DIR = paths.TRAINING_ROOT / ".cache/tts/kokoro-int8-multi-lang-v1_0"
+# The int8 Kokoro runs its quantized ops on the CPU even under CUDA (1.7x real time on an RTX 5070);
+# the float model runs at about 27x. The voices are the same file.
+KOKORO_GPU_DIR = paths.CACHE / "tts" / "kokoro-multi-lang-v1_0"
+# Pinned revisions; Apache-2.0 weights and voices.
+PHONON_MODEL = "hf://gradium/phonon-31m-en@8c64b55ec301728e2d1695bfea87a08a267d0c2d"
+PHONON_VOICES = "hf://gradium/phonon-voices@da6c9ec0d47be8df5c87c730a3aa97187f3229c3"
+# Phonon's character voices that are no person dictating; its human characters add old and young voices.
+PHONON_NOT_HUMAN = {"Azgorath", "The Thing Under the Stairs", "Vyrmathrax the Ancient", "Grub the Ogre"}
+TTS_MODELS = ("kokoro", "phonon")
 AUDIO_DIR = paths.TRAINING_ROOT / ".cache/probe_audio"
 OUT_DIR = paths.DATA / "probe"
 
@@ -255,41 +264,29 @@ def resample(samples: np.ndarray, rate: int) -> np.ndarray:
 @dataclass
 class Spoken:
     samples: np.ndarray
-    voice: int
+    voice: int | str
     speed: float
     chunks: list[str]
     pauses: list[float]
 
 
 class Speaker:
-    def __init__(self) -> None:
-        import sherpa_onnx as so
+    """Speaks a text in chunks with pauses between them, in one voice and speed drawn per text."""
 
-        model_dir = KOKORO_DIR
-        config = so.OfflineTtsConfig(
-            model=so.OfflineTtsModelConfig(
-                kokoro=so.OfflineTtsKokoroModelConfig(
-                    model=str(model_dir / "model.int8.onnx"),
-                    voices=str(model_dir / "voices.bin"),
-                    tokens=str(model_dir / "tokens.txt"),
-                    data_dir=str(model_dir / "espeak-ng-data"),
-                    dict_dir=str(model_dir / "dict"),
-                    lexicon=str(model_dir / "lexicon-us-en.txt"),
-                ),
-                num_threads=THREADS,
-                provider="cpu",
-            )
-        )
-        self.tts = so.OfflineTts(config)
+    name: str
+
+    def _voice(self, rng: random.Random) -> tuple[int | str, float]:
+        raise NotImplementedError
+
+    def _say(self, piece: str, voice: int | str, speed: float, rng: random.Random) -> np.ndarray:
+        raise NotImplementedError
 
     def speak(self, text: str, rng: random.Random) -> Spoken:
-        voice = rng.choice(ENGLISH_VOICES)
-        speed = round(rng.uniform(0.95, 1.15), 2)
+        voice, speed = self._voice(rng)
         pieces = chunks(text, rng)
         parts, pauses = [], []
         for index, piece in enumerate(pieces):
-            audio = self.tts.generate(piece, sid=voice, speed=speed)
-            parts.append(resample(np.asarray(audio.samples, dtype=np.float32), audio.sample_rate))
+            parts.append(self._say(piece, voice, speed, rng))
             if index < len(pieces) - 1:
                 pauses.append(round(pause_seconds(rng), 2))
                 parts.append(np.zeros(int(pauses[-1] * SAMPLE_RATE), dtype=np.float32))
@@ -297,11 +294,75 @@ class Speaker:
         return Spoken(np.concatenate([lead, *parts, lead]), voice, speed, pieces, pauses)
 
 
+class KokoroSpeaker(Speaker):
+    def __init__(self, provider: str = "cpu", model_dir: Path = KOKORO_DIR) -> None:
+        import sherpa_onnx as so
+
+        config = so.OfflineTtsConfig(
+            model=so.OfflineTtsModelConfig(
+                kokoro=so.OfflineTtsKokoroModelConfig(
+                    model=str(next(model_dir.glob("model*.onnx"))),
+                    voices=str(model_dir / "voices.bin"),
+                    tokens=str(model_dir / "tokens.txt"),
+                    data_dir=str(model_dir / "espeak-ng-data"),
+                    dict_dir=str(model_dir / "dict"),
+                    lexicon=str(model_dir / "lexicon-us-en.txt"),
+                ),
+                num_threads=THREADS,
+                provider=provider,
+            )
+        )
+        self.tts = so.OfflineTts(config)
+        self.name = f"{model_dir.name}-{provider}"
+
+    def _voice(self, rng: random.Random) -> tuple[int, float]:
+        return rng.choice(ENGLISH_VOICES), round(rng.uniform(0.95, 1.15), 2)
+
+    def _say(self, piece: str, voice: int | str, speed: float, rng: random.Random) -> np.ndarray:
+        audio = self.tts.generate(piece, sid=voice, speed=speed)
+        return resample(np.asarray(audio.samples, dtype=np.float32), audio.sample_rate)
+
+
+class PhononSpeaker(Speaker):
+    """gradium's phonon-31m-en through its `ptts` runtime, on the CPU (ptts 0.4.1 has no GPU build).
+
+    Half the texts get an American or British voice, half a French, German, Spanish or Portuguese one
+    reading English, which Parakeet hears as accented English. Phonon has no speed setting.
+    """
+
+    def __init__(self) -> None:
+        import ptts
+
+        ptts.set_num_threads(THREADS)
+        self.tts = ptts.TTS(PHONON_MODEL, lang="en", quant="q8", voice_catalog=PHONON_VOICES)
+        voices = ptts.catalog_voices(PHONON_VOICES)
+        self.english = sorted(v["name"] for v in voices if v["language"] == "en" and v["name"] not in PHONON_NOT_HUMAN)
+        self.accented = sorted(v["name"] for v in voices if v["language"] != "en")
+        self.name = "phonon-31m-en-q8"
+
+    def _voice(self, rng: random.Random) -> tuple[str, float]:
+        return rng.choice(self.english if rng.random() < 0.5 else self.accented), 1.0
+
+    def _say(self, piece: str, voice: int | str, speed: float, rng: random.Random) -> np.ndarray:
+        audio = self.tts.synth(piece, voice=voice, seed=rng.randrange(2**32))
+        return resample(np.asarray(audio, dtype=np.float32), self.tts.sample_rate)
+
+
+def speaker(tts: str, provider: str = "cpu") -> Speaker:
+    """A Kokoro (on `provider`) or Phonon speaker."""
+    if tts == "kokoro":
+        return KokoroSpeaker(provider, KOKORO_GPU_DIR if provider == "cuda" else KOKORO_DIR)
+    if tts == "phonon":
+        return PhononSpeaker()
+    raise ValueError(f"unknown text-to-speech model {tts!r}; expected one of {TTS_MODELS}")
+
+
 class Recognizer:
-    def __init__(self, model: str = "parakeet") -> None:
+    def __init__(self, model: str = "parakeet", provider: str = "cpu") -> None:
         import sherpa_onnx as so
 
         self.max_segment = max_segment(model)
+        self.name = f"{model}-{provider}"
 
         if model == "parakeet":
             self.recognizer = so.OfflineRecognizer.from_transducer(
@@ -314,7 +375,7 @@ class Recognizer:
                 feature_dim=80,
                 decoding_method="greedy_search",
                 model_type="nemo_transducer",
-                provider="cpu",
+                provider=provider,
             )
         elif model == "whisper":
             # The app's `offline_whisper_config`: automatic language, no tail padding, token timestamps.
@@ -328,6 +389,7 @@ class Recognizer:
                 decoding_method="greedy_search",
                 tail_paddings=0,
                 enable_token_timestamps=True,
+                provider=provider,
             )
         elif model == "qwen3":
             # A 28 s segment is about 364 audio tokens, more than the default 512-token budget allows with the text.
@@ -411,7 +473,7 @@ def probe_texts(
     if not todo:
         return 0
     out.parent.mkdir(parents=True, exist_ok=True)
-    speaker, recognizer = Speaker(), Recognizer()
+    speaker, recognizer = KokoroSpeaker(), Recognizer()
     written = 0
     with out.open("a", encoding="utf-8") as sink:
         for id_, text in todo:
@@ -481,6 +543,42 @@ _NUMBER_WORDS = set(
         "seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand million"
     ).split()
 )
+
+
+ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split()
+TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+
+
+def say(n: int) -> str:
+    """An integer in English words, as Kokoro read the probe inputs."""
+    if n < 20:
+        return ONES[n]
+    if n < 100:
+        return TENS[n // 10] + ("" if n % 10 == 0 else " " + ONES[n % 10])
+    for size, word in ((10**9, "billion"), (10**6, "million"), (1000, "thousand"), (100, "hundred")):
+        if n >= size:
+            rest = n % size
+            return say(n // size) + " " + word + ("" if rest == 0 else " " + say(rest))
+    raise AssertionError
+
+
+def normalize(text: str) -> list[str]:
+    """Words for WER: lower case, digits spelled out, punctuation and fillers dropped."""
+    text = text.lower().replace("’", "'")
+    text = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", text)
+    text = re.sub(r"\$(\d+(?:\.\d+)?)", r"\1 dollars", text)
+    text = text.replace("%", " percent").replace("&", " and ")
+    text = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", text)
+
+    def number(m):
+        whole, _, frac = m.group(0).partition(".")
+        spoken = say(int(whole))
+        return spoken + (" point " + " ".join(ONES[int(d)] for d in frac) if frac else "")
+
+    text = re.sub(r"\d+(?:\.\d+)?", number, text)
+    text = re.sub(r"[^a-z0-9' ]+", " ", text)
+    words = [w.strip("'") for w in text.split()]
+    return [w.replace("okay", "ok") for w in words if w and not FILLER.fullmatch(w)]
 
 
 def _bare(word: str) -> str:

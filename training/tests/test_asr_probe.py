@@ -99,7 +99,7 @@ def test_run_preserves_shard_resume_metadata_audio_and_progress(tmp_path, monkey
         spoken_ids.append(text)
         return asr_probe.Spoken(tone(1.0), rng.choice(asr_probe.ENGLISH_VOICES), 1.05, ["first two", "three"], [0.25])
 
-    monkeypatch.setattr(asr_probe, "Speaker", lambda: SimpleNamespace(speak=speak))
+    monkeypatch.setattr(asr_probe, "KokoroSpeaker", lambda: SimpleNamespace(speak=speak))
     monkeypatch.setattr(asr_probe, "Recognizer", lambda: SimpleNamespace(transcribe=lambda samples: ("First two three.", ["First two three."])))
 
     assert asr_probe.run(4, 7, keep_audio=keep_audio, shard=1, shards=2) == 1

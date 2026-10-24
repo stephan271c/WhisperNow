@@ -14,6 +14,17 @@ Layout = Literal["plain", "list", "paragraphs", "mixed"]
 Split = Literal["train", "val", "test", ""]
 
 EMPTY = "EMPTY"
+# Dataset versions. v1 is `data/build` and the two benchmarks as they stood on 2026-10-18, frozen, and
+# its rows carry no version tag. Every row generated after that is tagged v2; `build.build_v2` adds
+# them to v1's train split.
+V2_TAG = "v2"
+# Rows added for v3 (`v3.py`), on top of data/build-v2-no-heard.
+V3_TAG = "v3"
+# Rows added for v5 (`v5.py`), on top of data/build-v3.
+V5_TAG = "v5"
+# A row's `license` is its text's: an imported row keeps its dataset's license, and text made for
+# this dataset (generated transcripts, injected fillers, EMPTY rows) is under the repository's MIT license.
+OWN_LICENSE = "MIT"
 
 LIST_ITEM = re.compile(r"^\s*(?:- |\d+\. )\S")
 _LABEL_MAX_WORDS = 8
@@ -31,6 +42,7 @@ class BatchRecord:
     notes: list[str] = field(default_factory=list)
     seconds: float = 0.0
     error: str = ""
+    generator: str = ""
 
 
 def is_missing_key_failure(record: dict) -> bool:
@@ -56,6 +68,13 @@ class Example:
     teacher_model: str | None = None
     # The teacher's reasoning effort for the reference, recorded from the relabel on.
     teacher_reasoning: str | None = None
+    # Who wrote the transcript and who passed the reference, recorded on v2 rows. An injected row
+    # keeps its origin's: its input is the origin's reference with noise added.
+    generator_provider: str | None = None
+    generator_model: str | None = None
+    generator_reasoning: str | None = None
+    judge_model: str | None = None
+    judge_reasoning: str | None = None
 
     def __post_init__(self) -> None:
         self.layout = layout_of(self.output)

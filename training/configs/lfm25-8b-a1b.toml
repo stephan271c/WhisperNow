@@ -1,0 +1,21 @@
+# LFM2.5-8B-A1B (mixture of experts: 8.3B weights, 1.5B active per token), full fine-tune from the
+# base checkpoint, on a Modal B200 (modal_train.py --gpu B200). The 2.6B's recipe. fp32 weights,
+# gradients and Adam state take about 133 GB, more than an H100 or H200 holds with activations.
+base_model = "LiquidAI/LFM2.5-8B-A1B-Base"
+method = "full"
+learning_rate = 1e-5
+epochs = 3
+# 32 rows in one micro-batch. A B200 took 0.41 s a step at 32 × 1, 0.60 s at 16 × 2 and 1.0 s at 8 × 4;
+# peak 155 GB of its 183 GB, of which the weights, gradients and Adam state are most.
+batch_size = 32
+grad_accum = 1
+warmup = 0.03
+weight_decay = 0.0
+lr_scheduler = "cosine"
+# The longest rendered training row is 2,577 tokens, as with the 2.6B's tokenizer.
+max_length = 2816
+seed = 109
+gradient_checkpointing = true
+chunked_loss = true
+# A resumable checkpoint is about 100 GB; the 2.6B's 31 GB took 98 s to write and 266 s to commit.
+checkpoint_minutes = 60

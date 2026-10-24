@@ -10,13 +10,11 @@ the Open ASR Leaderboard where a model is listed.
 from __future__ import annotations
 
 import json
-import re
 import wave
 
 import numpy as np
 import sherpa_onnx as so
 
-from ..text_rules import FILLER
 from . import asr_probe as probe
 from . import paths
 
@@ -60,42 +58,6 @@ MODELS = {
     "whisper-distil-v3.5": whisper(ASR / "sherpa-onnx-whisper-distil-large-v3.5", "distil-large-v3.5"),
     "whisper-turbo": whisper(ASR / "sherpa-onnx-whisper-turbo", "turbo"),
 }
-
-ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split()
-TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
-
-
-def say(n: int) -> str:
-    """An integer in English words, as Kokoro read the probe inputs."""
-    if n < 20:
-        return ONES[n]
-    if n < 100:
-        return TENS[n // 10] + ("" if n % 10 == 0 else " " + ONES[n % 10])
-    for size, word in ((10**9, "billion"), (10**6, "million"), (1000, "thousand"), (100, "hundred")):
-        if n >= size:
-            rest = n % size
-            return say(n // size) + " " + word + ("" if rest == 0 else " " + say(rest))
-    raise AssertionError
-
-
-def normalize(text: str) -> list[str]:
-    """Words for WER: lower case, digits spelled out, punctuation and fillers dropped."""
-    text = text.lower().replace("’", "'")
-    text = re.sub(r"(\d),(\d{3})", r"\1\2", text)
-    text = re.sub(r"\$(\d+(?:\.\d+)?)", r"\1 dollars", text)
-    text = text.replace("%", " percent").replace("&", " and ")
-    text = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", text)
-
-    def number(m):
-        whole, _, frac = m.group(0).partition(".")
-        spoken = say(int(whole))
-        return spoken + (" point " + " ".join(ONES[int(d)] for d in frac) if frac else "")
-
-    text = re.sub(r"\d+(?:\.\d+)?", number, text)
-    text = re.sub(r"[^a-z0-9' ]+", " ", text)
-    words = [w.strip("'") for w in text.split()]
-    return [w.replace("okay", "ok") for w in words if w and not FILLER.fullmatch(w)]
-
 
 def edits(ref: list[str], hyp: list[str]) -> int:
     row = list(range(len(hyp) + 1))
@@ -141,7 +103,7 @@ def run(only: list[str] | None = None) -> dict:
                 text, elapsed = probe.decode_segment(recognizer, segment)
                 spent += elapsed
                 texts.append(text)
-            ref, hyp = normalize(spoken), normalize(probe.join_segment_texts(texts))
+            ref, hyp = probe.normalize(spoken), probe.normalize(probe.join_segment_texts(texts))
             errors += edits(ref, hyp)
             words += len(ref)
         results[name] = {"times_real_time": round(audio / spent, 1), "wer": round(100 * errors / words, 2)}

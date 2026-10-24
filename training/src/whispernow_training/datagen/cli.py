@@ -8,7 +8,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from . import aawaaz, build, compose, epochs, generate, paths, real, stage1, stage2, teacher
+from . import aawaaz, build, compose, epochs, generate, paths, real, review, stage1, stage2, teacher, v3, v5
 from .llm import LlmClient, LlmSettings, require_r112
 from .schema import read_examples, write_examples
 
@@ -82,10 +82,51 @@ async def _add(args: argparse.Namespace) -> None:
 
 
 async def _generate(args: argparse.Namespace) -> None:
-    categories = args.category or list(generate.TARGETS)
+    categories = args.category or list(generate.RUN_TARGETS[args.run_name] if args.run_name else generate.TARGETS)
     async with LlmClient(LlmSettings.from_env()) as llm:
-        counts = await generate.generate(llm, categories, args.scale, args.batch_size, args.test)
+        counts = await generate.generate(llm, categories, args.scale, args.batch_size, args.test, args.run_name or "")
     _print_counts("rows per category:", Counter(counts))
+
+
+async def _review_refs(args: argparse.Namespace) -> None:
+    settings = LlmSettings.from_env()
+    require_r112(settings, "teacher", "judge")
+    async with LlmClient(settings) as llm:
+        report = await review.review_build(llm, args.limit)
+        print(f"{llm.calls} requests, {llm.cache_hits} from the cache")
+    print(json.dumps(report, indent=1))
+    print(f"wrote {review.FIXES}")
+
+
+async def _v3(args: argparse.Namespace) -> None:
+    if args.step == "report":
+        print(json.dumps(v3.report(), indent=1))
+        return
+    settings = LlmSettings.from_env()
+    require_r112(settings, "teacher", "judge")
+    async with LlmClient(settings) as llm:
+        if args.step == "check":
+            result = await v3.check(llm)
+        elif args.step == "top-up":
+            result = await v3.top_up(llm)
+        elif args.step == "repair":
+            result = await v3.repair(llm, args.limit)
+        else:
+            result = await v3.label(llm, args.step.replace("-", "_"), args.limit)
+        print(f"{llm.calls} requests, {llm.cache_hits} from the cache")
+    print(json.dumps(result, indent=1))
+
+
+async def _v5(args: argparse.Namespace) -> None:
+    if args.step == "report":
+        print(json.dumps(v5.report(), indent=1))
+        return
+    settings = LlmSettings.from_env()
+    require_r112(settings, "teacher", "judge")
+    async with LlmClient(settings) as llm:
+        result = await (v5.check(llm) if args.step == "check" else v5.top_up(llm))
+        print(f"{llm.calls} requests, {llm.cache_hits} from the cache")
+    print(json.dumps(result, indent=1))
 
 
 async def _compose(args: argparse.Namespace) -> None:
@@ -169,9 +210,51 @@ def cmd_profile(args: argparse.Namespace) -> None:
 
 
 def cmd_build(args: argparse.Namespace) -> None:
+    if args.v5:
+        report = build.build_v5()
+        print(build.stats_markdown(report))
+        print(json.dumps(report["v5"], indent=1))
+        return
+    if args.v4:
+        report = build.build_v4()
+        print(build.stats_markdown(report))
+        print(f"v4: {report['v4']}")
+        print(f"wrote splits and stats to {paths.BUILD_V4}")
+        return
+    if args.v3:
+        report = build.build_v3()
+        print(build.stats_markdown(report))
+        print(f"v3: {report['v3']}")
+        print(f"wrote splits and stats to {paths.BUILD_V3}")
+        return
+    if args.v2:
+        out_dir = paths.BUILD_V2_NO_HEARD if args.no_heard else paths.BUILD_V2
+        report = build.build_v2(out_dir=out_dir, with_heard=not args.no_heard)
+        print(build.stats_markdown(report))
+        v2 = report["v2"]
+        print(f"added {v2['added']} v2 rows to train; swapped in {v2['heard_swapped']} heard inputs; dropped {v2['dropped']}")
+        print(f"wrote splits and stats to {out_dir}")
+        return
     report = build.build(with_sotto=args.with_sotto)
     print(build.stats_markdown(report))
     print(f"wrote splits and stats to {paths.BUILD}")
+
+
+def cmd_cutoff(args: argparse.Namespace) -> None:
+    from . import cutoff
+
+    if args.step == "run":
+        _print_counts(f"shard {args.shard}:", cutoff.run(shard=args.shard, shards=args.shards, tts_provider=args.tts_provider))
+    elif args.step == "check":
+        _print_counts("Mercury Decide:", asyncio.run(cutoff.check()))
+    elif args.step == "top-up":
+        print(json.dumps(cutoff.top_up(args.shards, args.tts_provider), indent=1))
+    elif args.step == "bench":
+        print(f"wrote {cutoff.bench(tts_provider=args.tts_provider)} rows to {cutoff.BENCH}")
+    elif args.step == "report":
+        print(json.dumps(cutoff.report(), indent=1))
+    else:
+        print(cutoff.score(args.eval_dirs))
 
 
 def cmd_epochs(args: argparse.Namespace) -> None:
@@ -196,6 +279,31 @@ def cmd_asr_probe(args: argparse.Namespace) -> None:
     report = asr_probe.report(asr_probe.load(args.model))
     (asr_probe.OUT_DIR / f"report.{args.model}.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=1))
+
+
+def cmd_heard(args: argparse.Namespace) -> None:
+    from . import heard
+
+    if args.step == "run":
+        if not args.n:
+            raise SystemExit("heard run needs --n, the number of train rows every process samples from")
+        counts = heard.run(
+            args.n, args.recognizer, args.seed, args.shard, args.shards, args.tts_provider, args.asr_provider, args.tts
+        )
+        _print_counts(f"{args.recognizer} shard {args.shard}:", counts)
+    elif args.step == "restore":
+        _print_counts("restored again:", heard.rerestore())
+    elif args.step == "check":
+        _print_counts("meaning check:", asyncio.run(heard.check()))
+    print(json.dumps(heard.report(), indent=1))
+
+
+async def _heard_audit(args: argparse.Namespace) -> None:
+    from . import heard
+
+    async with LlmClient(LlmSettings.from_env()) as llm:
+        print(json.dumps(await heard.audit(llm, args.n or 100, args.seed), indent=1))
+    print(f"verdicts in {heard.AUDIT}")
 
 
 def cmd_asr_speed(args: argparse.Namespace) -> None:
@@ -257,6 +365,7 @@ def main() -> None:
     gen.add_argument("--scale", type=float, default=1.0, help="multiply every category's target, e.g. 0.05 for a pilot")
     gen.add_argument("--batch-size", type=int, help="transcripts per request (default: 50, 25 for long_ramble)")
     gen.add_argument("--test", action="store_true", help="generate the extra rows pinned to the test split")
+    gen.add_argument("--run", dest="run_name", choices=list(generate.RUN_TARGETS), help="a later run's extra train rows, e.g. v3")
     gen.set_defaults(run=lambda args: asyncio.run(_generate(args)))
 
     restyle_parser = commands.add_parser(
@@ -267,10 +376,14 @@ def main() -> None:
     restyle_parser.set_defaults(run=lambda args: asyncio.run(_restyle(args)))
 
     compose_parser = commands.add_parser(
-        "compose", help="long composed-task rows (train) or the long benchmark's generated rows (bench); resumes"
+        "compose",
+        help="long composed-task rows (train), more of them weighted toward the weakest categories and lengths "
+        "(targeted), or the long benchmark's generated rows (bench); resumes",
     )
-    compose_parser.add_argument("--run", dest="run_name", choices=["train", "bench"], default="train")
-    compose_parser.add_argument("--total", type=int, required=True, help="rows over all categories, split 40/35/25 by bucket")
+    compose_parser.add_argument("--run", dest="run_name", choices=list(compose.RUNS), default="train")
+    compose_parser.add_argument(
+        "--total", type=int, required=True, help="rows over all categories, split by the run's bucket shares and category weights"
+    )
     compose_parser.add_argument("--category", action="append", choices=compose.CATEGORIES, help="only this category (repeatable)")
     compose_parser.set_defaults(run=lambda args: asyncio.run(_compose(args)))
 
@@ -312,7 +425,60 @@ def main() -> None:
 
     build_parser = commands.add_parser("build", help="filter, deduplicate, split by seed group, and report stats")
     build_parser.add_argument("--with-sotto", action="store_true", help="include sotto rows if stage 2 added them")
+    build_parser.add_argument(
+        "--v2", action="store_true", help="dataset v2: data/build as it is, plus the v2 rows in train, into data/build-v2"
+    )
+    build_parser.add_argument(
+        "--no-heard", action="store_true", help="with --v2: keep every v1 input, no heard swaps, into data/build-v2-no-heard"
+    )
+    build_parser.add_argument(
+        "--v3", action="store_true",
+        help="dataset v3: data/build-v2-no-heard with its verified reference fixes, plus the v3 rows, into data/build-v3",
+    )
+    build_parser.add_argument(
+        "--v4", action="store_true",
+        help="dataset v4: data/build-v3 with the cut-off word starts (`datagen cutoff run`) swapped into its train inputs",
+    )
+    build_parser.add_argument(
+        "--v5", action="store_true",
+        help="dataset v5: data/build-v3 with the cut-off inputs at the lighter short-row share, plus the v5 rows (`datagen v5 top-up`)",
+    )
     build_parser.set_defaults(run=cmd_build)
+
+    cutoff_parser = commands.add_parser(
+        "cutoff", help="cut-off word starts ('interf interface'): run (cut train rows, Kokoro/Phonon and Parakeet), "
+        "check (Mercury Decide, one call per question per cut), top-up (check, then replace failed rows until every "
+        "length bucket is full), bench (data/bench/cutoff.jsonl), report, score (eval dirs' bench-cutoff outputs)"
+    )
+    cutoff_parser.add_argument("step", choices=["run", "check", "top-up", "bench", "report", "score"])
+    cutoff_parser.add_argument("eval_dirs", nargs="*", type=Path, help="score: eval dirs with bench-cutoff and test outputs")
+    cutoff_parser.add_argument("--shard", type=int, default=0, help="run: the pool rows at positions shard, shard+shards, ...")
+    cutoff_parser.add_argument("--shards", type=int, default=1)
+    cutoff_parser.add_argument("--tts-provider", choices=["cuda", "cpu"], default="cuda", help="where Kokoro runs")
+    cutoff_parser.set_defaults(run=cmd_cutoff)
+
+    review_parser = commands.add_parser(
+        "review-refs",
+        help="have the teacher review suspect build references (Disfl-QA against the original question, line-initial "
+        "command case) and the judge verify each fix blind, into data/fixes/refs.jsonl",
+    )
+    review_parser.add_argument("--limit", type=int, default=0, help="review only the first N candidates of each kind")
+    review_parser.set_defaults(run=lambda args: asyncio.run(_review_refs(args)))
+
+    v3_parser = commands.add_parser(
+        "v3", help="dataset v3's new train rows: disfl-qa or ami (label and gate), check (the stage 3 v3 rows), "
+        "top-up (replace the rows check drops), repair (label heard records' raw recognizer text), report"
+    )
+    v3_parser.add_argument("step", choices=["disfl-qa", "ami", "repair", "check", "top-up", "report"])
+    v3_parser.add_argument("--limit", type=int, default=0, help="disfl-qa, ami, repair: label only the first N rows not done yet")
+    v3_parser.set_defaults(run=lambda args: asyncio.run(_v3(args)))
+
+    v5_parser = commands.add_parser(
+        "v5", help="dataset v5's new train rows (generated with `datagen generate --run v5`): check (a second teacher "
+        "sample for every row), top-up (check, then generate replacements until each category has its target), report"
+    )
+    v5_parser.add_argument("step", choices=["check", "top-up", "report"])
+    v5_parser.set_defaults(run=lambda args: asyncio.run(_v5(args)))
 
     epochs_parser = commands.add_parser(
         "epochs", help="todo 111: one freshly noised variant of the train split per epoch, for noise_per_epoch training"
@@ -340,6 +506,34 @@ def main() -> None:
     probe.add_argument("--shards", type=int, default=1, help="how many probe processes share the rows")
     probe.add_argument("--report", action="store_true", help="only rewrite report.<model>.json from the rows already probed")
     probe.set_defaults(run=cmd_asr_probe)
+    heard_parser = commands.add_parser(
+        "heard", help="v2: train rows spoken by Kokoro or Phonon and transcribed by Parakeet or Whisper, keeping their reference"
+    )
+    heard_parser.add_argument(
+        "step", choices=["run", "restore", "check", "report", "audit"],
+        help="restore: apply the current restore rules to every record's heard text, without speaking; "
+        "check: ask Mercury Decide whether each kept row unseen by it still says what was spoken (build keeps only passes)",
+    )
+    heard_parser.add_argument(
+        "--n", type=int, default=0, help="run: train rows sampled, the same for every process; audit: kept rows judged (100)"
+    )
+    heard_parser.add_argument("--recognizer", choices=["parakeet", "whisper"], default="parakeet")
+    heard_parser.add_argument("--seed", type=int, default=120)
+    heard_parser.add_argument("--shard", type=int, default=0, help="run the recognizer's rows at positions shard, shard+shards, ...")
+    heard_parser.add_argument("--shards", type=int, default=1)
+    heard_parser.add_argument(
+        "--tts", choices=["kokoro", "phonon"], default="kokoro",
+        help="who speaks; rows already heard are skipped whoever spoke them, so a Phonon run wants a new --seed",
+    )
+    heard_parser.add_argument(
+        "--tts-provider", choices=["cuda", "cpu"], default="cuda",
+        help="where Kokoro runs; cuda needs the audio-gpu extra and uses the float model",
+    )
+    heard_parser.add_argument(
+        "--asr-provider", choices=["cpu", "cuda"], default="cpu",
+        help="where the recognizer runs; the app runs it on the CPU, and only Parakeet fp16 gains much on the GPU",
+    )
+    heard_parser.set_defaults(run=lambda args: asyncio.run(_heard_audit(args)) if args.step == "audit" else cmd_heard(args))
     speed = commands.add_parser(
         "asr-speed", help="time each catalog speech model on the probe audio and score its WER (needs --extra audio)"
     )

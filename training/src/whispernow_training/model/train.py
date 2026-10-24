@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 import torch
-from datasets import Dataset, load_dataset
+from datasets import Dataset
 from peft import LoraConfig
 from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
@@ -26,7 +26,13 @@ EVALS_PER_EPOCH = 2
 
 
 def load_rows(files: list[Path], limit: int | None = None) -> Dataset:
-    rows = load_dataset("json", data_files=[str(path) for path in files], split="train")
+    # Only the two columns: `datasets` takes a JSON file's schema from its first rows, and v2 rows carry
+    # provenance fields v1 rows lack.
+    pairs = []
+    for path in files:
+        with path.open(encoding="utf-8") as source:
+            pairs += [{"input": row["input"], "output": row["output"]} for row in map(json.loads, filter(str.strip, source))]
+    rows = Dataset.from_list(pairs)
     if limit is not None:
         rows = rows.shuffle(seed=109).select(range(min(limit, len(rows))))
     return rows.map(
@@ -35,8 +41,8 @@ def load_rows(files: list[Path], limit: int | None = None) -> Dataset:
     )
 
 
-def load_split(split: str, limit: int | None = None) -> Dataset:
-    return load_rows([BUILD / f"{split}.jsonl"], limit)
+def load_split(split: str, limit: int | None = None, build: Path = BUILD) -> Dataset:
+    return load_rows([build / f"{split}.jsonl"], limit)
 
 
 def resolve(path_or_id: str) -> str:
@@ -47,8 +53,10 @@ def resolve(path_or_id: str) -> str:
 
 def train_files(config: TrainConfig) -> list[Path]:
     if config.noise_per_epoch:
+        if config.build != TrainConfig.build:
+            raise SystemExit("noise_per_epoch varies data/build only")
         return epochs.materialize(int(config.epochs))
-    return [BUILD / "train.jsonl"]
+    return [TRAINING_ROOT / config.build / "train.jsonl"]
 
 
 def load_tokenizer(base_model: str):
@@ -203,7 +211,7 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
         )
 
     files = train_files(config)
-    train_rows, eval_rows = load_rows(files, config.train_rows or None), load_split("val", VAL_ROWS)
+    train_rows, eval_rows = load_rows(files, config.train_rows or None), load_split("val", VAL_ROWS, TRAINING_ROOT / config.build)
     # Noise variants are one pass over every epoch's rows; otherwise the trainer counts epochs.
     passes = 1 if config.noise_per_epoch else config.epochs
     common = dict(

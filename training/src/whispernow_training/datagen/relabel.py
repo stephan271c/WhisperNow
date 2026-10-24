@@ -120,21 +120,6 @@ def require_complete(scope: str, records: Mapping[str, dict]) -> None:
         )
 
 
-def relabelled_license(example: Example) -> str:
-    """The row's license with the new teacher reference; the transcript's author stays.
-
-    A dataset original keeps its license, as rows the teacher relabelled before did. A row of model
-    output names each writer: a single author wrote both parts, a pair names the transcript's writer
-    and the old reference's.
-    """
-    parts = set(example.license.split("+"))
-    if not parts & {"zai-output", "openai-output"}:
-        return example.license
-    old_reference = "openai-output" if (example.teacher_model or "").startswith("gpt") else "zai-output"
-    transcript = (parts - {old_reference}) or {old_reference}
-    return "+".join(sorted(transcript | {"openai-output"}))
-
-
 def apply(rows: Iterable[Example], records: Mapping[str, dict]) -> tuple[list[Example], list[tuple[Example, str]]]:
     """Rows with their relabelled references; a row that failed twice, or has no record, is dropped."""
     kept, dropped = [], []
@@ -148,7 +133,7 @@ def apply(rows: Iterable[Example], records: Mapping[str, dict]) -> tuple[list[Ex
             tags = [*e.tags, TAG, *(["relabel112_retry"] if record["attempt"] else [])]
             kept.append(
                 replace(
-                    e, output=record["output"], tags=tags, license=relabelled_license(e),
+                    e, output=record["output"], tags=tags,
                     teacher_model=record["teacher_model"], teacher_reasoning=record["teacher_reasoning"],
                 )
             )

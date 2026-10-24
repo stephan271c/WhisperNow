@@ -1,0 +1,21 @@
+# Qwen3.5-4B, full fine-tune from the base checkpoint, on a Modal H200 (modal_train.py --gpu H200).
+# The 2.6B's recipe. transformers loads the text model only, without the vision tower or the
+# multi-token-prediction block: 4.2B weights, whose fp32 weights, gradients and Adam state take
+# about 67 GB, too much for an H100 with activations. Not a B200: there fla 0.5.2's gated delta rule
+# backward gave NaN gradients from step 34, the first batches under 128 tokens.
+base_model = "Qwen/Qwen3.5-4B-Base"
+method = "full"
+learning_rate = 1e-5
+epochs = 3
+batch_size = 32
+grad_accum = 1
+warmup = 0.03
+weight_decay = 0.0
+lr_scheduler = "cosine"
+# The longest rendered training row is 2,845 tokens with this tokenizer.
+max_length = 3072
+seed = 109
+gradient_checkpointing = true
+chunked_loss = true
+# A resumable checkpoint is about 50 GB.
+checkpoint_minutes = 60

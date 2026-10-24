@@ -47,30 +47,17 @@ def test_failed_evaluation_joins_peer_cleanup_before_closing(source, tmp_path, m
         peer_entered = asyncio.Event()
         release = asyncio.Event()
         events = []
-        sessions = []
-        peer_session = ""
         peer_task = None
         failure = llm.LlmError("invalid evaluation request", retryable=False)
 
         async def handle(request):
-            nonlocal peer_session, peer_task
-            path = request.url.path
-            if path == "/session":
-                session = str(len(sessions))
-                sessions.append(session)
-                return httpx.Response(200, json={"id": session})
-            if request.method == "DELETE":
-                if path == f"/session/{peer_session}":
-                    await asyncio.sleep(0)
-                    events.append("peer deleted")
-                return httpx.Response(200, json=True)
+            nonlocal peer_task
             body = json.loads(request.content)
-            text = body["parts"][0]["text"] if source == "teacher" else body["messages"][-1]["content"]
+            text = body["prompt"] if source == "teacher" else body["messages"][-1]["content"]
             if "failed transcript" in text:
                 await peer_entered.wait()
                 raise failure
             assert "held transcript" in text
-            peer_session = path.split("/")[2] if source == "teacher" else ""
             peer_task = asyncio.current_task()
             peer_entered.set()
             try:
@@ -99,7 +86,7 @@ def test_failed_evaluation_joins_peer_cleanup_before_closing(source, tmp_path, m
 
         assert error.value is failure
         assert not pending_on_return, f"evaluator closed its client while the peer was active; cleanup: {cleanup}"
-        expected = ["peer cancelled", "peer deleted", "client closed", "server stopped"] if source == "teacher" else [
+        expected = ["peer cancelled", "client closed", "server stopped"] if source == "teacher" else [
             "peer cancelled", "client closed",
         ]
         assert events_on_return == expected
@@ -123,13 +110,9 @@ def test_successful_evaluation_preserves_input_order_requests_limits_and_teacher
 
         async def handle(request):
             nonlocal active, peak
-            if request.url.path == "/session":
-                return httpx.Response(200, json={"id": str(len(requests))})
-            if request.method == "DELETE":
-                return httpx.Response(200, json=True)
             body = json.loads(request.content)
             requests.append(body)
-            text = body["parts"][0]["text"] if source == "teacher" else body["messages"][-1]["content"]
+            text = body["prompt"] if source == "teacher" else body["messages"][-1]["content"]
             name = next(name for name in ("first", "second", "third") if f"{name} transcript" in text)
             active += 1
             peak = max(peak, active)
@@ -144,7 +127,7 @@ def test_successful_evaluation_preserves_input_order_requests_limits_and_teacher
             active -= 1
             finished.append(name)
             output = f" {name} output "
-            reply = {"info": {}, "parts": [{"type": "text", "text": output}]} if source == "teacher" else {
+            reply = {"data": {"text": output}} if source == "teacher" else {
                 "choices": [{"message": {"content": output}, "finish_reason": "length" if name == "third" else "stop"}],
                 "usage": {"completion_tokens": 3},
             }
@@ -181,9 +164,8 @@ def test_successful_evaluation_preserves_input_order_requests_limits_and_teacher
         for row, body, output in zip(rows, requests, outputs, strict=True):
             if source == "teacher":
                 messages = teacher.teacher_messages(row.input)
-                assert body == {"agent": "datagen", "model": {"providerID": "local", "modelID": SETTINGS.model},
-                                "parts": [{"type": "text", "text": messages[-1]["content"]}],
-                                "system": messages[0]["content"], "variant": SETTINGS.reasoning}
+                assert body == {"prompt": f"{messages[0]['content']}\n\n{messages[-1]['content']}",
+                                "model": {"id": SETTINGS.model, "providerID": "local", "variant": SETTINGS.reasoning}}
                 assert output["tokens"] is None and not output["hit_limit"]
             else:
                 assert body == {"messages": prompt.messages(row.input), "max_tokens": prompt.max_tokens(row.input),
@@ -199,12 +181,8 @@ def test_evaluation_reports_each_simultaneous_client_failure(source, tmp_path, m
     failures = [llm.LlmError(f"failed transcript {index}", retryable=False) for index in range(2)]
 
     async def handle(request):
-        if request.url.path == "/session":
-            return httpx.Response(200, json={"id": "local"})
-        if request.method == "DELETE":
-            return httpx.Response(200, json=True)
         body = json.loads(request.content)
-        text = body["parts"][0]["text"] if source == "teacher" else body["messages"][-1]["content"]
+        text = body["prompt"] if source == "teacher" else body["messages"][-1]["content"]
         raise next(failure for failure in failures if str(failure) in text)
 
     _local_boundary(monkeypatch, tmp_path, handle, [])

@@ -32,7 +32,7 @@ from . import gates, generate, paths, rejudge, relabel
 from .compose import BENCH_NAMES, BENCH_SETTINGS
 from .concurrency import task_group
 from .llm import LlmClient, LlmError
-from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, hash_bucket, is_missing_key_failure, read_examples, read_jsonl, write_examples
+from .schema import EMPTY, OWN_LICENSE, BatchRecord, Example, append_jsonl, example_id, hash_bucket, is_missing_key_failure, read_examples, read_jsonl, write_examples
 
 PATTERNS = (
     "filler_cluster", "determiner_filler", "repeats", "restart", "short_cue", "redecision", "reasoned",
@@ -187,9 +187,11 @@ async def run_batch(
     style = style_for(kind, batch)
     record = BatchRecord(batch=batch, style=style, requested=count)
     started = time.monotonic()
-    reply = await llm.complete(generator_messages(kind, style, count, batch, notes), role="generator")
+    generated = await llm.generate(generator_messages(kind, style, count, batch, notes))
+    route = generated.route
+    record.generator = route.label
     try:
-        items = [item for item in generate.parse_items(reply, count) if item["input"] not in known]
+        items = [item for item in generate.parse_items(generated.text, count) if item["input"] not in known]
     except (ValueError, KeyError, TypeError) as error:
         record.error = f"unreadable generator reply: {error}"[:300]
         record.seconds = round(time.monotonic() - started, 1)
@@ -225,12 +227,18 @@ async def run_batch(
                 output=result.output,
                 source=generate.SOURCE,
                 category=f"noise_{kind}",
-                license=generate.LICENSE,
+                license=OWN_LICENSE,
                 tags=[
                     *item["tags"], f"style_{style}", "noise_bench", *pattern_tags(kind, item["input"]),
                     *(f"evidence:{e}" for e in item["evidence"]), *(["relabeled"] if result.attempt else []),
                 ],
                 teacher_model=llm.settings.model,
+                teacher_reasoning=llm.settings.reasoning,
+                generator_provider=route.provider,
+                generator_model=route.model,
+                generator_reasoning=route.reasoning or None,
+                judge_model=llm.settings.judge_model,
+                judge_reasoning=llm.settings.judge_reasoning,
             )
         )
         record.relabeled += bool(result.attempt)
@@ -241,7 +249,7 @@ async def run_batch(
         if set(row["failed"]) & {"length", "pattern", "input_realistic"} and row.get("note")
     ][:FEEDBACK_NOTES]
     record.seconds = round(time.monotonic() - started, 1)
-    return record, passed, rejected
+    return record, passed, [{**row, "generator": route.label} for row in rejected]
 
 
 def output_file(kind: str):

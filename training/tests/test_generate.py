@@ -47,7 +47,7 @@ def test_generation_writes_passing_rows_logs_batches_and_resumes(fake_llm, tmp_p
     assert kept == 6
     rows = read_examples(tmp_path / "mixed_message.jsonl")
     assert len(rows) == 6 and len({r.input for r in rows}) == 6
-    assert all(r.source == "teacher" and r.teacher_model == "teacher-model" and r.license == "zai-output" for r in rows)
+    assert all(r.source == "teacher" and r.teacher_model == "teacher-model" and r.license == "MIT" for r in rows)
     assert all(r.layout == "list" for r in rows)
     log = list(read_jsonl(tmp_path / "mixed_message.batches.jsonl"))
     styles = [b["style"] for b in log]
@@ -85,6 +85,21 @@ def test_held_out_rows_are_pinned_to_test_and_new(fake_llm, tmp_path, monkeypatc
     first = len(list(read_jsonl(tmp_path / "mixed_message.batches.jsonl")))
     assert all(int(r.input.split()[1]) >= first for r in held_out)
     assert (tmp_path / "mixed_message.test.batches.jsonl").exists()
+
+
+def test_run_rows_are_tagged_new_and_numbered_after_train_and_test(fake_llm, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "STAGE3", tmp_path)
+    llm = fake_llm(reply)
+    asyncio.run(generate.generate_category(llm, "mixed_message", 4, batch_size=5, progress=lambda _: None))
+    asyncio.run(generate.generate_category(llm, "mixed_message", 4, batch_size=5, held_out=True, progress=lambda _: None))
+    earlier = [*read_examples(tmp_path / "mixed_message.jsonl"), *read_examples(tmp_path / "mixed_message.test.jsonl")]
+    kept = asyncio.run(generate.generate_category(llm, "mixed_message", 4, batch_size=5, run="v3", progress=lambda _: None))
+    assert kept == 4
+    rows = read_examples(tmp_path / "mixed_message.v3.jsonl")
+    assert all("v3" in r.tags and r.split != "test" for r in rows)
+    assert not {r.input for r in rows} & {r.input for r in earlier}
+    first = sum(len(list(read_jsonl(tmp_path / f"mixed_message{stem}.batches.jsonl"))) for stem in ("", ".test"))
+    assert all(int(r.input.split()[1]) >= first for r in rows)
 
 
 def test_client_configuration_failure_preserves_batches_and_resumes_after_repair(fake_llm, tmp_path, monkeypatch):

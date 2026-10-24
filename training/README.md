@@ -10,6 +10,7 @@ Every row has one schema (`datagen/schema.py`): `id`, `input`, `output`, `source
 - LLM settings come from the repo-root `.env`: the `LLM_*` variables that `LlmSettings.from_env` in `datagen/llm.py` reads. The key is never printed or logged.
 - `publish` needs a Hugging Face login (`hf auth login`).
 - `asr-probe` needs `uv sync --extra audio` (sherpa-onnx 1.13.6, the version the app vendors), the app's Parakeet TDT 0.6B v2 fp16 and Silero VAD models in `~/.local/share/WhisperNow/models/`, and Kokoro `kokoro-int8-multi-lang-v1_0` (Apache-2.0, from the k2-fsa/sherpa-onnx `tts-models` release) unpacked in `.cache/tts/`. `--model whisper` and `--model qwen3` need `sherpa-onnx-whisper-distil-large-v3.5` (the app's catalog build, same SHA-256) and `sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25` from the k2-fsa/sherpa-onnx `asr-models` release, unpacked in `.cache/asr/`.
+- `heard run` speaks with Kokoro on an NVIDIA GPU: `uv sync --inexact --extra audio-gpu` swaps in sherpa-onnx 1.13.6's CUDA 13 build (it conflicts with `audio`, and `--inexact` keeps the `train` extra), which needs the CUDA 13 runtime, cuBLAS and cuDNN 9 on the system, and the float Kokoro `kokoro-multi-lang-v1_0` (same release, same voices) in `.cache/tts/`. `--tts-provider cpu` uses the int8 model instead. On an RTX 5070 the float Kokoro runs at about 27x real time against 1.1x for the int8 on the CPU, and Parakeet fp16 at 88x against 20x with transcripts within 0.2% of words of the CPU's (`--asr-provider cuda`); Whisper int8 gains little on the GPU and stays on the CPU. On a 12 GB GPU only Parakeet and two Whisper shards fit: each process's onnxruntime arena only grows (Parakeet's to about 6 GB, each Kokoro's to about 3 GB), a third shard ran out of memory, and even two run out now and then over hours, so the 10,000-row run restarted crashed processes (a restart resumes past the rows written). It took about 10 hours: Parakeet about 700 rows an hour, each Whisper shard about 150.
 - Data lands in `data/` and the response cache in `.cache/`. Both are gitignored.
 
 ## Build it, one command per stage
@@ -36,8 +37,11 @@ Every row has one schema (`datagen/schema.py`): `id`, `input`, `output`, `source
 | 110.4 New references for the probed rows, through the gates | `uv run datagen bench gate-probed` | `data/bench/noise/probed.gated.jsonl` |
 | 110.4 Write both benchmark files, and check them against the build | `uv run datagen bench assemble` | `data/bench/{long,noise}.jsonl`, `report.json` |
 | 110.5 Long composed training rows (40/35/25% by bucket). `gpt-6.1-sol` through codex writes the transcripts (low) and references (high; xhigh over 600 words). The judge checks one row per request (low up to 600 words, high above), and a failure is relabelled once by the teacher. Each cell runs `compose.LANES` batches at once (2, 6 and 12 by bucket), so the slow long cells keep the codex slots busy. The first 2,558 rows had `glm-5.3` as generator, teacher and judge | `LLM_BACKEND=codex LLM_MODEL=gpt-6.1-sol LLM_REASONING=high LLM_GENERATOR_MODEL=gpt-6.1-sol LLM_GENERATOR_REASONING=low LLM_JUDGE_MODEL=gpt-6.1-sol LLM_JUDGE_REASONING=high LLM_CODEX_CONCURRENCY=64 uv run datagen compose --total 8300` | `data/stage4/<category>.<bucket>.jsonl` |
+| v2: targeted long rows, more composed training rows weighted toward the categories and lengths where the fine-tuned models lose the most facts (`compose.TARGETED_WEIGHTS`: revised_choice 32%, recipe_quantities 22%; `TARGETED_SHARES`: 20/40/40% by bucket), from name and setting pools shared with neither the training run nor the benchmark. Rows are tagged `targeted` and `v2` | `LLM_BACKEND=codex LLM_MODEL=gpt-6.1-sol LLM_REASONING=high LLM_GENERATOR_MODEL=gpt-6.1-sol LLM_GENERATOR_REASONING=low LLM_JUDGE_MODEL=gpt-6.1-sol LLM_JUDGE_REASONING=high LLM_CODEX_CONCURRENCY=64 uv run datagen compose --run targeted --total N` | `data/stage4-targeted/<category>.<bucket>.jsonl` |
+| v2: heard rows. Kokoro speaks a sample of v1 train transcripts and Parakeet (two thirds) or Whisper transcribes them as the app does; the row keeps its origin's reference after `restore` puts back what the recognizer lost, and `check` (Mercury Decide, free) drops rows whose heard text reads differently from the spoken (see [Heard rows](#heard-rows-v2)). Every process needs the same `--n`; `--shard`/`--shards` split one recognizer's rows; `report` summarizes the records, `restore` reapplies changed rules to the saved heard text (run `check` again after it), and `audit` has the judge check kept rows against their origins | `nice -n 10 ionice -c3 uv run --extra audio-gpu datagen heard run --n N --recognizer parakeet --asr-provider cuda`, and two of `… --recognizer whisper --shard K --shards 2`; then `uv run datagen heard check` | `data/heard/heard.<recognizer>.<shard>.jsonl`, `meaning.jsonl`, `audit.jsonl` |
 | 112. Rewrite every reference with `gpt-6.1-sol` at high reasoning (teacher and judge; the command refuses any other setting for any role). `build`, `bench-long`, `bench-noise` or `all` is the full run; `--retry N` checks the dropped rows again and rewrites the ones that still fail, with the judge's notes from this round and the one before (rows the user ruled dropped stay dropped); `--settled-hedges` with `--retry` also rechecks passed rows that keep a hedge the speaker may have settled; `--report` only compares old and new references | `LLM_BACKEND=codex LLM_MODEL=gpt-6.1-sol LLM_REASONING=high LLM_JUDGE_BACKEND=codex LLM_JUDGE_MODEL=gpt-6.1-sol LLM_JUDGE_REASONING=high LLM_GENERATOR_BACKEND=codex LLM_GENERATOR_MODEL=gpt-6.1-sol LLM_GENERATOR_REASONING=high LLM_CODEX_CONCURRENCY=64 uv run datagen relabel all` | `data/relabel/<scope>.jsonl`, `data/relabel/inputs/` |
 | 4. Filter, deduplicate, split, report | `uv run datagen build` | `data/build/{train,val,test}.jsonl`, `stats.md` |
+| v2 build: dataset v1 (`data/build` and both benchmarks as they stood on 2026-10-18, frozen) plus the v2 rows in train. v1's rows are copied unchanged, val and test byte for byte, except that a heard row replaces its origin's train row; v2 rows skip the relabel (the same teacher and gates wrote them), get injected long versions from a pool of their own, and are dropped when they fail a filter or duplicate a v1 row. `--no-heard` keeps every v1 input, to measure what the heard swaps add | `uv run datagen build --v2 [--no-heard]` | `data/build-v2/{train,val,test}.jsonl`, `stats.md`; `data/build-v2-no-heard/` |
 | Draw rows for a hand review | `uv run datagen sample list --n 50 --seed 110` | stdout |
 | Publish (private) | `uv run datagen publish <user>/<repo>` | Hugging Face dataset |
 | Real-dictation sanity check (not an evaluation set) | `uv run datagen export-real` | `data/real/real.jsonl` (never uploaded) |
@@ -64,6 +68,31 @@ Every row has one schema (`datagen/schema.py`): `id`, `input`, `output`, `source
 - **Reasoning.** Only the final message text is kept. `<think>` blocks and reasoning parts are dropped.
 - **Models.** `LLM_MODEL` (`glm-5.3-flash`) is the teacher. `LLM_JUDGE_MODEL` (`glm-5.3`) is the judge and validator. `LLM_GENERATOR_MODEL` writes transcripts and defaults to `LLM_MODEL`.
 - **Backend per role.** `LLM_BACKEND` serves the teacher. `LLM_JUDGE_BACKEND` and `LLM_GENERATOR_BACKEND` default to it. `LLM_GENERATOR_REASONING` defaults to `LLM_REASONING`.
+
+**Generator pool.** `LLM_GENERATORS` spreads the generator role over several routes, comma-separated, each `provider:model#reasoning` (`llm.PROVIDERS`):
+
+| Provider | Route | Key | In flight |
+|---|---|---|---|
+| `nvidia` | NVIDIA NIM, `https://integrate.api.nvidia.com/v1` | `NVIDIA_API_KEY` | 8 |
+| `orca` | Orca Router, `https://api.orcarouter.ai/v1` | `ORCAROUTER_API_KEY` | 4 |
+| `openrouter` | OpenRouter directly | `OPENROUTER_API_KEY` | 4 |
+| `codex` | `codex exec`, sharing the codex semaphore | codex's own login | 8 |
+
+- The OpenAI-compatible routes send the reasoning as `reasoning_effort`. On NVIDIA's glm-5.3-flash it changes how long the model thinks. On OpenRouter's Nemotron and Orca's DeepSeek only `none` (no reasoning) made a measurable difference in our probes: low, high and max each thought for 2,000–7,000 tokens with no order between them.
+- **The pool is not used.** A pilot on the targeted run (2026-10-18, `gpt-6.1-sol` as teacher and judge) found no route worth its Codex cost:
+  - Writing transcripts is about 17% of the Codex spend per transcript (measured with `codex exec --json`, weighting cached input 0.1× and output 8×). The teacher at xhigh on long rows costs about 4 times a generator request.
+  - So another generator saves Codex only if it keeps at least about 70% of its transcripts (`gpt-6.1-sol` keeps 84% of its own).
+  - Kept: Orca DeepSeek 68% with reasoning off and 55% with it on; NVIDIA glm-5.3 and glm-5.3-flash 7–33%; OpenRouter Nemotron 6–13%.
+  - Most of the losses were the layout check: the GLM models label 62–78% of these list-heavy dictations `prose` (`gpt-6.1-sol` 12%), and the teacher writes a list. Judged without the check, about a third of those rejects would pass, for `gpt-6.1-sol`'s own rejects as for the others'.
+  - The 93 rows the pilot kept are in `data/stage4-targeted/`, each naming its generator.
+
+- `LLM_<PROVIDER>_CONCURRENCY` overrides a provider's slots, which its routes share.
+- Each request goes to the least-used route that is not resting and whose provider has a free slot.
+- A route rests after a rate limit (`Retry-After`, else 30 s doubling to 10 minutes), after an account or quota refusal (30 minutes, so a free tier the account qualifies for later joins by itself), or after three failures in a row (2 minutes). A configuration error (HTTP 400 or 404, such as a bad model name) takes it out of the run.
+- The request then moves to another route. Rate limits and refusals don't count against it; other failures count toward the usual 7.
+- `LLM_GENERATOR_FALLBACK` names a route that takes requests only while every pool route rests or is out, not while they are merely busy.
+- A cached reply keeps the route that wrote it, so a rerun reuses it whatever the pool holds now.
+- Every generated row records its generator (`generator_provider`, `generator_model`, `generator_reasoning`), teacher (`teacher_model`, `teacher_reasoning`) and judge (`judge_model`, `judge_reasoning`). Rejected rows and batch records carry the route's label as `generator`, so pass rates split by route. An injected row keeps its origin's fields.
 
 **Backend.** `LLM_BACKEND=openai` calls any OpenAI-compatible endpoint directly with `LLM_BASE_URL` and `LLM_API_KEY`.
 
@@ -116,12 +145,17 @@ Actual wall-clock times, on one account:
 
 This is a reading of the published terms, not a legal review.
 
+- **A row's `license` is its text's license** (`schema.OWN_LICENSE`). An imported row keeps its dataset's license, though `gpt-6.1-sol` rewrote its reference. Text made for this dataset (generated transcripts, injected fillers, `EMPTY` rows) is ours, under the repository's MIT license. The license does not name the models that wrote a row; the providers' terms below apply all the same.
 - **Z.ai (teacher, judge and generator outputs).**
   - Z.ai's terms of use forbid using outputs "to develop, train, or enhance algorithms or models that compete with us", and forbid automated access by bots or spiders.
-  - Whether a local dictation-cleanup model competes with Z.ai is a judgment call for the project owner. Rows whose output the teacher wrote carry `teacher_model`; stage 3 rows carry the license `zai-output`.
+  - Whether a local dictation-cleanup model competes with Z.ai is a judgment call for the project owner. Rows whose output the teacher wrote carry `teacher_model`.
 - **OpenAI (`gpt-6.1-sol` through the Codex CLI, todo 110's composed rows).**
   - OpenAI's terms of use also forbid using output to develop models that compete with OpenAI. Whether this model competes is the same judgment call as for Z.ai.
-  - Each composed row's license names the models that wrote its transcript and its reference (`compose.output_license`): `openai-output` 6,961 rows, `openai-output+zai-output` 898 (a `glm-5.3` transcript with a `gpt-6.1-sol` reference) and `zai-output` 194.
+  - `gpt-6.1-sol` wrote every reference in the build and both benchmarks. Z.ai's models wrote the stage 3 transcripts and the first composed ones, and `glm-5.3-flash` restyled half the aawaaz inputs.
+- **v2 transcript generators.** Each row names its generator, so the terms of the model that wrote its transcript can be checked per row.
+  - NVIDIA NIM serves `z-ai/glm-5.3` and `z-ai/glm-5.3-flash` with an API key; Z.ai's terms on GLM outputs (above) apply whichever host serves the model.
+  - OpenRouter's `nvidia/nemotron-3.5-super-vl:free` takes direct API calls.
+  - Orca Router's `deepseek/deepseek-v4.1-flash-free` needs the workspace owner to have linked an established GitHub account; before that it answers HTTP 429 `free_rate_limited`, and its route rests and retries every 30 minutes.
 - **aawaaz** (`shantanugoel/aawaaz-transcript-cleanup-dataset`): MIT. Its outputs came from Gemini 2.5 Flash and coding agents, so check Google's output terms before any commercial release.
   - Its generator repo has no license file, so our generator, validator and category prompts are written from scratch. They follow its loop but copy none of its text.
 - **handy** (`MagicNoThief/handy-dictation-editing`): CC-BY-4.0.
@@ -417,6 +451,27 @@ The stage 3 and injected recognizer-style inputs had commas on both sides of nea
 
 The build's inputs come out 48% lowercase and unpunctuated (the other aawaaz half, most of handy, and the `raw` stage 3 and injected rows) and 52% punctuated: 24% other punctuated rows (disfl_qa, some handy, stage 3 and injected `recognizer`), and 10% `parakeet`, 7% `whisper`, 5% `qwen3` and 5% `plain`.
 
+### Heard rows (v2)
+
+`heard run` gives v1 train rows a second input: what a recognizer wrote when Kokoro spoke the row's transcript, with the probe's voices, chunks and pauses and the app's segmenter and join (`asr_probe`). The row keeps its origin's reference, which stays right only where the cleanup could recover the spoken words from the heard ones. `heard.restore` makes sure it can:
+
+- It aligns the heard words with the spoken ones, lowercased, fillers dropped and number runs compared by value: "$1,200" matches "twelve hundred dollars", "April 15, 2024" matches "april fifteenth twenty twenty four", "$2 million" matches "two million dollars", "£50" matches "fifty pounds". Number words read in groups join up only digit by digit or as a year ("nine six two oh one", "twenty twenty six"), so "eighteen twenty percent" does not match "1820%". A sign the comparison would drop ("±", "°") only matches the same sign.
+- It puts the spoken words back, over whole tokens and with the fillers before them, wherever a difference touches any word other than an article, a discourse word ("so", "well", "yeah", "ok", "just") or a filler, or the recognizer made up a word: "uh the" heard as "other", "uh" as "ear", "U" or "R", "er" as "or", "internet" as "intranet", "ice in the cooler" as "ice and the cooler", a filler glued to a code ("A4721"), a misspelled name or drug, a filler heard as a capital "A" mid-sentence, which reads as the letter ("Garden A type 3"). Restored words take the reference's spelling and the recognizer's trailing punctuation, and a name heard with other capitals takes the reference's ("Grainlab" as "GrainLab"). A capitalized reference word counts as a name only if the reference never writes it in lower case, so "The" or "And" opening a quote is not one.
+- What stays as heard is the recognizer's formatting: casing, punctuation, sentence breaks at segment cuts, digits or words for numbers, the glued "$", "a" or "UM" for fillers, article slips and compounds ("front end").
+- A row is dropped when a restored stretch is over 6 words, the restored words are over 15% of the row and over 6 (the recognizer or Kokoro lost a phrase), the result fails the judge's code check (`gates.code_check`: a protected token the reference lacks, such as "2nd" from "on second thought"), or the result is the spoken text again. A dropped row is spoken again with a new voice, three tries in all. Transcripts with a backslash or control character are not sampled.
+
+The rules were set on a 300-row pilot (196 Parakeet, 104 Whisper; 4.2 hours of audio) and `heard audit`. With the first rules (numbers, names, rare words, negations and cues only), the judge failed 17 of 100 kept rows that it passed with the origin's input. Fillers heard as words, content-word mishearings, number pairs, "pound fifty" and name capitals made most of them. With the rules above it fails 3 of 150 such rows, and 3 of 150 with the origin's input, and all 3 are a recognizer sentence break or capital changing how a hedge or "So" reads. So the rest is generated without the judge. (One of the 3, a row with "And" and "She" capitalized throughout, came from a name-casing bug fixed since; the fix changed the casing in 65 of the 277 kept rows.) The pilot keeps 277 of 300 rows (Parakeet 180/196, Whisper 97/104; 169/184 up to 100 words, 49/52 to 200, 59/64 above).
+
+What this costs is the word errors: the heard text differs from the spoken words in 4.1% of words, the kept inputs in 0.3%. The rows teach the recognizers' real formatting, and almost none of their mishearings, which the reference could not follow. `heard restore` applies changed rules to the saved heard text without speaking anything again.
+
+A heard row has source `heard` and keeps its origin's category, license, seed group (so it stays in train) and provenance fields. It is tagged `heard`, `style_recognizer`, `recognizer:<name>`, `from:<origin source>` and `heard_from:<origin id>`, plus the origin's tags except the ones about its input (`style_*`, `asr_*`, `densified`, `composed`, injection tags). `build --v2` swaps each kept row in for its origin's train row after the filters, so no reference is trained on twice and the row count stays the same; a heard row that fails a filter leaves its origin in place. Heard rows skip the duplicate check, since each copies its origin's words, and `spoken_variant`. The heard rows are realistic inputs for references the model already sees, not new data: fresh programmatic noise per epoch, the same kind of second view, kept val loss flat but scored no better.
+
+`heard check` asks Mercury Decide (`inception/mercury-decide:free` on OpenRouter's System One endpoint, `prompts/judge/meaning.json`) whether each kept row's heard input says something its spoken text does not, and `build --v2` swaps in only the rows it passed. Verdicts go to `data/heard/meaning.jsonl` with the input they saw, so a row `heard restore` changes is asked again. On the pilot it takes 17 seconds and flags 5 of 277 kept rows (1.8%). By hand about half are real, all from punctuation or a filler heard as "a" rather than a changed word: "…for the fluid overload and a potassium. She doesn't need any supplementation" (spoken: "and uh potassium she doesn't need any supplementation"). The rest are sentence breaks a reader would see through ("how emotional. The finish line is like I crossed it"). On rows restored by the first rules it flagged 9 of the 13 that the judge failed for a changed word ("internet" as "intranet", "hole" as "hall", a dropped "bay" or "other") and missed dropped hedges ("I guess", "sort of"); it flagged 10 of the 83 rows the judge passed. It flags 49% of rows given the raw recognizer text. Its answers vary a little: asked twice, 2 of 217 rows changed verdict.
+
+The full run heard 10,153 rows (133.5 hours of audio; the 10,000 sampled plus 153 pilot rows sampled before the odd-text rule). The restore kept 9,565 (Parakeet 6,451 of 6,818, Whisper 3,114 of 3,335; 94% up to 100 words, 97% to 200, 92% above). The meaning check flagged 209 of them (2.2%), and `build --v2` swaps in 9,296; the other 60 fail a build filter, nearly all a changed protected token, and leave their origin in place.
+
+`heard audit` judges kept rows twice against the same reference, once with the heard input and once with the origin's. A row that passes with the origin's input and fails with the heard one is a miss of the rules; the origin side gives the judge's own failure rate on these references.
+
 ## Build: filters, split and stats
 
 `build` drops:
@@ -452,9 +507,9 @@ Test rows and earlier sources win a duplicate.
 | Source | Rows | License |
 |---|---|---|
 | aawaaz | 22,594 (43%) | MIT |
-| teacher (stage 3 and composed) | 12,694 | openai-output 7,378, zai-output 4,419, both 897 |
+| teacher (stage 3 and composed) | 12,694 | MIT (ours) |
 | handy | 10,303 | CC-BY-4.0 |
-| injected | 3,717 | MIT (2,848), or its composed origin's (869) |
+| injected | 3,717 | MIT (its origin's) |
 | disfl_qa | 3,212 | CC-BY-4.0 |
 
 - **Test groups:** todo 109's 2,828 test rows (`configs/test-ids-109.txt`) keep their ids and inputs. The 490 new test rows are composed rows of 150–1,000 words and their injected copies.
@@ -588,7 +643,7 @@ A small model fine-tuned on `data/build/` to do Clean Up & Format alone. It take
 
 ### Configs
 
-`configs/lfm25-350m.toml` holds every setting, and `--set` overrides any of them as TOML (`--set base_model='LiquidAI/LFM2.5-350M-Base'`, `--set method='lora'`). A sweep file names that config and lists runs, each with its overrides. Training is SFT with TRL: a conversational prompt-completion dataset rendered by the committed template, loss on the completion only, length-grouped batches of 8 with 4 accumulation steps (32 rows per optimizer step), rows up to `max_length` 2,816 tokens, cosine schedule with 3% warmup. The batch fits the longest batches of todo 110's build, which come first (`cleanup train` turns on PyTorch's expandable segments for them). A full fine-tune keeps fp32 master weights under bf16 autocast; LoRA (all linear layers) trains on bf16 weights and is merged before saving, so every run exports the same way.
+`configs/lfm25-350m.toml` holds every setting, and `--set` overrides any of them as TOML (`--set base_model='LiquidAI/LFM2.5-350M-Base'`, `--set method='lora'`). `build` names the directory whose train and val splits a run reads (`data/build`, or `--set build=data/build-v2`). On build-v2 the 350M needs `--set chunked_loss=true` on a 12 GB GPU: its first, longest batch (2,803 tokens) runs out of memory upcasting the whole vocabulary's logits to fp32 (5.5 GiB); with it the batch peaks at 9.1 GB. A sweep file names that config and lists runs, each with its overrides. Training is SFT with TRL: a conversational prompt-completion dataset rendered by the committed template, loss on the completion only, length-grouped batches of 8 with 4 accumulation steps (32 rows per optimizer step), rows up to `max_length` 2,816 tokens, cosine schedule with 3% warmup. The batch fits the longest batches of todo 110's build, which come first (`cleanup train` turns on PyTorch's expandable segments for them). A full fine-tune keeps fp32 master weights under bf16 autocast; LoRA (all linear layers) trains on bf16 weights and is merged before saving, so every run exports the same way.
 
 `configs/minicpm5-1b.toml` fits MiniCPM5-1B's full fine-tune in 12 GB of GPU memory: bitsandbytes' 8-bit AdamW (`optim`), frozen bf16 input embeddings (`freeze_embeddings`), Liger's fused cross-entropy (`liger`), and batches of 2 with 16 accumulation steps (4 × 8 runs out of memory on the 2,800-token rows). Its sweeps are `configs/sweep-minicpm5-1b.toml` and `configs/sweep-minicpm5-1b-stage2.toml`.
 

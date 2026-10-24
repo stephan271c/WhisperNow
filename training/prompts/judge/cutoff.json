@@ -1,0 +1,8 @@
+{
+  "preface": "TRANSCRIPT is part of a dictation as a speech recognizer wrote it. The speaker may have started to say NEXT WORD, cut it off and said it again; PIECE is what the recognizer wrote for that cut-off start, just before NEXT WORD. CLEAN is the same passage without PIECE. A cleanup of TRANSCRIPT will delete PIECE, so PIECE must carry nothing the speaker meant.",
+  "questions": {
+    "meant": "Could PIECE be a word or words the speaker meant to say here, rather than a cut-off start of NEXT WORD? Yes if PIECE fits the grammar and sense of the sentence as a word of its own, so that a careful editor would hesitate to delete it (as 'pen' in 'grab a pen pencil for the form' or 'lap' in 'put it on my lap laptop bag'). No if PIECE only makes sense as an unfinished start of NEXT WORD (as 'cal' in 'check the cal calendar' or 'rec s' in 'keep the rec s receipt').",
+    "fact": "Read with PIECE kept as a word, would TRANSCRIPT state a different fact from CLEAN? Yes if keeping PIECE adds or changes a number, quantity, name, date, time, negation, item, place, action or request (as 'ten' in 'pack the ten tennis shoes' or 'no' in 'we have no notes on it'). No if PIECE adds nothing a reader would take as information.",
+    "name": "Could PIECE be a name, title, acronym or term the speaker meant, such as a person, place, company, product, file or code name? Yes if a reader could take PIECE as such a name here (as 'Al' in 'ask Al Alvarez for the keys' or 'API' in 'the API apiary report'). No if PIECE can only be an unfinished word or a sound the recognizer heard."
+  }
+}

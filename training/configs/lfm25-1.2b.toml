@@ -1,0 +1,18 @@
+# LFM2.5-1.2B, full fine-tune from the base checkpoint, on a Modal GPU (modal_train.py): the 2.6B's
+# recipe (configs/lfm25-2.6b.toml). Base rather than instruct for the 2.6B's reason: the instruct
+# checkpoints share the 2.6B's thinking chat template. fp32 weights, gradients and Adam state take
+# about 19 GB.
+base_model = "LiquidAI/LFM2.5-1.2B-Base"
+method = "full"
+learning_rate = 1e-5
+epochs = 3
+batch_size = 32
+grad_accum = 1
+warmup = 0.03
+weight_decay = 0.0
+lr_scheduler = "cosine"
+max_length = 2816
+seed = 109
+gradient_checkpointing = true
+chunked_loss = true
+checkpoint_minutes = 25

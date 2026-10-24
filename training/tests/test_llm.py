@@ -343,6 +343,8 @@ def test_a_request_sent_before_the_limit_does_not_report_the_account_back(monkey
     (0, "ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 403 Forbidden", False),
     (1, "ERROR: Selected model is at capacity. Please try a different model.", False),
     (1, "You've hit your usage limit. Try again at 9:00 PM.", True),
+    (1, "ERROR: exceeded retry limit, last status: 429 Too Many Requests", False),
+    (1, "ERROR: exceeded retry limit, last status: 429 Too Many Requests\nERROR: You've hit your usage limit.", True),
 ])
 def test_codex_refusals_classify_throttling_and_usage_limits(tmp_path, monkeypatch, exit_code, log, limited):
     monkeypatch.setattr(llm, "CACHE", tmp_path)
@@ -413,3 +415,153 @@ def test_a_subprocess_that_runs_over_its_timeout_is_killed_with_its_group(tmp_pa
         asyncio.run(llm.run_process_group(["sh", "-c", script], b"", tmp_path, 0.5))
     time.sleep(0.2)
     assert not _alive(pid_file)
+
+
+def test_a_route_reads_provider_model_and_reasoning():
+    route = llm.Route.parse("opencode:openrouter/thinkingmachines/inkling:free#high")
+    assert route == llm.Route("opencode", "openrouter/thinkingmachines/inkling:free", "high")
+    assert llm.Route.parse(route.label) == route
+    assert llm.Route.parse("nvidia:z-ai/glm-5.3") == llm.Route("nvidia", "z-ai/glm-5.3", "")
+    with pytest.raises(SystemExit):
+        llm.Route.parse("nowhere:model")
+
+
+@pytest.mark.parametrize(("status", "text", "kind"), [
+    # Orca Router and opencode refusing a free tier the account may qualify for later.
+    (429, '{"error":{"code":"free_rate_limited","message":"Free models are not available to this account yet."}}', "limited"),
+    (503, "OpenCode's free tier can only be used from within OpenCode.", "limited"),
+    (429, "Rate limit exceeded: free-models-per-day", "limited"),
+    (429, "Too many requests", "throttled"),
+    (429, '{"error":{"code":"free_rate_limited","message":"Free model capacity is limited right now. Retry shortly, or add credits"}}', "throttled"),
+    (504, "", "retryable"),
+    (400, "Model unavailable: openrouter/no-such/model", "configuration"),
+])
+def test_a_route_error_rests_retries_or_takes_out_the_route(status, text, kind):
+    error = llm.route_error("route", status, text)
+    found = "limited" if error.limited else "throttled" if error.throttled else "retryable" if error.retryable else "configuration"
+    assert found == kind
+    assert llm.route_error("route", 429, "slow down", "12").retry_after == 12
+
+
+def _pool(*routes, fallback=None):
+    return llm.GeneratorPool(
+        [llm.Route.parse(r) for r in routes], llm.Route.parse(fallback) if fallback else None, dict.fromkeys(llm.PROVIDERS, 1)
+    )
+
+
+def test_the_pool_rotates_routes_and_passes_over_one_that_rests():
+    async def run():
+        pool = _pool("nvidia:a", "orca:b")
+        first, second = await pool.acquire(), await pool.acquire()
+        assert {first.route.model, second.route.model} == {"a", "b"}
+        a, b = sorted((first, second), key=lambda state: state.route.model)
+        pool.release(a, llm.route_error("nvidia:a", 429, "Too many requests", "60"))
+        pool.release(b)
+        for _ in range(3):
+            state = await pool.acquire()
+            assert state.route.model == "b"
+            pool.release(state)
+
+    asyncio.run(run())
+
+
+def test_the_fallback_takes_requests_only_while_every_route_rests():
+    async def run():
+        pool = _pool("nvidia:a", fallback="codex:gpt-6.1-sol#low")
+        state = await pool.acquire()
+        # Busy is not resting: the next request waits for the route instead of using the fallback.
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(pool.acquire(), timeout=0.05)
+        pool.release(state, llm.route_error("nvidia:a", 429, "Too many requests", "60"))
+        assert (await pool.acquire()).route.provider == "codex"
+
+    asyncio.run(run())
+
+
+def test_a_configuration_error_takes_its_route_out_and_an_empty_pool_fails():
+    async def run():
+        pool = _pool("nvidia:a")
+        pool.release(await pool.acquire(), llm.route_error("nvidia:a", 400, "Model unavailable"))
+        with pytest.raises(llm.LlmError, match="out of the run"):
+            await pool.acquire()
+
+    asyncio.run(run())
+
+
+def test_generate_moves_a_rate_limited_request_and_caches_the_route_that_wrote_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvidia-test-key")
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "orca-test-key")
+    sent = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        sent.append((request.url.host, request.headers["authorization"], body))
+        if request.url.host == "integrate.api.nvidia.com":
+            return httpx.Response(429, headers={"retry-after": "60"}, json={"error": "too many requests"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": f"orca: {body['messages'][-1]['content']}"}}]})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(transport=httpx.MockTransport(handle), **kwargs))
+    settings = replace(SETTINGS, generators=(llm.Route.parse("nvidia:glm#high"), llm.Route.parse("orca:deepseek")))
+    messages = [{"role": "system", "content": "write"}, {"role": "user", "content": "batch 0"}]
+
+    async def run():
+        async with llm.LlmClient(settings) as client:
+            first = await client.generate(messages)
+            again = await client.generate(messages)
+            other = await client.generate([messages[0], {"role": "user", "content": "batch 1"}])
+            return client, first, again, other
+
+    client, first, again, other = asyncio.run(run())
+    assert first.route == again.route == other.route == llm.Route("orca", "deepseek", "")
+    assert (first.text, again.text, other.text) == ("orca: batch 0", "orca: batch 0", "orca: batch 1")
+    assert client.cache_hits == 1
+    # NVIDIA is tried once, then rests for the 60 s it asked for.
+    nvidia = [(auth, body) for host, auth, body in sent if host == "integrate.api.nvidia.com"]
+    assert len(nvidia) == 1
+    auth, body = nvidia[0]
+    assert auth == "Bearer nvidia-test-key" and body["reasoning_effort"] == "high" and body["max_tokens"] == 32768
+    assert body["messages"][0] == {"role": "system", "content": "write"}
+    orca_body = next(body for host, _, body in sent if host == "api.orcarouter.ai")
+    assert "reasoning_effort" not in orca_body and "max_tokens" not in orca_body
+
+
+def test_the_opencode_agent_route_returns_its_last_written_step_and_reads_refusals(monkeypatch, tmp_path):
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    server = llm._OpencodeServer()
+    server.opencode, server.url = "opencode", "http://127.0.0.1:1"
+    server.agent_work.mkdir(parents=True)
+    calls = []
+    events = [
+        {"type": "step_start"},
+        {"type": "text", "part": {"text": "Let me check the folder first."}},
+        {"type": "tool_use", "part": {"tool": "shell", "state": {"status": "error"}}},
+        {"type": "step_start"},
+        {"type": "text", "part": {"text": '{"items": '}},
+        {"type": "text", "part": {"text": "[]}"}},
+        {"type": "step_start"},
+    ]
+
+    async def run(command, data, cwd, timeout, stdout=None, env=None):
+        calls.append((command, data, cwd, env))
+        stdout.write_text("".join(json.dumps(event) + "\n" for event in events))
+        return 0, b""
+
+    monkeypatch.setattr(llm, "run_process_group", run)
+    text = asyncio.run(server.run_agent("opencode", "glm-5.3-flash-free", "low", ("system", "user")))
+    assert text == '{"items": []}'
+    command, data, cwd, env = calls[0]
+    assert command[1:] == ["run", "--server", "http://127.0.0.1:1", "--format", "json", "-m", "opencode/glm-5.3-flash-free#low"]
+    assert data == b"system\n\nuser" and cwd == server.agent_work and env["OPENCODE_SERVER_PASSWORD"] == server.auth[1]
+    events[:] = [{"type": "error", "error": {"status": 403, "message": "OpenCode's free tier can only be used from within OpenCode."}}]
+    with pytest.raises(llm.LlmError) as refused:
+        asyncio.run(server.run_agent("opencode", "glm-5.3-flash-free", "low", ("system", "user")))
+    assert refused.value.limited
+
+
+def test_the_private_opencode_server_lets_no_tool_run_without_asking(monkeypatch, tmp_path):
+    monkeypatch.setattr(llm, "CACHE", tmp_path)
+    config = json.loads((llm._OpencodeServer()._write_config() / "opencode" / "opencode.json").read_text())
+    assert config["permissions"] == [{"action": "*", "resource": "*", "effect": "ask"}]
+    assert config["instructions"] == [] and config["plugins"] == []

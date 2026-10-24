@@ -21,31 +21,19 @@ def test_concurrent_cli_failure_cleans_up_peer_sessions_before_closing_and_resum
     monkeypatch.setattr(compose, "LANES", {"150-300": 2})
     monkeypatch.setattr(llm, "CACHE", tmp_path / "cache")
     monkeypatch.setattr(llm.LlmSettings, "from_env", classmethod(lambda cls: settings))
-    monkeypatch.setattr(sys, "argv", ["datagen", "compose", "--run", "bench", "--total", "1",
+    # Four rows, so the cell runs both lanes and one batch is in flight when the other fails.
+    monkeypatch.setattr(sys, "argv", ["datagen", "compose", "--run", "bench", "--total", "4",
                                      "--category", "revised_choice"])
     peer_entered = asyncio.Event()
     release = asyncio.Event()
     events = []
-    sessions = []
     clients = []
     generator_requests = []
-    peer_session = ""
     failing = True
 
     async def handle(request):
-        nonlocal peer_session
-        path = request.url.path
-        if request.method == "DELETE":
-            if failing and path == f"/session/{peer_session}":
-                await asyncio.sleep(0)
-                events.append("peer deleted")
-            return httpx.Response(200, json=True)
-        if path == "/session":
-            session_id = str(len(sessions))
-            sessions.append(session_id)
-            return httpx.Response(200, json={"id": session_id})
-        assert request.method == "POST" and path.endswith("/message")
-        user = json.loads(request.content)["parts"][0]["text"]
+        assert request.method == "POST" and request.url.path == "/api/experimental/generate"
+        user = json.loads(request.content)["prompt"]
         if batch_match := re.search(r"Batch (\d+)\.", user):
             generator_requests.append(user)
             batch = int(batch_match.group(1))
@@ -53,7 +41,6 @@ def test_concurrent_cli_failure_cleans_up_peer_sessions_before_closing_and_resum
                 if batch == 0:
                     await asyncio.wait_for(peer_entered.wait(), timeout=5)
                     return httpx.Response(400, text="invalid generator request")
-                peer_session = path.split("/")[2]
                 peer_entered.set()
                 try:
                     await asyncio.wait_for(release.wait(), timeout=5)
@@ -66,11 +53,12 @@ def test_concurrent_cli_failure_cleans_up_peer_sessions_before_closing_and_resum
         elif "<transcript>" in user:
             content = re.search(r"<transcript>\n(.*)\n</transcript>", user, re.S).group(1)
         else:
+            # The prompt leads with the judge's instructions; the items are its lines that start with {"i".
+            items = [json.loads(line) for line in user.split("\n") if line.startswith('{"i"')]
             content = json.dumps({"results": [
-                {"i": item["i"], **dict.fromkeys(gates.COMPOSE_CRITERIA, True)}
-                for item in judge_items([{"content": user}])
+                {"i": item["i"], **dict.fromkeys(gates.COMPOSE_CRITERIA, True)} for item in items
             ]})
-        return httpx.Response(200, json={"info": {}, "parts": [{"type": "text", "text": content}]})
+        return httpx.Response(200, json={"data": {"text": content}})
 
     class HttpClient(httpx.AsyncClient):
         def __init__(self, **kwargs):
@@ -91,18 +79,19 @@ def test_concurrent_cli_failure_cleans_up_peer_sessions_before_closing_and_resum
     with pytest.raises(llm.LlmError, match="opencode HTTP 400: invalid generator request"):
         cli.main()
     assert peer_entered.is_set()
-    assert events == ["peer cancelled", "peer deleted", "client closed", "server stopped"]
+    assert events == ["peer cancelled", "client closed", "server stopped"]
     assert clients[0].is_closed
     assert not list(run.out_dir.glob("*.jsonl"))
     assert not list((tmp_path / "cache").rglob("*.json"))
 
     failing = False
     monkeypatch.setattr(compose, "LANES", {"150-300": 1})
+    resumed = len(generator_requests)
     cli.main()
-    assert generator_requests[-1] == generator_requests[0]
-    assert len(compose.load(run)) == 1
+    assert generator_requests[resumed] == generator_requests[0]
+    assert len(compose.load(run)) == 4
     records = list(read_jsonl(run.out_dir / "revised_choice.150-300.batches.jsonl"))
-    assert len(records) == 1 and records[0]["batch"] == 0 and not records[0]["error"]
+    assert [r["batch"] for r in records] == [0, 1, 2, 3] and not any(r["error"] for r in records)
 
 
 @pytest.mark.parametrize("workflow", ["generate", "compose", "noise"])

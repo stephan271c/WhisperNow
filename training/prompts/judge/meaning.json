@@ -1,0 +1,4 @@
+{
+  "preface": "SPOKEN is what a person said in a dictation, written as plain words. RECOGNIZED is what a speech recognizer wrote for the same audio. The question is whether a careful reader of RECOGNIZED would take away a different message than a reader of SPOKEN.",
+  "question": "Does RECOGNIZED say something different from SPOKEN? Yes if a word or phrase was changed, added or lost in a way that changes a fact, quantity, number, name, date, time, negation, request, question, reason, hedge or which thing a detail belongs to, or if punctuation or a sentence break makes a sentence state, ask or attach something SPOKEN does not. These are never differences: punctuation, capitals or sentence breaks that leave the same reading; fillers (uh, um, er, a, ah); a repeated word heard once ('the the' as 'the'); numbers written as digits or words; symbols for spoken units ($, %, £); spelling of the same name or word."
+}

@@ -37,6 +37,8 @@ class TrainConfig:
     max_steps: int = 0
     # Train on a fixed random sample of this many rows; 0 uses them all.
     train_rows: int = 0
+    # The build directory, under `training/`, whose train and val splits the run reads.
+    build: str = "data/build"
     # Recompute activations in the backward pass; TRL's default.
     gradient_checkpointing: bool = True
     # Memory savers for models that do not fit a 12 GB GPU otherwise: a transformers optimizer

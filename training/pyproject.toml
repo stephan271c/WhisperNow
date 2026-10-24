@@ -24,8 +24,15 @@ cleanup = "whispernow_training.model.cli:main"
 
 [project.optional-dependencies]
 audio = [
+    "ptts==0.4.1",
     "sherpa-onnx==1.13.6",
     "sherpa-onnx-core==1.13.6",
+]
+# sherpa-onnx 1.13.6's CUDA 13 build (onnxruntime 1.27.1), for Kokoro on an NVIDIA GPU in `datagen heard`.
+# Needs the CUDA 13 runtime, cuBLAS and cuDNN 9 on the system.
+audio-gpu = [
+    "ptts==0.4.1",
+    "sherpa-onnx",
 ]
 train = [
     "accelerate>=1.15.0",
@@ -48,8 +55,12 @@ dev = [
     "pytest>=9.1.1",
 ]
 
+[tool.uv]
+conflicts = [[{ extra = "audio" }, { extra = "audio-gpu" }]]
+
 [tool.uv.sources]
 torch = { index = "pytorch-cu130" }
+sherpa-onnx = { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.6/sherpa_onnx-1.13.6%2Bcuda13.cudnn9.onnxruntime1.27.1-cp312-cp312-linux_x86_64.whl", extra = "audio-gpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.12'" }
 
 [[tool.uv.index]]
 name = "pytorch-cu130"

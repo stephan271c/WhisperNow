@@ -199,9 +199,20 @@ def test_injected_rows_keep_origin_target_group_and_license():
     assert [r.input for r in rows] == [r.input for r in inject.injected_rows(origins, 20, seed=3)]
 
 
+def test_injected_rows_keep_who_wrote_and_passed_their_origin():
+    provenance = {
+        "teacher_model": "gpt-6.1-sol", "teacher_reasoning": "high", "generator_provider": "nvidia",
+        "generator_model": "z-ai/glm-5.3", "generator_reasoning": "high", "judge_model": "gpt-6.1-sol", "judge_reasoning": "low",
+    }
+    origin = Example(id="a", input="raw", output="We met on Tuesday and it went well, I think.", source="teacher",
+                     category="c", license="MIT", **provenance)
+    row, = inject.injected_rows([origin], 1, seed=3)
+    assert {key: getattr(row, key) for key in provenance} == provenance
+
+
 def test_injected_rows_take_paragraph_origins_as_one_spoken_block():
     text = "We met on Friday about the launch, and it went well.\n\nThe venue holds 200 people and costs 5000 dollars."
-    origin = Example(id="p", input="x", output=text, source="teacher", category="c", license="zai-output")
+    origin = Example(id="p", input="x", output=text, source="teacher", category="c", license="MIT")
     assert origin.layout == "paragraphs"
     assert inject.injected_rows([origin], 5, seed=1) == []
     (row,) = inject.injected_rows([origin], 5, seed=1, layouts=("plain", "paragraphs"))

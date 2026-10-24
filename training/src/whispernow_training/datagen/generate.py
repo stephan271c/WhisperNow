@@ -24,11 +24,10 @@ from . import paths
 from .concurrency import task_group
 from .judge import judge_batch
 from .llm import LlmClient, LlmError, parse_json_reply
-from .schema import EMPTY, BatchRecord, Example, append_jsonl, example_id, is_missing_key_failure, read_examples, read_jsonl
+from .schema import EMPTY, OWN_LICENSE, BatchRecord, Example, append_jsonl, example_id, is_missing_key_failure, read_examples, read_jsonl
 from .teacher import relabel
 
 SOURCE = "teacher"
-LICENSE = "zai-output"
 BATCH_SIZE = 50
 # Long transcripts make slow replies: a batch of 50 long rambles took 12 minutes (64 KB).
 BATCH_SIZES = {"long_ramble": 25}
@@ -62,6 +61,13 @@ TEST_TARGETS = {
     "technical_list": 85,
     "ambiguous_intent": 85,
 }
+# Extra train rows per later run. v3: categories the v2 4B lost more facts in than v1, and categories
+# where the v2 models lose more facts than glm-5.3 max on short rows.
+# v5: correction words used literally, which the 1.2B v4 dropped from short dictations.
+RUN_TARGETS = {
+    "v3": {"technical_list": 700, "spoken_symbols": 700, "list_edits": 700, "mixed_message": 700},
+    "v5": {"literal_cue": 600},
+}
 # Categories where the validator, not the generator's guess, decides whether a list fits.
 LAYOUT_OPEN = {"ambiguous_intent"}
 
@@ -81,24 +87,24 @@ SETTINGS = (
 )
 
 
-def _stem(category: str, held_out: bool) -> str:
-    return f"{category}.test" if held_out else category
+def _stem(category: str, held_out: bool, run: str = "") -> str:
+    return f"{category}.{run}" if run else f"{category}.test" if held_out else category
 
 
-def output_file(category: str, held_out: bool = False):
-    return paths.STAGE3 / f"{_stem(category, held_out)}.jsonl"
+def output_file(category: str, held_out: bool = False, run: str = ""):
+    return paths.STAGE3 / f"{_stem(category, held_out, run)}.jsonl"
 
 
-def batch_log(category: str, held_out: bool = False):
-    return paths.STAGE3 / f"{_stem(category, held_out)}.batches.jsonl"
+def batch_log(category: str, held_out: bool = False, run: str = ""):
+    return paths.STAGE3 / f"{_stem(category, held_out, run)}.batches.jsonl"
 
 
-def rejected_file(category: str, held_out: bool = False):
-    return paths.STAGE3 / f"{_stem(category, held_out)}.rejected.jsonl"
+def rejected_file(category: str, held_out: bool = False, run: str = ""):
+    return paths.STAGE3 / f"{_stem(category, held_out, run)}.rejected.jsonl"
 
 
-def _read_log(category: str, held_out: bool) -> list[dict]:
-    path = batch_log(category, held_out)
+def _read_log(category: str, held_out: bool, run: str = "") -> list[dict]:
+    path = batch_log(category, held_out, run)
     return list(read_jsonl(path)) if path.exists() else []
 
 
@@ -170,9 +176,11 @@ async def run_batch(
     style = STYLES[batch % len(STYLES)]
     record = BatchRecord(batch=batch, style=style, requested=count)
     started = time.monotonic()
-    reply = await llm.complete(generator_messages(category, style, count, batch, notes), role="generator")
+    generated = await llm.generate(generator_messages(category, style, count, batch, notes))
+    route = generated.route
+    record.generator = route.label
     try:
-        items = [item for item in parse_items(reply, count) if item["input"] not in known_inputs]
+        items = [item for item in parse_items(generated.text, count) if item["input"] not in known_inputs]
     except (ValueError, KeyError, TypeError) as error:
         record.error = f"unreadable generator reply: {error}"[:300]
         record.seconds = round(time.monotonic() - started, 1)
@@ -189,9 +197,15 @@ async def run_batch(
             output=output,
             source=SOURCE,
             category=category,
-            license=LICENSE,
+            license=OWN_LICENSE,
             tags=[*item["tags"], f"style_{style}"],
             teacher_model=llm.settings.model,
+            teacher_reasoning=llm.settings.reasoning,
+            generator_provider=route.provider,
+            generator_model=route.model,
+            generator_reasoning=route.reasoning or None,
+            judge_model=llm.settings.judge_model,
+            judge_reasoning=llm.settings.judge_reasoning,
         )
         for item, output in zip(items, outputs, strict=True)
     ]
@@ -230,7 +244,7 @@ async def run_batch(
         if row["note"]
     ][:FEEDBACK_NOTES]
     record.seconds = round(time.monotonic() - started, 1)
-    return record, passed, rejected
+    return record, passed, [{**row, "generator": route.label} for row in rejected]
 
 
 async def generate_category(
@@ -240,21 +254,26 @@ async def generate_category(
     *,
     batch_size: int | None = None,
     held_out: bool = False,
+    run: str = "",
     progress: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
 ) -> int:
     """Generates batches until `target` rows pass, resuming from the category's files.
 
     `held_out` rows go to `<category>.test.jsonl`, pinned to the test split. Their batches are
-    numbered after the training batches, so each request draws new names and settings.
+    numbered after the training batches, so each request draws new names and settings. A `run`'s
+    rows (`v3`) go to `<category>.<run>.jsonl`, tagged with the run, numbered after both.
     """
     batch_size = batch_size or BATCH_SIZES.get(category, BATCH_SIZE)
-    out = output_file(category, held_out)
+    out = output_file(category, held_out, run)
     kept = read_examples(out) if out.exists() else []
-    log = _read_log(category, held_out)
-    first_batch = len(_read_log(category, False)) if held_out else 0
+    log = _read_log(category, held_out, run)
+    first_batch = len(_read_log(category, False)) if held_out or run else 0
+    if run:
+        first_batch += len(_read_log(category, True))
     known = {e.input for e in kept}
-    if held_out and output_file(category).exists():
-        known |= {e.input for e in read_examples(output_file(category))}
+    for earlier in ([output_file(category), output_file(category, True)] if run else [output_file(category)] if held_out else []):
+        if earlier.exists():
+            known |= {e.input for e in read_examples(earlier)}
     max_batches = 3 * -(-target // batch_size) + 2 + sum(is_missing_key_failure(record) for record in log)
     while len(kept) < target:
         if len(log) >= max_batches:
@@ -271,14 +290,16 @@ async def generate_category(
         passed = [e for e in passed if e.input not in known][: target - len(kept)]
         if held_out:
             passed = [replace(e, split="test") for e in passed]
+        if run:
+            passed = [replace(e, tags=[*e.tags, run]) for e in passed]
         known |= {e.input for e in passed}
         kept += passed
         append_jsonl(out, [e.to_json() for e in passed])
-        append_jsonl(rejected_file(category, held_out), [json.dumps(row, ensure_ascii=False) for row in rejected])
-        append_jsonl(batch_log(category, held_out), [json.dumps(asdict(record), ensure_ascii=False)])
+        append_jsonl(rejected_file(category, held_out, run), [json.dumps(row, ensure_ascii=False) for row in rejected])
+        append_jsonl(batch_log(category, held_out, run), [json.dumps(asdict(record), ensure_ascii=False)])
         log.append(asdict(record))
         progress(
-            f"{_stem(category, held_out)}: batch {batch} ({record.style}) {record.passed}/{record.returned} passed"
+            f"{_stem(category, held_out, run)}: batch {batch} ({record.style}) {record.passed}/{record.returned} passed"
             f"{' ' + record.error if record.error else ''}, {len(kept)}/{target} rows, {record.seconds}s"
         )
     return len(kept)
@@ -290,12 +311,13 @@ async def generate(
     scale: float = 1.0,
     batch_size: int | None = None,
     held_out: bool = False,
+    run: str = "",
 ) -> dict[str, int]:
     """Runs every category's loop at once; the client's semaphore caps the requests in flight."""
-    goals = TEST_TARGETS if held_out else TARGETS
+    goals = RUN_TARGETS[run] if run else TEST_TARGETS if held_out else TARGETS
     targets = {category: max(1, round(goals[category] * scale)) for category in categories}
     async with task_group() as group:
-        tasks = [group.create_task(generate_category(llm, category, target, batch_size=batch_size, held_out=held_out))
+        tasks = [group.create_task(generate_category(llm, category, target, batch_size=batch_size, held_out=held_out, run=run))
                  for category, target in targets.items()]
     counts = [task.result() for task in tasks]
     return dict(zip(targets, counts, strict=True))

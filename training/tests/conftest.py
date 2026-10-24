@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from whispernow_training.datagen.llm import LlmSettings
+from whispernow_training.datagen.llm import Generated, LlmSettings, Route
 
 SETTINGS = LlmSettings(
     backend="openai",
@@ -41,6 +41,11 @@ class FakeLlm:
         self.attempts.append(attempt)
         self.reasonings.append((role, reasoning))
         return self.reply(messages, role)
+
+    async def generate(self, messages, *, cached=True, attempt=0):
+        settings = self.settings
+        route = Route(settings.generator_backend, settings.generator_model, settings.generator_reasoning)
+        return Generated(await self.complete(messages, role="generator", attempt=attempt), route)
 
 
 def judge_items(messages):

@@ -8,7 +8,7 @@ import pytest
 from conftest import judge_items
 
 from whispernow_training.datagen import compose, gates
-from whispernow_training.datagen.schema import Example, read_jsonl
+from whispernow_training.datagen.schema import V2_TAG, Example, read_jsonl, write_examples
 
 
 def _words(n, tag):
@@ -42,6 +42,16 @@ def test_targets_split_by_bucket_shares():
     assert {sum(n for (_, bucket), n in bench.items() if bucket == b) for b in compose.BUCKETS} == {120}
 
 
+def test_targeted_targets_follow_the_category_weights_and_bucket_shares():
+    goals = compose.targets(1000, compose.TARGETED_SHARES, compose.CATEGORIES, compose.TARGETED_WEIGHTS)
+    per_category = {c: sum(n for (category, _), n in goals.items() if category == c) for c in compose.CATEGORIES}
+    per_bucket = {b: sum(n for (_, bucket), n in goals.items() if bucket == b) for b in compose.BUCKETS}
+    assert per_category["revised_choice"] == 320 and per_category["recipe_quantities"] == 220
+    assert per_bucket == {"150-300": 200, "300-600": 400, "600-1000": 400}
+    one = compose.targets(100, compose.TARGETED_SHARES, ["revised_choice"], compose.TARGETED_WEIGHTS)
+    assert sum(one.values()) == 100
+
+
 def test_file_bucket_follows_the_length_and_stays_in_150_to_1000():
     assert compose.file_bucket(150) is None and compose.file_bucket(151) == "150-300"
     assert compose.file_bucket(320) == "300-600" and compose.file_bucket(1000) == "600-1000"
@@ -55,6 +65,12 @@ def test_bench_and_train_requests_share_no_prompt_names_or_settings():
     assert not set(compose.TRAIN.names) & set(compose.BENCH.names)
     assert not set(compose.TRAIN.settings) & set(compose.BENCH.settings)
     assert compose.style_for(compose.BENCH, "revised_choice", "150-300", 3) == compose.style_for(compose.BENCH, "revised_choice", "150-300", 3)
+
+
+def test_targeted_pools_share_nothing_with_the_training_or_benchmark_pools():
+    for other in (compose.TRAIN, compose.BENCH):
+        assert not set(compose.TARGETED.names) & set(other.names)
+        assert not set(compose.TARGETED.settings) & set(other.settings)
 
 
 @pytest.fixture(autouse=True)
@@ -137,6 +153,51 @@ def test_generate_cell_files_rows_by_length_rejects_short_ones_and_resumes(fake_
     assert llm.calls == calls
 
 
+def long_rows(messages, role):
+    if role == "generator":
+        batch = int(re.search(r"Batch (\d+)\.", messages[-1]["content"]).group(1))
+        return json.dumps({"items": [{"input": _words(800, f"long{batch}w"), "layout": "prose"}]})
+    return reply(messages, role)
+
+
+def test_a_cell_short_of_one_row_runs_one_batch_whatever_its_lanes(fake_llm, tmp_path, monkeypatch):
+    monkeypatch.setattr(compose, "LANES", dict.fromkeys(compose.BUCKETS, 12))
+    run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
+    counts = compose.counts_by_cell(run)
+    asyncio.run(compose.generate_cell(fake_llm(long_rows), run, "revised_choice", "600-1000", 1, set(), counts, progress=lambda _: None))
+    assert len(list(read_jsonl(tmp_path / "revised_choice.600-1000.batches.jsonl"))) == 1
+
+
+def test_targeted_rows_carry_the_run_tag_and_the_teacher_reasoning(fake_llm, tmp_path):
+    run = dataclasses.replace(compose.TARGETED, out_dir=tmp_path)
+    counts = compose.counts_by_cell(run)
+    asyncio.run(compose.generate_cell(fake_llm(long_rows), run, "revised_choice", "600-1000", 1, set(), counts, progress=lambda _: None))
+    rows = compose.load(run)
+    assert len(rows) == 1 and {compose.TARGETED_TAG, V2_TAG} <= set(rows[0].tags) and rows[0].teacher_reasoning == "xhigh"
+
+
+def test_rows_rejects_and_batch_records_name_the_generator_teacher_and_judge(fake_llm, tmp_path):
+    run = dataclasses.replace(compose.TARGETED, out_dir=tmp_path)
+    counts = compose.counts_by_cell(run)
+    asyncio.run(compose.generate_cell(fake_llm(reply), run, "revised_choice", "300-600", 1, set(), counts, progress=lambda _: None))
+    row = compose.load(run)[0]
+    assert (row.generator_provider, row.generator_model, row.generator_reasoning) == ("openai", "teacher-model", "low")
+    assert (row.teacher_model, row.judge_model) == ("teacher-model", "judge-model")
+    # Rows up to 600 words are judged at low whatever the judge's setting.
+    assert row.judge_reasoning == "low"
+    rejected = list(read_jsonl(tmp_path / "revised_choice.300-600.rejected.jsonl"))
+    assert rejected and {r["generator"] for r in rejected} == {"openai:teacher-model#low"}
+    record, = read_jsonl(tmp_path / "revised_choice.300-600.batches.jsonl")
+    assert record["generator"] == "openai:teacher-model#low"
+
+
+def test_load_gives_rows_written_before_a_run_tag_existed_that_tag(tmp_path):
+    run = dataclasses.replace(compose.TARGETED, out_dir=tmp_path)
+    old = Example(id="old", input="buy eggs", output="Buy eggs.", source="teacher", category="revised_choice", license="MIT", tags=["targeted"])
+    write_examples(compose.output_file(run, "revised_choice", "150-300"), [old])
+    assert compose.load(run)[0].tags == ["targeted", V2_TAG]
+
+
 def test_client_request_failure_preserves_completed_cells_and_resumes_after_repair(fake_llm, tmp_path):
     run = dataclasses.replace(compose.BENCH, out_dir=tmp_path)
     generator_requests = []
@@ -212,14 +273,3 @@ def test_a_reference_against_the_intended_layout_is_dropped_before_the_judge_see
     rejected = [json.loads(line) for line in (tmp_path / "technical_steps.300-600.rejected.jsonl").open()]
     assert rejected and all(r["failed"] == ["layout_intent"] for r in rejected)
     assert not [role for role, _ in llm.reasonings if role == "judge"]
-
-
-def test_a_composed_row_is_licensed_by_the_models_that_wrote_its_transcript_and_reference():
-    def row(id_, teacher):
-        return Example(id=id_, input="x", output="y", source="teacher", category="c", license="zai-output",
-                       teacher_model=teacher)
-
-    glm = {"old-kept", "old-relabeled"}
-    assert compose.output_license(row("old-kept", "glm-5.3"), glm) == "zai-output"
-    assert compose.output_license(row("old-relabeled", "gpt-6.1-sol"), glm) == "openai-output+zai-output"
-    assert compose.output_license(row("new", "gpt-6.1-sol"), glm) == "openai-output"

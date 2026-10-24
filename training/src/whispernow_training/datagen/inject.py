@@ -40,10 +40,9 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
 from ..text_rules import FILLER_TOKEN
-from .schema import EMPTY, Example, example_id
+from .schema import EMPTY, OWN_LICENSE, Example, example_id
 
 SOURCE = "injected"
-EMPTY_LICENSE = "MIT"
 STYLES = ("recognizer", "raw")
 KINDS = ("filler", "cluster", "determiner", "repeat", "restart", "fragment", "correction", "pause")
 # Words that can carry meaning, which random injection never adds as a filler.
@@ -572,6 +571,11 @@ def injected_rows(
                 seed_group=origin.seed_group,
                 teacher_model=origin.teacher_model,
                 teacher_reasoning=origin.teacher_reasoning,
+                generator_provider=origin.generator_provider,
+                generator_model=origin.generator_model,
+                generator_reasoning=origin.generator_reasoning,
+                judge_model=origin.judge_model,
+                judge_reasoning=origin.judge_reasoning,
             )
         )
     return rows
@@ -604,7 +608,7 @@ def empty_rows(count: int, seed: int) -> list[Example]:
                 output=EMPTY,
                 source=SOURCE,
                 category="empty",
-                license=EMPTY_LICENSE,
+                license=OWN_LICENSE,
                 tags=["empty"],
             )
         )

@@ -49,7 +49,7 @@ def test_run_resumes_records_provenance_and_apply_replaces_or_drops(fake_llm, re
     _, built = relabel_dirs
     rows = [
         _row("a", "uh two bags of ice", "Two bags of ice — please."),
-        _row("b", "send it to Ana no wait to Sam", "Send it to Ana, no wait, to Sam.", source="teacher", license="zai-output", teacher_model="glm-5.3-flash"),
+        _row("b", "send it to Ana no wait to Sam", "Send it to Ana, no wait, to Sam.", source="teacher", teacher_model="glm-5.3-flash"),
         _row("e", "um uh", EMPTY, source="injected", license="MIT"),
         Example(
             id="i", input="two bags of uh ice", output="x", source="injected", category="filler_injection", license="MIT"
@@ -393,14 +393,3 @@ def test_failed_group_joins_inflight_clients_before_returning_and_resumes_withou
     assert asyncio.run(relabel.run(resumed, "build", rows))["rows"] == 2
     assert relabel.records_path("build").read_text().startswith(saved)
     assert all(record["passed"] for record in relabel.load_records("build").values())
-
-
-def test_licenses_name_the_new_reference_writer_and_keep_the_transcripts():
-    def license_of(license, teacher_model):
-        return relabel.relabelled_license(_row("x", "a", "b", license=license, teacher_model=teacher_model))
-
-    assert license_of("MIT", None) == "MIT"
-    assert license_of("openai-output", "gpt-6.1-sol") == "openai-output"
-    assert license_of("openai-output+zai-output", "gpt-6.1-sol") == "openai-output+zai-output"
-    assert license_of("zai-output", "glm-5.3-flash") == "openai-output+zai-output"
-    assert license_of("openai-output+zai-output", "glm-5.3") == "openai-output"

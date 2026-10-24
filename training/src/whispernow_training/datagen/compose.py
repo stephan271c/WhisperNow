@@ -8,9 +8,13 @@ teacher writes each reference and every reference passes the gates (`gates.gate`
 format checks stage 3's judge made. A failing reference is relabelled once, then dropped; an
 unrealistic transcript is dropped at once. Drops go to `<stem>.rejected.jsonl` with their reason.
 
-Two runs share the code and nothing else:
+Three runs share the code and nothing else:
 - `TRAIN` writes `data/stage4/`, which `build` reads. Batches draw names, settings and seeds from
   the stage 3 pools with a "train" prefix.
+- `TARGETED` writes `data/stage4-targeted/`: v2 training rows, weighted toward the categories and
+  lengths where the fine-tuned models lose the most facts. Its own name and setting pools, shared
+  with neither other run, and a "targeted" seed prefix. `build` never reads it; `build_v2` adds its
+  rows to v1's train split.
 - `BENCH` writes `data/bench/long/`, which `build` never reads. Its requests use their own base
   prompt (`prompts/bench/base.md`), their own name and setting pools, and a "bench" seed prefix, so
   no benchmark row shares a template or `seed_group` with a training row.
@@ -34,7 +38,7 @@ from pathlib import Path
 from . import gates, generate, paths, rejudge
 from .concurrency import task_group
 from .llm import LlmClient, LlmError
-from .schema import BatchRecord, Example, append_jsonl, example_id, is_missing_key_failure, layout_of, length_bucket, read_examples, read_jsonl
+from .schema import OWN_LICENSE, V2_TAG, BatchRecord, Example, append_jsonl, example_id, is_missing_key_failure, layout_of, length_bucket, read_examples, read_jsonl
 from .teacher import relabel
 
 CATEGORIES = (
@@ -45,6 +49,15 @@ BUCKETS = {"150-300": (150, 300), "300-600": (300, 600), "600-1000": (600, 1000)
 SHARES = {"150-300": 0.40, "300-600": 0.35, "600-1000": 0.25}
 # The benchmark needs at least 100 rows in every bucket, so its buckets are equal.
 BENCH_SHARES = {bucket: 1 / 3 for bucket in BUCKETS}
+# Where the Qwen3.5-9B fine-tune lost the most facts against glm-5.3 at max reasoning, over the test
+# and bench-long splits: revised_choice 190 more, recipe_quantities 115, meeting_actions 53,
+# multi_topic 36, dense_professional 27, and the other three about level. 79% of its lost facts were
+# in inputs over 200 words and 54% over 450.
+TARGETED_SHARES = {"150-300": 0.20, "300-600": 0.40, "600-1000": 0.40}
+TARGETED_WEIGHTS = {
+    "revised_choice": 0.32, "recipe_quantities": 0.22, "meeting_actions": 0.12, "multi_topic": 0.10,
+    "dense_professional": 0.08, "list_corrections": 0.06, "technical_steps": 0.05, "email_late_correction": 0.05,
+}
 # Transcripts per request: a request's reply takes about as long as its words.
 PER_REQUEST = {"150-300": 6, "300-600": 3, "600-1000": 2}
 RECOGNIZER_PERCENT = 70
@@ -80,6 +93,33 @@ BENCH_SETTINGS = (
     "a local newspaper", "an animal shelter", "a wine shop", "a robotics club", "an insurance claim",
     "a family reunion", "a kitchen remodel", "a visa application", "a startup board meeting", "a chess club",
 )
+TARGETED_NAMES = (
+    "Abena Arjun Beatriz Bilal Chiara Desta Elena Emre Femi Gabriel Greta Hassan Hyun Imani Ingrid Jabari "
+    "Jonas Kavya Keoni Lars Layla Malik Marta Nasser Niamh Obi Paloma Petra Rashid Renata Rohan Sakura Selim Simone "
+    "Tavita Thiago Tomasz Viktor Wanjiru Yasmin Yuki Zainab Zoltan Aurelio Bronwyn Ciaran Dalia Eamon Folasade Gunnar "
+    "Hoang Ilse Jovan Kemal Linnea Mariam Nico Oksana Brian Karen Steve Megan Kevin Laura Greg Nicole"
+).split()
+TARGETED_SETTINGS = (
+    "a catering company", "a bake sale", "a meal-prep business", "a school cafeteria", "a supper club",
+    "a holiday dinner", "a backyard barbecue", "a farmers market stall", "a coffee roaster", "a pizzeria",
+    "a cooking class", "a camp kitchen", "a food bank", "a potluck", "a tea shop", "a ramen bar", "a bridal shop",
+    "a funeral home", "a real estate showing", "a property management office", "a car dealership",
+    "a backyard shed build", "a roofing job", "an electrician's crew", "a plumbing supply store", "a furniture store",
+    "a hardware store", "a thrift store", "a toy store", "a bookstore", "a florist", "a jewelry repair counter",
+    "a hair salon", "a tattoo studio", "a physical therapy clinic", "a pediatric practice", "an urgent care clinic",
+    "a nursing home", "a blood drive", "a home health visit", "an anniversary dinner", "a baby shower",
+    "a retirement party", "a quinceañera", "a bar mitzvah", "a graduation party", "a honeymoon", "a cruise",
+    "a European rail trip", "a beach house rental", "a national park trip", "a golf tournament", "a bowling league",
+    "a swim team", "a little league team", "a dance recital", "a church choir", "an orchestra tour", "a film shoot",
+    "a photography business", "an IT help desk", "a data center migration", "a security audit",
+    "a mobile app launch", "a marketing agency", "a trade show booth", "a sales team", "a call center",
+    "a warehouse", "a trucking company", "a delivery route", "an airline crew", "an auto body shop",
+    "a boat repair yard", "a horse stable", "a dog grooming business", "a beekeeping club", "a community garden",
+    "a public library", "a homeowners association", "a parent-teacher association", "a scout troop",
+    "a summer camp", "a tutoring center", "a language school", "a coding bootcamp", "a graduate thesis",
+    "a grant application", "a clinical trial", "an accounting firm", "a payroll change", "a nonprofit gala",
+    "a campaign office", "a small hotel", "a co-working space", "a radio station", "an escape room",
+)
 
 
 @dataclass(frozen=True)
@@ -90,11 +130,18 @@ class Run:
     names: tuple[str, ...]
     settings: tuple[str, ...]
     shares: dict[str, float]
+    weights: dict[str, float] | None = None
+    tags: tuple[str, ...] = ()
 
 
 TRAIN = Run("train", paths.DATA / "stage4", paths.PROMPTS / "generate" / "base.md", tuple(generate.NAMES), generate.SETTINGS, SHARES)
+TARGETED_TAG = "targeted"
+TARGETED = Run(
+    "targeted", paths.DATA / "stage4-targeted", paths.PROMPTS / "generate" / "base.md", tuple(TARGETED_NAMES),
+    TARGETED_SETTINGS, TARGETED_SHARES, TARGETED_WEIGHTS, tags=(TARGETED_TAG, V2_TAG),
+)
 BENCH = Run("bench", paths.DATA / "bench" / "long", paths.PROMPTS / "bench" / "base.md", tuple(BENCH_NAMES), BENCH_SETTINGS, BENCH_SHARES)
-RUNS = {run.name: run for run in (TRAIN, BENCH)}
+RUNS = {run.name: run for run in (TRAIN, TARGETED, BENCH)}
 
 
 def stem(category: str, bucket: str) -> str:
@@ -158,9 +205,11 @@ async def run_batch(
     style = style_for(run, category, bucket, batch)
     record = BatchRecord(batch=batch, style=style, requested=count)
     started = time.monotonic()
-    reply = await llm.complete(generator_messages(run, category, bucket, style, count, batch, notes), role="generator")
+    generated = await llm.generate(generator_messages(run, category, bucket, style, count, batch, notes))
+    route = generated.route
+    record.generator = route.label
     try:
-        items = [item for item in generate.parse_items(reply, count) if item["input"] not in known]
+        items = [item for item in generate.parse_items(generated.text, count) if item["input"] not in known]
     except (ValueError, KeyError, TypeError) as error:
         record.error = f"unreadable generator reply: {error}"[:300]
         record.seconds = round(time.monotonic() - started, 1)
@@ -216,12 +265,18 @@ async def run_batch(
             output=result.output,
             source=generate.SOURCE,
             category=category,
-            license=generate.LICENSE,
+            license=OWN_LICENSE,
             tags=[
-                *item["tags"], f"style_{style}", "composed", f"length:{length_bucket(words)}",
+                *item["tags"], f"style_{style}", "composed", f"length:{length_bucket(words)}", *run.tags,
                 *(["relabeled"] if result.attempt else []),
             ],
             teacher_model=llm.settings.model,
+            teacher_reasoning=TEACHER_REASONING.get(_bucket_of(item)) or llm.settings.reasoning,
+            generator_provider=route.provider,
+            generator_model=route.model,
+            generator_reasoning=route.reasoning or None,
+            judge_model=llm.settings.judge_model,
+            judge_reasoning=JUDGE_REASONING.get(_bucket_of(item)) or llm.settings.judge_reasoning,
         )
         mismatch = generate.layout_mismatch(item["layout"], example.layout)
         if mismatch:
@@ -237,27 +292,15 @@ async def run_batch(
         if set(row["failed"]) & {"length", "input_realistic"} and row.get("note")
     ][:FEEDBACK_NOTES]
     record.seconds = round(time.monotonic() - started, 1)
-    return record, passed, rejected
-
-
-def output_license(example: Example, glm_inputs: set[str]) -> str:
-    """Whose model output a composed row is: the transcript's writer and the reference's.
-
-    The first rows had `glm-5.3` write the transcript; `rejudge train-codex` re-gated exactly those
-    (`glm_inputs`), and every later transcript is `gpt-6.1-sol`'s. Both providers' terms restrict
-    training competing models on their outputs (README, Terms and licenses).
-    """
-    teacher = example.teacher_model or ""
-    authors = {"zai" if example.id in glm_inputs else "openai", "openai" if teacher.startswith("gpt") else "zai"}
-    return "+".join(f"{author}-output" for author in sorted(authors))
+    return record, passed, [{**row, "generator": route.label} for row in rejected]
 
 
 def load(run: Run, passes: Sequence[str] = rejudge.PASSES) -> list[Example]:
-    """The run's rows, with the re-judge passes (`rejudge.py`) applied and each row's output license."""
+    """The run's rows, with the re-judge passes (`rejudge.py`) applied and the run's tags on every row,
+    including rows written before the run had them."""
     rows = [e for path in sorted(run.out_dir.glob("*.jsonl")) if path.name.count(".") == 2 for e in read_examples(path)]
-    codex = rejudge.overrides_file(run.out_dir, "codex")
-    glm_inputs = {row["id"] for row in read_jsonl(codex)} if codex.exists() else set()
-    return [replace(e, license=output_license(e, glm_inputs)) for e in rejudge.apply(rows, run.out_dir, passes)]
+    rows = [replace(e, tags=[*e.tags, *(t for t in run.tags if t not in e.tags)]) for e in rows]
+    return rejudge.apply(rows, run.out_dir, passes)
 
 
 def counts_by_cell(run: Run) -> Counter:
@@ -313,21 +356,29 @@ async def generate_cell(
             log.append(asdict(record))
             elsewhere = sum(file_bucket(len(e.input.split())) != bucket for e in passed)
             progress(
-                f"{run.name} {stem(category, bucket)}: batch {batch} ({record.style}) {record.passed}/{record.returned} passed"
+                f"{run.name} {stem(category, bucket)}: batch {batch} ({record.style}, {record.generator}) {record.passed}/{record.returned} passed"
                 f"{f' ({elsewhere} filed under another bucket)' if elsewhere else ''}"
                 f"{' ' + record.error if record.error else ''}, {counts[(category, bucket)]}/{target}, {record.seconds}s"
             )
 
+    # About 60% of transcripts pass (49-83% by category in the first training run), so a cell short
+    # of its target by a few rows needs about twice that many over `per_request` batches; more lanes
+    # would only overshoot it.
+    missing = target - counts[(category, bucket)]
     async with task_group() as group:
-        for _ in range(LANES[bucket]):
+        for _ in range(max(1, min(LANES[bucket], -(-2 * missing // per_request)))):
             group.create_task(lane())
     return counts[(category, bucket)]
 
 
-def targets(total: int, shares: dict[str, float] = SHARES, categories: Sequence[str] = CATEGORIES) -> dict[tuple[str, str], int]:
-    """Rows per category and bucket for `total` rows, split between the buckets by `shares`."""
+def targets(
+    total: int, shares: dict[str, float] = SHARES, categories: Sequence[str] = CATEGORIES, weights: dict[str, float] | None = None
+) -> dict[tuple[str, str], int]:
+    """Rows per category and bucket for `total` rows, split between the buckets by `shares` and between
+    `categories` by `weights` (equally without them)."""
+    weight = {category: weights[category] if weights else 1.0 for category in categories}
     return {
-        (category, bucket): max(1, round(total * share / len(categories)))
+        (category, bucket): max(1, round(total * share * weight[category] / sum(weight.values())))
         for category in categories
         for bucket, share in shares.items()
     }
@@ -338,7 +389,7 @@ async def generate_all(llm: LlmClient, run: Run, total: int, categories: Sequenc
     rows = load(run)
     known = {e.input for e in rows}
     shared = Counter((e.category, file_bucket(len(e.input.split()))) for e in rows)
-    goals = targets(total, run.shares, categories)
+    goals = targets(total, run.shares, categories, run.weights)
     async with task_group() as group:
         tasks = [group.create_task(generate_cell(llm, run, category, bucket, target, known, shared))
                  for (category, bucket), target in goals.items()]

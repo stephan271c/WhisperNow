@@ -50,8 +50,10 @@ JUDGE_VERSION = "faults"
 METRICS_VERSION = 2
 # Categories the acceptance criteria name for answered transcripts.
 COMMAND_CATEGORIES = ("dictated_command", "command_question_list")
-# The held-out benchmarks, scored like a split.
-BENCHMARKS = {"bench-long": DATA / "bench" / "long.jsonl", "bench-noise": DATA / "bench" / "noise.jsonl"}
+# The held-out benchmarks, scored like a split. bench-cutoff is test rows with cut-off word starts
+# (`datagen cutoff bench`), scored by `datagen cutoff score` against the same test rows' outputs.
+BENCHMARKS = {"bench-long": DATA / "bench" / "long.jsonl", "bench-noise": DATA / "bench" / "noise.jsonl",
+              "bench-cutoff": DATA / "bench" / "cutoff.jsonl"}
 # Fixed subsets of a split, scored like a split, for models too slow or costly to run on all of it:
 # name → (split, id file). `test-sample` is 800 test rows drawn per category and length bucket in
 # proportion to the split. Of 500 such draws (seeds 0–499), seed 408's came closest to the full split
