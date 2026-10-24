@@ -7,8 +7,9 @@ import pytest
 
 from conftest import judge_items
 
-from whispernow_training.datagen import compose, gates
-from whispernow_training.datagen.schema import V2_TAG, Example, read_jsonl, write_examples
+from whispernow_training.datagen.synthetic import compose
+from whispernow_training.datagen import gates
+from whispernow_training.datagen.schema import ROUND2_TAG, Example, read_jsonl, write_examples
 
 
 def _words(n, tag):
@@ -173,7 +174,7 @@ def test_targeted_rows_carry_the_run_tag_and_the_teacher_reasoning(fake_llm, tmp
     counts = compose.counts_by_cell(run)
     asyncio.run(compose.generate_cell(fake_llm(long_rows), run, "revised_choice", "600-1000", 1, set(), counts, progress=lambda _: None))
     rows = compose.load(run)
-    assert len(rows) == 1 and {compose.TARGETED_TAG, V2_TAG} <= set(rows[0].tags) and rows[0].teacher_reasoning == "xhigh"
+    assert len(rows) == 1 and {compose.TARGETED_TAG, ROUND2_TAG} <= set(rows[0].tags) and rows[0].teacher_reasoning == "xhigh"
 
 
 def test_rows_rejects_and_batch_records_name_the_generator_teacher_and_judge(fake_llm, tmp_path):
@@ -195,7 +196,7 @@ def test_load_gives_rows_written_before_a_run_tag_existed_that_tag(tmp_path):
     run = dataclasses.replace(compose.TARGETED, out_dir=tmp_path)
     old = Example(id="old", input="buy eggs", output="Buy eggs.", source="teacher", category="revised_choice", license="MIT", tags=["targeted"])
     write_examples(compose.output_file(run, "revised_choice", "150-300"), [old])
-    assert compose.load(run)[0].tags == ["targeted", V2_TAG]
+    assert compose.load(run)[0].tags == ["targeted", ROUND2_TAG]
 
 
 def test_client_request_failure_preserves_completed_cells_and_resumes_after_repair(fake_llm, tmp_path):

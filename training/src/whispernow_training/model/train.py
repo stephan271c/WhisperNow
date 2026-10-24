@@ -1,4 +1,4 @@
-"""Fine-tuning with TRL: SFT with full fine-tuning or LoRA, loss on the reply only."""
+"""Full fine-tuning with TRL's SFT, loss on the reply only."""
 
 from __future__ import annotations
 
@@ -9,12 +9,9 @@ from pathlib import Path
 
 import torch
 from datasets import Dataset
-from peft import LoraConfig
-from peft.tuners.lora import LoraLayer
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import SFTConfig, SFTTrainer
 
-from ..datagen import epochs
 from ..datagen.paths import BUILD, TRAINING_ROOT
 from . import prompt
 from .config import TrainConfig
@@ -26,8 +23,8 @@ EVALS_PER_EPOCH = 2
 
 
 def load_rows(files: list[Path], limit: int | None = None) -> Dataset:
-    # Only the two columns: `datasets` takes a JSON file's schema from its first rows, and v2 rows carry
-    # provenance fields v1 rows lack.
+    # Only the two columns: `datasets` takes a JSON file's schema from its first rows, and later rounds'
+    # rows carry provenance fields round 1's rows lack.
     pairs = []
     for path in files:
         with path.open(encoding="utf-8") as source:
@@ -51,14 +48,6 @@ def resolve(path_or_id: str) -> str:
     return str(local) if local.exists() else path_or_id
 
 
-def train_files(config: TrainConfig) -> list[Path]:
-    if config.noise_per_epoch:
-        if config.build != TrainConfig.build:
-            raise SystemExit("noise_per_epoch varies data/build only")
-        return epochs.materialize(int(config.epochs))
-    return [TRAINING_ROOT / config.build / "train.jsonl"]
-
-
 def load_tokenizer(base_model: str):
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     tokenizer.chat_template = prompt.chat_template()
@@ -66,7 +55,7 @@ def load_tokenizer(base_model: str):
     # render it when serving, so prompts start with the base model's end of document instead.
     if tokenizer.bos_token is None:
         tokenizer.bos_token = tokenizer.eos_token
-    # Replies end at the end of the turn; MiniCPM's own eos is `</s>`.
+    # Replies end at the end of the turn, whatever the base model's own eos is.
     tokenizer.eos_token = prompt.END_OF_TURN
     return tokenizer
 
@@ -76,33 +65,18 @@ def checkpoint_dir(out: Path, epoch: int) -> Path:
 
 
 def _bf16_state_dict(model) -> dict[str, torch.Tensor]:
-    """The parameters as bf16 copies on the CPU, with any LoRA adapter added in; the model is untouched.
+    """The parameters as bf16 copies on the CPU; the model is untouched.
 
     Buffers keep their dtype: LFM2-MoE's routing bias is fp32 in the base checkpoint, and rounding it
     to bf16 changes which experts some tokens go to.
     """
-    if not hasattr(model, "get_base_model"):
-        buffers = {name for name, _ in model.named_buffers()}
-        return {name: tensor.detach().to("cpu", tensor.dtype if name in buffers else torch.bfloat16)
-                for name, tensor in model.state_dict().items()}
-    base = model.get_base_model()
-    merged = {}
-    for name, tensor in base.state_dict().items():
-        if "lora_" in name:
-            continue
-        merged[name.replace(".base_layer.", ".")] = tensor.detach().to("cpu", torch.float32)
-    for name, module in base.named_modules():
-        if isinstance(module, LoraLayer):
-            for adapter in module.active_adapters:
-                merged[f"{name}.weight"] += module.get_delta_weight(adapter).detach().to("cpu", torch.float32)
-    return {name: tensor.to(torch.bfloat16) for name, tensor in merged.items()}
+    buffers = {name for name, _ in model.named_buffers()}
+    return {name: tensor.detach().to("cpu", tensor.dtype if name in buffers else torch.bfloat16)
+            for name, tensor in model.state_dict().items()}
 
 
 class EpochCheckpoints(TrainerCallback):
     """Saves a loadable bf16 model after every epoch but the last, whose model is `model/`.
-
-    Epochs are counted in steps, so a run over per-epoch noise variants (one pass over all of them)
-    saves at the same points as a run over the same rows for that many epochs.
 
     A checkpoint mid-schedule was taken before the learning rate decayed, so it scores somewhat
     below a run that ends at that epoch; it shows the trend, not the best a shorter run can do.
@@ -120,10 +94,9 @@ class EpochCheckpoints(TrainerCallback):
         if epoch is None or model is None:
             return
         target = checkpoint_dir(self.out, epoch)
-        base = model.get_base_model() if hasattr(model, "get_base_model") else model
-        base.generation_config.eos_token_id = self.tokenizer.eos_token_id
-        base.generation_config.pad_token_id = self.tokenizer.pad_token_id
-        base.save_pretrained(target, state_dict=_bf16_state_dict(model))
+        model.generation_config.eos_token_id = self.tokenizer.eos_token_id
+        model.generation_config.pad_token_id = self.tokenizer.pad_token_id
+        model.save_pretrained(target, state_dict=_bf16_state_dict(model))
         self.tokenizer.save_pretrained(target)
 
 
@@ -185,39 +158,19 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
     base_model = resolve(config.base_model)
     tokenizer = load_tokenizer(base_model)
     resumed_from = latest_checkpoint(out)
-    # A resumed full fine-tune loads its weights here: the trainer reloads them with a non-strict
-    # `load_state_dict`, which matches no key when transformers saves another layout (Qwen3.5's
-    # `model.language_model.*`) and silently keeps the base weights.
-    weights = resumed_from if resumed_from and config.method == "full" else base_model
-    # Full fine-tunes keep fp32 master weights under bf16 autocast; LoRA trains fp32 adapters on bf16 weights.
+    # fp32 master weights under bf16 autocast. A resumed run loads its weights here: the trainer
+    # reloads them with a non-strict `load_state_dict`, which matches no key when transformers saves
+    # another layout (Qwen3.5's `model.language_model.*`) and silently keeps the base weights.
     model = AutoModelForCausalLM.from_pretrained(
-        weights,
-        dtype=torch.float32 if config.method == "full" else torch.bfloat16,
-        attn_implementation="sdpa",
+        resumed_from or base_model, dtype=torch.float32, attn_implementation="sdpa"
     )
-    if config.freeze_embeddings:
-        # Frozen weights need no fp32 master copy; the layers still run under bf16 autocast.
-        embeddings = model.get_input_embeddings()
-        embeddings.requires_grad_(False)
-        embeddings.to(torch.bfloat16)
-    peft_config = None
-    if config.method == "lora":
-        peft_config = LoraConfig(
-            r=config.lora.r,
-            lora_alpha=config.lora.alpha,
-            lora_dropout=config.lora.dropout,
-            target_modules=config.lora.target_modules,
-            task_type="CAUSAL_LM",
-        )
 
-    files = train_files(config)
-    train_rows, eval_rows = load_rows(files, config.train_rows or None), load_split("val", VAL_ROWS, TRAINING_ROOT / config.build)
-    # Noise variants are one pass over every epoch's rows; otherwise the trainer counts epochs.
-    passes = 1 if config.noise_per_epoch else config.epochs
+    train_rows = load_rows([TRAINING_ROOT / config.build / "train.jsonl"], config.train_rows or None)
+    eval_rows = load_split("val", VAL_ROWS, TRAINING_ROOT / config.build)
     common = dict(
         output_dir=str(out / "checkpoints"),
         learning_rate=config.learning_rate,
-        num_train_epochs=passes,
+        num_train_epochs=config.epochs,
         max_steps=config.max_steps or -1,
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=config.batch_size * 2,
@@ -227,9 +180,8 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
         lr_scheduler_type=config.lr_scheduler,
         max_length=config.max_length,
         bf16=True,
-        optim=config.optim,
+        optim="adamw_torch_fused",
         gradient_checkpointing=config.gradient_checkpointing,
-        use_liger_kernel=config.liger,
         logging_steps=25,
         eval_strategy="steps",
         # A short probe evaluates once, at its end; a ratio below 1 is a share of the total steps.
@@ -258,7 +210,6 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
         train_dataset=train_rows,
         eval_dataset=eval_rows,
         processing_class=tokenizer,
-        peft_config=peft_config,
         callbacks=callbacks,
     )
     torch.cuda.reset_peak_memory_stats()
@@ -271,7 +222,7 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
     final_eval = trainer.evaluate()
     trainable = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
 
-    trained = trainer.model.merge_and_unload() if config.method == "lora" else trainer.model
+    trained = trainer.model
     # Buffers keep their dtype, as in `_bf16_state_dict`.
     for parameter in trained.parameters():
         parameter.data = parameter.data.to(torch.bfloat16)
@@ -281,7 +232,7 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
     tokenizer.save_pretrained(out / "model")
     summary = {
         "config": config.to_dict(),
-        "train_files": [str(path) for path in files],
+        "train_files": [str(TRAINING_ROOT / config.build / "train.jsonl")],
         "train_rows": len(train_rows),
         "steps": trainer.state.global_step,
         # A resumed run's seconds and peak memory cover only the part since `resumed_from`.

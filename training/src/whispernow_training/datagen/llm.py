@@ -227,14 +227,15 @@ def request_key(fields: dict) -> str:
     return hashlib.sha256(request.encode()).hexdigest()
 
 
-R112_TARGET = ("codex", "gpt-6.1-sol", "high")
+# The teacher and judge every reference in the dataset was written and checked by.
+REFERENCE_TARGET = ("codex", "gpt-6.1-sol", "high")
 
 
-def require_r112(settings: LlmSettings, *roles: Role) -> None:
-    wrong = {role: target for role in roles if (target := settings.target(role)) != R112_TARGET}
+def require_reference_target(settings: LlmSettings, *roles: Role) -> None:
+    wrong = {role: target for role in roles if (target := settings.target(role)) != REFERENCE_TARGET}
     if wrong:
         found = ", ".join(f"{role}: {'/'.join(target)}" for role, target in wrong.items())
-        raise SystemExit(f"R112 requires {'/'.join(R112_TARGET)}; found {found}")
+        raise SystemExit(f"references need {'/'.join(REFERENCE_TARGET)}; found {found}")
 
 
 class ResponseCache:

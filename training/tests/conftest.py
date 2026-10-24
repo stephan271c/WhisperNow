@@ -57,7 +57,7 @@ def judge_items(messages):
 @pytest.fixture(autouse=True)
 def _relabel_records(tmp_path, monkeypatch):
     """No test reads the real relabel records, which a running relabel may leave partial."""
-    from whispernow_training.datagen import relabel
+    from whispernow_training.datagen.references import relabel
 
     monkeypatch.setattr(relabel, "DIR", tmp_path / "relabel")
     monkeypatch.setattr(relabel, "INPUTS", tmp_path / "relabel" / "inputs")

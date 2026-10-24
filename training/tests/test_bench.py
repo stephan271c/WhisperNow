@@ -1,4 +1,5 @@
-from whispernow_training.datagen import ami, bench
+from whispernow_training.datagen.sources import ami
+from whispernow_training.datagen.bench import assemble
 from whispernow_training.datagen.schema import Example
 
 
@@ -23,7 +24,7 @@ def test_pick_ami_spreads_turns_over_buckets_and_meetings():
     turns = [
         _example(f"t{i}", " ".join(["w"] * (160 + i)), [f"ami:m{i % 3}"]) for i in range(20)
     ] + [_example("long", " ".join(["w"] * 700), ["ami:m9"])]
-    picked = bench.pick_ami(turns)
+    picked = assemble.pick_ami(turns)
     assert len([t for t in picked if t.id != "long"]) == 6  # two per meeting
     assert any(t.id == "long" for t in picked)
 
@@ -34,7 +35,7 @@ def test_overlap_flags_near_copies_of_build_inputs():
         _example("copy", "um we need to book the ferry for nine people on friday and pay the deposit today ok"),
         _example("new", "the orchard delivery is late again so call the driver after lunch and ask about the pears"),
     ]
-    assert [row["id"] for row in bench.overlap(bench_rows, build)] == ["copy"]
+    assert [row["id"] for row in assemble.overlap(bench_rows, build)] == ["copy"]
 
 
 def test_ami_raw_text_lowercases_and_joins_spelled_letters():

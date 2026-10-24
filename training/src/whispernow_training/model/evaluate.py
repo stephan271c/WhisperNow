@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 
 from ..datagen.concurrency import task_group
 from ..datagen.judge import Verdict, load_verdicts
-from ..datagen.llm import R112_TARGET, request_key, require_r112
+from ..datagen.llm import REFERENCE_TARGET, request_key, require_reference_target
 from ..datagen.paths import BUILD, DATA, PROMPTS, TRAINING_ROOT
 from ..datagen.schema import Example, length_bucket, read_examples, read_jsonl
 from . import draft, prompt
@@ -57,7 +57,7 @@ BENCHMARKS = {"bench-long": DATA / "bench" / "long.jsonl", "bench-noise": DATA /
 # Fixed subsets of a split, scored like a split, for models too slow or costly to run on all of it:
 # name → (split, id file). `test-sample` is 800 test rows drawn per category and length bucket in
 # proportion to the split. Of 500 such draws (seeds 0–499), seed 408's came closest to the full split
-# in facts lost per 1,000 words for glm-5.3 max, glm-5.3-flash and todo 113's two models: within 1.6%
+# in facts lost per 1,000 words for glm-5.3 max, glm-5.3-flash and two fine-tuned models: within 1.6%
 # for each, where the median draw is 10% off for one of them. `test-long` is the 536 test rows over
 # 200 words, where the local models lose the most facts per word.
 SAMPLES = {"test-sample": ("test", TRAINING_ROOT / "configs" / "test-sample-800.txt"),
@@ -71,14 +71,14 @@ JUDGE_MAX_CHARS = 16_000
 # Rows longer than this get a judge request each.
 JUDGE_SOLO_OVER_WORDS = 300
 # References the relabel rewrote are judged and scored apart from the old ones, by the model that wrote
-# them: `<stem>.r112.judge.jsonl` and `<stem>.r112.scores.json`.
-R112 = "r112"
+# them: `<stem>.r112.judge.jsonl` and `<stem>.r112.scores.json`, the stem existing eval dirs use.
+REWRITTEN = "r112"
 
 
 def reference_tag(rows: Sequence[Example]) -> str:
-    """`R112` when every row's reference is the relabel's, `""` for the references before it."""
-    if rows and all((row.teacher_model, row.teacher_reasoning) == R112_TARGET[1:] for row in rows):
-        return R112
+    """`REWRITTEN` when every row's reference is the relabel's, `""` for the references before it."""
+    if rows and all((row.teacher_model, row.teacher_reasoning) == REFERENCE_TARGET[1:] for row in rows):
+        return REWRITTEN
     return ""
 
 
@@ -277,14 +277,14 @@ async def judge_outputs(llm, items: Sequence[tuple[str, dict]], out: Path,
 
 
 async def judge(
-    rows: Sequence[Example], outputs: dict[str, dict], out: Path, r112: bool = False
+    rows: Sequence[Example], outputs: dict[str, dict], out: Path, rewritten: bool = False
 ) -> dict[str, Verdict]:
     """Judges current transcript/reference/output requests; returns each row's verdict by id."""
     from ..datagen.llm import LlmClient, LlmSettings
 
     settings = LlmSettings.from_env()
-    if r112:
-        require_r112(settings, "judge")
+    if rewritten:
+        require_reference_target(settings, "judge")
 
     items = [
         (row.id, {"transcript": row.input, "reference": row.output, "output": outputs[row.id]["output"]})

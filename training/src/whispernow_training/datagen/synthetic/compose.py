@@ -1,0 +1,407 @@
+"""Long composed-task rows and the long-dictation benchmark.
+
+One dictation combines several behaviours: a list with corrections, choices revised with a reason,
+meeting notes whose owners and dates change, a ramble with an embedded list and a question. Each
+request asks for a few transcripts of one length bucket (150-300, 300-600 or 600-1,000 words). The
+teacher writes each reference and every reference passes the gates (`gates.gate` with the
+`compose` judge): the completeness criteria, a protected-token code check, and the realism and
+format checks `generate`'s judge makes. A failing reference is relabelled once, then dropped; an
+unrealistic transcript is dropped at once. Drops go to `<stem>.rejected.jsonl` with their reason.
+
+Three runs share the code and nothing else:
+- `TRAIN` writes `data/composed/`, which round 1 reads. Batches draw names, settings and seeds from
+  `generate`'s pools with a "train" prefix.
+- `TARGETED` writes `data/composed-targeted/`: round 2's training rows, weighted toward the categories and
+  lengths where the fine-tuned models lose the most facts. Its own name and setting pools, shared
+  with neither other run, and a "targeted" seed prefix. Round 2 adds its rows to round 1's train split.
+- `BENCH` writes `data/bench/long/`, which no round reads. Its requests use their own base
+  prompt (`prompts/bench/base.md`), their own name and setting pools, and a "bench" seed prefix, so
+  no benchmark row shares a template or `seed_group` with a training row.
+
+Batches are logged per category and bucket, and a batch's request depends only on the run, the
+category, the bucket, its number and the previous batch's notes, so an interrupted run resumes with
+the finished requests served from the response cache.
+"""
+
+from __future__ import annotations
+
+import json
+import random
+import sys
+import time
+from collections import Counter
+from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+
+from .. import gates, paths
+from . import generate
+from ..references import rejudge
+from ..concurrency import task_group
+from ..llm import LlmClient, LlmError
+from ..schema import OWN_LICENSE, ROUND2_TAG, BatchRecord, Example, append_jsonl, example_id, is_missing_key_failure, layout_of, length_bucket, read_examples, read_jsonl
+from ..teacher import relabel
+
+CATEGORIES = (
+    "list_corrections", "revised_choice", "meeting_actions", "multi_topic", "recipe_quantities",
+    "technical_steps", "email_late_correction", "dense_professional",
+)
+BUCKETS = {"150-300": (150, 300), "300-600": (300, 600), "600-1000": (600, 1000)}
+SHARES = {"150-300": 0.40, "300-600": 0.35, "600-1000": 0.25}
+# The benchmark needs at least 100 rows in every bucket, so its buckets are equal.
+BENCH_SHARES = {bucket: 1 / 3 for bucket in BUCKETS}
+# Where the Qwen3.5-9B fine-tune lost the most facts against glm-5.3 at max reasoning, over the test
+# and bench-long splits: revised_choice 190 more, recipe_quantities 115, meeting_actions 53,
+# multi_topic 36, dense_professional 27, and the other three about level. 79% of its lost facts were
+# in inputs over 200 words and 54% over 450.
+TARGETED_SHARES = {"150-300": 0.20, "300-600": 0.40, "600-1000": 0.40}
+TARGETED_WEIGHTS = {
+    "revised_choice": 0.32, "recipe_quantities": 0.22, "meeting_actions": 0.12, "multi_topic": 0.10,
+    "dense_professional": 0.08, "list_corrections": 0.06, "technical_steps": 0.05, "email_late_correction": 0.05,
+}
+# Transcripts per request: a request's reply takes about as long as its words.
+PER_REQUEST = {"150-300": 6, "300-600": 3, "600-1000": 2}
+RECOGNIZER_PERCENT = 70
+# Batches a cell runs at once. A batch over 600 words takes about 10 minutes for about one kept row,
+# so with one batch at a time the long cells would run on for a day after the rest, leaving most
+# codex slots idle. A cell can overshoot its target by the batches still running when it is reached.
+LANES = {"150-300": 2, "300-600": 6, "600-1000": 12}
+FEEDBACK_NOTES = 8
+# The teacher's reasoning per length bucket; a bucket not listed keeps `LLM_REASONING` (high). On 40
+# long references, gpt-6.1-sol passed the judge 7 of 14 times over 600 words at xhigh against 3 at
+# high; below 600 words, xhigh was no better and took 2.5 times as long (report, section 5).
+TEACHER_REASONING = {"600-1000": "xhigh"}
+# One row per judge request: batched at low reasoning, the gates missed every fault a hand read found
+# in 13 of 54 long references; one row at a time, the judge caught 6 of them at low reasoning and 9 at
+# max (report, section 4).
+JUDGE_ITEMS = 1
+# The judge's reasoning per length bucket; a bucket not listed keeps `LLM_JUDGE_REASONING` (max for
+# the training run). 9 of the 13 faults were in rows over 600 words, and max costs about 7 times low
+# per row, so the shorter rows are checked at low.
+JUDGE_REASONING = {"150-300": "low", "300-600": "low"}
+
+BENCH_NAMES = (
+    "Adaeze Bjorn Camila Dev Esme Felix Gideon Harriet Ivo Jun Kalani Lorenzo Maren Nnamdi Orla Pavel Rhea Soren "
+    "Tamsin Ulrich Valentina Wendell Ximena Yusuf Zara Anouk Bashir Cosima Dariusz Eero Freya Gustavo Hamid Iris "
+    "Joaquin Kirra Leif Mbali Nikhil Odette Phuong Rafferty Saoirse Teodor Uzma Vesna Wilhelmina Yohannes Zeynep"
+).split()
+BENCH_SETTINGS = (
+    "a veterinary clinic", "a ferry terminal", "a community theater", "a solar installer", "a food truck",
+    "a university admissions office", "a brewery", "a school bus depot", "a museum archive", "a yoga studio",
+    "a pharmacy", "an orchard", "a recording studio", "a print shop", "a ski resort", "a daycare",
+    "a charity auction", "an architecture firm", "a fishing charter", "a climbing gym", "a dental lab",
+    "a city council office", "a moving company", "a tailor", "a greenhouse nursery", "a marathon organizing team",
+    "a local newspaper", "an animal shelter", "a wine shop", "a robotics club", "an insurance claim",
+    "a family reunion", "a kitchen remodel", "a visa application", "a startup board meeting", "a chess club",
+)
+TARGETED_NAMES = (
+    "Abena Arjun Beatriz Bilal Chiara Desta Elena Emre Femi Gabriel Greta Hassan Hyun Imani Ingrid Jabari "
+    "Jonas Kavya Keoni Lars Layla Malik Marta Nasser Niamh Obi Paloma Petra Rashid Renata Rohan Sakura Selim Simone "
+    "Tavita Thiago Tomasz Viktor Wanjiru Yasmin Yuki Zainab Zoltan Aurelio Bronwyn Ciaran Dalia Eamon Folasade Gunnar "
+    "Hoang Ilse Jovan Kemal Linnea Mariam Nico Oksana Brian Karen Steve Megan Kevin Laura Greg Nicole"
+).split()
+TARGETED_SETTINGS = (
+    "a catering company", "a bake sale", "a meal-prep business", "a school cafeteria", "a supper club",
+    "a holiday dinner", "a backyard barbecue", "a farmers market stall", "a coffee roaster", "a pizzeria",
+    "a cooking class", "a camp kitchen", "a food bank", "a potluck", "a tea shop", "a ramen bar", "a bridal shop",
+    "a funeral home", "a real estate showing", "a property management office", "a car dealership",
+    "a backyard shed build", "a roofing job", "an electrician's crew", "a plumbing supply store", "a furniture store",
+    "a hardware store", "a thrift store", "a toy store", "a bookstore", "a florist", "a jewelry repair counter",
+    "a hair salon", "a tattoo studio", "a physical therapy clinic", "a pediatric practice", "an urgent care clinic",
+    "a nursing home", "a blood drive", "a home health visit", "an anniversary dinner", "a baby shower",
+    "a retirement party", "a quinceañera", "a bar mitzvah", "a graduation party", "a honeymoon", "a cruise",
+    "a European rail trip", "a beach house rental", "a national park trip", "a golf tournament", "a bowling league",
+    "a swim team", "a little league team", "a dance recital", "a church choir", "an orchestra tour", "a film shoot",
+    "a photography business", "an IT help desk", "a data center migration", "a security audit",
+    "a mobile app launch", "a marketing agency", "a trade show booth", "a sales team", "a call center",
+    "a warehouse", "a trucking company", "a delivery route", "an airline crew", "an auto body shop",
+    "a boat repair yard", "a horse stable", "a dog grooming business", "a beekeeping club", "a community garden",
+    "a public library", "a homeowners association", "a parent-teacher association", "a scout troop",
+    "a summer camp", "a tutoring center", "a language school", "a coding bootcamp", "a graduate thesis",
+    "a grant application", "a clinical trial", "an accounting firm", "a payroll change", "a nonprofit gala",
+    "a campaign office", "a small hotel", "a co-working space", "a radio station", "an escape room",
+)
+
+
+@dataclass(frozen=True)
+class Run:
+    name: str
+    out_dir: Path
+    base: Path
+    names: tuple[str, ...]
+    settings: tuple[str, ...]
+    shares: dict[str, float]
+    weights: dict[str, float] | None = None
+    tags: tuple[str, ...] = ()
+
+
+TRAIN = Run("train", paths.DATA / "composed", paths.PROMPTS / "generate" / "base.md", tuple(generate.NAMES), generate.SETTINGS, SHARES)
+TARGETED_TAG = "targeted"
+TARGETED = Run(
+    "targeted", paths.DATA / "composed-targeted", paths.PROMPTS / "generate" / "base.md", tuple(TARGETED_NAMES),
+    TARGETED_SETTINGS, TARGETED_SHARES, TARGETED_WEIGHTS, tags=(TARGETED_TAG, ROUND2_TAG),
+)
+BENCH = Run("bench", paths.DATA / "bench" / "long", paths.PROMPTS / "bench" / "base.md", tuple(BENCH_NAMES), BENCH_SETTINGS, BENCH_SHARES)
+RUNS = {run.name: run for run in (TRAIN, TARGETED, BENCH)}
+
+
+def stem(category: str, bucket: str) -> str:
+    return f"{category}.{bucket}"
+
+
+def output_file(run: Run, category: str, bucket: str) -> Path:
+    return run.out_dir / f"{stem(category, bucket)}.jsonl"
+
+
+def _log_file(run: Run, category: str, bucket: str) -> Path:
+    return run.out_dir / f"{stem(category, bucket)}.batches.jsonl"
+
+
+def _rejected_file(run: Run, category: str, bucket: str) -> Path:
+    return run.out_dir / f"{stem(category, bucket)}.rejected.jsonl"
+
+
+def style_for(run: Run, category: str, bucket: str, batch: int) -> str:
+    rng = random.Random(f"{run.name}-style-{category}-{bucket}-{batch}")
+    return "recognizer" if rng.randrange(100) < RECOGNIZER_PERCENT else "raw"
+
+
+def generator_messages(run: Run, category: str, bucket: str, style: str, count: int, batch: int, notes: Sequence[str]) -> list[dict]:
+    base = run.base.read_text(encoding="utf-8")
+    style_text = (paths.PROMPTS / "generate" / f"style_{style}.md").read_text(encoding="utf-8")
+    guidance = (paths.PROMPTS / "compose" / f"{category}.md").read_text(encoding="utf-8")
+    low, high = BUCKETS[bucket]
+    rng = random.Random(f"{run.name}-{category}-{bucket}-{batch}")
+    names = ", ".join(rng.sample(run.names, 8))
+    settings = "; ".join(rng.sample(run.settings, 4))
+    user = (
+        f"{guidance}\n\n{style_text}\n\nBatch {batch}. Write {count} transcripts for this category, each "
+        f"{low} to {high} words long, never over {high}; aim for about {(low + high) // 2} words, and count them. These are "
+        "long dictations: pack each with many specific facts (names, numbers, dates, times, amounts, items, "
+        "places), keep it noisy and spoken the whole way through, and put at least one correction late in the "
+        "transcript that changes something said much earlier. Each transcript is a different situation. "
+        f"For variety, draw on some of these names ({names}) and settings ({settings}), and invent others."
+    )
+    if notes:
+        user += (
+            "\n\nThe checker rejected these transcripts from the previous batch. Avoid the same problems:\n"
+            + "\n".join(f"- {note}" for note in notes)
+        )
+    return [{"role": "system", "content": base}, {"role": "user", "content": user}]
+
+
+def _bucket_of(item: dict) -> str:
+    return length_bucket(len(item["input"].split()))
+
+
+def file_bucket(words: int) -> str | None:
+    """The bucket a transcript of `words` words is filed under, whatever was asked; None outside 150-1,000."""
+    bucket = length_bucket(words)
+    return bucket if bucket in BUCKETS else None
+
+
+async def run_batch(
+    llm: LlmClient, run: Run, category: str, bucket: str, batch: int, count: int, notes: Sequence[str], known: set[str]
+) -> tuple[BatchRecord, list[Example], list[dict]]:
+    style = style_for(run, category, bucket, batch)
+    record = BatchRecord(batch=batch, style=style, requested=count)
+    started = time.monotonic()
+    generated = await llm.generate(generator_messages(run, category, bucket, style, count, batch, notes))
+    route = generated.route
+    record.generator = route.label
+    try:
+        items = [item for item in generate.parse_items(generated.text, count) if item["input"] not in known]
+    except (ValueError, KeyError, TypeError) as error:
+        record.error = f"unreadable generator reply: {error}"[:300]
+        record.seconds = round(time.monotonic() - started, 1)
+        return record, [], []
+    record.returned = len(items)
+    rejected: list[dict] = []
+    candidates = []
+    for item in items:
+        words = len(item["input"].split())
+        id_ = example_id(generate.SOURCE, item["input"])
+        if file_bucket(words) is None:
+            rejected.append({"id": id_, "input": item["input"], "failed": ["length"], "note": f"{words} words, asked for {bucket}"})
+        else:
+            candidates.append((id_, item))
+    # The teacher's first references. One whose layout contradicts the generator's intent would be
+    # dropped below whatever the judge said, so it is dropped before the judge's cost is paid.
+    async with task_group() as group:
+        tasks = [group.create_task(relabel(llm, item["input"], reasoning=TEACHER_REASONING.get(_bucket_of(item))))
+                 for _, item in candidates]
+    outputs = [task.result() for task in tasks]
+    firsts = {id_: output for (id_, _), output in zip(candidates, outputs, strict=True)}
+    unjudged = []
+    for id_, item in candidates:
+        mismatch = generate.layout_mismatch(item["layout"], layout_of(firsts[id_]))
+        if mismatch:
+            rejected.append({"id": id_, "input": item["input"], "output": firsts[id_], "failed": ["layout_intent"], "note": mismatch})
+        else:
+            unjudged.append((id_, item))
+    candidates = unjudged
+    groups: dict[str, list[tuple[str, dict]]] = {}
+    for id_, item in candidates:
+        groups.setdefault(_bucket_of(item), []).append((id_, item))
+    results: dict[str, gates.Gated] = {}
+    for bucket_, group in groups.items():
+        judge = gates.Judge(
+            gates.COMPOSE, gates.COMPOSE_CRITERIA, {id_: style for id_, _ in group}, max_items=JUDGE_ITEMS,
+            reasoning=JUDGE_REASONING.get(bucket_),
+        )
+        results |= await gates.gate(
+            llm, [(id_, item["input"]) for id_, item in group], {id_: firsts[id_] for id_, _ in group}, judge=judge,
+            teacher_reasoning=TEACHER_REASONING.get(bucket_),
+        )
+    passed = []
+    for id_, item in candidates:
+        result = results[id_]
+        if not result.passed:
+            rejected.append({"id": id_, "input": item["input"], **asdict(result)})
+            continue
+        words = len(item["input"].split())
+        example = Example(
+            id=id_,
+            input=item["input"],
+            output=result.output,
+            source=generate.SOURCE,
+            category=category,
+            license=OWN_LICENSE,
+            tags=[
+                *item["tags"], f"style_{style}", "composed", f"length:{length_bucket(words)}", *run.tags,
+                *(["relabeled"] if result.attempt else []),
+            ],
+            teacher_model=llm.settings.model,
+            teacher_reasoning=TEACHER_REASONING.get(_bucket_of(item)) or llm.settings.reasoning,
+            generator_provider=route.provider,
+            generator_model=route.model,
+            generator_reasoning=route.reasoning or None,
+            judge_model=llm.settings.judge_model,
+            judge_reasoning=JUDGE_REASONING.get(_bucket_of(item)) or llm.settings.judge_reasoning,
+        )
+        mismatch = generate.layout_mismatch(item["layout"], example.layout)
+        if mismatch:
+            rejected.append({"id": id_, "input": item["input"], **asdict(result), "failed": ["layout_intent"], "note": mismatch})
+            continue
+        passed.append(example)
+        record.relabeled += bool(result.attempt)
+    record.passed = len(passed)
+    # Only notes about the transcript help the generator; a reference's faults are the teacher's.
+    record.notes = [
+        f"{', '.join(row['failed'])}: {row['note']} (transcript began: {row['input'][:80]!r})"
+        for row in rejected
+        if set(row["failed"]) & {"length", "input_realistic"} and row.get("note")
+    ][:FEEDBACK_NOTES]
+    record.seconds = round(time.monotonic() - started, 1)
+    return record, passed, [{**row, "generator": route.label} for row in rejected]
+
+
+def load(run: Run, passes: Sequence[str] = rejudge.PASSES) -> list[Example]:
+    """The run's rows, with the re-judge passes (`rejudge.py`) applied and the run's tags on every row,
+    including rows written before the run had them."""
+    rows = [e for path in sorted(run.out_dir.glob("*.jsonl")) if path.name.count(".") == 2 for e in read_examples(path)]
+    rows = [replace(e, tags=[*e.tags, *(t for t in run.tags if t not in e.tags)]) for e in rows]
+    return rejudge.apply(rows, run.out_dir, passes)
+
+
+def counts_by_cell(run: Run) -> Counter:
+    return Counter((e.category, file_bucket(len(e.input.split()))) for e in load(run))
+
+
+async def generate_cell(
+    llm: LlmClient,
+    run: Run,
+    category: str,
+    bucket: str,
+    target: int,
+    known: set[str],
+    counts: Counter,
+    progress: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True),
+) -> int:
+    """Generates batches for one category and bucket until the bucket holds `target` rows; resumes from its files.
+
+    A passing transcript that misses the requested bucket but is 150-1,000 words long is filed under
+    the bucket its length puts it in, and counts there. `counts` is shared by the cells running at once.
+    """
+    log_path = _log_file(run, category, bucket)
+    log = list(read_jsonl(log_path)) if log_path.exists() else []
+    per_request = PER_REQUEST[bucket]
+    max_batches = 3 * -(-target // per_request) + 3 + sum(is_missing_key_failure(record) for record in log)
+    # A batch still running when a run stopped was never logged; its number is skipped on resume.
+    next_batch = max((record["batch"] for record in log), default=-1) + 1
+    stopped = False
+
+    async def lane() -> None:
+        nonlocal next_batch, stopped
+        while not stopped and counts[(category, bucket)] < target:
+            if next_batch >= max_batches:
+                stopped = True
+                progress(f"{run.name} {stem(category, bucket)}: stopped after {next_batch} batches with {counts[(category, bucket)]}/{target}")
+                break
+            batch = next_batch
+            next_batch += 1
+            notes = log[-1]["notes"] if log else []
+            try:
+                record, passed, rejected = await run_batch(llm, run, category, bucket, batch, per_request, notes, known)
+            except LlmError as error:
+                progress(f"{run.name} {stem(category, bucket)}: batch {batch} failed: {error}")
+                raise
+            passed = [e for e in passed if e.input not in known]
+            known.update(e.input for e in passed)
+            for e in passed:
+                actual = file_bucket(len(e.input.split()))
+                counts[(category, actual)] += 1
+                append_jsonl(output_file(run, category, actual), [e.to_json()])
+            append_jsonl(_rejected_file(run, category, bucket), [json.dumps(row, ensure_ascii=False) for row in rejected])
+            append_jsonl(log_path, [json.dumps(asdict(record), ensure_ascii=False)])
+            log.append(asdict(record))
+            elsewhere = sum(file_bucket(len(e.input.split())) != bucket for e in passed)
+            progress(
+                f"{run.name} {stem(category, bucket)}: batch {batch} ({record.style}, {record.generator}) {record.passed}/{record.returned} passed"
+                f"{f' ({elsewhere} filed under another bucket)' if elsewhere else ''}"
+                f"{' ' + record.error if record.error else ''}, {counts[(category, bucket)]}/{target}, {record.seconds}s"
+            )
+
+    # About 60% of transcripts pass (49-83% by category in the first training run), so a cell short
+    # of its target by a few rows needs about twice that many over `per_request` batches; more lanes
+    # would only overshoot it.
+    missing = target - counts[(category, bucket)]
+    async with task_group() as group:
+        for _ in range(max(1, min(LANES[bucket], -(-2 * missing // per_request)))):
+            group.create_task(lane())
+    return counts[(category, bucket)]
+
+
+def targets(
+    total: int, shares: dict[str, float] = SHARES, categories: Sequence[str] = CATEGORIES, weights: dict[str, float] | None = None
+) -> dict[tuple[str, str], int]:
+    """Rows per category and bucket for `total` rows, split between the buckets by `shares` and between
+    `categories` by `weights` (equally without them)."""
+    weight = {category: weights[category] if weights else 1.0 for category in categories}
+    return {
+        (category, bucket): max(1, round(total * share * weight[category] / sum(weight.values())))
+        for category in categories
+        for bucket, share in shares.items()
+    }
+
+
+async def generate_all(llm: LlmClient, run: Run, total: int, categories: Sequence[str] = CATEGORIES) -> dict[str, int]:
+    """Every category and bucket at once; the client's semaphore caps the requests in flight."""
+    rows = load(run)
+    known = {e.input for e in rows}
+    shared = Counter((e.category, file_bucket(len(e.input.split()))) for e in rows)
+    goals = targets(total, run.shares, categories, run.weights)
+    async with task_group() as group:
+        tasks = [group.create_task(generate_cell(llm, run, category, bucket, target, known, shared))
+                 for (category, bucket), target in goals.items()]
+    counts = [task.result() for task in tasks]
+    return {stem(category, bucket): count for (category, bucket), count in zip(goals, counts, strict=True)}
+
+
+def rejections(run: Run) -> dict[str, int]:
+    """Why rows were dropped, by the first failed criterion."""
+    counts: Counter = Counter()
+    for path in run.out_dir.glob("*.rejected.jsonl"):
+        for row in read_jsonl(path):
+            counts[row["failed"][0] if row["failed"] else "unknown"] += 1
+    return dict(counts.most_common())

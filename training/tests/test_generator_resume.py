@@ -9,7 +9,9 @@ import pytest
 
 from conftest import SETTINGS, judge_items
 
-from whispernow_training.datagen import cli, compose, gates, generate, llm, noise, paths
+from whispernow_training.datagen import cli, gates, llm, paths
+from whispernow_training.datagen.synthetic import compose, generate
+from whispernow_training.datagen.bench import noise
 from whispernow_training.datagen.schema import BatchRecord, read_jsonl
 
 
@@ -96,7 +98,7 @@ def test_concurrent_cli_failure_cleans_up_peer_sessions_before_closing_and_resum
 
 @pytest.mark.parametrize("workflow", ["generate", "compose", "noise"])
 def test_legacy_missing_key_records_restore_only_infrastructure_budget(workflow, fake_llm, tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "STAGE3", tmp_path)
+    monkeypatch.setattr(paths, "GENERATED", tmp_path)
     monkeypatch.setattr(noise, "OUT_DIR", tmp_path)
     monkeypatch.setattr(compose, "LANES", dict.fromkeys(compose.BUCKETS, 1))
     run = replace(compose.BENCH, out_dir=tmp_path)

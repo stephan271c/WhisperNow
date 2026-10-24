@@ -1,6 +1,6 @@
 import json
 
-from whispernow_training.datagen import rejudge
+from whispernow_training.datagen.references import rejudge
 from whispernow_training.datagen.schema import Example
 
 

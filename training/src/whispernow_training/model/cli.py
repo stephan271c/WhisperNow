@@ -1,19 +1,16 @@
-"""`uv run --extra train cleanup <command>`: train, sweep, evaluate, export and benchmark the local cleanup model."""
+"""`uv run --extra train cleanup <command>`: train, evaluate, export and benchmark the local cleanup models."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
-import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 from ..datagen.paths import TRAINING_ROOT
 
 RUNS = TRAINING_ROOT / "runs"
-SWEEP_VAL_ROWS = 500
 
 
 def cmd_train(args: argparse.Namespace) -> None:
@@ -27,30 +24,6 @@ def cmd_train(args: argparse.Namespace) -> None:
     settings = config.load(args.config, args.set or [])
     summary = train.train(settings, RUNS / args.name)
     print(f"{args.name}: {summary['steps']} steps in {summary['seconds']} s, eval loss {summary['final_eval_loss']:.4f}")
-
-
-def _sweep_runs(path: Path) -> tuple[Path, list[dict]]:
-    sweep = tomllib.loads(path.read_text(encoding="utf-8"))
-    return path.parent / sweep["config"], sweep["run"]
-
-
-def cmd_sweep(args: argparse.Namespace) -> None:
-    """Trains and scores each run in its own process, so GPU memory is released between runs."""
-    base, runs = _sweep_runs(args.sweep)
-    for run in runs:
-        if args.only and run["name"] not in args.only:
-            continue
-        if not (RUNS / run["name"] / "train.json").exists():
-            overrides = [item for value in run["set"] for item in ("--set", value)]
-            subprocess.run([sys.argv[0], "train", str(base), "--name", run["name"], *overrides], check=True)
-        if not any((RUNS / run["name"] / "eval").glob(f"val{SWEEP_VAL_ROWS}.*scores.json")):
-            subprocess.run([sys.argv[0], "eval", run["name"], "--split", "val", "--limit", str(SWEEP_VAL_ROWS)], check=True)
-        for checkpoint in sorted((RUNS / run["name"]).glob("epoch-*")):
-            if not any((RUNS / run["name"] / f"eval-{checkpoint.name}").glob(f"val{SWEEP_VAL_ROWS}.*scores.json")):
-                subprocess.run(
-                    [sys.argv[0], "eval", run["name"], "--checkpoint", checkpoint.name, "--split", "val", "--limit", str(SWEEP_VAL_ROWS)],
-                    check=True,
-                )
 
 
 def cmd_eval(args: argparse.Namespace) -> None:
@@ -68,7 +41,7 @@ def cmd_eval(args: argparse.Namespace) -> None:
         def produce(rows):
             return [{"id": row.id, "output": row.output, "hit_limit": False, "tokens": None} for row in rows]
     elif args.teacher:
-        # `--label` keeps a new teacher prompt's outputs apart, as in `eval-112`.
+        # `--label` keeps a new teacher prompt's outputs apart.
         out_dir = RUNS / "teacher" / ("eval" if args.label == "server" else f"eval-{args.label}")
         generation = evaluate.teacher_generation()
 
@@ -100,15 +73,7 @@ def cmd_eval(args: argparse.Namespace) -> None:
         out_dir = out_dir.with_name(f"{out_dir.name}-last{args.repeat_last_n}")
     else:
         args.repeat_last_n = prompt.REPEAT_LAST_N
-    if args.chunk_words is not None:
-        from . import chunking
-
-        if args.reference:
-            raise SystemExit("--chunk-words splits a model's requests; --reference makes none")
-        out_dir = out_dir.with_name(f"{out_dir.name}-chunk{args.chunk_words}")
-        generation = {**generation, "chunk_words": args.chunk_words}
-        produce = chunking.chunked(produce, args.chunk_words)
-    scores =evaluate.evaluate(produce, out_dir, args.split, args.limit, with_judge=args.judge, generation=generation)
+    scores = evaluate.evaluate(produce, out_dir, args.split, args.limit, with_judge=args.judge, generation=generation)
     overall = scores["overall"]
     def rate(value):
         if not isinstance(value, dict):
@@ -178,13 +143,6 @@ def cmd_handcheck(args: argparse.Namespace) -> None:
         print(f"## {row.id} ({len(row.input.split())} words){flags}\n\nINPUT\n{row.input}\n\nREFERENCE\n{row.output}\n\nOUTPUT\n{output['output']}\n")
 
 
-def cmd_sweep_table(args: argparse.Namespace) -> None:
-    from . import report
-
-    _, runs = _sweep_runs(args.sweep)
-    print(report.sweep_table([run["name"] for run in runs], f"val{SWEEP_VAL_ROWS}"))
-
-
 def cmd_rescore(args: argparse.Namespace) -> None:
     from . import evaluate
 
@@ -234,22 +192,13 @@ def main() -> None:
     train_parser.add_argument("--set", action="append", metavar="KEY=VALUE", help="override a config value (repeatable)")
     train_parser.set_defaults(handler=cmd_train)
 
-    sweep = commands.add_parser("sweep", help="train and score every run of a sweep file that is not done yet")
-    sweep.add_argument("sweep", type=Path, help="a sweep file in configs/")
-    sweep.add_argument("--only", action="append", help="only this run (repeatable)")
-    sweep.set_defaults(handler=cmd_sweep)
-
-    table = commands.add_parser("sweep-table", help="print a sweep's val scores as a markdown table")
-    table.add_argument("sweep", type=Path)
-    table.set_defaults(handler=cmd_sweep_table)
-
     from . import evaluate
 
     eval_parser = commands.add_parser("eval", help="generate, check and (with --judge) judge a split")
     eval_parser.add_argument("run", nargs="?", default="teacher", help="run name under runs/")
     eval_parser.add_argument(
         "--split", default="test", choices=evaluate.SPLITS,
-        help="a built split, or one of todo 110's benchmarks in data/bench/",
+        help="a split of the dataset, a fixed sample of one, or a benchmark in data/bench/",
     )
     eval_parser.add_argument("--limit", type=int, help="score a fixed random sample of this many rows")
     eval_parser.add_argument("--judge", action="store_true", help="also judge with LLM_JUDGE_MODEL")
@@ -262,10 +211,6 @@ def main() -> None:
     )
     eval_parser.add_argument(
         "--repeat-last-n", type=int, default=None, help="with --server: the penalty's window instead of the served one; scores go to <eval dir>-last<value>"
-    )
-    eval_parser.add_argument(
-        "--chunk-words", type=int, default=None,
-        help="clean inputs over this many words in pieces, cut at sentence ends, and join the replies; scores go to <eval dir>-chunk<value>",
     )
     eval_parser.add_argument("--reference", action="store_true", help="score the split's own references, as a baseline")
     eval_parser.add_argument("--teacher", action="store_true", help="evaluate LLM_MODEL with the app's hosted prompt")
@@ -319,7 +264,7 @@ def main() -> None:
 
     compare = commands.add_parser("compare", help="print scores of several evaluations side by side")
     compare.add_argument("candidates", nargs="+", metavar="LABEL=RUN/EVAL_DIR")
-    compare.add_argument("--stem", default="test", help="scores file stem, e.g. test, val500 or test.r112.faults")
+    compare.add_argument("--stem", default="test", help="scores file stem, e.g. test or test.r112.faults")
     compare.add_argument(
         "--group",
         action="append",

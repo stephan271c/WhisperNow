@@ -6,7 +6,8 @@ import pytest
 
 from conftest import judge_items
 
-from whispernow_training.datagen import gates, noise
+from whispernow_training.datagen import gates
+from whispernow_training.datagen.bench import noise
 from whispernow_training.datagen.schema import read_jsonl
 
 

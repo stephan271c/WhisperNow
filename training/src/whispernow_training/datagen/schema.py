@@ -14,14 +14,10 @@ Layout = Literal["plain", "list", "paragraphs", "mixed"]
 Split = Literal["train", "val", "test", ""]
 
 EMPTY = "EMPTY"
-# Dataset versions. v1 is `data/build` and the two benchmarks as they stood on 2026-10-18, frozen, and
-# its rows carry no version tag. Every row generated after that is tagged v2; `build.build_v2` adds
-# them to v1's train split.
-V2_TAG = "v2"
-# Rows added for v3 (`v3.py`), on top of data/build-v2-no-heard.
-V3_TAG = "v3"
-# Rows added for v5 (`v5.py`), on top of data/build-v3.
-V5_TAG = "v5"
+# The round that added a row to train (`build/`); round 1's rows carry no round tag.
+ROUND2_TAG = "round2"
+ROUND3_TAG = "round3"
+ROUND4_TAG = "round4"
 # A row's `license` is its text's: an imported row keeps its dataset's license, and text made for
 # this dataset (generated transcripts, injected fillers, EMPTY rows) is under the repository's MIT license.
 OWN_LICENSE = "MIT"
@@ -68,7 +64,7 @@ class Example:
     teacher_model: str | None = None
     # The teacher's reasoning effort for the reference, recorded from the relabel on.
     teacher_reasoning: str | None = None
-    # Who wrote the transcript and who passed the reference, recorded on v2 rows. An injected row
+    # Who wrote the transcript and who passed the reference, recorded from round 2 on. An injected row
     # keeps its origin's: its input is the origin's reference with noise added.
     generator_provider: str | None = None
     generator_model: str | None = None

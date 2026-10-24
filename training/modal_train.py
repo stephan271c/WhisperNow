@@ -1,7 +1,7 @@
 """Fine-tunes the cleanup model on a Modal GPU with `whispernow_training.model.train`.
 
 The container mirrors `training/` with only what training reads: the package, `serving/` (the
-chat template), `configs/`, `prompts/` and the builds' train and val splits. Hugging Face
+chat template), `configs/`, `prompts/` and the dataset's train and val splits. Hugging Face
 downloads and run outputs live on Volumes. Modal's GPUs can be preempted, so a config with
 `checkpoint_minutes` saves a resumable checkpoint to the runs Volume, and the restarted function
 resumes from it.
@@ -26,8 +26,7 @@ REMOTE = Path("/root/training")
 HF_CACHE = Path("/hf")
 RUNS = REMOTE / "runs"
 ROWS_PER_STEP = 32
-# Every build a config's `build` may name.
-BUILDS = ("data/build", "data/build-v2", "data/build-v2-no-heard", "data/build-v3", "data/build-v4", "data/build-v5")
+BUILD = "data/build"
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -41,14 +40,12 @@ image = (
     .add_local_dir(HERE / "configs", str(REMOTE / "configs"))
     .add_local_dir(HERE / "prompts", str(REMOTE / "prompts"))
 )
-for build in BUILDS:
-    for split in ("train", "val"):
-        image = image.add_local_file(HERE / build / f"{split}.jsonl", str(REMOTE / build / f"{split}.jsonl"))
+for split in ("train", "val"):
+    image = image.add_local_file(HERE / BUILD / f"{split}.jsonl", str(REMOTE / BUILD / f"{split}.jsonl"))
 hf_cache = modal.Volume.from_name("whispernow-hf-cache", create_if_missing=True)
 runs = modal.Volume.from_name("whispernow-runs", create_if_missing=True)
 
 app = modal.App("whispernow-train", image=image)
-# LFM2.5-8B-A1B's fp32 weights take 33 GB of RAM while loading, and its resume checkpoint is about 100 GB.
 CONTAINER = dict(volumes={str(HF_CACHE): hf_cache, str(RUNS): runs}, cpu=4.0, memory=96 * 1024)
 
 

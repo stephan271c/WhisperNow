@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from whispernow_training.datagen import restyle
+from whispernow_training.datagen.synthetic import restyle
 from whispernow_training.datagen.llm import LlmError
 from whispernow_training.datagen.schema import Example, read_jsonl, write_examples
 
@@ -12,11 +12,11 @@ from whispernow_training.datagen.schema import Example, read_jsonl, write_exampl
 def restyle_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(restyle, "OUT", tmp_path / "restyle.jsonl")
     monkeypatch.setattr(restyle, "REJECTED", tmp_path / "rejected.jsonl")
-    monkeypatch.setattr(restyle.stage1, "CLEAN", tmp_path / "clean.jsonl")
+    monkeypatch.setattr(restyle.aawaaz_audit, "CLEAN", tmp_path / "clean.jsonl")
     monkeypatch.setattr(restyle, "chosen", lambda example: True)
     rows = [Example(id=id_, input=f"bring {item}", output=f"Bring {item}.", source="s", category="c", license="MIT")
             for id_, item in (("a", "milk"), ("b", "eggs"), ("c", "bread"))]
-    write_examples(restyle.stage1.CLEAN, rows)
+    write_examples(restyle.aawaaz_audit.CLEAN, rows)
     return rows
 
 

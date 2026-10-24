@@ -3,7 +3,6 @@
 # checkpoints share the 2.6B's thinking chat template. fp32 weights, gradients and Adam state take
 # about 19 GB.
 base_model = "LiquidAI/LFM2.5-1.2B-Base"
-method = "full"
 learning_rate = 1e-5
 epochs = 3
 batch_size = 32

@@ -85,7 +85,7 @@ def test_judged_scores_get_their_own_files(tmp_path, monkeypatch):
     rows = [_row("a", 5)]
     monkeypatch.setattr(evaluate, "load_rows", lambda split, limit: rows)
 
-    async def judge(rows, outputs, out, r112):
+    async def judge(rows, outputs, out, rewritten):
         assert out.name == "test.faults.judge.jsonl"
         return {"a": Verdict("a", True, [], "", "judge-model")}
 

@@ -6,7 +6,8 @@ import pytest
 
 from conftest import judge_items
 
-from whispernow_training.datagen import generate, paths
+from whispernow_training.datagen.synthetic import generate
+from whispernow_training.datagen import paths
 from whispernow_training.datagen.schema import read_examples, read_jsonl
 
 
@@ -34,7 +35,7 @@ def reply(messages, role):
 
 
 def test_generation_writes_passing_rows_logs_batches_and_resumes(fake_llm, tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "STAGE3", tmp_path)
+    monkeypatch.setattr(paths, "GENERATED", tmp_path)
     generator_requests = []
 
     def recorded_reply(messages, role):
@@ -64,13 +65,13 @@ def test_generation_writes_passing_rows_logs_batches_and_resumes(fake_llm, tmp_p
     assert len(read_examples(tmp_path / "mixed_message.jsonl")) == 8
 
     repeat = tmp_path / "repeat"
-    monkeypatch.setattr(paths, "STAGE3", repeat)
+    monkeypatch.setattr(paths, "GENERATED", repeat)
     asyncio.run(generate.generate_category(fake_llm(reply), "mixed_message", 6, batch_size=5, progress=lambda _: None))
     assert [b["style"] for b in read_jsonl(repeat / "mixed_message.batches.jsonl")] == styles
 
 
 def test_held_out_rows_are_pinned_to_test_and_new(fake_llm, tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "STAGE3", tmp_path)
+    monkeypatch.setattr(paths, "GENERATED", tmp_path)
     llm = fake_llm(reply)
     asyncio.run(generate.generate_category(llm, "mixed_message", 4, batch_size=5, progress=lambda _: None))
     trained = read_examples(tmp_path / "mixed_message.jsonl")
@@ -88,22 +89,22 @@ def test_held_out_rows_are_pinned_to_test_and_new(fake_llm, tmp_path, monkeypatc
 
 
 def test_run_rows_are_tagged_new_and_numbered_after_train_and_test(fake_llm, tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "STAGE3", tmp_path)
+    monkeypatch.setattr(paths, "GENERATED", tmp_path)
     llm = fake_llm(reply)
     asyncio.run(generate.generate_category(llm, "mixed_message", 4, batch_size=5, progress=lambda _: None))
     asyncio.run(generate.generate_category(llm, "mixed_message", 4, batch_size=5, held_out=True, progress=lambda _: None))
     earlier = [*read_examples(tmp_path / "mixed_message.jsonl"), *read_examples(tmp_path / "mixed_message.test.jsonl")]
-    kept = asyncio.run(generate.generate_category(llm, "mixed_message", 4, batch_size=5, run="v3", progress=lambda _: None))
+    kept = asyncio.run(generate.generate_category(llm, "mixed_message", 4, batch_size=5, run="round3", progress=lambda _: None))
     assert kept == 4
-    rows = read_examples(tmp_path / "mixed_message.v3.jsonl")
-    assert all("v3" in r.tags and r.split != "test" for r in rows)
+    rows = read_examples(tmp_path / "mixed_message.round3.jsonl")
+    assert all("round3" in r.tags and r.split != "test" for r in rows)
     assert not {r.input for r in rows} & {r.input for r in earlier}
     first = sum(len(list(read_jsonl(tmp_path / f"mixed_message{stem}.batches.jsonl"))) for stem in ("", ".test"))
     assert all(int(r.input.split()[1]) >= first for r in rows)
 
 
 def test_client_configuration_failure_preserves_batches_and_resumes_after_repair(fake_llm, tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "STAGE3", tmp_path)
+    monkeypatch.setattr(paths, "GENERATED", tmp_path)
     generator_requests = []
 
     def malformed_then_valid(messages, role):
@@ -143,7 +144,7 @@ def test_client_configuration_failure_preserves_batches_and_resumes_after_repair
 
 
 def test_unreadable_model_replies_remain_bounded_completed_batches(fake_llm, tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "STAGE3", tmp_path)
+    monkeypatch.setattr(paths, "GENERATED", tmp_path)
     llm = fake_llm(lambda messages, role: "no json here")
     assert asyncio.run(generate.generate_category(llm, "mixed_message", 1, batch_size=1, progress=lambda _: None)) == 0
     log = list(read_jsonl(tmp_path / "mixed_message.batches.jsonl"))

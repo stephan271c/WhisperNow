@@ -1,4 +1,5 @@
-from whispernow_training.datagen import review, v3
+from whispernow_training.datagen.references import review
+from whispernow_training.datagen.synthetic import second_sample
 
 
 def test_capitalized_literal_flags_command_lines_and_file_names():
@@ -15,5 +16,5 @@ def test_capitalized_literal_ignores_lowercase_commands_and_plain_prose():
 
 def test_two_samples_disagree_only_on_content_words_the_speaker_said():
     transcript = "we can meet on wednesday or uh sunday whichever suits you"
-    assert v3.two_sample_disagreement(transcript, "We can meet on Wednesday or Sunday.", "We can meet on Sunday.") == ["wednesday"]
-    assert v3.two_sample_disagreement(transcript, "We can meet on Wednesday or Sunday.", "We can meet Wednesday or Sunday!") == []
+    assert second_sample.two_sample_disagreement(transcript, "We can meet on Wednesday or Sunday.", "We can meet on Sunday.") == ["wednesday"]
+    assert second_sample.two_sample_disagreement(transcript, "We can meet on Wednesday or Sunday.", "We can meet Wednesday or Sunday!") == []

@@ -3,7 +3,8 @@ from collections import Counter
 
 import pytest
 
-from whispernow_training.datagen import inject, sources
+from whispernow_training.datagen.synthetic import inject
+from whispernow_training.datagen.sources import public
 from whispernow_training.datagen.schema import EMPTY, Example
 from whispernow_training.model.metrics import protected_tokens
 from whispernow_training.text_rules import FILLER
@@ -226,5 +227,5 @@ def test_empty_rows_are_unique_filler_only_inputs():
     assert len({r.input for r in rows}) == 50
     for row in rows:
         assert row.output == EMPTY
-        assert all(FILLER.fullmatch(word) for word in sources.words(row.input))
+        assert all(FILLER.fullmatch(word) for word in public.words(row.input))
     assert [r.input for r in rows] == [r.input for r in inject.empty_rows(50, seed=9)]

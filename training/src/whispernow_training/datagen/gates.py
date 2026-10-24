@@ -32,7 +32,7 @@ from .teacher import relabel
 COMPLETENESS = PROMPTS / "judge" / "completeness.md"
 FACT_CRITERIA = ("facts_complete", "corrections_right", "nothing_invented")
 COMPLETENESS_CRITERIA = (*FACT_CRITERIA, "clean")
-# New generated rows: the fact criteria, plus the realism and format checks stage 3's judge made.
+# New generated rows: the fact criteria, plus the realism and format checks `generate`'s judge makes.
 COMPOSE = PROMPTS / "judge" / "compose.md"
 COMPOSE_CRITERIA = (*FACT_CRITERIA, "input_realistic", "not_answered", "layout_ok", "clean")
 # A failure a new reference cannot fix: the row is dropped without a relabel.

@@ -19,21 +19,16 @@ source_datasets:
 - shantanugoel/aawaaz-transcript-cleanup-dataset
 - MagicNoThief/handy-dictation-editing
 - google-research-datasets/disfl_qa
+- edinburghcstr/ami
 ---
 
 # WhisperNow Cleanup
 
-52,110 English pairs of a dictation transcript, as a speech recognizer writes it, and the text the speaker meant to write. The pairs train the local cleanup models of [WhisperNow](https://github.com/stephan271c/WhisperNow), a desktop dictation app:
-
-- [WhisperNow cleanup model (LFM2.5 350M)](https://huggingface.co/OWNER/whispernow-cleanup-lfm2.5-350m)
-- [WhisperNow cleanup model (MiniCPM5 1B)](https://huggingface.co/OWNER/whispernow-cleanup-minicpm5-1b)
-- [WhisperNow cleanup model (LFM2.5 2.6B)](https://huggingface.co/OWNER/whispernow-cleanup-lfm2.5-2.6b)
-
-Every reference was written by OpenAI's `gpt-6.1-sol` at high reasoning, following one set of rules: the prompt WhisperNow sends to hosted cleanup models ([below](#the-cleanup-rules)). Each reference then passed code checks and a completeness judge.
+66,557 English pairs of a dictation transcript, as a speech recognizer writes it, and the text the speaker meant to write. They train the local cleanup models of [WhisperNow](https://github.com/stephan271c/WhisperNow), a desktop dictation app. OpenAI's `gpt-6.1-sol` wrote every reference at high reasoning, following the prompt WhisperNow sends to hosted cleanup models ([below](#the-cleanup-rules)), and each reference passed code checks and a completeness judge. The data was built in four rounds. After each round, models trained on it were scored on the same held-out test split and benchmarks, and the next round added training rows aimed at the places where they lost facts.
 
 ## Examples
 
-A dictation with several self-corrections (`self_corrections_heavy`, from aawaaz):
+A dictation with several self-corrections (`self_corrections_heavy`, from aawaaz, test split):
 
 ```text
 alright so the hides need to soak in the lime bath for uh three days no actually five days for these thicker buffalo hides and the ph should be around 11 no wait 12.5 to properly loosen the hair and giuliana said to add an extra 20 no 30 pounds of hydrated lime to this batch because the last one came out underprocessed
@@ -43,7 +38,7 @@ alright so the hides need to soak in the lime bath for uh three days no actually
 The hides need to soak in the lime bath for 5 days for these thicker buffalo hides, and the pH should be around 12.5 to properly loosen the hair. Giuliana said to add an extra 30 pounds of hydrated lime to this batch because the last one came out underprocessed.
 ```
 
-A list inside a message (`mixed_message`, generated). The request at the end is dictated text, so it stays:
+A list inside a message (`mixed_message`, generated, test split). The request at the end is dictated text, so it stays:
 
 ```text
 Hey, hardware store list before I lose it. Paint, the same gray as the hallway, painter's tape, 2 more rollers, and um drop cloths. Actually just add it all to the list app, I'm driving.
@@ -59,25 +54,15 @@ Hey, hardware store list before I lose it:
 Just add it all to the list app. I'm driving.
 ```
 
-A transcript with no dictated words (`empty`):
+A recognizer repair row (round 3, train split). The speaker said "cc me on the reply", and Parakeet wrote "see see me". The reference fixes it because the text makes the fix clear:
 
 ```text
-Uh. um...
+The meeting is on Thursday and see see me on the reply.
 ```
 
 ```text
-EMPTY
+The meeting is on Thursday, and CC me on the reply.
 ```
-
-## Splits
-
-| split | rows |
-|---|---|
-| train | 46,389 |
-| val | 2,424 |
-| test | 3,297 |
-
-Rows are split by `seed_group`, so rows made from the same seed, such as a restyled transcript and its copy with injected fillers, always share a split. Some generated categories and extra `EMPTY` rows were placed in test on purpose.
 
 ## Fields
 
@@ -86,41 +71,61 @@ Rows are split by `seed_group`, so rows made from the same seed, such as a resty
 | `id` | Unique id, prefixed with its source. |
 | `input` | The transcript. |
 | `output` | The reference cleanup, or `EMPTY` when the transcript holds no dictated words (217 rows). |
-| `source` | Where the row came from; see [Sources](#sources). |
-| `category` | One of 36 categories, such as `self_correction`, `shopping_lists`, `meeting_notes`, `technical_code` and `email_late_correction`. |
-| `license` | The license of the row's text: `MIT` or `CC-BY-4.0`. See [Licenses](#licenses). |
-| `tags` | How the row was made: the recognizer whose style the input copies (`asr_parakeet`, `asr_whisper`, `asr_qwen3`, `asr_plain`), `restyled`, `composed` (a long generated dictation), `densified` (fillers added), `length:150-300` and the like, noise patterns such as `noise:repeat`, and others. |
+| `source` | Where the row came from; see [Splits and sources](#splits-and-sources). |
+| `category` | One of 38 categories, such as `self_correction`, `revised_choice`, `meeting_notes`, `spoken_symbols` and `literal_cue`. |
+| `license` | The license of the row's text: `MIT` or `CC-BY-4.0`. See [Licenses and terms](#licenses-and-terms). |
+| `tags` | How the row was made. `round2`, `round3` and `round4` mark the round that added the row; round 1 rows have none. Input tags: the recognizer style the input copies (`asr_parakeet`, `asr_whisper`, `asr_qwen3`, `asr_plain`), `style_recognizer` or `style_raw`, `restyled`, `densified` (fillers added), `cutoff` with `tts:kokoro`, `tts:phonon` or `tts:written` (cut-off word starts added in round 4), `recognizer_repair` with `recognizer:parakeet` or `recognizer:whisper`, and `real_speech` (AMI). Content tags: `composed` (a long generated dictation), `length:150-300` and the like, and noise patterns such as `noise:repeat`. Reference tags: `rewritten` or `rewritten_retry` (written in round 1's full rewrite, on the first pass or in a retry round) and `ref_fixed` (corrected in round 3's review). A recognizer repair row also carries the tags of the row it was made from. |
 | `layout` | `plain`, `list`, `paragraphs` or `mixed`, computed from the output. |
 | `seed_group` | Rows made from the same seed. They share a split. |
 | `split` | `train`, `val` or `test`. |
-| `teacher_model` | The model that wrote the output: `gpt-6.1-sol` on every row. |
-| `teacher_reasoning` | Its reasoning effort: `high` on every row. |
+| `teacher_model` | The model that wrote the output: `gpt-6.1-sol` on every row. The 217 `EMPTY` outputs were set in code. |
+| `teacher_reasoning` | Its reasoning effort: `high`, or `xhigh` on round 2's long dictations over 600 words and their injected copies (4,146 rows). |
+| `generator_provider`, `generator_model`, `generator_reasoning` | Set on train rows only. For a transcript generated in rounds 2–4, the route, model and reasoning effort that wrote it; `null` on other rows. |
+| `judge_model`, `judge_reasoning` | Set on train rows only. The judge that passed a round 2–4 row's reference; `null` on round 1 rows, whose references `gpt-6.1-sol` at high reasoning judged. |
+
+## Splits and sources
+
+| source | train | val | test | `license` | what it is |
+|---|---|---|---|---|---|
+| teacher (made for this dataset) | 21,832 | 595 | 1,284 | `MIT` | Generated transcripts: short dictations in categories the public data lacks (dictated commands that must stay text, spoken symbols, list edits such as "scratch the eggs", lists inside messages), long dictations of 150–1,000 words that mix late corrections, revised choices and dense values, and short dictations that use a correction word literally ("hold on to the receipts"). |
+| [shantanugoel/aawaaz-transcript-cleanup-dataset](https://huggingface.co/datasets/shantanugoel/aawaaz-transcript-cleanup-dataset) | 18,403 | 1,077 | 736 | `MIT` | Synthetic transcripts in 12 categories. A judge read every row; 1,691 flagged rows were relabelled and 84 dropped. Half the inputs were restyled to a recognizer's punctuation. |
+| [MagicNoThief/handy-dictation-editing](https://huggingface.co/datasets/MagicNoThief/handy-dictation-editing) | 8,471 | 474 | 851 | `CC-BY-4.0` | Dictation edits. Rows that overlap Switchboard transcripts (LDC) were dropped, as were rows with Wikipedia sentences spliced in and rows whose number words clash with written forms. |
+| injected | 4,663 | 150 | 135 | `MIT` | Fillers, repeats and restarts injected into clean references (4,731 rows), and filler-only transcripts whose output is `EMPTY` (217). |
+| heard | 4,000 | | | `MIT` 3,315, `CC-BY-4.0` 685 | Recognizer repair rows. A train row's transcript was spoken by Kokoro TTS and transcribed by Parakeet (2,687) or Whisper (1,313), misheard words and all, and the reference fixes only what the text makes clear. Each replaced the row it was made from and keeps that row's license. |
+| [google-research-datasets/disfl_qa](https://huggingface.co/datasets/google-research-datasets/disfl_qa) | 2,649 | 128 | 291 | `CC-BY-4.0` | Self-corrected questions. Rows whose output used a word the speaker never said were dropped. |
+| [edinburghcstr/ami](https://huggingface.co/datasets/edinburghcstr/ami) | 818 | | | `CC-BY-4.0` | Single-speaker turns of 50–1,000 words from meetings in the AMI Meeting Corpus's train split, as lowercase, unpunctuated text. |
+| **total** | **60,836** | **2,424** | **3,297** | | |
+
+Rows are split by `seed_group`, so rows made from the same seed, such as a transcript and its copy with injected fillers, always share a split. Rounds 2–4 added rows to train only, and val and test are the same in every round.
 
 ## Statistics
 
-- **Transcript length:** median 72 words, 90th percentile 426, longest 1,038.
+- **Transcript length:** median 83 words, 90th percentile 519, longest 1,110.
 
   | words | rows |
   |---|---|
-  | up to 25 | 14,499 |
-  | 26–50 | 5,453 |
-  | 51–100 | 13,572 |
-  | 101–200 | 8,379 |
-  | 201–450 | 5,567 |
-  | over 450 | 4,640 |
+  | up to 25 | 15,717 |
+  | 26–50 | 7,631 |
+  | 51–100 | 13,946 |
+  | 101–200 | 8,771 |
+  | 201–450 | 9,396 |
+  | over 450 | 11,096 |
 
-- **Output layout:** plain 31,169, mixed 13,234, list 4,309, paragraphs 3,398.
+- **Output layout:** plain 33,151, mixed 20,863, paragraphs 7,061, list 5,482.
 
 <details>
 <summary>Rows per category</summary>
 
 | category | rows |
 |---|---|
+| filler_injection | 5,009 |
+| revised_choice | 3,615 |
 | self_correction | 3,469 |
-| dictated_question | 3,208 |
-| filler_injection | 3,127 |
+| dictated_question | 3,253 |
 | no_edit | 3,030 |
+| recipe_quantities | 2,878 |
 | short_dictation | 2,191 |
+| meeting_actions | 2,073 |
 | medical_clinical | 2,006 |
 | financial_business | 2,000 |
 | academic_research | 1,996 |
@@ -131,50 +136,52 @@ Rows are split by `seed_group`, so rows made from the same seed, such as a resty
 | meeting_notes | 1,979 |
 | creative_writing | 1,940 |
 | shopping_lists | 1,905 |
+| multi_topic | 1,902 |
 | email_professional | 1,849 |
+| dense_professional | 1,746 |
 | dictation | 1,606 |
-| recipe_quantities | 1,076 |
-| meeting_actions | 1,069 |
-| multi_topic | 1,066 |
-| dense_professional | 1,061 |
-| list_corrections | 1,059 |
-| email_late_correction | 1,049 |
-| technical_steps | 1,046 |
-| revised_choice | 1,029 |
+| list_corrections | 1,581 |
+| technical_steps | 1,488 |
+| email_late_correction | 1,474 |
+| spoken_symbols | 1,273 |
+| mixed_message | 1,085 |
+| list_edits | 1,084 |
+| technical_list | 1,083 |
 | recipe_cooking | 953 |
 | prose_mentions | 819 |
-| spoken_symbols | 573 |
+| real_meeting_turn | 818 |
+| literal_cue | 600 |
 | dictated_command | 570 |
 | ambiguous_intent | 385 |
-| mixed_message | 385 |
 | command_question_list | 384 |
-| list_edits | 384 |
-| technical_list | 383 |
 | long_ramble | 339 |
 | empty | 217 |
 
 </details>
 
-## Sources
-
-| source | rows | `license` field | what it is |
-|---|---|---|---|
-| [shantanugoel/aawaaz-transcript-cleanup-dataset](https://huggingface.co/datasets/shantanugoel/aawaaz-transcript-cleanup-dataset) | 22,585 | `MIT` | Synthetic transcripts in 12 categories. A judge read every row; 1,691 flagged rows were relabeled and 84 dropped. |
-| teacher (made for this dataset) | 12,677 | `MIT` | Generated transcripts. 4,222 cover what the public data lacks, such as dictated commands that must stay text, spoken symbols, list edits ("scratch the eggs") and lists inside messages. 8,455 are long dictations of 150–1,000 words that mix late corrections, revised choices, meeting notes whose owners change, and recipes with quantities. |
-| [MagicNoThief/handy-dictation-editing](https://huggingface.co/datasets/MagicNoThief/handy-dictation-editing) | 10,296 | `CC-BY-4.0` | Dictation edits. Rows that overlap Switchboard transcripts (LDC) were dropped, as were rows with Wikipedia sentences spliced in and rows whose number words clash with written forms. |
-| [google-research-datasets/disfl_qa](https://huggingface.co/datasets/google-research-datasets/disfl_qa) | 3,208 | `CC-BY-4.0` | Self-corrected questions. Rows whose output used a word the speaker never said were dropped. |
-| injected | 3,344 | `MIT` | Fillers injected into clean aawaaz and generated rows, and filler-only rows whose output is `EMPTY`. |
-
 ## How it was made
 
-1. **Imported** the three public datasets, audited them with a judge model, and filtered them as described in [Sources](#sources).
-2. **Generated** transcripts for the categories the public data lacks and for long dictations. Z.ai's GLM models wrote 5,308 of them (all 4,222 short ones and the first 1,086 long ones), and `gpt-6.1-sol` wrote the other 7,369.
-3. **Made inputs look like WhisperNow's recognizers.** 300 inputs were spoken with Kokoro TTS and transcribed with Parakeet, Whisper and Qwen3 ASR to measure how each punctuates. `glm-5.3-flash` then rewrote half the aawaaz inputs (10,671 rows) with a recognizer's casing, punctuation and number style, and code checked that every rewrite kept the same words. Generated inputs had a fifth of the fillers real dictation has, so a share of them got 3–6 fillers per 100 words, placed where speakers hesitate.
+Round 1 built the base:
+
+1. **Imported** the three public datasets, audited them with a judge model, and filtered them as described in [Splits and sources](#splits-and-sources).
+2. **Generated** transcripts for the categories the public data lacks, and long dictations of 150–1,000 words.
+3. **Made inputs look like WhisperNow's recognizers.** 300 inputs were spoken with Kokoro TTS and transcribed with Parakeet, Whisper and Qwen3 ASR to measure how each punctuates. `glm-5.3-flash` then rewrote half the aawaaz inputs with a recognizer's casing, punctuation and number style, and code checked that every rewrite kept the same words. Generated inputs had a fifth of the fillers real dictation has, so a share of them got 3–6 fillers per 100 words, placed where speakers hesitate.
 4. **Wrote every reference** with `gpt-6.1-sol` at high reasoning, sending exactly the request WhisperNow sends a hosted cleanup model.
 5. **Checked every reference** in code (protected values, em dashes, spelled-out counts, kept hedges and reasons) and with a `gpt-6.1-sol` completeness judge. A rejected reference was rewritten with the judge's note and checked again, for up to 14 rounds. 7 rows still failed and were dropped.
-6. **Settled the rules by hand.** The project owner read 33 rows and then two rounds of 60, and each read changed the prompt below.
+6. **Settled the rules by hand.** The project owner read 33 judged rows and then two rounds of 60 rewritten rows, and each read changed the prompt.
 
-After the rewrite, no reference has an em dash, 0.1% spell out a count, and 97–99% keep the transcript's "maybe", "probably", "I think" and "because".
+After the rewrite, no round 1 reference has an em dash, 0.1% spell out a count, and 97–99% keep the transcript's "maybe", "probably", "I think" and "because".
+
+Each later round started from an evaluation of models trained on the round before, and used the same teacher and gates:
+
+| round | added to train | train rows |
+|---|---|---|
+| 1, base | the rows above | 46,389 |
+| 2, targeted | 8,302 long dictations weighted toward the categories and lengths where round 1 models lost the most facts, and 1,882 injected spoken versions of them | 56,573 |
+| 3, weak spots | 2,800 short generated rows in four categories where round 2 models lost facts, 818 AMI meeting turns, 45 Disfl-QA questions, 138 corrected references, and 4,000 recognizer repair rows in place of the rows they were made from | 60,236 |
+| 4, cut-offs and literal cues | cut-off word starts ("interf interface") in 3,000 train inputs, and 600 short dictations that use a correction word literally | 60,836 |
+
+[How the dataset was made](https://github.com/stephan271c/WhisperNow/blob/master/training/making-the-dataset.md) describes each step, the benchmarks and what each round's evaluation showed.
 
 ## The cleanup rules
 
@@ -245,33 +252,64 @@ Clean up the dictation and lay it out the way the speaker would have written it.
 
 </details>
 
-## Licenses
+## Models trained on it
 
-This is a reading of the published terms, not legal advice.
+Three models were trained on the train split of round 4:
 
-- **The `license` field gives the license of the row's text:** `MIT` (38,606 rows) or `CC-BY-4.0` (13,504).
-  - Rows from aawaaz are `MIT`, and rows from handy and disfl_qa are `CC-BY-4.0`, including their rewritten references.
-  - Text made for this dataset (the generated transcripts, the injected fillers and the `EMPTY` rows) is `MIT`.
-- **The CC-BY-4.0 rows need attribution.** handy's rows come from [MagicNoThief/handy-dictation-editing](https://huggingface.co/datasets/MagicNoThief/handy-dictation-editing). disfl_qa's rows come from Google Research's [Disfl-QA](https://github.com/google-research-datasets/disfl-qa), whose questions derive from SQuAD 2.0 (CC-BY-SA-4.0), so share-alike terms may carry over.
-- **Much of the text was written by models**, whose providers set terms of their own:
-  - OpenAI's `gpt-6.1-sol` wrote every reference except the 217 `EMPTY` ones, and 7,369 generated transcripts.
-  - Z.ai's GLM models wrote 5,308 generated transcripts, rewrote the casing, punctuation and number style of 10,671 aawaaz transcripts (`glm-5.3-flash`), and wrote the earlier references that 328 injected transcripts were made from.
-  - aawaaz itself was generated with Gemini 2.5 Flash.
+- [WhisperNow LFM2.5 1.2B](https://huggingface.co/category271/whispernow-lfm2.5-1.2b)
+- [WhisperNow LFM2.5 2.6B](https://huggingface.co/category271/whispernow-lfm2.5-2.6b)
+- [WhisperNow Qwen3.5 4B](https://huggingface.co/category271/whispernow-qwen3.5-4b)
 
-  OpenAI's and Z.ai's terms restrict using their outputs to develop models that compete with them, and Google's terms need checking before commercial use. Whether they apply to your use is for you to judge.
+A judge model (`gpt-6.1-sol` at high reasoning) compares each output with the reference and lists the facts that were dropped, changed, or put on the wrong side of a correction. The table gives those facts lost per 1,000 reference words; lower is better. The two hosted models received WhisperNow's full cleanup prompt. Rates are over the rows every model has a verdict for: 3,295 test rows, 414 bench-long rows and all 461 bench-noise rows. bench-cutoff is scored in code: the share of cut-off word starts left in the output.
 
-## Personal data
+| model | test | bench-long | bench-noise | pooled | bench-cutoff pieces left |
+|---|---|---|---|---|---|
+| WhisperNow LFM2.5 1.2B | 4.53 | 8.58 | 4.27 | 5.88 | 2.1% |
+| WhisperNow LFM2.5 2.6B | 3.54 | 6.65 | 3.90 | 4.60 | 2.6% |
+| WhisperNow Qwen3.5 4B | 2.10 | 4.37 | 2.62 | 2.88 | 1.6% |
+| glm-5.3-flash (hosted) | 2.87 | 4.68 | 2.50 | 3.46 | not run |
+| glm-5.3 at max reasoning (hosted) | 1.73 | 2.14 | 2.01 | 1.88 | not run |
 
-No real person's dictation is in this dataset: WhisperNow users' dictations never enter it. Names and numbers in generated rows are invented. handy's rows that re-record Switchboard telephone calls were removed.
+The model cards give results by length, speed and the other checks.
 
 ## Limitations
 
-- **One model wrote every reference, and the same model judged them**, so the references carry its habits. The hand reads were the outside check.
-- **Most inputs are text styled like recognizer output**, not recognizer output of real speech.
+- **One model wrote every reference, and the same model judged them**, so the references carry its habits. The project owner's hand reads were the outside check.
+- **Most inputs are text styled like recognizer output.** Recognizer transcripts of speech appear in the 4,000 repair rows and in the cut-off pieces, and that speech came from TTS voices, which are flatter than people. The 818 AMI turns transcribe real speech, and they are meetings rather than dictation.
 - **The long generated dictations are harder than real speech.** They pack late corrections and dense values into every dictation.
+- **Narrated plan changes go both ways.** In 2,865 train rows (4.7%) the speaker tells an earlier plan before changing it ("I originally wanted X, but …, so Y instead"). 29% of those references keep the earlier plan and 71% drop it. The rules allow both readings, and the references were left as they are.
+- **Some literal-cue phrasings repeat.** "hold on to the receipts" appears in 10 of the 600 literal-cue rows and "I mean it this time" in 7.
 - **English only.**
+
+## Licenses and terms
+
+This is a reading of the published terms, not legal advice.
+
+- **The `license` field gives the license of the row's text:** `MIT` (52,190 rows) or `CC-BY-4.0` (14,367).
+  - Rows from aawaaz are `MIT`, and rows from handy, Disfl-QA and AMI are `CC-BY-4.0`, including their rewritten references. A recognizer repair row keeps the license of the row it was made from.
+  - Text made for this dataset (the generated transcripts, the injected fillers and the `EMPTY` rows) is `MIT`.
+- **The CC-BY-4.0 rows need attribution.**
+  - handy's rows come from [MagicNoThief/handy-dictation-editing](https://huggingface.co/datasets/MagicNoThief/handy-dictation-editing).
+  - Disfl-QA's rows come from Google Research's [Disfl-QA](https://github.com/google-research-datasets/disfl-qa). Its questions derive from SQuAD 2.0 (CC-BY-SA-4.0), so share-alike terms may carry over.
+  - AMI's rows come from the [AMI Meeting Corpus](https://groups.inf.ed.ac.uk/ami/corpus/) (University of Edinburgh and partners, CC BY 4.0), read through [edinburghcstr/ami](https://huggingface.co/datasets/edinburghcstr/ami). Only the text was used.
+- **Much of the text was written by models**, whose providers set terms of their own:
+  - OpenAI's `gpt-6.1-sol` wrote every reference except the 217 `EMPTY` ones, and the transcripts of 18,603 generated rows. The injected rows' inputs are its references with fillers added.
+  - Z.ai's GLM models wrote the transcripts of 5,041 generated rows, and `glm-5.3-flash` rewrote the casing, punctuation and number style of 9,530 aawaaz transcripts.
+  - A pilot of other generators wrote 67 transcripts: 64 by DeepSeek V4.1 Flash and 3 by NVIDIA Nemotron 3.5 Super. `generator_model` names the model that wrote each round 2–4 transcript.
+  - aawaaz itself was generated with Gemini 2.5 Flash.
+
+  OpenAI's and Z.ai's terms restrict using their outputs to develop models that compete with them, and Google's terms need checking before commercial use. Whether they apply to your use is for you to judge.
+- **Left out on purpose:** `juanquivilla/sotto-transcript-cleanup`, which is MIT but partly written by Grok 4.20, whose terms bar using outputs to train competing models; data under a non-commercial or ShareAlike license (such as Earnings-22); unlicensed data; and LDC data (such as Switchboard).
+
+## Personal data
+
+No real person's dictation is in this dataset: WhisperNow users' dictations never enter it. Names and numbers in generated rows are invented. handy's rows that re-record Switchboard telephone calls were removed. The AMI turns come from a public corpus of recorded meetings.
 
 ## Not included
 
-- The two benchmarks the model cards report: bench-long (416 dictations of 150–1,000 words, 49 of them real AMI meeting turns) and bench-noise (461 rows, one disfluency pattern each).
+- The three benchmarks the model cards report:
+  - bench-long: 416 dictations of 150–1,000 words, 49 of them real AMI meeting turns from meetings that no training row comes from;
+  - bench-noise: 461 short dictations with one disfluency pattern each, 136 of them Parakeet transcripts of TTS speech;
+  - bench-cutoff: 150 test rows with cut-off word starts added.
 - Any real WhisperNow dictations.
+- Rows the filters dropped, and a round 2 variant that replaced train inputs with recognizer transcripts of the same text, which was tried and set aside.

@@ -1,13 +1,11 @@
 import asyncio
 import json
 from collections import Counter
-from dataclasses import replace
 from types import SimpleNamespace
 
-import pytest
 
-from whispernow_training.datagen import asr_probe, build, cutoff
-from whispernow_training.datagen.schema import Example, read_examples, write_examples
+from whispernow_training.datagen.speech import probe, cutoff
+from whispernow_training.datagen.schema import Example
 from whispernow_training.model import evaluate
 
 VOCAB = cutoff.Vocabulary(
@@ -94,30 +92,6 @@ def test_a_raw_row_takes_parakeets_piece_lowercased_and_unpunctuated(monkeypatch
     assert record["kept"] and record["input"] == example.input.replace("invoice", f"{record['cuts'][0]['prefix']} invoice")
 
 
-def test_build_v4_swaps_the_target_count_of_cut_inputs_in_place(tmp_path, monkeypatch):
-    base_dir, out_dir = tmp_path / "build-v3", tmp_path / "build-v4"
-    write_examples(base_dir / "train.jsonl", [
-        row("a", "um we need to book the big room", "We need to book the big room."),
-        row("b", "call the plumber", "Call the plumber."),
-    ])
-    for split in ("val", "test"):
-        write_examples(base_dir / f"{split}.jsonl", [replace(row(split, "so the plan", "The plan."), split=split)])
-    record = {"id": "a", "kept": True, "tts": "phonon", "input": "um we need to book the big ro room",
-              "cuts": [{"word": "room", "prefix": "ro", "piece": ["ro"]}]}
-    monkeypatch.setattr(cutoff, "ROWS", 1)
-    monkeypatch.setattr(cutoff, "load", lambda short_share=None: [record])
-
-    report = build.build_v4(base_dir, out_dir)
-    train = {e.id: e for e in read_examples(out_dir / "train.jsonl")}
-    assert train["a"].input == record["input"] and train["a"].output == "We need to book the big room."
-    assert {cutoff.TAG, "tts:phonon"} <= set(train["a"].tags) and train["b"].input == "call the plumber"
-    assert report["v4"]["cutoff_rows"] == "1/1"
-
-    monkeypatch.setattr(cutoff, "ROWS", 2)
-    with pytest.raises(SystemExit):
-        build.build_v4(base_dir, out_dir)
-
-
 def test_score_counts_pieces_left_words_lost_and_look_alike_pairs_kept(tmp_path, monkeypatch):
     cuts = [
         {"id": "c1", "origin": "t1", "tts": "kokoro", "cuts": [{"word": "settings", "prefix": "sett", "piece": ["sett,"]}]},
@@ -177,7 +151,7 @@ def test_run_fills_each_length_bucket_to_its_target_past_rows_that_fail(tmp_path
     monkeypatch.setattr(cutoff, "pool", lambda: rows)
     monkeypatch.setattr(cutoff, "cut_row", cut_row)
     monkeypatch.setattr(cutoff, "_speakers", lambda provider: {})
-    monkeypatch.setattr(asr_probe, "Recognizer", lambda *args: None)
+    monkeypatch.setattr(probe, "Recognizer", lambda *args: None)
 
     for shard in (0, 1):
         cutoff.run(shard=shard, shards=2)
@@ -206,8 +180,8 @@ def test_check_asks_each_question_once_per_cut_and_a_flag_fails_the_row(tmp_path
         return 0.9 if "PIECE: nine" in state and question == cutoff._check_spec()["questions"]["fact"] else 0.01
 
     monkeypatch.setattr(cutoff, "CHECK", tmp_path / "check.jsonl")
-    monkeypatch.setattr(cutoff.heard, "decide", decide)
-    monkeypatch.setattr(cutoff.heard, "openrouter_key", lambda: "k")
+    monkeypatch.setattr(cutoff.mercury, "decide", decide)
+    monkeypatch.setattr(cutoff.mercury, "openrouter_key", lambda: "k")
     bad = {"id": "a", "kept": True, "input": "come back at nine night and sta stairs",
            "cuts": [{"word": "night", "prefix": "ni", "piece": ["nine"]}, {"word": "stairs", "prefix": "sta", "piece": ["sta"]}]}
     good = {"id": "b", "kept": True, "input": "take the sta stairs", "cuts": [{"word": "stairs", "prefix": "sta", "piece": ["sta"]}]}
@@ -236,7 +210,7 @@ def test_a_row_the_check_failed_is_replaced_by_the_next_in_its_bucket(tmp_path, 
     monkeypatch.setattr(cutoff, "pool", lambda: rows)
     monkeypatch.setattr(cutoff, "cut_row", cut_row)
     monkeypatch.setattr(cutoff, "_speakers", lambda provider: {})
-    monkeypatch.setattr(asr_probe, "Recognizer", lambda *args: None)
+    monkeypatch.setattr(probe, "Recognizer", lambda *args: None)
     monkeypatch.setattr(cutoff, "screen", lambda record, seen: "fact: 'x' before 'y'" if record["id"] == "s01" else None)
 
     async def check(rows=None, concurrency=8):
@@ -264,7 +238,7 @@ def test_one_shard_run_skips_rows_another_shard_cut_and_load_takes_each_row_once
     monkeypatch.setattr(cutoff, "pool", lambda: rows)
     monkeypatch.setattr(cutoff, "cut_row", cut_row)
     monkeypatch.setattr(cutoff, "_speakers", lambda provider: {})
-    monkeypatch.setattr(asr_probe, "Recognizer", lambda *args: None)
+    monkeypatch.setattr(probe, "Recognizer", lambda *args: None)
 
     cutoff.run(shard=1, shards=2)
     first = list(tried)
@@ -273,33 +247,3 @@ def test_one_shard_run_skips_rows_another_shard_cut_and_load_takes_each_row_once
     assert first == ["s01", "s03", "m01"] and not set(tried[3:]) & set(first)
     loaded = [r["id"] for r in cutoff.load()]
     assert len(loaded) == len(set(loaded)) == 6
-
-
-def test_build_v5_swaps_cut_inputs_and_adds_each_categorys_first_target_of_v5_rows(tmp_path, monkeypatch):
-    from whispernow_training.datagen import generate, v5
-
-    base_dir, out_dir = tmp_path / "build-v3", tmp_path / "build-v5"
-    write_examples(base_dir / "train.jsonl", [row("a", "um we need to book the big room", "We need to book the big room.")])
-    write_examples(base_dir / "val.jsonl", [replace(row("val", "so the plan", "The plan."), split="val")])
-    held_out = "please hold on to the receipts until thursday so we can check"
-    write_examples(base_dir / "test.jsonl", [replace(row("test", held_out, "Hold on to the receipts."), split="test")])
-    monkeypatch.setattr(build, "_benchmark_rows", lambda: [])
-    record = {"id": "a", "kept": True, "tts": "kokoro", "input": "um we need to book the big ro room",
-              "cuts": [{"word": "room", "prefix": "ro", "piece": ["ro"]}]}
-    texts = ["hold on to the receipts until Thursday", "never mind the parking we'll take the train",
-             "can you scratch off the lottery ticket for me"]
-    generated = [replace(row(f"t{i}", text, text.capitalize() + "."), tags=["v5"]) for i, text in enumerate(texts)]
-    generated = [replace(e, source=generate.SOURCE, category="literal_cue") for e in generated]
-    monkeypatch.setattr(cutoff, "ROWS", 1)
-    monkeypatch.setattr(cutoff, "load", lambda short_share=None: [record])
-    monkeypatch.setattr(v5, "load", lambda: generated)
-    monkeypatch.setattr(v5, "stage3_rows", lambda: generated)
-    monkeypatch.setitem(generate.RUN_TARGETS, "v5", {"literal_cue": 2})
-
-    report = build.build_v5(base_dir, out_dir)
-    train = {e.id: e for e in read_examples(out_dir / "train.jsonl")}
-    assert train["a"].input == record["input"] and train["a"].output == "We need to book the big room."
-    assert {"t1", "t2"} <= set(train) and "t0" not in train
-    assert report["v5"]["added"] == {"literal_cue": "2/2"} and report["v5"]["cutoff"]["cutoff_rows"] == "1/1"
-    assert report["v5"]["dropped"] == {"shares 6 words with a held-out input": 1}
-    assert (out_dir / "test.jsonl").read_text() == (base_dir / "test.jsonl").read_text()

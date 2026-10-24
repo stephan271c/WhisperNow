@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from whispernow_training.datagen import aawaaz
+from whispernow_training.datagen.sources import aawaaz
 
 FIXTURES = [json.loads(line) for line in (Path(__file__).parent / "fixtures" / "aawaaz_rows.jsonl").open()]
 

@@ -1,8 +1,0 @@
-# Todo 113: todo 109's MiniCPM5-1B recipe (full fine-tune from the instruct checkpoint, lr 1e-5,
-# 3 epochs) retrained from the base model on todo 112's relabeled build. Add the fresh-noise run
-# below only if it helped LFM2.5-350M (configs/sweep-lfm25-350m-r112.toml).
-config = "minicpm5-1b.toml"
-
-[[run]]
-name = "r112-minicpm-full-inst-1e-5-e3"
-set = ["learning_rate=1e-5", "epochs=3"]

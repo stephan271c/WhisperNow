@@ -4,7 +4,6 @@
 # about 67 GB, too much for an H100 with activations. Not a B200: there fla 0.5.2's gated delta rule
 # backward gave NaN gradients from step 34, the first batches under 128 tokens.
 base_model = "Qwen/Qwen3.5-4B-Base"
-method = "full"
 learning_rate = 1e-5
 epochs = 3
 batch_size = 32
