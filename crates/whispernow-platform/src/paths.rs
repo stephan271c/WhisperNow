@@ -46,7 +46,7 @@ impl AppPaths {
         }
     }
 
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn under(root: impl AsRef<Path>) -> Self {
         let root = root.as_ref();

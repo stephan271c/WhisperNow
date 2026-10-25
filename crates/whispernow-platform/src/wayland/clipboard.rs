@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt, time::Duration};
 
 use zeroize::Zeroizing;
 
-use super::portal::PortalOutputError;
+use super::PortalOutputError;
 
 const TRANSCRIPT_MIME_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "text/plain"];
 pub(crate) const SNAPSHOT_MIME_TYPES: [&str; 6] = [

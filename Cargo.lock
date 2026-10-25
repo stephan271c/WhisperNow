@@ -7621,6 +7621,7 @@ dependencies = [
  "wayland-client",
  "whispernow-core",
  "whispernow-domain",
+ "whispernow-platform",
  "windows-sys 0.61.2",
  "x11rb 0.14.0",
  "xkbcommon",

@@ -70,7 +70,7 @@ fn spawn_opener(argument: &OsStr) -> io::Result<()> {
     std::thread::Builder::new()
         .name("whispernow-opener".to_owned())
         .spawn(move || {
-            let _status = opener.wait();
+            let _ = opener.wait();
         })?;
     Ok(())
 }

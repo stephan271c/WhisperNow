@@ -106,8 +106,7 @@ impl Default for DownloadTimeouts {
 pub struct ModelStore {
     registry: ModelRegistry,
     paths: AppPaths,
-    runtime: tokio::runtime::Runtime,
-    client: reqwest::Client,
+    timeouts: DownloadTimeouts,
     // Model reads must not see replacement gaps.
     mutation: Mutex<()>,
 }
@@ -129,37 +128,32 @@ impl ModelStore {
         paths: AppPaths,
         timeouts: DownloadTimeouts,
     ) -> Self {
-        if let Ok(entries) = fs::read_dir(paths.models_dir()) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                let partial_download = name.starts_with(MODEL_DOWNLOAD_PREFIX)
-                    && Path::new(&*name)
-                        .extension()
-                        .is_some_and(|extension| extension == "part");
-                if (name.starts_with(MODEL_STAGE_PREFIX) || partial_download)
-                    && let Err(error) = remove_path(&entry.path())
-                {
-                    tracing::warn!(%error, "stale download files could not be removed");
-                }
-            }
-        }
-        let client = reqwest::Client::builder()
-            .connect_timeout(timeouts.connect)
-            .read_timeout(timeouts.receive_body)
-            .timeout(timeouts.total)
-            .build()
-            .expect("the model download client builds");
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("the model download runtime builds");
         Self {
             registry,
             paths,
-            runtime,
-            client,
+            timeouts,
             mutation: Mutex::new(()),
+        }
+    }
+
+    /// Removes the staging directories and partial downloads that an interrupted download
+    /// left in the models directory.
+    pub fn sweep_stale(&self) {
+        let Ok(entries) = fs::read_dir(self.paths.models_dir()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let partial_download = name.starts_with(MODEL_DOWNLOAD_PREFIX)
+                && Path::new(&*name)
+                    .extension()
+                    .is_some_and(|extension| extension == "part");
+            if (name.starts_with(MODEL_STAGE_PREFIX) || partial_download)
+                && let Err(error) = remove_path(&entry.path())
+            {
+                tracing::warn!(%error, "stale download files could not be removed");
+            }
         }
     }
 
@@ -235,6 +229,24 @@ impl ModelStore {
         sync_directory(&self.paths.models_dir()).map_err(filesystem("sync models directory"))?;
         Ok(destination)
     }
+}
+
+fn download_client(timeouts: DownloadTimeouts) -> Result<reqwest::Client, ModelStoreError> {
+    reqwest::Client::builder()
+        .connect_timeout(timeouts.connect)
+        .read_timeout(timeouts.receive_body)
+        .timeout(timeouts.total)
+        .build()
+        .inspect_err(|error| tracing::warn!(%error, "the model download client did not build"))
+        .map_err(|_| ModelStoreError::Transport)
+}
+
+fn download_runtime() -> Result<tokio::runtime::Runtime, ModelStoreError> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .inspect_err(|error| tracing::warn!(%error, "the model download runtime did not build"))
+        .map_err(|_| ModelStoreError::Transport)
 }
 
 async fn download_file(
@@ -399,8 +411,10 @@ impl ModelStore {
             .suffix(".part")
             .tempfile_in(&models_dir)
             .map_err(filesystem("create download staging file"))?;
-        self.runtime.block_on(download_file(
-            &self.client,
+        let client = download_client(self.timeouts)?;
+        let runtime = download_runtime()?;
+        runtime.block_on(download_file(
+            &client,
             &definition.source,
             &mut download,
             cancellation,
@@ -578,7 +592,7 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
 
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        let _infallible_for_string = write!(&mut encoded, "{byte:02x}");
+        let _ = write!(&mut encoded, "{byte:02x}");
     }
     encoded
 }

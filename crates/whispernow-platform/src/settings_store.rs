@@ -7,11 +7,10 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use whispernow_domain::AppError;
 
 use serde::Serialize;
 use serde_json::Value;
-use whispernow_domain::{ApiKey, ErrorCategory, LlmProvider, PythonSettings, Settings};
+use whispernow_domain::{ApiKey, AppError, ErrorCategory, LlmProvider, PythonSettings, Settings};
 
 use crate::{
     AppPaths,

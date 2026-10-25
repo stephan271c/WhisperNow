@@ -5,7 +5,6 @@ use std::{
     fmt, fs, io,
     path::{Path, PathBuf},
 };
-use whispernow_domain::AppError;
 
 use hound::{SampleFormat, WavSpec, WavWriter};
 use rusqlite::{
@@ -14,7 +13,7 @@ use rusqlite::{
 };
 use whispernow_core::audio::TARGET_SAMPLE_RATE;
 use whispernow_domain::{
-    EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryLimit, HistoryPage,
+    AppError, EntryId, EntryStatus, ErrorCategory, HistoryEntry, HistoryLimit, HistoryPage,
     HistoryPageRequest, HistoryRetention, NewHistoryEntry, UtcMillis,
 };
 
@@ -139,22 +138,19 @@ impl SqliteHistoryRepository {
                 })
                 .is_ok()
         });
-        let result = prune(&transaction, limit, retention).and_then(|pruned| {
-            transaction
-                .commit()
-                .map_err(history_error("history_insert"))?;
-            Ok(pruned)
-        });
-        let pruned = match result {
-            Ok(pruned) => pruned,
-            Err(error) => {
+        let pruned = prune(&transaction, limit, retention)
+            .and_then(|pruned| {
+                transaction
+                    .commit()
+                    .map(|()| pruned)
+                    .map_err(history_error("history_insert"))
+            })
+            .inspect_err(|_| {
                 // A rolled-back id can be reused by the next insert.
                 if wrote_audio {
                     discard_audio(&self.audio_dir, id);
                 }
-                return Err(error);
-            }
-        };
+            })?;
         for id in pruned {
             discard_audio(&self.audio_dir, id);
         }
@@ -267,15 +263,17 @@ fn prune(
     limit: HistoryLimit,
     retention: HistoryRetention,
 ) -> Result<Vec<EntryId>, AppError> {
-    let mut pruned = Vec::new();
-    if let Some(days) = retention.days() {
-        let cutoff = UtcMillis::now().get() - sql_u64(days) * 86_400_000;
-        pruned = delete_returning_ids(
-            connection,
-            "DELETE FROM entries WHERE created_at_ms < ?1 RETURNING id",
-            cutoff,
-        )?;
-    }
+    let mut pruned = match retention.days() {
+        Some(days) => {
+            let cutoff = UtcMillis::now().get() - sql_u64(days) * 86_400_000;
+            delete_returning_ids(
+                connection,
+                "DELETE FROM entries WHERE created_at_ms < ?1 RETURNING id",
+                cutoff,
+            )?
+        }
+        None => Vec::new(),
+    };
     if let Some(kept) = limit.max_entries() {
         pruned.extend(delete_returning_ids(
             connection,
@@ -313,30 +311,36 @@ fn remove_orphan_audio(connection: &Connection, audio_dir: &Path) {
     };
     for file in files.flatten() {
         let path = file.path();
-        let wav_id = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| name.strip_suffix(".wav"))
-            .filter(|stem| !stem.is_empty() && stem.bytes().all(|byte| byte.is_ascii_digit()));
-        let orphan_wav = wav_id.is_some_and(|stem| {
-            stem.parse::<i64>()
-                .ok()
-                .is_none_or(|id| !owned.contains(&id))
-        });
-        let temporary = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(TEMPORARY_PREFIX));
-        if (orphan_wav || temporary) && file.file_type().is_ok_and(|kind| kind.is_file()) {
-            drop(fs::remove_file(&path));
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let orphan_wav = name
+            .strip_suffix(".wav")
+            .filter(|stem| !stem.is_empty() && stem.bytes().all(|byte| byte.is_ascii_digit()))
+            .is_some_and(|stem| {
+                stem.parse::<i64>()
+                    .ok()
+                    .is_none_or(|id| !owned.contains(&id))
+            });
+        if (orphan_wav || name.starts_with(TEMPORARY_PREFIX))
+            && file.file_type().is_ok_and(|kind| kind.is_file())
+        {
+            let _ = fs::remove_file(&path).inspect_err(|error| {
+                tracing::warn!(
+                    code = "history_audio_delete",
+                    %error,
+                    "an unowned recording could not be removed; it is retried at the next start"
+                );
+            });
         }
     }
 }
 
 fn entry_from_row(row: &Row<'_>, audio_dir: &Path) -> rusqlite::Result<HistoryEntry> {
+    let id = EntryId(row.get(0)?);
     let status: String = row.get(5)?;
     Ok(HistoryEntry {
-        id: EntryId(row.get(0)?),
+        id,
         created_at: UtcMillis(row.get(1)?),
         duration_millis: row.get::<_, Option<i64>>(2)?.map(i64::unsigned_abs),
         raw_text: row.get(3)?,
@@ -345,7 +349,7 @@ fn entry_from_row(row: &Row<'_>, audio_dir: &Path) -> rusqlite::Result<HistoryEn
             rusqlite::Error::FromSqlConversionFailure(5, Type::Text, "unknown entry status".into())
         })?,
         error: row.get(6)?,
-        audio_kept: audio_path(audio_dir, EntryId(row.get(0)?)).is_file(),
+        audio_kept: audio_path(audio_dir, id).is_file(),
     })
 }
 

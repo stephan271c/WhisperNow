@@ -64,5 +64,8 @@ windows-sys = { version = "=0.61.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[dev-dependencies]
+whispernow-platform = { path = ".", features = ["test-support"] }
+
 [lints]
 workspace = true

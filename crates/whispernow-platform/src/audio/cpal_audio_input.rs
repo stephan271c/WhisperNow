@@ -15,7 +15,7 @@ use whispernow_core::audio::{
 
 use whispernow_domain::ipc::AudioDevice;
 
-use super::{
+use super::cpal_backend::{
     CaptureBackend, CaptureStream, CpalBackend, FaultFlag, OpenedCapture, StreamFault, backend,
 };
 
@@ -129,7 +129,9 @@ impl AudioCapture for CpalCapture {
 
 impl Drop for CpalCapture {
     fn drop(&mut self) {
-        let _stopped = self.finish().is_ok();
+        let _ = self.finish().inspect_err(|error| {
+            tracing::warn!(%error, "the audio capture did not stop cleanly");
+        });
     }
 }
 
@@ -167,7 +169,7 @@ impl CaptureWorker {
             }
             self.poll_default_device(&mut last_default_check);
             if let Some(fault) = self.fault.get() {
-                let _stream_was_stopped = self.stream.stop().is_ok();
+                let _ = self.stream.stop();
                 // Audio the device delivered before the fault is still the user's speech.
                 let drained = self.drain_queued_chunks(&mut processor, chunks);
                 let finished = self.finish_processor(processor);
@@ -205,10 +207,7 @@ impl CaptureWorker {
         processor: &mut AudioProcessor,
         chunks: &Receiver<Vec<f32>>,
     ) -> Result<(), AudioInputError> {
-        for _ in 0..RAW_QUEUE_CAPACITY {
-            let Ok(chunk) = chunks.try_recv() else {
-                break;
-            };
+        for chunk in chunks.try_iter().take(RAW_QUEUE_CAPACITY) {
             self.process_native_chunk(processor, chunk)?;
         }
         Ok(())
@@ -227,7 +226,7 @@ impl CaptureWorker {
             );
         }
         let processed = processor.push_interleaved(&chunk);
-        let _recycled = self.recycle.try_send(chunk).is_ok();
+        let _ = self.recycle.try_send(chunk);
         let output = processed
             .inspect_err(|error| tracing::warn!(%error, "an audio chunk could not be processed"))
             .map_err(|_| backend("process native audio chunk"))?;

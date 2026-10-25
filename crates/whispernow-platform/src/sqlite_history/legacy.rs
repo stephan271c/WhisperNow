@@ -1,10 +1,9 @@
 use std::{fs, io::ErrorKind};
-use whispernow_domain::AppError;
 
 use rusqlite::{Connection, Transaction, params};
 use serde::Deserialize;
 use time::{OffsetDateTime, PrimitiveDateTime, format_description::well_known::Rfc3339};
-use whispernow_domain::{EntryStatus, ErrorCategory, UtcMillis};
+use whispernow_domain::{AppError, EntryStatus, ErrorCategory, UtcMillis};
 
 use super::status_text;
 use crate::AppPaths;

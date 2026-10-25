@@ -18,7 +18,6 @@ use ashpd::{
     },
 };
 use futures_util::{FutureExt as _, StreamExt as _, future::BoxFuture};
-use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::unix::pipe,
@@ -34,6 +33,7 @@ use whispernow_core::{
 use crate::PasteKeys;
 
 use super::{
+    PortalOutputError,
     accessibility::active_paste_keys,
     clipboard::{
         CLIPBOARD_TIMEOUT, ClipboardOffer, MAX_FORMAT_BYTES, PortalClipboardState,
@@ -46,28 +46,6 @@ const XK_CONTROL_L: i32 = 0xffe3;
 const XK_SHIFT_L: i32 = 0xffe1;
 const XK_V_LOWER: i32 = 0x0076;
 const BEFORE_PASTE_DELAY: Duration = Duration::from_millis(20);
-
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum PortalOutputError {
-    #[error("desktop portal operation failed")]
-    Backend,
-    #[error("the paste was cancelled")]
-    Cancelled,
-    #[error("clipboard snapshot exceeds safe limits")]
-    ClipboardSnapshotTooLarge,
-    #[error("clipboard portal is unavailable")]
-    ClipboardUnavailable,
-    #[error("desktop portal disconnected")]
-    Disconnected,
-    #[error("remote keyboard capability was not granted")]
-    KeyboardUnavailable,
-    #[error("desktop portal permission was denied")]
-    PermissionDenied,
-    #[error("required desktop portal is unavailable")]
-    PortalUnavailable,
-    #[error("remote desktop restore token could not be stored safely")]
-    TokenStore,
-}
 
 enum ClipboardSignal {
     OwnerChanged { mime_types: Vec<String> },
@@ -93,7 +71,7 @@ impl CloseOnDrop {
     /// Waits for the listener to stop and the session to close.
     async fn close(mut self) {
         self.listener.abort();
-        let _ignored = (&mut self.listener).await;
+        let _ = (&mut self.listener).await;
         if let Some(close) = self.close.take() {
             close.await;
         }
@@ -233,7 +211,7 @@ impl PortalOutput {
             let clipboard_state = Arc::clone(&clipboard_state);
             async move {
                 listen(&clipboard, &session, &clipboard_state, &signal_tx).await;
-                let _ignored = signal_tx.send(ClipboardSignal::Closed);
+                let _ = signal_tx.send(ClipboardSignal::Closed);
             }
         });
         let close_session = Arc::clone(&session);
@@ -243,7 +221,7 @@ impl PortalOutput {
             session,
             signals,
             cleanup: CloseOnDrop::new(listener, async move {
-                let _ignored = close_session.close().await;
+                let _ = close_session.close().await;
             }),
             clipboard_state,
             advertised_mime_types: None,
@@ -531,7 +509,7 @@ async fn serve_transfer(
         .unwrap_or_else(PoisonError::into_inner)
         .transfer(mime_type);
     let Some(bytes) = bytes else {
-        let _ignored = clipboard.selection_write_done(session, serial, false).await;
+        let _ = clipboard.selection_write_done(session, serial, false).await;
         return;
     };
     let success = match clipboard.selection_write(session, serial).await {
@@ -541,7 +519,7 @@ async fn serve_transfer(
         },
         Err(_) => false,
     };
-    let _ignored = clipboard
+    let _ = clipboard
         .selection_write_done(session, serial, success)
         .await;
 }
@@ -577,7 +555,7 @@ async fn inject_balanced_paste(
             .is_err()
         {
             if !release_pressed(output, &keysyms[..index]).await {
-                let _ignored = output.session.close().await;
+                let _ = output.session.close().await;
             }
             return Err(PortalOutputError::Backend);
         }
@@ -587,7 +565,7 @@ async fn inject_balanced_paste(
     } else {
         // Closing the session is the only safe recovery after a partial key
         // release; it prevents a virtual modifier remaining logically held.
-        let _ignored = output.session.close().await;
+        let _ = output.session.close().await;
         Err(PortalOutputError::Backend)
     }
 }
@@ -711,6 +689,49 @@ mod tests {
         runtime.block_on(tokio::task::yield_now());
         assert_eq!(parked.listener_drops.load(Ordering::SeqCst), 1);
         assert_eq!(parked.closes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn portal_errors_map_to_what_the_user_can_act_on() {
+        use ashpd::{PortalError, desktop::ResponseError, zbus::names::OwnedInterfaceName};
+
+        let interface = OwnedInterfaceName::try_from("org.freedesktop.portal.RemoteDesktop")
+            .expect("interface name");
+        let cases = [
+            (
+                AshpdError::Response(ResponseError::Cancelled),
+                PortalOutputError::PermissionDenied,
+            ),
+            (
+                AshpdError::Portal(PortalError::NotAllowed(String::new())),
+                PortalOutputError::PermissionDenied,
+            ),
+            (
+                AshpdError::Portal(PortalError::Cancelled(String::new())),
+                PortalOutputError::PermissionDenied,
+            ),
+            (
+                AshpdError::PortalNotFound(interface),
+                PortalOutputError::PortalUnavailable,
+            ),
+            (
+                AshpdError::RequiresVersion(2, 1),
+                PortalOutputError::PortalUnavailable,
+            ),
+            (
+                AshpdError::Response(ResponseError::Other),
+                PortalOutputError::Backend,
+            ),
+            (
+                AshpdError::Portal(PortalError::Failed(String::new())),
+                PortalOutputError::Backend,
+            ),
+            (AshpdError::NoResponse, PortalOutputError::Backend),
+        ];
+        for (error, expected) in cases {
+            let described = error.to_string();
+            assert_eq!(map_portal_error(error), expected, "{described}");
+        }
     }
 
     #[tokio::test]

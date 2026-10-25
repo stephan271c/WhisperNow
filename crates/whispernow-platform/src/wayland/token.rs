@@ -6,7 +6,7 @@ use std::{
 
 use crate::atomic_file::write_atomically;
 
-use super::portal::PortalOutputError;
+use super::PortalOutputError;
 
 const MAX_TOKEN_BYTES: usize = 4 * 1024;
 

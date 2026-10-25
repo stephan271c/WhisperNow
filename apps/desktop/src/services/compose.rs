@@ -73,6 +73,7 @@ impl Backend {
         ));
         settings.report_loaded(&persisted, settings_notice);
         let store = Arc::new(ModelStore::new(paths.clone()));
+        store.sweep_stale();
         let cleanup_state = Arc::clone(&state);
         let local_cleanup = Arc::new(LocalCleanupService::new(
             llama_dir,

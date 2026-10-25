@@ -26,14 +26,14 @@ const STREAM_BUILD_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
-pub(crate) enum StreamFault {
+pub(super) enum StreamFault {
     DeviceLost = 1,
     StreamError = 2,
 }
 
 /// The latest fault, shared between the stream callback and the capture worker.
 #[derive(Debug, Default)]
-pub(crate) struct FaultFlag(AtomicU8);
+pub(super) struct FaultFlag(AtomicU8);
 
 impl FaultFlag {
     pub(super) fn raise(&self, fault: StreamFault) {
@@ -49,7 +49,7 @@ impl FaultFlag {
     }
 }
 
-pub(crate) trait CaptureStream: Send {
+pub(super) trait CaptureStream: Send {
     fn start(&self) -> Result<(), AudioInputError>;
     fn stop(&self) -> Result<(), AudioInputError>;
 }
@@ -66,7 +66,7 @@ impl CaptureStream for Stream {
     }
 }
 
-pub(crate) struct OpenedCapture {
+pub(super) struct OpenedCapture {
     pub stream: Box<dyn CaptureStream>,
     pub resolved_device_id: String,
     pub sample_rate_hz: u32,
@@ -76,7 +76,7 @@ pub(crate) struct OpenedCapture {
     pub dropped_frames: Arc<AtomicUsize>,
 }
 
-pub(crate) trait CaptureBackend: Send + Sync + 'static {
+pub(super) trait CaptureBackend: Send + Sync + 'static {
     fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError>;
 
     fn open(
@@ -89,7 +89,7 @@ pub(crate) trait CaptureBackend: Send + Sync + 'static {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct CpalBackend;
+pub(super) struct CpalBackend;
 
 impl CaptureBackend for CpalBackend {
     fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
@@ -232,12 +232,10 @@ fn negotiate_input_config(
 }
 
 fn preferred_sample_rate(range: &SupportedStreamConfigRange) -> u32 {
-    for preferred in [48_000, 44_100, TARGET_SAMPLE_RATE] {
-        if range.min_sample_rate() <= preferred && preferred <= range.max_sample_rate() {
-            return preferred;
-        }
-    }
-    48_000_u32.clamp(range.min_sample_rate(), range.max_sample_rate())
+    [48_000, 44_100, TARGET_SAMPLE_RATE]
+        .into_iter()
+        .find(|preferred| (range.min_sample_rate()..=range.max_sample_rate()).contains(preferred))
+        .unwrap_or_else(|| 48_000_u32.clamp(range.min_sample_rate(), range.max_sample_rate()))
 }
 
 fn sample_format_rank(format: SampleFormat) -> Option<u8> {
@@ -320,7 +318,7 @@ impl CallbackPorts {
             self.chunks.try_send(buffer)
         {
             add_dropped(&self.dropped_frames, buffer.len() / self.channels.get());
-            let _returned = self.recycle.try_send(buffer).is_ok();
+            let _ = self.recycle.try_send(buffer);
         }
     }
 }
@@ -375,7 +373,7 @@ where
 }
 
 fn add_dropped(counter: &AtomicUsize, frames: usize) {
-    let _previous = counter.fetch_add(frames, Ordering::Relaxed);
+    counter.fetch_add(frames, Ordering::Relaxed);
 }
 
 fn map_stream_fault(kind: ErrorKind) -> StreamFault {
