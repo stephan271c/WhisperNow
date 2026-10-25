@@ -158,6 +158,7 @@ pub(crate) struct Fixture {
     credentials: Arc<MemoryCredentialStore>,
     model: ResolvedModel,
     paths: AppPaths,
+    detectors_built: Arc<AtomicUsize>,
     root: tempfile::TempDir,
 }
 
@@ -215,13 +216,18 @@ impl Fixture {
         });
         let provider = Arc::new(FakeProvider::default());
         let engine_script = Arc::clone(&script);
+        let detectors_built = Arc::new(AtomicUsize::new(0));
+        let built = Arc::clone(&detectors_built);
         let dictation = Dictation::spawn(DictationParts {
             state: Arc::clone(&state),
             settings: Arc::clone(&settings),
             history: Arc::clone(&history),
             audio,
             models,
-            voice_activity: Arc::new(|| Box::new(Loudness)),
+            voice_activity: Arc::new(move || {
+                built.fetch_add(1, Ordering::SeqCst);
+                Box::new(Loudness)
+            }),
             cleanup: Arc::new(AiCleanup {
                 service: Arc::clone(&provider) as Arc<dyn LlmService>,
                 api_keys: Arc::clone(&persistence),
@@ -246,6 +252,7 @@ impl Fixture {
             credentials,
             model,
             paths,
+            detectors_built,
             root,
         }
     }
@@ -349,6 +356,27 @@ fn a_dictation_is_transcribed_saved_and_pasted() {
     assert_eq!(history[0].status, EntryStatus::Ok);
     assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
     assert!(history[0].audio_kept);
+}
+
+#[test]
+fn each_recording_takes_a_fresh_detector_built_while_idle() {
+    let fixture = Fixture::new();
+    let built = || fixture.detectors_built.load(Ordering::SeqCst);
+    fixture.flush();
+    assert_eq!(built(), 1, "built at startup");
+
+    fixture.start();
+    assert_eq!(built(), 1, "the start takes the one built");
+    fixture.dictation.stop().expect("stop");
+    assert_eq!(fixture.settled(), Phase::Idle);
+    fixture.flush();
+    assert_eq!(built(), 2, "the next one is built once the recording ends");
+
+    fixture.start();
+    fixture.dictation.cancel().expect("cancel");
+    fixture.settled();
+    fixture.flush();
+    assert_eq!(built(), 3);
 }
 
 #[test]

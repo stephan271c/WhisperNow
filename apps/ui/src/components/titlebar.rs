@@ -52,7 +52,12 @@ pub(super) fn use_window_chrome() -> Signal<WindowChrome> {
         let scope = dioxus::core::current_scope_id();
         // Without the listener the maximize button keeps its label; it still toggles.
         if let Ok(owner) = crate::client::listen_maximized(move |maximized| {
-            runtime.in_scope(scope, || chrome.write().maximized = maximized);
+            // Resizing reports on every frame; only a change may re-render the shell.
+            runtime.in_scope(scope, || {
+                if chrome.peek().maximized != maximized {
+                    chrome.write().maximized = maximized;
+                }
+            });
         })
         .await
         {

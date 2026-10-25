@@ -186,23 +186,17 @@ fn SearchBox(mut typed: Signal<String>, failed: bool) -> Element {
 }
 
 /// The page's clock: a provided one in tests, otherwise the system's, read again each minute
-/// so relative times stay current.
+/// so relative times stay current. Between ticks it stays equal, so rows skip re-rendering.
 fn use_clock() -> LocalClock {
     let provided = try_use_context::<LocalClock>();
-    use_minute_tick();
-    provided.unwrap_or_else(LocalClock::system)
-}
-
-fn use_minute_tick() {
-    let mut minute = use_signal(|| 0_u64);
+    let mut system = use_signal(LocalClock::system);
     use_future(move || async move {
         loop {
             crate::client::delay(60_000).await;
-            minute += 1;
+            system.set(LocalClock::system());
         }
     });
-    // Reading the signal subscribes the caller, so each tick re-renders it.
-    let _ = minute();
+    provided.unwrap_or_else(|| *system.read())
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

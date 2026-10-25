@@ -37,29 +37,30 @@ pub(super) fn VocabularyPage() -> Element {
     let settings_blocked = context.settings_blocked();
     let disabled = settings_blocked.is_some();
     let management = context.management;
-    let mut source = use_signal(String::new);
-    let mut replacement = use_signal(String::new);
     let mut search = use_signal(String::new);
     let mut focus = use_signal(|| None::<RuleFocus>);
-    let mut add_form = use_signal(|| None::<Rc<MountedData>>);
+    let add_form = use_signal(|| None::<Rc<MountedData>>);
     use_effect(move || {
         if focus() == Some(RuleFocus::AddForm) {
             take_focus(add_form);
             focus.set(None);
         }
     });
-    let Some(settings) = management.read().shown_settings().cloned() else {
+    let Some(rules) = management
+        .read()
+        .shown_settings()
+        .map(|settings| settings.vocabulary_replacements.clone())
+    else {
         return rsx! { SettingsLoading {} };
     };
     let error = management.read().setting_error(SettingKey::Vocabulary);
     let query = search().trim().to_lowercase();
     let filtering = !query.is_empty();
-    let total = settings.vocabulary_replacements.len();
-    let shown = settings
-        .vocabulary_replacements
+    let total = rules.len();
+    let shown = rules
         .iter()
         .enumerate()
-        .filter(|(_, entry)| matches(entry, &query))
+        .filter(|(_, entry)| !filtering || matches(entry, &query))
         .map(|(index, entry)| (index, entry.clone()))
         .collect::<Vec<_>>();
     let shown_indices = shown.iter().map(|(index, _)| *index).collect::<Vec<_>>();
@@ -74,24 +75,7 @@ pub(super) fn VocabularyPage() -> Element {
         DisabledReason { id: "settings-disabled-reason", reason: settings_blocked }
         Section { id: "vocabulary", title: "Vocabulary",
             description: "Rules run from top to bottom.",
-            form { id: ADD_FORM, class: "vocabulary-add", tabindex: "-1", aria_label: "Add a rule",
-                onmounted: move |event| add_form.set(Some(event.data())),
-                onsubmit: move |event: FormEvent| {
-                    event.prevent_default();
-                    let entry = VocabularyReplacement::new(source().trim(), replacement().trim());
-                    context.change_vocabulary(move |rules| rules.push(entry));
-                    source.set(String::new());
-                    replacement.set(String::new());
-                },
-                Field { id: "vocabulary-source", label: "Replace this",
-                    TextInput { value: "{source}", disabled, oninput: move |event: FormEvent| source.set(event.value()) }
-                }
-                Field { id: "vocabulary-replacement", label: "With this",
-                    TextInput { value: "{replacement}", disabled, oninput: move |event: FormEvent| replacement.set(event.value()) }
-                }
-                button { r#type: "submit", id: "vocabulary-add", class: "btn btn-primary btn-md", disabled, "Add rule" }
-                p { class: "field-description vocabulary-add-hint", "Press Enter to add." }
-            }
+            AddRuleForm { disabled, mounted: add_form }
             if let Some(error) = error {
                 p { id: "vocabulary-error", class: "field-error-message vocabulary-error", role: "alert", "{error}" }
             }
@@ -117,8 +101,36 @@ pub(super) fn VocabularyPage() -> Element {
                 }
             }
         }
-        VocabularyTransfer { rules: settings.vocabulary_replacements.clone(), disabled }
+        VocabularyTransfer { rules, disabled }
     } }
+}
+
+/// The form that adds a rule. Typing re-renders only this form.
+#[component]
+fn AddRuleForm(disabled: bool, mut mounted: Signal<Option<Rc<MountedData>>>) -> Element {
+    let context = use_context::<UiContext>();
+    let mut source = use_signal(String::new);
+    let mut replacement = use_signal(String::new);
+    rsx! {
+        form { id: ADD_FORM, class: "vocabulary-add", tabindex: "-1", aria_label: "Add a rule",
+            onmounted: move |event| mounted.set(Some(event.data())),
+            onsubmit: move |event: FormEvent| {
+                event.prevent_default();
+                let entry = VocabularyReplacement::new(source().trim(), replacement().trim());
+                context.change_vocabulary(move |rules| rules.push(entry));
+                source.set(String::new());
+                replacement.set(String::new());
+            },
+            Field { id: "vocabulary-source", label: "Replace this",
+                TextInput { value: "{source}", disabled, oninput: move |event: FormEvent| source.set(event.value()) }
+            }
+            Field { id: "vocabulary-replacement", label: "With this",
+                TextInput { value: "{replacement}", disabled, oninput: move |event: FormEvent| replacement.set(event.value()) }
+            }
+            button { r#type: "submit", id: "vocabulary-add", class: "btn btn-primary btn-md", disabled, "Add rule" }
+            p { class: "field-description vocabulary-add-hint", "Press Enter to add." }
+        }
+    }
 }
 
 /// One rule: both texts edit in place; move and delete name the rule they act on. Deleting it
@@ -196,8 +208,10 @@ fn VocabularyTransfer(rules: Vec<VocabularyReplacement>, disabled: bool) -> Elem
     let context = use_context::<UiContext>();
     let mut management = context.management;
     let mut pasted = use_signal(String::new);
-    let export = (!rules.is_empty())
-        .then(|| serde_json::to_string_pretty(&rules).expect("a list of text pairs serializes"));
+    let export = use_memo(use_reactive!(|rules| {
+        (!rules.is_empty())
+            .then(|| serde_json::to_string_pretty(&rules).expect("a list of text pairs serializes"))
+    }))();
     rsx! {
         Section { id: "vocabulary-transfer", title: "Import and export",
             description: "A JSON list of {{\"source\": …, \"replacement\": …}} pairs.",

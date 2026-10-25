@@ -17,13 +17,21 @@ use crate::operations::UiOperation;
 pub(super) fn ModelsPage() -> Element {
     let context = use_context::<UiContext>();
     let management = context.management;
-    let snapshot = context.state.read().snapshot.clone();
-    let active_id = snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.selected_model_id.clone());
-    let active_state = snapshot
-        .as_ref()
-        .map_or(ModelState::Unloaded, |snapshot| snapshot.model_state);
+    let state = context.state;
+    let active_id = use_memo(move || {
+        state
+            .read()
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.selected_model_id.clone())
+    })();
+    let active_state = use_memo(move || {
+        state
+            .read()
+            .snapshot
+            .as_ref()
+            .map_or(ModelState::Unloaded, |snapshot| snapshot.model_state)
+    })();
     let mut models = management
         .read()
         .speech_models()
@@ -100,13 +108,15 @@ pub(super) fn ModelRow(
     let id = model.id.clone();
     let slug = model_slug(&id);
     let name = model.display_name.clone();
-    let download = context.active_download(&id);
-    let download_failed = context
-        .state
-        .read()
-        .snapshot
-        .as_ref()
-        .is_some_and(|snapshot| snapshot.failed_download.as_ref() == Some(&id));
+    let download = use_memo(use_reactive!(|id| context.active_download(&id)))();
+    let download_failed = use_memo(use_reactive!(|id| {
+        context
+            .state
+            .read()
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.failed_download.as_ref() == Some(&id))
+    }))();
     let active_state = match kind {
         ModelRowKind::Speech { state } => state,
         ModelRowKind::Cleanup { .. } => None,

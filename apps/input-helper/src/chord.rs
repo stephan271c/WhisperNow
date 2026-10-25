@@ -51,6 +51,10 @@ impl FromStr for Chord {
 }
 
 impl Chord {
+    pub fn codes(&self) -> impl Iterator<Item = u16> + '_ {
+        self.groups.iter().flatten().copied()
+    }
+
     fn held(&self, down: &HashSet<u16>) -> bool {
         self.groups
             .iter()

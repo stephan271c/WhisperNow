@@ -34,7 +34,7 @@ use crate::PasteKeys;
 
 use super::{
     PortalOutputError,
-    accessibility::active_paste_keys,
+    accessibility::AccessibilityBus,
     clipboard::{
         CLIPBOARD_TIMEOUT, ClipboardOffer, MAX_FORMAT_BYTES, PortalClipboardState,
         SNAPSHOT_MIME_TYPES, SecretBytes,
@@ -100,6 +100,7 @@ struct OutputSession {
     clipboard_state: Arc<Mutex<PortalClipboardState>>,
     advertised_mime_types: Option<Vec<String>>,
     abandoned: bool,
+    accessibility: AccessibilityBus,
 }
 
 impl OutputSession {
@@ -230,6 +231,7 @@ impl PortalOutput {
             clipboard_state,
             advertised_mime_types: None,
             abandoned: false,
+            accessibility: AccessibilityBus::default(),
         };
         output.start(&self.token_store).await?;
         Ok(output)
@@ -286,7 +288,7 @@ impl PortalOutput {
                 let keys = tokio::select! {
                     keys = async {
                         serve_for(output, BEFORE_PASTE_DELAY).await?;
-                        Ok(active_paste_keys().await)
+                        Ok(output.accessibility.active_paste_keys().await)
                     } => keys?,
                     () = cancellation.cancelled() => return Err(PortalOutputError::Cancelled),
                 };

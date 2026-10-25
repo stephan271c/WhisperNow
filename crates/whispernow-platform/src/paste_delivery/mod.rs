@@ -11,6 +11,7 @@ use std::{
 use thiserror::Error;
 use whispernow_core::text_output::{KeystrokeOutcome, PastePlatform};
 
+#[cfg(not(target_os = "linux"))]
 use crate::destination;
 
 mod clipboard;
@@ -28,8 +29,6 @@ mod macos;
 use macos::{capture_system_destination, inject_if_current};
 #[cfg(target_os = "windows")]
 use windows::{capture_system_destination, inject_if_current};
-#[cfg(target_os = "linux")]
-use x11::{capture_system_destination, inject_if_current};
 
 pub use clipboard::{ClipboardContents, NativeClipboard};
 
@@ -139,6 +138,12 @@ impl PastePlatform for NativePastePlatform {
         self.clipboard.restore(&snapshot)
     }
 
+    #[cfg(target_os = "linux")]
+    fn send_paste_shortcut(&mut self) -> NativePasteInjection {
+        x11::send_paste_shortcut(process::id())
+    }
+
+    #[cfg(not(target_os = "linux"))]
     fn send_paste_shortcut(&mut self) -> NativePasteInjection {
         let target = capture_system_destination()
             .and_then(|found| destination::foreign(found, process::id()));

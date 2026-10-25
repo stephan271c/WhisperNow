@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{Arc, Mutex, MutexGuard},
     thread::{self, JoinHandle},
@@ -13,6 +14,8 @@ use whispernow_domain::{ModelFamily, ModelId};
 use whispernow_platform::{
     DownloadProgress, HeldUnloaded, LocalCleanupService, ModelStore, ModelStoreError,
 };
+
+use crate::progress_throttle::ProgressThrottle;
 
 use super::{
     Backend, lock,
@@ -295,9 +298,20 @@ fn run_model_download(
     download: impl FnOnce(&dyn Fn(DownloadProgress)) -> Result<ResolvedModel, ModelStoreError>,
 ) {
     let started = Instant::now();
+    let throttle = RefCell::new(ProgressThrottle::default());
     let observer = |progress: DownloadProgress| {
         let phase = progress.phase;
-        let bytes_per_second = matches!(phase, DownloadPhase::Downloading)
+        let downloading = matches!(phase, DownloadPhase::Downloading);
+        if downloading
+            && !throttle.borrow_mut().poll_due(
+                Instant::now(),
+                progress.downloaded_bytes,
+                Some(progress.total_bytes),
+            )
+        {
+            return;
+        }
+        let bytes_per_second = downloading
             .then(|| transfer_rate(progress.downloaded_bytes, started.elapsed()))
             .flatten();
         state.apply(|current| {
@@ -364,15 +378,18 @@ mod tests {
     use std::{
         io::{self, Write},
         net::{TcpListener, TcpStream},
+        path::PathBuf,
         sync::{Arc, mpsc},
         thread,
         time::{Duration, Instant},
     };
 
-    use whispernow_core::CancellationToken;
+    use whispernow_core::{CancellationToken, ResolvedModel};
     use whispernow_domain::ipc::{ActiveDownload, EventPayload, ModelState};
     use whispernow_domain::{DEFAULT_CLEANUP_MODEL_ID, DownloadPhase, ModelId, ModelRegistry};
-    use whispernow_platform::{AppPaths, DownloadTimeouts, LocalCleanupService, ModelStore};
+    use whispernow_platform::{
+        AppPaths, DownloadProgress, DownloadTimeouts, LocalCleanupService, ModelStore,
+    };
 
     use crate::services::{
         Fixture, Phase, RecordingTrigger,
@@ -642,6 +659,96 @@ mod tests {
             published
                 .try_iter()
                 .any(|event| matches!(event, EventPayload::ModelsChanged))
+        );
+    }
+
+    #[test]
+    fn thousands_of_tiny_reports_publish_a_bounded_number_of_states_and_every_phase() {
+        let definition = ModelRegistry::builtin()
+            .get(DEFAULT_CLEANUP_MODEL_ID)
+            .expect("cleanup model")
+            .clone();
+        let model_id = definition.id.clone();
+        let (events, published) = Events::channel();
+        let state = StateCell::new(State::new(ModelId::default()), events);
+        state.apply(|state| {
+            state.active_downloads.insert(
+                model_id.clone(),
+                DownloadTask {
+                    progress: ActiveDownload {
+                        model_id: model_id.clone(),
+                        phase: DownloadPhase::Downloading,
+                        downloaded_bytes: 0,
+                        total_bytes: 0,
+                        bytes_per_second: None,
+                    },
+                    cancellation: CancellationToken::default(),
+                },
+            );
+        });
+        published.try_iter().for_each(drop);
+        let later_phases = [
+            DownloadPhase::ValidatingArchive,
+            DownloadPhase::Extracting,
+            DownloadPhase::Installing,
+            DownloadPhase::Complete,
+        ];
+
+        let started = Instant::now();
+        let (chunk, total) = (256_u64, 1024 * 1024_u64);
+        run_model_download(&state, &model_id, |observer| {
+            for downloaded in (0..=total).step_by(256) {
+                observer(DownloadProgress {
+                    phase: DownloadPhase::Downloading,
+                    downloaded_bytes: downloaded,
+                    total_bytes: total,
+                });
+            }
+            for phase in later_phases {
+                observer(DownloadProgress {
+                    phase,
+                    downloaded_bytes: total,
+                    total_bytes: total,
+                });
+            }
+            Ok(ResolvedModel {
+                definition,
+                root: PathBuf::new(),
+            })
+        });
+        let elapsed = started.elapsed();
+
+        let downloads: Vec<_> = published
+            .try_iter()
+            .filter_map(|event| match event {
+                EventPayload::StateChanged { state } => Some(
+                    state
+                        .active_downloads
+                        .into_iter()
+                        .find(|download| download.model_id == model_id),
+                ),
+                _ => None,
+            })
+            .collect();
+        let (removal, reported) = downloads.split_last().expect("published states");
+        assert!(removal.is_none(), "the last state drops the download");
+        let phases: Vec<_> = reported
+            .iter()
+            .map(|download| download.as_ref().expect("reported download").phase)
+            .collect();
+        let downloading = phases.len() - later_phases.len();
+        assert_eq!(phases[downloading..], later_phases);
+        assert!(
+            phases[..downloading]
+                .iter()
+                .all(|phase| *phase == DownloadPhase::Downloading)
+        );
+        // The first report, 100 whole percents, and one per 100 ms the loop took.
+        let timed = usize::try_from(elapsed.as_millis() / 100).expect("short test") + 1;
+        assert!(
+            (101..=101 + timed).contains(&downloading),
+            "{downloading} of {} reports",
+            total / chunk + 1
         );
     }
 

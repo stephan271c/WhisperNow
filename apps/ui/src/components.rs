@@ -259,18 +259,33 @@ fn Sidebar(route: Route) -> Element {
 fn SidebarFooter() -> Element {
     let context = use_context::<UiContext>();
     let navigator = context.navigator;
-    let state = context.state.read();
+    let state = context.state;
+    let model = use_memo(move || {
+        state
+            .read()
+            .snapshot
+            .as_ref()
+            .map(|snapshot| (snapshot.selected_model_id.clone(), snapshot.model_state))
+    })();
+    let update = use_memo(move || {
+        update_summary(
+            state
+                .read()
+                .update_snapshot
+                .as_ref()
+                .map(|update| &update.phase),
+        )
+    })();
     let management = context.management.read();
     // Setup has chosen no model before its model step.
     let unchosen = management
         .unfinished_setup_step()
         .is_some_and(|step| step < SetupStep::Model);
-    let model_name = state
-        .snapshot
+    let model_name = model
         .as_ref()
         .filter(|_| !unchosen)
-        .map(|snapshot| management.model_display_name(&snapshot.selected_model_id));
-    let model_state = state.snapshot.as_ref().map(|snapshot| snapshot.model_state);
+        .map(|(id, _)| management.model_display_name(id));
+    let model_state = model.map(|(_, state)| state);
     let dot = match model_state {
         Some(ModelState::Ready) => "status-dot",
         Some(ModelState::Failed) => "status-dot error",
@@ -287,7 +302,6 @@ fn SidebarFooter() -> Element {
     } else {
         "model-status-state"
     };
-    let update = update_summary(state.update_snapshot.as_ref().map(|update| &update.phase));
     rsx! {
         footer { class: "sidebar-footer",
             div { class: "model-status",

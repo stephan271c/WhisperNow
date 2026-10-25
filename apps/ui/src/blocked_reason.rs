@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use crate::UiContext;
 use crate::components::ui::{Button, ButtonVariant};
 use crate::operations::UiOperation;
+use crate::state::UiState;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BlockedReason {
@@ -22,27 +23,31 @@ impl BlockedReason {
     }
 }
 
+pub(crate) fn phase_reason(state: &UiState) -> Option<BlockedReason> {
+    match state.snapshot.as_ref() {
+        None => Some(BlockedReason::Connecting),
+        Some(snapshot) => snapshot
+            .phase
+            .require_idle()
+            .err()
+            .map(|error| BlockedReason::Phase(error.summary)),
+    }
+}
+
 impl UiContext {
     pub(crate) fn blocked(self, operation: UiOperation) -> Option<BlockedReason> {
-        if self.state.read().snapshot.is_none() {
-            Some(BlockedReason::Connecting)
-        } else {
+        if (self.connected)() {
             self.management
                 .read()
                 .is_busy(operation)
                 .then_some(BlockedReason::CommandPending)
+        } else {
+            Some(BlockedReason::Connecting)
         }
     }
 
     pub(crate) fn phase_blocked(self) -> Option<BlockedReason> {
-        match self.state.read().snapshot.as_ref() {
-            None => Some(BlockedReason::Connecting),
-            Some(snapshot) => snapshot
-                .phase
-                .require_idle()
-                .err()
-                .map(|error| BlockedReason::Phase(error.summary)),
-        }
+        (self.phase_reason)()
     }
 
     pub(crate) fn model_download_blocked(self) -> Option<BlockedReason> {

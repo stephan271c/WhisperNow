@@ -156,6 +156,7 @@ impl Dictation {
             next_session: 0,
             recording: None,
             deferred_update: None,
+            next_voice_activity: None,
         };
         let worker = thread::Builder::new()
             .name("whispernow-dictation".to_owned())
@@ -407,6 +408,8 @@ struct Worker {
     next_session: u64,
     recording: Option<Recording>,
     deferred_update: Option<Reply<()>>,
+    /// Built while idle, so a start does not wait for it; each recording takes a fresh one.
+    next_voice_activity: Option<Box<dyn VoiceActivity>>,
 }
 
 impl Worker {
@@ -425,6 +428,7 @@ impl Worker {
 
     fn serve(&mut self, receiver: &mpsc::Receiver<Message>) {
         self.preload_model();
+        self.next_voice_activity = Some(self.build_voice_activity());
         for message in receiver {
             match message {
                 Message::Start { trigger, reply } => match self.start(trigger) {
@@ -464,6 +468,9 @@ impl Worker {
                 Message::BeginUpdate { reply } => self.begin_update(reply),
                 Message::Shutdown => break,
             }
+            if self.recording.is_none() && self.next_voice_activity.is_none() {
+                self.next_voice_activity = Some(self.build_voice_activity());
+            }
         }
         self.cancel();
         self.unload();
@@ -490,12 +497,16 @@ impl Worker {
             state.cancellation = cancellation.clone();
             Ok(previous_phase)
         })?;
+        let voice_activity = self
+            .next_voice_activity
+            .take()
+            .unwrap_or_else(|| self.build_voice_activity());
         let sink = Arc::new(RecordingSink::new(
             session,
             self.sender.clone(),
             self.parts.state.events().clone(),
             MAX_RECORDING_SAMPLES,
-            SpeechSegmenter::new((self.parts.voice_activity)(), model.definition.family()),
+            SpeechSegmenter::new(voice_activity, model.definition.family()),
         ));
         let capture = match self
             .parts
@@ -534,6 +545,17 @@ impl Worker {
         };
         tracing::info!(?trigger, "recording started");
         Ok(recording)
+    }
+
+    fn build_voice_activity(&self) -> Box<dyn VoiceActivity> {
+        let started = Instant::now();
+        let voice_activity = (self.parts.voice_activity)();
+        tracing::debug!(
+            stage = "voice_activity_ready",
+            duration_ms = started.elapsed().as_secs_f64() * 1_000.0,
+            "workflow stage completed"
+        );
+        voice_activity
     }
 
     fn shortcut_pressed(&mut self, trigger: RecordingTrigger) {
@@ -606,7 +628,6 @@ impl Worker {
     fn process(&mut self, recording: &mut Recording) -> Outcome {
         let stopped = recording.stop_capture();
         let CapturedSpeech { samples, segments } = recording.sink.take();
-        let samples = Arc::<[f32]>::from(samples);
         if stopped.is_err() {
             return self.failed_with_audio(
                 recording,

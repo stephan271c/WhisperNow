@@ -9,6 +9,7 @@ use super::format::{group_by_day, retention_summary};
 use super::{HistoryScreen, LocalClock};
 use crate::client::fake;
 use crate::management::{HistoryRows, ManagementState};
+use crate::operations::UiOperation;
 use crate::route::{Route, SettingsRoute};
 use crate::state::UiState;
 use crate::test_support::{
@@ -205,6 +206,46 @@ fn search_is_debounced_and_paged_within_the_search() {
             },
         ]
     );
+}
+
+#[test]
+fn history_rows_render_again_only_on_the_minute_tick() {
+    let entries = vec![
+        entry(7, UtcMillis(NOW.0 - HOUR)),
+        entry(8, UtcMillis(NOW.0 - 2 * HOUR)),
+    ];
+    let mut page = super::super::tests::shell(snapshot(Phase::Idle), management(entries));
+    page.click("nav-history");
+    let rows = |rendered: &[&str]| {
+        rendered
+            .iter()
+            .filter(|name| **name == "HistoryRow")
+            .count()
+    };
+
+    let before = page.render_counts();
+    page.publish(crate::test_support::state_event(
+        crate::test_support::RECORDING,
+        |_| {},
+    ));
+    assert_eq!(rows(&page.rendered_since(&before)), 0, "a phase change");
+
+    let before = page.render_counts();
+    page.act(|mut context| {
+        context
+            .management
+            .write()
+            .begin_busy(UiOperation::CheckForUpdates);
+    });
+    let rendered = page.rendered_since(&before);
+    assert!(rendered.contains(&"HistoryScreen"), "{rendered:?}");
+    assert_eq!(rows(&rendered), 0, "a screen render with the same entries");
+
+    // The clock reads whole milliseconds; the tick must read a later one.
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let before = page.render_counts();
+    page.wait();
+    assert_eq!(rows(&page.rendered_since(&before)), 2, "the minute tick");
 }
 
 #[test]

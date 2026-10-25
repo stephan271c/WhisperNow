@@ -192,12 +192,17 @@ impl ManagementState {
     /// The test could not start, or its stop failed: the failure is its result, unless a
     /// snapshot already reported how the test ended.
     pub(crate) fn fail_setup_test(&mut self, error: &AppError) {
-        if !matches!(self.setup_test, Some(SetupTest::Running { .. })) {
+        if !self.setup_test_running() {
             return;
         }
         self.setup_test = Some(SetupTest::Finished(SetupTestResult::Failed {
             error: error.clone(),
         }));
+    }
+
+    #[must_use]
+    pub(crate) fn setup_test_running(&self) -> bool {
+        matches!(self.setup_test, Some(SetupTest::Running { .. }))
     }
 
     /// Follows the test dictation through the snapshots: once it has run and the workflow is

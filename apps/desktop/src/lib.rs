@@ -6,6 +6,7 @@ mod input_helper;
 mod overlay;
 #[cfg(target_os = "linux")]
 mod portal_identity;
+mod progress_throttle;
 mod services;
 mod shortcuts;
 mod tray;

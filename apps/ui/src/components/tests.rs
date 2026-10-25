@@ -292,6 +292,41 @@ fn audio_levels_do_not_render_the_sidebar_or_the_pages() {
 }
 
 #[test]
+fn download_progress_renders_only_that_models_row_and_progress() {
+    let small = ModelId::new("sherpa-onnx-whisper-small").expect("small model");
+    let progress = |downloaded_bytes| {
+        state_event(Phase::Idle, |state| {
+            state.active_downloads.push(ActiveDownload {
+                model_id: small.clone(),
+                phase: DownloadPhase::Downloading,
+                downloaded_bytes,
+                total_bytes: 1_024,
+                bytes_per_second: None,
+            });
+        })
+    };
+    let mut page = shell(snapshot(Phase::Idle), configured());
+    open(&mut page, &["nav-settings", "nav-settings-models"]);
+    page.publish(progress(256));
+    let before = page.render_counts();
+    assert!(
+        before
+            .iter()
+            .filter(|(name, _)| *name == "ModelRow")
+            .count()
+            > 1,
+        "{before:?}"
+    );
+
+    page.publish(progress(512));
+
+    assert_eq!(
+        page.rendered_since(&before),
+        ["ModelRow", "DownloadProgress", "ProgressBar", "Button"]
+    );
+}
+
+#[test]
 fn test_microphone_runs_once_and_shows_the_measured_level() {
     let mut page = shell(snapshot(Phase::Idle), loaded());
     page.click("test-microphone");
@@ -1137,9 +1172,15 @@ fn repeated_controls_name_the_row_they_act_on() {
 fn a_new_vocabulary_rule_is_added_with_enter() {
     let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-vocabulary"]);
+    let before = page.render_counts();
     page.fire("vocabulary-source", "input", "recieve");
     page.fire("vocabulary-replacement", "input", "receive");
     assert!(sent_changes().is_empty());
+    assert_eq!(
+        page.rendered_since(&before),
+        ["AddRuleForm", "Field", "TextInput", "Field", "TextInput"],
+        "typing renders the form, not the page or its rules"
+    );
     let html = page.html();
     let form = tag(&html, "vocabulary-add-form").expect("add form");
     assert!(form.starts_with("<form"), "{form}");

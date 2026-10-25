@@ -22,7 +22,7 @@ use std::{
 
 use whispernow_core::text_output::{KeystrokeOutcome, PastePlatform};
 use whispernow_platform::{
-    ClipboardContents, NativeClipboard, NativePasteError, PasteKeys, wayland::active_paste_keys,
+    ClipboardContents, NativeClipboard, NativePasteError, PasteKeys, wayland::AccessibilityBus,
 };
 
 const HELPER: &str = "whispernow-input-helper";
@@ -185,6 +185,7 @@ pub(crate) struct HelperPastePlatform {
     helper: Child,
     commands: ChildStdin,
     answers: mpsc::Receiver<String>,
+    accessibility: AccessibilityBus,
 }
 
 impl HelperPastePlatform {
@@ -213,6 +214,7 @@ impl HelperPastePlatform {
             helper,
             commands,
             answers,
+            accessibility: AccessibilityBus::default(),
         };
         match platform.answers.recv_timeout(READY_TIMEOUT).as_deref() {
             Ok("ready") => Some(platform),
@@ -248,7 +250,7 @@ impl PastePlatform for HelperPastePlatform {
     }
 
     fn send_paste_shortcut(&mut self) -> KeystrokeOutcome<NativePasteError> {
-        let command = match tauri::async_runtime::block_on(active_paste_keys()) {
+        let command = match tauri::async_runtime::block_on(self.accessibility.active_paste_keys()) {
             PasteKeys::ControlV => "ctrl-v",
             PasteKeys::ControlShiftV => "ctrl-shift-v",
         };
@@ -306,16 +308,26 @@ pub(crate) fn setup_command(setup_dir: &Path) -> Option<String> {
 
 fn copy_setup(app_dir: &Path, setup_dir: &Path) -> io::Result<PathBuf> {
     fs::create_dir_all(setup_dir)?;
-    fs::copy(
-        app_dir.join("usr/libexec/whispernow").join(HELPER),
-        setup_dir.join(HELPER),
+    copy_unless_same_size(
+        &app_dir.join("usr/libexec/whispernow").join(HELPER),
+        &setup_dir.join(HELPER),
     )?;
     let script = setup_dir.join(SETUP_SCRIPT);
-    fs::copy(
-        app_dir.join("usr/share/whispernow").join(SETUP_SCRIPT),
+    copy_unless_same_size(
+        &app_dir.join("usr/share/whispernow").join(SETUP_SCRIPT),
         &script,
     )?;
     Ok(script)
+}
+
+/// The permissions page asks for the setup command once a second while it waits for the
+/// user, so an unchanged copy is left alone.
+fn copy_unless_same_size(from: &Path, to: &Path) -> io::Result<()> {
+    let source = fs::metadata(from)?;
+    if fs::metadata(to).is_ok_and(|copied| copied.len() == source.len()) {
+        return Ok(());
+    }
+    fs::copy(from, to).map(drop)
 }
 
 fn shell_quoted(text: &str) -> String {
@@ -343,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn an_appimage_copies_its_helper_and_script_out() {
+    fn an_appimage_copies_its_helper_and_script_out_only_when_they_changed() {
         let app_dir = tempfile::tempdir().expect("app dir");
         let setup_dir = tempfile::tempdir().expect("setup dir");
         for (dir, name) in [
@@ -360,7 +372,27 @@ mod tests {
             fs::read_to_string(target.join(HELPER)).expect("helper"),
             HELPER
         );
-        assert_eq!(fs::read_to_string(script).expect("script"), SETUP_SCRIPT);
+        assert_eq!(fs::read_to_string(&script).expect("script"), SETUP_SCRIPT);
+
+        let copied_at = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let modified = |path: &Path| fs::metadata(path).and_then(|meta| meta.modified());
+        fs::File::options()
+            .write(true)
+            .open(target.join(HELPER))
+            .and_then(|file| file.set_modified(copied_at))
+            .expect("age the copy");
+        copy_setup(app_dir.path(), &target).expect("asked again");
+        assert_eq!(modified(&target.join(HELPER)).expect("mtime"), copied_at);
+
+        let source = app_dir.path().join("usr/libexec/whispernow").join(HELPER);
+        fs::write(&source, "a newer helper").expect("new helper");
+        fs::remove_file(&script).expect("remove the script");
+        copy_setup(app_dir.path(), &target).expect("copied again");
+        assert_eq!(
+            fs::read_to_string(target.join(HELPER)).expect("helper"),
+            "a newer helper"
+        );
+        assert_eq!(fs::read_to_string(&script).expect("script"), SETUP_SCRIPT);
     }
 
     #[test]

@@ -135,7 +135,11 @@ impl UiContext {
     pub(crate) fn apply_event(mut self, event: EventPayload) {
         match event {
             EventPayload::StateChanged { state } => {
-                self.management.write().observe_setup_test(&state);
+                // A write re-renders everything that reads `management`, so take one only
+                // when the snapshot can end a test.
+                if self.management.peek().setup_test_running() {
+                    self.management.write().observe_setup_test(&state);
+                }
                 if !matches!(state.phase, Phase::Recording { .. }) {
                     self.audio_rms.set(0.0);
                 }

@@ -1,5 +1,5 @@
-//! Reads key events from every input device, reports chord releases and
-//! presses paste shortcuts.
+//! Reads key events from the input devices that have the keys a mode needs, reports chord
+//! releases and presses paste shortcuts.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -22,6 +22,9 @@ use crate::{
 
 const EVDEV_IOCTL_BASE: u32 = b'E' as u32;
 const EVIOCSCLOCKID: libc::Ioctl = libc::_IOW::<libc::c_int>(EVDEV_IOCTL_BASE, 0xa0);
+const EVIOCSMASK: libc::Ioctl = libc::_IOW::<InputMask>(EVDEV_IOCTL_BASE, 0x93);
+/// `EVIOCSMASK`'s type 0 masks event types rather than one type's codes.
+const EVENT_TYPE_MASK: u32 = 0;
 const NAME_BYTES: usize = 256;
 const KEY_STATE_BYTES: usize = (MAX_KEY_CODE as usize + 1) / 8;
 /// Request numbers for [`eviocg`].
@@ -30,6 +33,14 @@ const EVIOCGKEY: u32 = 0x18;
 const EVIOCGBIT_KEY: u32 = 0x20 + EV_KEY as u32;
 const RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 const MODIFIER_WAIT: Duration = Duration::from_secs(1);
+
+/// `struct input_mask` from `linux/input.h`.
+#[repr(C)]
+struct InputMask {
+    kind: u32,
+    codes_size: u32,
+    codes_ptr: u64,
+}
 
 enum Message {
     Key {
@@ -124,21 +135,25 @@ pub fn run(mode: Mode) -> ExitCode {
 }
 
 fn serve(mode: Mode) -> io::Result<ExitCode> {
-    let (mut tracker, mut session) = match mode {
-        Mode::Watch(chord) => (ChordTracker::new(Some(chord)), Session::Watch),
+    let (mut tracker, mut session, wanted) = match mode {
+        Mode::Watch(chord) => {
+            let wanted = chord.codes().collect();
+            (ChordTracker::new(Some(chord)), Session::Watch, wanted)
+        }
         Mode::Paste(keyboard) => (
             ChordTracker::new(None),
             Session::Paste {
                 keyboard,
                 pending: None,
             },
+            MODIFIERS.to_vec(),
         ),
     };
     let (sender, messages) = mpsc::channel();
     let stdin_sender = sender.clone();
     thread::spawn(move || read_commands(&stdin_sender));
 
-    let mut devices = Devices::new(sender);
+    let mut devices = Devices::new(sender, wanted);
     devices.scan(&mut tracker);
     let mut available = session.available(&tracker, &devices);
     if !available {
@@ -234,16 +249,19 @@ fn reply_availability(
 }
 
 struct Devices {
-    /// The key codes each device supports.
+    /// The key codes each device being read supports.
     supported: HashMap<PathBuf, HashSet<u16>>,
+    /// A device with none of these is not read: mice, sound cards, power buttons.
+    wanted: Vec<u16>,
     next_id: u32,
     sender: mpsc::Sender<Message>,
 }
 
 impl Devices {
-    fn new(sender: mpsc::Sender<Message>) -> Self {
+    fn new(sender: mpsc::Sender<Message>, wanted: Vec<u16>) -> Self {
         Self {
             supported: HashMap::new(),
+            wanted,
             next_id: 0,
             sender,
         }
@@ -257,7 +275,12 @@ impl Devices {
         self.supported.remove(path).is_some()
     }
 
-    /// Starts reading every new device, and returns whether there was one.
+    fn wants(&self, supported: &[u8; KEY_STATE_BYTES]) -> bool {
+        self.wanted.iter().any(|code| has_key(supported, *code))
+    }
+
+    /// Starts reading every new device that has a wanted key, and returns whether there was
+    /// one. A device without one is checked again on the next scan.
     fn scan(&mut self, tracker: &mut ChordTracker) -> bool {
         let Ok(entries) = std::fs::read_dir("/dev/input") else {
             return false;
@@ -277,18 +300,22 @@ impl Devices {
             let Ok(supported) = eviocg::<KEY_STATE_BYTES>(&file, EVIOCGBIT_KEY) else {
                 continue;
             };
+            if !self.wants(&supported) {
+                continue;
+            }
             let Ok(held) = eviocg::<KEY_STATE_BYTES>(&file, EVIOCGKEY) else {
                 continue;
             };
+            deliver_only_key_events(&file);
             let device = self.next_id;
             self.next_id += 1;
             for code in 1..=MAX_KEY_CODE {
-                if held[usize::from(code / 8)] & (1 << (code % 8)) != 0 {
+                if has_key(&held, code) {
                     tracker.key(device, code, KeyValue::Press);
                 }
             }
             let codes = (1..=MAX_KEY_CODE)
-                .filter(|code| supported[usize::from(code / 8)] & (1 << (code % 8)) != 0)
+                .filter(|code| has_key(&supported, *code))
                 .collect();
             self.supported.insert(path.clone(), codes);
             changed = true;
@@ -297,6 +324,27 @@ impl Devices {
         }
         changed
     }
+}
+
+fn has_key(bitmap: &[u8; KEY_STATE_BYTES], code: u16) -> bool {
+    bitmap[usize::from(code / 8)] & (1 << (code % 8)) != 0
+}
+
+/// Asks the kernel to queue only key and sync events, so a keyboard that also moves a pointer
+/// does not wake its reader for every movement. The kernel never filters `EV_SYN`, so
+/// `SYN_DROPPED` still arrives. Kernels before 4.4 refuse, and the reader drops the rest itself.
+fn deliver_only_key_events(file: &File) {
+    let types: libc::c_ulong = (1 << EV_SYN) | (1 << EV_KEY);
+    let mask = InputMask {
+        kind: EVENT_TYPE_MASK,
+        codes_size: u32::try_from(size_of::<libc::c_ulong>()).expect("a long fits in u32"),
+        codes_ptr: (&raw const types).addr() as u64,
+    };
+    // SAFETY: EVIOCSMASK reads one `input_mask` through the pointer and `codes_size` bytes
+    // through `codes_ptr`; both point at locals that outlive the call, and the descriptor is
+    // an open evdev device owned by `file`.
+    #[allow(unsafe_code, reason = "evdev's event mask is only settable by ioctl")]
+    let _ = unsafe { libc::ioctl(file.as_raw_fd(), EVIOCSMASK, &raw const mask) };
 }
 
 /// Reads the `N` bytes an `EVIOCG*` request with number `number` writes.
@@ -386,6 +434,42 @@ fn monotonic_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codes::{KEY_LEFTCTRL, KEY_V};
+
+    const KEY_SPACE: u16 = 57;
+    const BTN_LEFT: u16 = 0x110;
+    const BTN_RIGHT: u16 = 0x111;
+
+    fn bitmap(codes: &[u16]) -> [u8; KEY_STATE_BYTES] {
+        let mut bitmap = [0; KEY_STATE_BYTES];
+        for code in codes {
+            bitmap[usize::from(code / 8)] |= 1 << (code % 8);
+        }
+        bitmap
+    }
+
+    #[test]
+    fn only_devices_with_a_key_the_mode_reads_get_a_reader() {
+        let mouse = bitmap(&[BTN_LEFT, BTN_RIGHT]);
+        let keyboard = bitmap(&[KEY_LEFTCTRL, KEY_V, KEY_SPACE]);
+        let space_bar = bitmap(&[KEY_SPACE]);
+        let watch = Devices::new(
+            mpsc::channel().0,
+            "29,97+57"
+                .parse::<Chord>()
+                .expect("chord")
+                .codes()
+                .collect(),
+        );
+        let paste = Devices::new(mpsc::channel().0, MODIFIERS.to_vec());
+
+        assert!(!watch.wants(&mouse));
+        assert!(watch.wants(&keyboard));
+        assert!(watch.wants(&space_bar), "any one of the chord's keys");
+        assert!(!paste.wants(&mouse));
+        assert!(paste.wants(&keyboard));
+        assert!(!paste.wants(&space_bar), "no modifier");
+    }
 
     #[test]
     fn key_events_carry_their_millisecond_time() {
