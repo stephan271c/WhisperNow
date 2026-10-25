@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     os::fd::OwnedFd,
     path::PathBuf,
     sync::{Arc, Mutex, PoisonError},
@@ -371,7 +372,7 @@ async fn snapshot_clipboard(
         }
         let signal = tokio::time::timeout(CLIPBOARD_TIMEOUT, output.signals.recv())
             .await
-            .map_err(|_| WaylandPortalError::ClipboardUnavailable)?
+            .map_err(clipboard_unreadable)?
             .ok_or(WaylandPortalError::Disconnected)?;
         if !output.note(signal) {
             return Err(WaylandPortalError::Disconnected);
@@ -382,9 +383,17 @@ async fn snapshot_clipboard(
         if advertised
             .iter()
             .any(|advertised| advertised.eq_ignore_ascii_case(mime_type))
-            && let Ok(bytes) = read_selection(output, mime_type).await
         {
-            formats.push((mime_type.to_owned(), bytes));
+            match read_selection(output, mime_type).await {
+                Ok(bytes) => formats.push((mime_type.to_owned(), bytes)),
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        mime_type,
+                        "a clipboard format was left out of the snapshot"
+                    );
+                }
+            }
         }
     }
     if !advertised.is_empty() && formats.is_empty() {
@@ -403,8 +412,7 @@ async fn read_selection(
         .await
         .map_err(map_portal_error)?;
     let fd: OwnedFd = fd.into();
-    let pipe =
-        pipe::Receiver::from_owned_fd(fd).map_err(|_| WaylandPortalError::ClipboardUnavailable)?;
+    let pipe = pipe::Receiver::from_owned_fd(fd).map_err(clipboard_unreadable)?;
     let mut bytes = SecretBytes::default();
     tokio::time::timeout(
         CLIPBOARD_TIMEOUT,
@@ -412,8 +420,8 @@ async fn read_selection(
             .read_to_end(&mut bytes),
     )
     .await
-    .map_err(|_| WaylandPortalError::ClipboardUnavailable)?
-    .map_err(|_| WaylandPortalError::ClipboardUnavailable)?;
+    .map_err(clipboard_unreadable)?
+    .map_err(clipboard_unreadable)?;
     if bytes.len() > MAX_FORMAT_BYTES {
         Err(WaylandPortalError::ClipboardSnapshotTooLarge)
     } else {
@@ -565,6 +573,7 @@ async fn inject_balanced_paste(
                 NotifyKeyboardKeysymOptions::default(),
             )
             .await
+            .inspect_err(|error| tracing::debug!(%error, "a paste key could not be pressed"))
             .is_err()
         {
             if !release_pressed(output, &pressed).await {
@@ -596,6 +605,7 @@ async fn release_pressed(output: &OutputSession, pressed: &[i32]) -> bool {
                 NotifyKeyboardKeysymOptions::default(),
             )
             .await
+            .inspect_err(|error| tracing::debug!(%error, "a paste key could not be released"))
             .is_ok();
     }
     released
@@ -614,8 +624,20 @@ fn map_portal_error(error: AshpdError) -> WaylandPortalError {
         AshpdError::PortalNotFound(_) | AshpdError::RequiresVersion(_, _) => {
             WaylandPortalError::PortalUnavailable
         }
-        _ => WaylandPortalError::Backend,
+        _ => {
+            tracing::debug!(%error, "the desktop portal failed");
+            WaylandPortalError::Backend
+        }
     }
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Result::map_err supplies the owned error"
+)]
+fn clipboard_unreadable(error: impl fmt::Display) -> WaylandPortalError {
+    tracing::debug!(%error, "the clipboard selection could not be read");
+    WaylandPortalError::ClipboardUnavailable
 }
 
 #[cfg(test)]

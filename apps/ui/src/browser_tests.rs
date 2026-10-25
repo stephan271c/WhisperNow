@@ -5,8 +5,9 @@ use wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_test::*;
 use whispernow_domain::ipc::{ModelSummary, Phase};
 use whispernow_domain::{
-    AudioDeviceId, LlmProvider, ModelAvailability, ModelId, ProviderEndpoint, SettingChange,
-    Settings, SetupCheckpoint, Shortcut, ShortcutKey, ShortcutModifier, VocabularyReplacement,
+    AppError, AudioDeviceId, EntryId, ErrorCategory, LlmProvider, ModelAvailability, ModelId,
+    ProviderEndpoint, SettingChange, Settings, SetupCheckpoint, Shortcut, ShortcutKey,
+    ShortcutModifier, VocabularyReplacement,
 };
 
 use crate::components::ui::{Field, Select};
@@ -282,6 +283,56 @@ async fn a_command_without_input_sends_no_request_and_null_answers_read_as_unit_
     );
 }
 
+#[wasm_bindgen_test(async)]
+async fn a_rejection_that_is_not_an_app_error_reaches_the_console() {
+    install_tauri(r#"throw "Command get_state not allowed by ACL";"#);
+    capture_console_errors();
+
+    let answer = client::call::<()>("get_state").await;
+    let logged = take_console_errors();
+
+    assert_eq!(
+        answer.expect_err("a rejected call").code,
+        "desktop_unreachable"
+    );
+    assert!(
+        logged.contains("Command get_state not allowed by ACL"),
+        "{logged}"
+    );
+}
+
+#[wasm_bindgen_test(async)]
+async fn an_answer_that_does_not_fit_its_type_reaches_the_console_with_the_command() {
+    install_tauri("return 5;");
+    capture_console_errors();
+
+    let answer = client::call::<String>("get_state").await;
+    let logged = take_console_errors();
+
+    assert_eq!(
+        answer.expect_err("an answer of the wrong type").code,
+        "desktop_unreachable"
+    );
+    assert!(logged.contains("get_state"), "{logged}");
+}
+
+#[wasm_bindgen_test(async)]
+async fn a_history_audio_the_desktop_refuses_keeps_its_error() {
+    let refusal = AppError::new(
+        ErrorCategory::NotFound,
+        "history_audio_missing",
+        "The recording is no longer kept",
+    );
+    install_tauri(&format!(
+        "throw {};",
+        serde_json::to_string(&refusal).expect("error JSON")
+    ));
+
+    let answer = client::history_audio_url(EntryId(7)).await;
+
+    assert_eq!(answer.expect_err("a refused audio"), refusal);
+}
+
 async fn assert_reaches_desktop<T>(command: &'static str, request: T)
 where
     T: Serialize + DeserializeOwned + PartialEq + Debug,
@@ -298,6 +349,30 @@ where
     let received: T = serde_json::from_str(&sent)
         .unwrap_or_else(|error| panic!("{command} cannot read {sent}: {error}"));
     assert_eq!(received, request);
+}
+
+fn capture_console_errors() {
+    js_sys::eval(
+        r"
+        window.__consoleErrors = [];
+        window.__consoleError = console.error;
+        console.error = (...messages) => window.__consoleErrors.push(messages.join(' '));
+        ",
+    )
+    .expect("capture console errors");
+}
+
+/// Restores the console and returns what it was given since [`capture_console_errors`].
+fn take_console_errors() -> String {
+    js_sys::eval(
+        r"
+        console.error = window.__consoleError;
+        window.__consoleErrors.join('\n')
+        ",
+    )
+    .expect("restore the console")
+    .as_string()
+    .expect("console error text")
 }
 
 fn adapter_calls() -> String {

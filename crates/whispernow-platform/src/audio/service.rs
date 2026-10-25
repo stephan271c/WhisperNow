@@ -93,6 +93,7 @@ impl AudioInput for CpalAudioInput {
         let worker = thread::Builder::new()
             .name("whispernow-audio".to_owned())
             .spawn(move || worker.run(&chunks_rx, processor))
+            .inspect_err(|error| tracing::warn!(%error, "the audio worker could not be spawned"))
             .map_err(|_| backend("spawn audio worker"))?;
         Ok(Box::new(CpalCapture {
             stop_requested,
@@ -110,7 +111,10 @@ impl CpalCapture {
     fn finish(&mut self) -> Result<(), AudioInputError> {
         self.stop_requested.store(true, Ordering::Release);
         self.worker.take().map_or(Ok(()), |worker| {
-            worker.join().map_err(|_| backend("join audio worker"))?
+            worker.join().map_err(|_| {
+                tracing::error!("the audio worker panicked");
+                backend("join audio worker")
+            })?
         })
     }
 }

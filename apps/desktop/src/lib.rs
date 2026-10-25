@@ -190,9 +190,9 @@ pub fn run() {
             // answer a page request.
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window(SETTINGS_WINDOW)
-                && window.set_decorations(false).is_err()
+                && let Err(error) = window.set_decorations(false)
             {
-                tracing::warn!("settings window decorations could not be removed");
+                tracing::warn!(%error, "settings window decorations could not be removed");
             }
             let persisted_binding = recording_binding(&settings);
             let (registrar, startup_failure) = shortcut_registrar(
@@ -302,8 +302,8 @@ pub fn run() {
                         }
                     });
                 }
-                if window.hide().is_err() {
-                    tracing::warn!(label, "window could not be hidden");
+                if let Err(error) = window.hide() {
+                    tracing::warn!(%error, label, "window could not be hidden");
                 }
                 // A hidden window cannot finish a shortcut capture, so global
                 // shortcuts must not stay suspended on its behalf.
@@ -488,17 +488,17 @@ pub(crate) fn on_window(
             operation(&window);
         }
     });
-    if scheduled.is_err() {
-        tracing::warn!(label, "window change could not be scheduled");
+    if let Err(error) = scheduled {
+        tracing::warn!(%error, label, "window change could not be scheduled");
     }
 }
 
 pub(crate) fn show_settings_window(app: &tauri::AppHandle) {
     on_window(app, SETTINGS_WINDOW, |window| {
-        if window.show().is_err() {
-            tracing::warn!("the settings window could not be shown");
-        } else if window.set_focus().is_err() {
-            tracing::warn!("the settings window could not be focused");
+        if let Err(error) = window.show() {
+            tracing::warn!(%error, "the settings window could not be shown");
+        } else if let Err(error) = window.set_focus() {
+            tracing::warn!(%error, "the settings window could not be focused");
         }
     });
 }
@@ -513,8 +513,8 @@ pub(crate) fn hide_recording_bar(app: &tauri::AppHandle) {
 
 fn hide_window(app: &tauri::AppHandle, label: &'static str) {
     on_window(app, label, move |window| {
-        if window.hide().is_err() {
-            tracing::warn!(label, "window could not be hidden");
+        if let Err(error) = window.hide() {
+            tracing::warn!(%error, label, "window could not be hidden");
         }
     });
 }
@@ -533,8 +533,12 @@ fn restore_settings_geometry(app: &tauri::App, geometry: WindowGeometry) {
         return;
     }
     let geometry = clamp_geometry_to_monitors(geometry, &monitors);
-    let _ = window.set_size(tauri::PhysicalSize::new(geometry.width, geometry.height));
-    let _ = window.set_position(tauri::PhysicalPosition::new(geometry.x, geometry.y));
+    if let Err(error) = window.set_size(tauri::PhysicalSize::new(geometry.width, geometry.height)) {
+        tracing::warn!(%error, "the settings window size could not be restored");
+    }
+    if let Err(error) = window.set_position(tauri::PhysicalPosition::new(geometry.x, geometry.y)) {
+        tracing::warn!(%error, "the settings window position could not be restored");
+    }
 }
 
 fn clamp_geometry_to_monitors(

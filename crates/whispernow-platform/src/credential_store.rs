@@ -35,7 +35,7 @@ impl OsCredentialStore {
     fn entry(provider: LlmProvider) -> Result<keyring::Entry, CredentialStoreUnavailable> {
         // Saved keys are found again by this account name; changing it loses them.
         let account = format!("llm-provider:{}", provider.as_str());
-        keyring::Entry::new(SERVICE, &account).map_err(|_| unavailable("entry"))
+        keyring::Entry::new(SERVICE, &account).map_err(|error| unavailable("entry", &error))
     }
 }
 
@@ -45,29 +45,41 @@ impl CredentialStore for OsCredentialStore {
             // A key that is no longer one line reads as no key.
             Ok(secret) => Ok(ApiKey::new(secret).ok()),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(_) => Err(unavailable("read")),
+            Err(error) => Err(unavailable("read", &error)),
         }
     }
 
     fn write(&self, provider: LlmProvider, key: &ApiKey) -> Result<(), CredentialStoreUnavailable> {
         Self::entry(provider)?
             .set_password(key.expose_secret())
-            .map_err(|_| unavailable("write"))
+            .map_err(|error| unavailable("write", &error))
     }
 
     fn delete(&self, provider: LlmProvider) -> Result<(), CredentialStoreUnavailable> {
         match Self::entry(provider)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err(unavailable("delete")),
+            Err(error) => Err(unavailable("delete", &error)),
         }
     }
 }
 
-/// Platform errors can name items or collections, so only the operation is logged.
-fn unavailable(operation: &'static str) -> CredentialStoreUnavailable {
+/// Platform errors can name items or collections, and `BadEncoding` holds the secret's
+/// bytes, so only the operation and the variant are logged.
+fn unavailable(operation: &'static str, error: &keyring::Error) -> CredentialStoreUnavailable {
+    let variant = match error {
+        keyring::Error::PlatformFailure(_) => "PlatformFailure",
+        keyring::Error::NoStorageAccess(_) => "NoStorageAccess",
+        keyring::Error::NoEntry => "NoEntry",
+        keyring::Error::BadEncoding(_) => "BadEncoding",
+        keyring::Error::TooLong(..) => "TooLong",
+        keyring::Error::Invalid(..) => "Invalid",
+        keyring::Error::Ambiguous(_) => "Ambiguous",
+        _ => "Other",
+    };
     tracing::warn!(
         code = "credential_store_unavailable",
         operation,
+        variant,
         "the OS credential store could not be used"
     );
     CredentialStoreUnavailable

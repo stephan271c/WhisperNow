@@ -6,14 +6,14 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant},
 };
-use whispernow_domain::{AppError, ErrorCategory};
 
 use semver::Version;
 use tauri::{AppHandle, Manager as _};
 use tauri_plugin_updater::{Update, UpdaterExt as _};
 use whispernow_domain::ipc::{
-    ManualUpdatePackage, UpdateError, UpdatePhase, UpdateProgress, UpdateState,
+    EventPayload, ManualUpdatePackage, UpdateError, UpdatePhase, UpdateProgress, UpdateState,
 };
+use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_platform::open_url;
 
 use crate::services::{Dictation, NativeServices};
@@ -122,7 +122,10 @@ impl<U> Updates<U> {
                 self.check_is_manual |= manual;
                 false
             }
-            _ => {
+            UpdatePhase::Idle
+            | UpdatePhase::ManualInstallAvailable { .. }
+            | UpdatePhase::UpToDate
+            | UpdatePhase::Error { .. } => {
                 self.check_is_manual = manual;
                 self.state.phase = UpdatePhase::Checking;
                 self.state.restart_deferred = false;
@@ -195,17 +198,14 @@ impl<U> Updates<U> {
 
     /// A scheduled check fails quietly and keeps offering a manual release it found before.
     fn failed(&mut self, code: UpdateError) {
-        let manual = self.check_is_manual;
-        self.state.phase = if manual {
-            UpdatePhase::Error { error: code }
+        if self.check_is_manual {
+            self.state.phase = UpdatePhase::Error { error: code };
         } else {
-            UpdatePhase::Idle
-        };
-        if let (false, Some(update)) = (manual, &self.manual) {
-            update.publish(&mut self.state);
-        }
-        if !manual {
             tracing::warn!(?code, "scheduled update check failed");
+            self.state.phase = UpdatePhase::Idle;
+            if let Some(update) = &self.manual {
+                update.publish(&mut self.state);
+            }
         }
     }
 
@@ -333,7 +333,7 @@ impl UpdateController {
         self.services
             .state
             .events()
-            .publish(whispernow_domain::ipc::EventPayload::UpdateChanged {
+            .publish(EventPayload::UpdateChanged {
                 state: updates.state.clone(),
             });
         result
@@ -561,7 +561,7 @@ pub(crate) fn dismiss_update(controller: tauri::State<'_, Arc<UpdateController>>
 pub(crate) async fn restart_to_update(
     controller: tauri::State<'_, Arc<UpdateController>>,
 ) -> Result<UpdateState, AppError> {
-    Arc::clone(controller.inner()).restart_to_update().await
+    controller.inner().restart_to_update().await
 }
 
 /// Only the first call shuts down.
@@ -635,11 +635,11 @@ fn updater_error(error: tauri_plugin_updater::Error, phase: UpdaterPhase) -> Upd
 
 pub(crate) fn spawn_periodic_checks(controller: Arc<UpdateController>) {
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(20)).await;
-        let _ = controller.check(false).await;
-        let mut interval = tokio::time::interval(PERIODIC_CHECK_INTERVAL);
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(20),
+            PERIODIC_CHECK_INTERVAL,
+        );
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        interval.tick().await;
         loop {
             interval.tick().await;
             let _ = controller.check(false).await;

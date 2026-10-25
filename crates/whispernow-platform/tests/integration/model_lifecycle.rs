@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    fs, io,
     sync::{Arc, mpsc},
     thread,
     time::Duration,
@@ -582,7 +582,9 @@ fn invalid_archives_missing_artifacts_and_links_are_rejected() {
     for (archive, expected) in [
         (
             b"not a bzip2 archive".to_vec(),
-            ModelStoreError::InvalidArchive,
+            ModelStoreError::InvalidArchive {
+                kind: io::ErrorKind::InvalidInput,
+            },
         ),
         (
             archive_with_entries(&[(ARTIFACTS[0], b"encoder")]),
@@ -600,6 +602,32 @@ fn invalid_archives_missing_artifacts_and_links_are_rejected() {
             .expect_err("invalid archive");
         assert_eq!(error, expected);
     }
+}
+
+#[test]
+fn a_filesystem_failure_names_the_operation_and_the_io_kind() {
+    let archive = valid_archive();
+    let server = serve(Response::ok(archive.clone()));
+    let (_root, paths, store, id) = make_store(&server, &archive);
+    let models_dir = paths.models_dir();
+    fs::create_dir_all(models_dir.parent().expect("data directory")).expect("data directory");
+    fs::write(&models_dir, b"a file where the models directory belongs").expect("blocking file");
+
+    let error = store
+        .download(&id, &CancellationToken::default(), &|_| {})
+        .expect_err("models directory cannot be created");
+
+    assert_eq!(
+        error,
+        ModelStoreError::Filesystem {
+            operation: "create models directory",
+            kind: io::ErrorKind::AlreadyExists,
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "model filesystem operation failed during create models directory: entity already exists"
+    );
 }
 
 #[test]

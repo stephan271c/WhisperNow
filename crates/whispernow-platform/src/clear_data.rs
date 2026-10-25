@@ -51,8 +51,18 @@ impl ClearPlan {
             .iter()
             .filter(|target| target.removable && categories.contains(&target.location.category))
             .map(|Target { location, .. }| {
-                let deleted = remove_path(&location.path)
-                    .map_or_else(|error| error.kind() == io::ErrorKind::NotFound, |()| true);
+                let deleted = match remove_path(&location.path) {
+                    Ok(()) => true,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+                    Err(error) => {
+                        tracing::warn!(
+                            category = ?location.category,
+                            kind = ?error.kind(),
+                            "application data could not be deleted"
+                        );
+                        false
+                    }
+                };
                 ClearDataItem {
                     location: location.clone(),
                     deleted,

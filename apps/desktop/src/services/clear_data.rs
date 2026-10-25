@@ -7,7 +7,10 @@ use super::{NativeServices, models::hold_cleanup_unloaded};
 impl NativeServices {
     /// The existing data each category would remove, including the credential store entry.
     pub(crate) fn data_locations(&self) -> Result<Vec<DataLocation>, AppError> {
-        let locations = self.paths.data_locations().map_err(inspect_error)?;
+        let locations = self
+            .paths
+            .data_locations()
+            .map_err(|error| inspect_error(&error))?;
         Ok(locations
             .into_iter()
             .chain([credential_store_location()])
@@ -28,7 +31,10 @@ impl NativeServices {
         };
         let clears_settings = categories.contains(&ClearDataCategory::Settings);
         let mut settings_lock = clears_settings.then(|| self.settings.lock());
-        let plan = self.paths.clear_plan(categories).map_err(inspect_error)?;
+        let plan = self
+            .paths
+            .clear_plan(categories)
+            .map_err(|error| inspect_error(&error))?;
         let history_item = categories.contains(&ClearDataCategory::History).then(|| {
             let item = self.history.clear_data(&plan);
             self.state.events().history_changed();
@@ -97,7 +103,8 @@ pub(super) fn credential_store_location() -> DataLocation {
     }
 }
 
-fn inspect_error(_: std::io::Error) -> AppError {
+fn inspect_error(error: &std::io::Error) -> AppError {
+    tracing::warn!(%error, "application data could not be inspected");
     AppError::new(
         ErrorCategory::General,
         "clear_data_inspect",

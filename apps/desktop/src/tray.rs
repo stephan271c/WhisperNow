@@ -156,7 +156,9 @@ pub(crate) fn tray_desired(snapshot: &AppState, copy_capable: bool) -> TrayDesir
         pause: match snapshot.phase {
             Phase::ClearingData | Phase::Updating => PauseItem::Unavailable,
             Phase::Paused => PauseItem::Resume,
-            _ => PauseItem::Pause,
+            Phase::Idle | Phase::Recording { .. } | Phase::Processing { .. } | Phase::Error => {
+                PauseItem::Pause
+            }
         },
         copy_last: copy_capable && snapshot.last_transcript.is_some(),
         cancel: snapshot.phase.is_busy(),
@@ -175,21 +177,25 @@ struct NativeTray {
 impl NativeTray {
     /// Runs on the main thread.
     fn render(&self, desired: TrayDesired) {
+        if let Err(error) = self.try_render(desired) {
+            tracing::warn!(%error, "the tray could not be updated");
+        }
+    }
+
+    fn try_render(&self, desired: TrayDesired) -> tauri::Result<()> {
         let presentation = desired.state.presentation();
-        let _ = self.status.set_text(presentation.status_text);
-        let _ = self.copy_last.set_enabled(desired.copy_last);
-        let _ = self.cancel.set_enabled(desired.cancel);
-        let _ = self.pause.set_text(match desired.pause {
+        self.status.set_text(presentation.status_text)?;
+        self.copy_last.set_enabled(desired.copy_last)?;
+        self.cancel.set_enabled(desired.cancel)?;
+        self.pause.set_text(match desired.pause {
             PauseItem::Pause | PauseItem::Unavailable => "Pause",
             PauseItem::Resume => "Resume",
-        });
-        let _ = self
-            .pause
-            .set_enabled(desired.pause != PauseItem::Unavailable);
-        let _ = self.icon.set_tooltip(Some(presentation.tooltip));
-        let _ = self
-            .icon
-            .set_icon_with_as_template(Some(state_icon(desired.state, system_ink())), IS_TEMPLATE);
+        })?;
+        self.pause
+            .set_enabled(desired.pause != PauseItem::Unavailable)?;
+        self.icon.set_tooltip(Some(presentation.tooltip))?;
+        self.icon
+            .set_icon_with_as_template(Some(state_icon(desired.state, system_ink())), IS_TEMPLATE)
     }
 }
 

@@ -29,8 +29,8 @@ fn notify(message: String) {
                 )
                 .await
         };
-        if sent.await.is_err() {
-            tracing::warn!("dictation failure notification could not be shown");
+        if let Err(error) = sent.await {
+            tracing::warn!(%error, "dictation failure notification could not be shown");
         }
     });
 }
@@ -69,12 +69,12 @@ fn place_and_show(window: &tauri::WebviewWindow) {
                     OVERLAY_LOGICAL_SIZE.1,
                 ))
             });
-        if placed.is_err() {
-            tracing::warn!("recording overlay could not be positioned");
+        if let Err(error) = placed {
+            tracing::warn!(%error, "recording overlay could not be positioned");
         }
     }
-    if window.show().is_err() {
-        tracing::warn!("recording overlay could not be shown");
+    if let Err(error) = window.show() {
+        tracing::warn!(%error, "recording overlay could not be shown");
     }
 }
 

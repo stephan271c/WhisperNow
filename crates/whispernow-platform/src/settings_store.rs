@@ -1,6 +1,12 @@
 //! `settings.json`, with every API key kept in the OS credential store instead.
 
-use std::{collections::BTreeSet, fs, io::ErrorKind, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    fs,
+    io::{self, ErrorKind},
+    path::PathBuf,
+    sync::Arc,
+};
 use whispernow_domain::AppError;
 
 use serde::Serialize;
@@ -78,7 +84,9 @@ impl SettingsStore {
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 return Ok(Settings::default().into());
             }
-            Err(_) => return Err(redacted("settings_read", "could not read settings")),
+            Err(error) => {
+                return Err(io_failed("settings_read", "could not read settings")(error));
+            }
         };
         match serde_json::from_slice::<Value>(&document) {
             Ok(value) if value.is_object() && value.get(VERSION_FIELD).is_none() => {
@@ -94,12 +102,10 @@ impl SettingsStore {
         let bad = self
             .paths
             .unreadable_settings_file(&AppPaths::unreadable_stamp());
-        fs::rename(&path, &bad).map_err(|_| {
-            redacted(
-                "settings_unreadable",
-                "Settings could not be read, and the file could not be moved aside",
-            )
-        })?;
+        fs::rename(&path, &bad).map_err(io_failed(
+            "settings_unreadable",
+            "Settings could not be read, and the file could not be moved aside",
+        ))?;
         tracing::warn!(
             code = "settings_unreadable",
             "unreadable settings were moved aside and the defaults loaded"
@@ -117,7 +123,7 @@ impl SettingsStore {
         })
         .map_err(|_| redacted("settings_encode", "could not encode settings"))?;
         write_atomically(&self.paths.settings_file(), &document)
-            .map_err(|_| redacted("settings_write", "could not save settings"))
+            .map_err(io_failed("settings_write", "could not save settings"))
     }
 
     /// The API key of `provider` in the credential store. Callers ask only when
@@ -161,12 +167,10 @@ impl SettingsStore {
         let copy = serde_json::to_vec_pretty(&imported.copy_with_refused_keys(document, &refused))
             .map_err(|_| redacted("settings_encode", "could not encode settings"))?;
         let kept = self.paths.python_settings_file();
-        write_atomically(&kept, &copy).map_err(|_| {
-            redacted(
-                "settings_import",
-                "The earlier version's settings could not be imported",
-            )
-        })?;
+        write_atomically(&kept, &copy).map_err(io_failed(
+            "settings_import",
+            "The earlier version's settings could not be imported",
+        ))?;
         self.save(&imported.settings)?;
         tracing::info!(
             keys = imported.settings.api_keys.len(),
@@ -184,6 +188,14 @@ impl SettingsStore {
 
 fn redacted(code: &'static str, summary: &'static str) -> AppError {
     AppError::new(ErrorCategory::General, code, summary)
+}
+
+/// Only the kind is logged: the error text can name the settings directory.
+fn io_failed(code: &'static str, summary: &'static str) -> impl FnOnce(io::Error) -> AppError {
+    move |error| {
+        tracing::warn!(code, kind = ?error.kind(), "settings could not be read or written");
+        redacted(code, summary)
+    }
 }
 
 #[cfg(test)]

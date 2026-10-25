@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashSet,
-    fs, io,
+    fmt, fs, io,
     path::{Path, PathBuf},
 };
 use whispernow_domain::AppError;
@@ -63,11 +63,16 @@ impl SqliteHistoryRepository {
         };
         let database = paths.history_database_file();
         if let Some(parent) = database.parent() {
-            fs::create_dir_all(parent).map_err(|_| open_error("history_open"))?;
+            fs::create_dir_all(parent)
+                .inspect_err(open_cause)
+                .map_err(|_| open_error("history_open"))?;
         }
-        let mut connection = Connection::open(&database).map_err(|_| open_error("history_open"))?;
+        let mut connection = Connection::open(&database)
+            .inspect_err(open_cause)
+            .map_err(|_| open_error("history_open"))?;
         connection
             .execute_batch(SCHEMA)
+            .inspect_err(open_cause)
             .map_err(|_| open_error("history_schema"))?;
         let diagnostic = legacy::import_legacy(&mut connection, paths).map_err(open_error)?;
         let audio_dir = paths.recordings_dir();
@@ -103,7 +108,7 @@ impl SqliteHistoryRepository {
         let transaction = self
             .connection
             .transaction()
-            .map_err(|_| history_error("history_insert"))?;
+            .map_err(history_error("history_insert"))?;
         transaction
             .execute(
                 "INSERT INTO entries (created_at_ms, duration_ms, raw_text, cleaned_text, status,
@@ -119,27 +124,25 @@ impl SqliteHistoryRepository {
                     asr_model_id.as_str(),
                 ],
             )
-            .map_err(|_| history_error("history_insert"))?;
+            .map_err(history_error("history_insert"))?;
         let id = EntryId(transaction.last_insert_rowid());
         // Cleanup of a prior rolled-back insert may have failed for this reused id.
-        remove_audio(&self.audio_dir, id).map_err(|_| history_error("history_audio_delete"))?;
-        let wrote_audio = if let Some(audio) = audio {
-            if write_wav(&self.audio_dir, id, audio).is_ok() {
-                true
-            } else {
-                tracing::warn!(
-                    code = "history_audio_write",
-                    "a dictation's audio could not be kept"
-                );
-                false
-            }
-        } else {
-            false
-        };
+        remove_audio(&self.audio_dir, id).map_err(history_error("history_audio_delete"))?;
+        let wrote_audio = audio.is_some_and(|audio| {
+            write_wav(&self.audio_dir, id, audio)
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        code = "history_audio_write",
+                        kind = ?error.kind(),
+                        "a dictation's audio could not be kept"
+                    );
+                })
+                .is_ok()
+        });
         let result = prune(&transaction, limit, retention).and_then(|pruned| {
             transaction
                 .commit()
-                .map_err(|_| history_error("history_insert"))?;
+                .map_err(history_error("history_insert"))?;
             Ok(pruned)
         });
         let pruned = match result {
@@ -165,7 +168,7 @@ impl SqliteHistoryRepository {
                 params![status_text(EntryStatus::NotDelivered), error, id.0],
             )
             .map(drop)
-            .map_err(|_| history_error("history_update"))
+            .map_err(history_error("history_update"))
     }
 
     /// Lists one newest-first page.
@@ -196,13 +199,13 @@ impl SqliteHistoryRepository {
                 "SELECT {COLUMNS} FROM entries {filter}
                  ORDER BY created_at_ms DESC, id DESC LIMIT ?"
             ))
-            .map_err(|_| history_error("history_list"))?;
+            .map_err(history_error("history_list"))?;
         let mut entries = statement
             .query_map(params_from_iter(values), |row| {
                 entry_from_row(row, &self.audio_dir)
             })
             .and_then(Iterator::collect::<Result<Vec<_>, _>>)
-            .map_err(|_| history_error("history_list"))?;
+            .map_err(history_error("history_list"))?;
         let has_more = entries.len() > limit as usize;
         entries.truncate(limit as usize);
         Ok(HistoryPage { entries, has_more })
@@ -213,7 +216,7 @@ impl SqliteHistoryRepository {
         match fs::read(audio_path(&self.audio_dir, id)) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(_) => Err(history_error("history_audio_read")),
+            Err(error) => Err(history_error("history_audio_read")(error)),
         }
     }
 
@@ -222,7 +225,7 @@ impl SqliteHistoryRepository {
         let deleted = self
             .connection
             .execute("DELETE FROM entries WHERE id = ?1", [id.0])
-            .map_err(|_| history_error("history_delete"))?;
+            .map_err(history_error("history_delete"))?;
         discard_audio(&self.audio_dir, id);
         Ok(deleted > 0)
     }
@@ -232,15 +235,15 @@ impl SqliteHistoryRepository {
         let recordings_removed = match remove_path(&self.audio_dir) {
             Ok(()) => true,
             Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-            Err(_) => return Err(history_error("history_clear_audio")),
+            Err(error) => return Err(history_error("history_clear_audio")(error)),
         };
         let deleted = self
             .connection
             .execute("DELETE FROM entries", [])
-            .map_err(|_| history_error("history_clear"))?;
+            .map_err(history_error("history_clear"))?;
         self.connection
             .execute_batch("VACUUM")
-            .map_err(|_| history_error("history_clear"))?;
+            .map_err(history_error("history_clear"))?;
         Ok(deleted > 0 || recordings_removed)
     }
 
@@ -297,7 +300,7 @@ fn delete_returning_ids(
                 .query_map([parameter], |row| row.get(0).map(EntryId))?
                 .collect()
         })
-        .map_err(|_| history_error("history_prune"))
+        .map_err(history_error("history_prune"))
 }
 
 /// Removes unowned numeric WAVs and unfinished writes before the first insert.
@@ -400,9 +403,10 @@ fn remove_audio(audio_dir: &Path, id: EntryId) -> io::Result<()> {
 }
 
 fn discard_audio(audio_dir: &Path, id: EntryId) {
-    if remove_audio(audio_dir, id).is_err() {
+    if let Err(error) = remove_audio(audio_dir, id) {
         tracing::warn!(
             code = "history_audio_delete",
+            %error,
             "a deleted entry's audio could not be removed; it is removed at the next start"
         );
     }
@@ -427,12 +431,21 @@ fn sql_u64(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-fn history_error(code: &'static str) -> AppError {
-    AppError::new(
-        ErrorCategory::General,
-        code,
-        "Transcription history is unavailable",
-    )
+fn open_cause(error: &impl fmt::Display) {
+    tracing::warn!(%error, "transcription history could not be opened");
+}
+
+/// Logs `error`, which must not carry row values: rusqlite messages name columns and
+/// statements, never the values bound to them.
+fn history_error<E: fmt::Display>(code: &'static str) -> impl FnOnce(E) -> AppError {
+    move |error| {
+        tracing::warn!(code, %error, "transcription history failed");
+        AppError::new(
+            ErrorCategory::General,
+            code,
+            "Transcription history is unavailable",
+        )
+    }
 }
 
 #[cfg(test)]

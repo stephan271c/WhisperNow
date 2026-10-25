@@ -51,7 +51,7 @@ fn observe(
 }
 
 fn emit(app: &tauri::AppHandle, event: EventPayload) {
-    if app.emit(EVENT, event).is_err() {
-        tracing::error!("desktop event emission failed");
+    if let Err(error) = app.emit(EVENT, event) {
+        tracing::error!(%error, "desktop event emission failed");
     }
 }

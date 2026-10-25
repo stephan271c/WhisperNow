@@ -51,7 +51,7 @@ fn load_audio(id: EntryId, mut source: Signal<AudioSource>) {
     spawn(async move {
         source.set(match crate::client::history_audio_url(id).await {
             Ok(url) => AudioSource::Ready(url),
-            Err(summary) => AudioSource::Failed(summary),
+            Err(error) => AudioSource::Failed(error.summary),
         });
     });
 }

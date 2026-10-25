@@ -500,6 +500,35 @@ fn an_entry_with_an_unknown_status_fails_to_load() {
 }
 
 #[test]
+fn constraint_failure_messages_name_columns_not_row_values() {
+    let connection = Connection::open_in_memory().expect("database");
+    connection.execute_batch(super::SCHEMA).expect("schema");
+    connection
+        .execute(
+            "INSERT INTO entries (id, created_at_ms, raw_text, status) VALUES (1, 1, 'first words', 'ok')",
+            [],
+        )
+        .expect("first row");
+    for (statement, column) in [
+        (
+            "INSERT INTO entries (id, created_at_ms, raw_text, status) VALUES (1, 2, 'second words', 'ok')",
+            "entries.id",
+        ),
+        (
+            "INSERT INTO entries (created_at_ms, raw_text, status) VALUES (NULL, 'third words', 'ok')",
+            "entries.created_at_ms",
+        ),
+    ] {
+        let message = connection
+            .execute(statement, [])
+            .expect_err("constraint failure")
+            .to_string();
+        assert!(message.contains(column), "{message}");
+        assert!(!message.contains("words"), "{message}");
+    }
+}
+
+#[test]
 fn a_failed_open_reports_history_unavailable() {
     let fixture = Fixture::new();
     let database = fixture.paths.history_database_file();

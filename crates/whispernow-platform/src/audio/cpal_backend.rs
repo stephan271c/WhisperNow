@@ -392,7 +392,10 @@ fn map_device_error(error: &cpal::Error, operation: &'static str) -> AudioInputE
         ErrorKind::UnsupportedConfig | ErrorKind::UnsupportedOperation => {
             AudioInputError::UnsupportedConfiguration
         }
-        _ => backend(operation),
+        _ => {
+            tracing::warn!(%error, operation, "the audio backend failed");
+            backend(operation)
+        }
     }
 }
 

@@ -17,6 +17,15 @@ pub(crate) fn connection_error() -> AppError {
     )
 }
 
+fn contract_failed(command: &str, error: &impl std::fmt::Display) -> AppError {
+    let message = format!("Desktop command {command} contract failed: {error}");
+    #[cfg(target_arch = "wasm32")]
+    wasm::console_error(&message);
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{message}");
+    connection_error()
+}
+
 type Answer<R> = Result<R, AppError>;
 
 pub(crate) async fn invoke<Q, R>(command: &'static str, request: Q) -> Answer<R>
@@ -30,9 +39,10 @@ where
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let request = serde_json::to_value(request).map_err(|_| connection_error())?;
+        let request =
+            serde_json::to_value(request).map_err(|error| contract_failed(command, &error))?;
         let answer = fake::invoke(command, request).await?;
-        serde_json::from_value(answer).map_err(|_| connection_error())
+        serde_json::from_value(answer).map_err(|error| contract_failed(command, &error))
     }
 }
 
@@ -148,8 +158,12 @@ pub(crate) const fn request_shortcut_capture(_capturing: bool) {}
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn history_audio_url(
     _id: whispernow_domain::EntryId,
-) -> std::future::Ready<Result<String, String>> {
-    std::future::ready(Err("Audio plays in the desktop app".to_owned()))
+) -> std::future::Ready<Answer<String>> {
+    std::future::ready(Err(AppError::new(
+        whispernow_domain::ErrorCategory::General,
+        "audio_unavailable",
+        "Audio plays in the desktop app",
+    )))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -165,12 +179,14 @@ mod wasm {
     use whispernow_domain::EntryId;
     use whispernow_domain::ipc::EventPayload;
 
-    use super::{Answer, AppError, Platform, WindowAction, WindowFrame, connection_error};
+    use super::{
+        Answer, AppError, Platform, WindowAction, WindowFrame, connection_error, contract_failed,
+    };
 
     #[wasm_bindgen]
     extern "C" {
         #[wasm_bindgen(js_namespace = console, js_name = error)]
-        fn console_error(message: &str);
+        pub(super) fn console_error(message: &str);
     }
 
     #[wasm_bindgen(module = "/public/tauri_bridge.js")]
@@ -227,8 +243,23 @@ mod wasm {
         async fn listen_maximized_js(callback: &Function) -> Result<u32, JsValue>;
     }
 
-    fn from_js(value: JsValue) -> AppError {
-        serde_wasm_bindgen::from_value(value).unwrap_or_else(|_| connection_error())
+    fn from_js(value: &JsValue) -> AppError {
+        serde_wasm_bindgen::from_value(value.clone()).unwrap_or_else(|_| {
+            console_error(&format!("Desktop call rejected: {}", rejection_text(value)));
+            connection_error()
+        })
+    }
+
+    fn rejection_text(value: &JsValue) -> String {
+        value
+            .as_string()
+            .or_else(|| {
+                value
+                    .dyn_ref::<js_sys::Error>()
+                    .map(|error| String::from(error.message()))
+            })
+            .or_else(|| js_sys::JSON::stringify(value).ok()?.as_string())
+            .unwrap_or_else(|| format!("{value:?}"))
     }
 
     // Tauri sends arguments through `JSON.stringify`, which drops `undefined`, so `None` and `()`
@@ -242,17 +273,20 @@ mod wasm {
         Q: Serialize,
         R: DeserializeOwned,
     {
-        let request = request_to_js(&request).map_err(|_| connection_error())?;
-        let response = invoke_typed(command, request).await.map_err(from_js)?;
-        serde_wasm_bindgen::from_value(response).map_err(|_| connection_error())
+        let request = request_to_js(&request).map_err(|error| contract_failed(command, &error))?;
+        let response = invoke_typed(command, request)
+            .await
+            .map_err(|error| from_js(&error))?;
+        serde_wasm_bindgen::from_value(response).map_err(|error| contract_failed(command, &error))
     }
 
     // Make the URL after the last await, in the same step that hands it to the player.
-    pub(crate) async fn history_audio_url(id: EntryId) -> Result<String, String> {
-        let request = request_to_js(&id).map_err(|_| connection_error().summary)?;
+    pub(crate) async fn history_audio_url(id: EntryId) -> Answer<String> {
+        let request =
+            request_to_js(&id).map_err(|error| contract_failed("get_history_audio", &error))?;
         let audio = audio_blob("get_history_audio", request)
             .await
-            .map_err(|error| from_js(error).summary)?;
+            .map_err(|error| from_js(&error))?;
         Ok(object_url(&audio))
     }
 
@@ -271,7 +305,7 @@ mod wasm {
             closure.as_ref().unchecked_ref::<Function>(),
         )
         .await
-        .map_err(from_js)?;
+        .map_err(|error| from_js(&error))?;
         Ok(ListenerOwner {
             listener_id,
             _callback: closure,
@@ -311,7 +345,7 @@ mod wasm {
         }) as Box<dyn FnMut(JsValue)>);
         let listener_id = listen_maximized_js(closure.as_ref().unchecked_ref::<Function>())
             .await
-            .map_err(from_js)?;
+            .map_err(|error| from_js(&error))?;
         Ok(ListenerOwner {
             listener_id,
             _callback: closure,

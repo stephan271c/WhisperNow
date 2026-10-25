@@ -73,12 +73,15 @@ pub enum ModelStoreError {
     ResponseLength { expected: u64, actual: u64 },
     #[error("model archive checksum does not match the registry")]
     ChecksumMismatch,
-    #[error("model archive is not a valid supported archive")]
-    InvalidArchive,
+    #[error("model archive is not a valid supported archive: {kind}")]
+    InvalidArchive { kind: io::ErrorKind },
     #[error("model archive is missing required artifacts: {artifacts:?}")]
     MissingArtifacts { artifacts: Vec<String> },
-    #[error("model filesystem operation failed during {operation}")]
-    Filesystem { operation: &'static str },
+    #[error("model filesystem operation failed during {operation}: {kind}")]
+    Filesystem {
+        operation: &'static str,
+        kind: io::ErrorKind,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -182,7 +185,7 @@ impl ModelStore {
         staging_base: &Path,
         cancellation: &CancellationToken,
     ) -> Result<PathBuf, ModelStoreError> {
-        let file = File::open(archive_file).map_err(|_| filesystem("open model archive"))?;
+        let file = File::open(archive_file).map_err(filesystem("open model archive"))?;
         let archive_root = Path::new(definition.source.archive_root());
         let staged_root = staging_base.join(definition.id.as_str());
         let mut members: Vec<_> = definition
@@ -217,11 +220,11 @@ impl ModelStore {
         let staged_root = staging_base.join(definition.id.as_str());
         let destination = staged_root.join(artifact);
         if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent).map_err(|_| filesystem("create model staging directory"))?;
+            fs::create_dir_all(parent).map_err(filesystem("create model staging directory"))?;
         }
         download
             .persist_noclobber(&destination)
-            .map_err(|_| filesystem("stage model artifact"))?;
+            .map_err(filesystem("stage model artifact"))?;
         Ok(staged_root)
     }
 
@@ -234,11 +237,10 @@ impl ModelStore {
         check_cancelled(cancellation)?;
         let destination = self.model_root(definition);
         if fs::symlink_metadata(&destination).is_ok() {
-            remove_path(&destination).map_err(|_| filesystem("replace installed model"))?;
+            remove_path(&destination).map_err(filesystem("replace installed model"))?;
         }
-        fs::rename(staged_root, &destination).map_err(|_| filesystem("install staged model"))?;
-        sync_directory(&self.paths.models_dir())
-            .map_err(|_| filesystem("sync models directory"))?;
+        fs::rename(staged_root, &destination).map_err(filesystem("install staged model"))?;
+        sync_directory(&self.paths.models_dir()).map_err(filesystem("sync models directory"))?;
         Ok(destination)
     }
 }
@@ -299,7 +301,7 @@ async fn download_file(
         }
         destination
             .write_all(&chunk)
-            .map_err(|_| filesystem("write download staging file"))?;
+            .map_err(filesystem("write download staging file"))?;
         hasher.update(&chunk);
         observer(DownloadProgress::new(
             DownloadPhase::Downloading,
@@ -316,7 +318,7 @@ async fn download_file(
     destination
         .flush()
         .and_then(|()| destination.as_file().sync_all())
-        .map_err(|_| filesystem("sync download staging file"))?;
+        .map_err(filesystem("sync download staging file"))?;
     let actual_sha256 = hex_lower(&hasher.finalize());
     if actual_sha256 != source.sha256 {
         return Err(ModelStoreError::ChecksumMismatch);
@@ -380,7 +382,7 @@ impl ModelStore {
             if error.kind() == io::ErrorKind::NotFound {
                 ModelStoreError::NotInstalled
             } else {
-                filesystem("remove downloaded model")
+                filesystem("remove downloaded model")(error)
             }
         })
     }
@@ -399,12 +401,12 @@ impl ModelStore {
             ));
         };
         let models_dir = self.paths.models_dir();
-        fs::create_dir_all(&models_dir).map_err(|_| filesystem("create models directory"))?;
+        fs::create_dir_all(&models_dir).map_err(filesystem("create models directory"))?;
         let mut download = Builder::new()
             .prefix(MODEL_DOWNLOAD_PREFIX)
             .suffix(".part")
             .tempfile_in(&models_dir)
-            .map_err(|_| filesystem("create download staging file"))?;
+            .map_err(filesystem("create download staging file"))?;
         self.runtime.block_on(download_file(
             &self.client,
             &definition.source,
@@ -417,7 +419,7 @@ impl ModelStore {
         let staging = Builder::new()
             .prefix(MODEL_STAGE_PREFIX)
             .tempdir_in(&models_dir)
-            .map_err(|_| filesystem("create model staging directory"))?;
+            .map_err(filesystem("create model staging directory"))?;
         report_phase(DownloadPhase::Extracting);
         let staged_root = match &definition.layout {
             ModelLayout::Gguf { model: artifact } => {
@@ -439,7 +441,7 @@ fn validate_model_root(definition: &ModelDefinition, root: &Path) -> Result<bool
     let root_metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(_) => return Err(filesystem("inspect model root")),
+        Err(error) => return Err(filesystem("inspect model root")(error)),
     };
     if !root_metadata.is_dir() || root_metadata.file_type().is_symlink() {
         return Ok(false);
@@ -463,7 +465,7 @@ fn validate_artifact_path(root: &Path, relative: &Path) -> Result<bool, ModelSto
         let metadata = match fs::symlink_metadata(&current) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-            Err(_) => return Err(filesystem("inspect model artifact")),
+            Err(error) => return Err(filesystem("inspect model artifact")(error)),
         };
         if metadata.file_type().is_symlink() {
             return Ok(false);
@@ -485,18 +487,16 @@ fn extract_tar(
     cancellation: &CancellationToken,
 ) -> Result<(), ModelStoreError> {
     let mut archive = Archive::new(input);
-    let entries = archive
-        .entries()
-        .map_err(|_| ModelStoreError::InvalidArchive)?;
+    let entries = archive.entries().map_err(|error| invalid_archive(&error))?;
     for entry in entries {
         check_cancelled(cancellation)?;
-        let mut entry = entry.map_err(|_| ModelStoreError::InvalidArchive)?;
+        let mut entry = entry.map_err(|error| invalid_archive(&error))?;
         if !entry.header().entry_type().is_file() {
             continue;
         }
         let path = entry
             .path()
-            .map_err(|_| ModelStoreError::InvalidArchive)?
+            .map_err(|error| invalid_archive(&error))?
             .into_owned();
         // Some upstream archives name their entries `./<model>/…`.
         let path = path.strip_prefix(".").unwrap_or(&path);
@@ -515,30 +515,30 @@ fn write_member(
     cancellation: &CancellationToken,
 ) -> Result<(), ModelStoreError> {
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|_| filesystem("create model staging directory"))?;
+        fs::create_dir_all(parent).map_err(filesystem("create model staging directory"))?;
     }
     let mut output = File::options()
         .create_new(true)
         .write(true)
         .open(destination)
-        .map_err(|_| filesystem("create staged model artifact"))?;
+        .map_err(filesystem("create staged model artifact"))?;
     let mut buffer = vec![0_u8; DOWNLOAD_BUFFER_BYTES];
     loop {
         check_cancelled(cancellation)?;
         let count = input
             .read(&mut buffer)
-            .map_err(|_| ModelStoreError::InvalidArchive)?;
+            .map_err(|error| invalid_archive(&error))?;
         if count == 0 {
             break;
         }
         output
             .write_all(&buffer[..count])
-            .map_err(|_| filesystem("write staged model artifact"))?;
+            .map_err(filesystem("write staged model artifact"))?;
     }
     output
         .flush()
         .and_then(|()| output.sync_all())
-        .map_err(|_| filesystem("sync staged model artifact"))
+        .map_err(filesystem("sync staged model artifact"))
 }
 
 fn check_cancelled(cancellation: &CancellationToken) -> Result<(), ModelStoreError> {
@@ -583,6 +583,13 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     encoded
 }
 
-fn filesystem(operation: &'static str) -> ModelStoreError {
-    ModelStoreError::Filesystem { operation }
+fn filesystem<E: Into<io::Error>>(operation: &'static str) -> impl FnOnce(E) -> ModelStoreError {
+    move |error| ModelStoreError::Filesystem {
+        operation,
+        kind: error.into().kind(),
+    }
+}
+
+fn invalid_archive(error: &io::Error) -> ModelStoreError {
+    ModelStoreError::InvalidArchive { kind: error.kind() }
 }

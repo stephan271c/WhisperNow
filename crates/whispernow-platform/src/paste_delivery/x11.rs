@@ -18,7 +18,7 @@ use x11rb::{
 use super::{NativePasteError, NativePasteInjection, wait_until_modifiers_released};
 use crate::{
     PasteKeys,
-    destination::{NativeDestination, capture_on, connect_x11, reply},
+    destination::{NativeDestination, capture_on, connect_x11, log_x11_error, reply},
 };
 
 const XK_V_LOWER: u32 = 0x0076;
@@ -47,7 +47,7 @@ pub(super) fn inject_if_current(target: NativeDestination) -> NativePasteInjecti
     if let Err(error) = prepared {
         return NativePasteInjection::NotSent(error);
     }
-    if connection.grab_server().is_err() {
+    if connection.grab_server().inspect_err(log_x11_error).is_err() {
         return NativePasteInjection::NotSent(NativePasteError::InjectionFailed);
     }
     let outcome = match revalidate(&connection, root, target) {
@@ -56,7 +56,8 @@ pub(super) fn inject_if_current(target: NativeDestination) -> NativePasteInjecti
     };
     let released = connection
         .ungrab_server()
-        .is_ok_and(|cookie| cookie.check().is_ok());
+        .inspect_err(log_x11_error)
+        .is_ok_and(|cookie| cookie.check().inspect_err(log_x11_error).is_ok());
     match outcome {
         NativePasteInjection::Sent if !released => {
             NativePasteInjection::Uncertain(NativePasteError::InjectionFailed)
@@ -69,6 +70,7 @@ pub(super) fn inject_if_current(target: NativeDestination) -> NativePasteInjecti
 /// could be reached to ask.
 pub(super) fn xtest_available() -> Option<bool> {
     x11rb::connect(None)
+        .inspect_err(log_x11_error)
         .ok()
         .map(|(connection, _)| reply(connection.xtest_get_version(2, 1)).is_ok())
 }
@@ -218,8 +220,10 @@ fn fake_key(
     const CORE_KEYBOARD: u8 = 0;
     connection
         .xtest_fake_input(event, keycode, CURRENT_TIME, root, 0, 0, CORE_KEYBOARD)
+        .inspect_err(log_x11_error)
         .map_err(|_| KeyFailure::NotSent)?
         .check()
+        .inspect_err(log_x11_error)
         .map_err(|_| KeyFailure::MaybeSent)
 }
 

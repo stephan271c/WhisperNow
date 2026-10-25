@@ -111,7 +111,10 @@ impl ModelCoordinator {
                 run_model_download(&state, &worker_model_id, |observer| {
                     store.download(&worker_model_id, &token, observer)
                 });
-            });
+            })
+            .inspect_err(
+                |error| tracing::warn!(%error, "the model download worker could not be started"),
+            );
         let Ok(worker) = worker else {
             self.state.apply(|state| {
                 state.active_downloads.remove(model_id);

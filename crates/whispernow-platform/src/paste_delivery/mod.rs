@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use thiserror::Error;
 use whispernow_core::text_output::{KeystrokeOutcome, PastePlatform};
 
 use crate::destination::{self, NativeDestination};
@@ -25,12 +26,16 @@ mod macos;
 
 pub use clipboard::{ClipboardContents, NativeClipboard};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum NativePasteError {
+    #[error("paste permission was denied")]
     PermissionDenied,
     /// No clipboard, no focused application, or focus moved before the keystroke.
+    #[error("no clipboard or focused application is available")]
     Unavailable,
+    #[error("a modifier key is still held")]
     ModifierStillHeld,
+    #[error("the paste keystroke could not be sent")]
     InjectionFailed,
 }
 

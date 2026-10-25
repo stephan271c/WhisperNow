@@ -38,7 +38,9 @@ impl Gateway {
                 ) => {
                     "The compositor shortcut portal is unavailable; tray, settings, and manual recording remain available"
                 }
-                _ => "A configured recording shortcut is unavailable; choose another combination",
+                Some(ShortcutRegistrationError::ConflictOrUnsupported) | None => {
+                    "A configured recording shortcut is unavailable; choose another combination"
+                }
             };
             view.warnings.push(summary.to_owned());
         }
@@ -335,16 +337,15 @@ const SHORTCUT_REFUSED: &str =
     "The recording shortcut could not be activated; the previous shortcut is still in use";
 
 pub(crate) fn shortcut_error(error: ShortcutRegistrationError) -> AppError {
-    AppError {
-        category: ErrorCategory::Settings,
-        code: match error {
-            ShortcutRegistrationError::ConflictOrUnsupported => "shortcut_registration_failed",
-            ShortcutRegistrationError::PermissionDenied => "wayland_shortcut_permission_denied",
-            ShortcutRegistrationError::PortalUnavailable => "wayland_shortcut_portal_unavailable",
-            ShortcutRegistrationError::SessionClosed => "wayland_shortcut_session_closed",
-        }
-        .to_owned(),
-        summary: "The recording shortcut could not be activated; choose a different combination"
-            .to_owned(),
-    }
+    let code = match error {
+        ShortcutRegistrationError::ConflictOrUnsupported => "shortcut_registration_failed",
+        ShortcutRegistrationError::PermissionDenied => "wayland_shortcut_permission_denied",
+        ShortcutRegistrationError::PortalUnavailable => "wayland_shortcut_portal_unavailable",
+        ShortcutRegistrationError::SessionClosed => "wayland_shortcut_session_closed",
+    };
+    AppError::new(
+        ErrorCategory::Settings,
+        code,
+        "The recording shortcut could not be activated; choose a different combination",
+    )
 }

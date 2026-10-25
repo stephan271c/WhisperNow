@@ -56,7 +56,11 @@ impl RemoteDesktopRestoreTokenStore {
     }
 
     pub(crate) fn replace(&self, token: &str) -> Result<(), WaylandPortalError> {
-        write_atomically(&self.path, token.as_bytes()).map_err(|_| WaylandPortalError::TokenStore)
+        write_atomically(&self.path, token.as_bytes())
+            .inspect_err(|error| {
+                tracing::warn!(kind = ?error.kind(), "the restore token could not be saved");
+            })
+            .map_err(|_| WaylandPortalError::TokenStore)
     }
 }
 

@@ -160,6 +160,9 @@ impl Dictation {
         let worker = thread::Builder::new()
             .name("whispernow-dictation".to_owned())
             .spawn(move || worker.run(&receiver))
+            .inspect_err(
+                |error| tracing::warn!(%error, "the dictation worker could not be started"),
+            )
             .map_err(|_| {
                 AppError::new(
                     ErrorCategory::General,

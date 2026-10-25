@@ -350,66 +350,20 @@ impl WaylandOutputPortal {
 
     fn spawn(restore_token_path: PathBuf, stopping: CancellationToken) -> Self {
         let restore_token = RemoteDesktopRestoreTokenStore::new(restore_token_path.clone());
-        let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let worker = thread::Builder::new()
-            .name("whispernow-wayland-output".to_owned())
-            .spawn(move || {
-                let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                else {
-                    return;
-                };
-                runtime.block_on(async move {
-                    let mut portal = WaylandOutput::new(restore_token_path);
-                    while let Some(command) = receiver.recv().await {
-                        match command {
-                            WaylandOutputCommand::Paste {
-                                text,
-                                cancellation,
-                                reply,
-                            } => {
-                                // The paste observes cancellation and always ends in
-                                // its compare-and-restore, so stopping the application
-                                // only cancels it; only a hung portal call is dropped.
-                                let paste = tokio::time::timeout(
-                                    Self::PORTAL_TIMEOUT,
-                                    portal.paste(&text, &cancellation),
-                                );
-                                tokio::pin!(paste);
-                                let result = tokio::select! {
-                                    result = &mut paste => result,
-                                    () = stopping.cancelled() => {
-                                        cancellation.cancel();
-                                        paste.await
-                                    }
-                                };
-                                let _ =
-                                    reply.send(result.unwrap_or(PasteOutcome::Failed(
-                                        WaylandPortalError::Backend,
-                                    )));
-                            }
-                            WaylandOutputCommand::Prepare { reply } => {
-                                // Stopping the application drops the wait for the
-                                // user's answer.
-                                let result = tokio::select! {
-                                    result = tokio::time::timeout(
-                                        Self::PORTAL_TIMEOUT,
-                                        portal.prepare_output(),
-                                    ) => result.unwrap_or(Err(WaylandPortalError::Backend)),
-                                    () = stopping.cancelled() => Err(WaylandPortalError::Cancelled),
-                                };
-                                let _ = reply.send(result);
-                            }
-                            WaylandOutputCommand::Shutdown { reply } => {
-                                portal.shutdown().await;
-                                let _ = reply.send(());
-                                break;
-                            }
-                        }
-                    }
-                });
+        let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let worker = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .and_then(|runtime| {
+                thread::Builder::new()
+                    .name("whispernow-wayland-output".to_owned())
+                    .spawn(move || {
+                        runtime.block_on(Self::serve(restore_token_path, receiver, stopping));
+                    })
             })
+            .inspect_err(
+                |error| tracing::warn!(%error, "the Wayland output worker could not be started"),
+            )
             .ok();
         Self {
             commands,
@@ -417,6 +371,58 @@ impl WaylandOutputPortal {
             worker: Mutex::new(worker),
             restore_token,
             consent: Mutex::new(None),
+        }
+    }
+
+    async fn serve(
+        restore_token_path: PathBuf,
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<WaylandOutputCommand>,
+        stopping: CancellationToken,
+    ) {
+        let mut portal = WaylandOutput::new(restore_token_path);
+        while let Some(command) = receiver.recv().await {
+            match command {
+                WaylandOutputCommand::Paste {
+                    text,
+                    cancellation,
+                    reply,
+                } => {
+                    // The paste observes cancellation and always ends in
+                    // its compare-and-restore, so stopping the application
+                    // only cancels it; only a hung portal call is dropped.
+                    let paste = tokio::time::timeout(
+                        Self::PORTAL_TIMEOUT,
+                        portal.paste(&text, &cancellation),
+                    );
+                    tokio::pin!(paste);
+                    let result = tokio::select! {
+                        result = &mut paste => result,
+                        () = stopping.cancelled() => {
+                            cancellation.cancel();
+                            paste.await
+                        }
+                    };
+                    let _ = reply
+                        .send(result.unwrap_or(PasteOutcome::Failed(WaylandPortalError::Backend)));
+                }
+                WaylandOutputCommand::Prepare { reply } => {
+                    // Stopping the application drops the wait for the
+                    // user's answer.
+                    let result = tokio::select! {
+                        result = tokio::time::timeout(
+                            Self::PORTAL_TIMEOUT,
+                            portal.prepare_output(),
+                        ) => result.unwrap_or(Err(WaylandPortalError::Backend)),
+                        () = stopping.cancelled() => Err(WaylandPortalError::Cancelled),
+                    };
+                    let _ = reply.send(result);
+                }
+                WaylandOutputCommand::Shutdown { reply } => {
+                    portal.shutdown().await;
+                    let _ = reply.send(());
+                    break;
+                }
+            }
         }
     }
 

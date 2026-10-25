@@ -1,7 +1,7 @@
 //! Captures the focused window immediately before a delivery; nothing is retained from the
 //! start of the recording.
 
-use std::process;
+use std::{fmt, process};
 
 #[cfg(target_os = "linux")]
 use x11rb::{
@@ -206,8 +206,9 @@ fn capture_system_destination() -> Result<Option<NativeDestination>, NativePaste
 
 #[cfg(target_os = "linux")]
 pub(crate) fn connect_x11() -> Result<(RustConnection, Window), NativePasteError> {
-    let (connection, screen_number) =
-        x11rb::connect(None).map_err(|_| NativePasteError::Unavailable)?;
+    let (connection, screen_number) = x11rb::connect(None)
+        .inspect_err(log_x11_error)
+        .map_err(|_| NativePasteError::Unavailable)?;
     let root = connection
         .setup()
         .roots
@@ -222,9 +223,15 @@ pub(crate) fn reply<R: TryParse>(
     request: Result<Cookie<'_, RustConnection, R>, ConnectionError>,
 ) -> Result<R, NativePasteError> {
     request
+        .inspect_err(log_x11_error)
         .ok()
-        .and_then(|cookie| cookie.reply().ok())
+        .and_then(|cookie| cookie.reply().inspect_err(log_x11_error).ok())
         .ok_or(NativePasteError::Unavailable)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn log_x11_error(error: &impl fmt::Display) {
+    tracing::debug!(%error, "an X11 request failed");
 }
 
 #[cfg(target_os = "linux")]
