@@ -1,4 +1,4 @@
-use whispernow_domain::{LlmProvider, ProviderEndpoint};
+use whispernow_domain::{LlmProvider, ProviderEndpoint, UnknownLlmProvider};
 
 #[test]
 fn provider_api_base_requires_a_valid_url_and_exact_loopback_host_for_http() {
@@ -40,13 +40,13 @@ fn provider_api_base_requires_a_valid_url_and_exact_loopback_host_for_http() {
 #[test]
 fn provider_names_round_trip_and_accept_the_google_alias() {
     for provider in LlmProvider::ALL {
-        assert_eq!(LlmProvider::from_name(provider.as_str()), Some(provider));
+        assert_eq!(provider.as_str().parse(), Ok(provider));
     }
+    assert_eq!(" Google ".parse(), Ok(LlmProvider::Gemini));
     assert_eq!(
-        LlmProvider::from_name(" Google "),
-        Some(LlmProvider::Gemini)
+        "future-provider".parse::<LlmProvider>(),
+        Err(UnknownLlmProvider)
     );
-    assert_eq!(LlmProvider::from_name("future-provider"), None);
 }
 
 #[test]

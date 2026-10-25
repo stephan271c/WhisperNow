@@ -47,9 +47,7 @@ impl Worker {
                     Phase::Idle
                 }
                 Outcome::Failed(error) if setup_test => {
-                    state.setup_test = Some(SetupTestResult::Failed {
-                        error: Box::new(error),
-                    });
+                    state.setup_test = Some(SetupTestResult::Failed { error });
                     Phase::Idle
                 }
                 Outcome::Failed(error) => {

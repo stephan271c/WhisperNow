@@ -196,7 +196,7 @@ impl ManagementState {
             return;
         }
         self.setup_test = Some(SetupTest::Finished(SetupTestResult::Failed {
-            error: Box::new(error.clone()),
+            error: error.clone(),
         }));
     }
 

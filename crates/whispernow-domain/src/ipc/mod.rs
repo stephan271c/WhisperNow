@@ -4,7 +4,7 @@ pub use command_names::COMMAND_NAMES;
 
 use crate::{
     ApiKey, AppError, AudioDeviceId, ClearDataCategory, DownloadPhase, ErrorCategory, LlmProvider,
-    ModelAvailability, ModelBenchmark, ModelFamily, ModelId, Settings,
+    ModelAvailability, ModelBenchmark, ModelDefinition, ModelFamily, ModelId, Settings,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -150,6 +150,22 @@ pub struct ModelSummary {
     pub benchmark: Option<ModelBenchmark>,
     /// The model new installations start with.
     pub recommended: bool,
+}
+
+impl ModelSummary {
+    #[must_use]
+    pub fn new(definition: ModelDefinition, availability: ModelAvailability) -> Self {
+        Self {
+            recommended: definition.is_recommended(),
+            family: definition.family(),
+            size_bytes: definition.source.archive_size_bytes,
+            id: definition.id,
+            display_name: definition.display_name,
+            availability,
+            languages: definition.languages,
+            benchmark: definition.benchmark,
+        }
+    }
 }
 
 /// One existing piece of application data that clearing its category removes.
@@ -413,9 +429,8 @@ pub enum SetupTestResult {
     NoSpeech,
     /// The user cancelled the test, or the application interrupted it.
     Cancelled,
-    /// Boxed so a snapshot stays small.
     Failed {
-        error: Box<AppError>,
+        error: AppError,
     },
 }
 

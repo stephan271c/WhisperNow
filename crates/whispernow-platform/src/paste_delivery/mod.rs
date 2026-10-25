@@ -4,14 +4,14 @@
 //! [`crate::wayland`] instead.
 
 use std::{
-    thread,
+    process, thread,
     time::{Duration, Instant},
 };
 
 use thiserror::Error;
 use whispernow_core::text_output::{KeystrokeOutcome, PastePlatform};
 
-use crate::destination::{self, NativeDestination};
+use crate::destination;
 
 mod clipboard;
 
@@ -23,6 +23,13 @@ mod x11;
 
 #[cfg(target_os = "macos")]
 mod macos;
+
+#[cfg(target_os = "macos")]
+use macos::{capture_system_destination, inject_if_current};
+#[cfg(target_os = "windows")]
+use windows::{capture_system_destination, inject_if_current};
+#[cfg(target_os = "linux")]
+use x11::{capture_system_destination, inject_if_current};
 
 pub use clipboard::{ClipboardContents, NativeClipboard};
 
@@ -133,30 +140,21 @@ impl PastePlatform for NativePastePlatform {
     }
 
     fn send_paste_shortcut(&mut self) -> NativePasteInjection {
-        match destination::capture() {
+        let target = capture_system_destination()
+            .and_then(|found| destination::foreign(found, process::id()));
+        match target {
             Ok(target) => inject_if_current(target),
             Err(error) => NativePasteInjection::NotSent(error),
         }
     }
 }
 
-fn inject_if_current(target: NativeDestination) -> NativePasteInjection {
-    #[cfg(target_os = "windows")]
-    {
-        windows::inject_if_current(target)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        x11::inject_if_current(target)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        macos::inject_if_current(target)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        let _ = target;
-        NativePasteInjection::NotSent(NativePasteError::Unavailable)
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn still_focused(expected: destination::NativeDestination) -> Result<(), NativePasteError> {
+    if capture_system_destination()? == Some(expected) {
+        Ok(())
+    } else {
+        Err(NativePasteError::Unavailable)
     }
 }
 

@@ -1,25 +1,27 @@
-//! X11 paste injection through the XTEST extension: waits until no modifier key is
-//! physically down, then grabs the server, re-checks the destination and the modifiers,
-//! and sends one balanced shortcut.
+//! X11 destination capture and paste injection through the XTEST extension: waits until no
+//! modifier key is physically down, then grabs the server, re-checks the destination and the
+//! modifiers, and sends one balanced shortcut.
+
+use std::fmt;
 
 use x11rb::{
     connection::Connection,
+    cookie::Cookie,
+    errors::ConnectionError,
     protocol::{
         xkb::{self, ConnectionExt as _},
         xproto::{
-            ConnectionExt as _, GetKeyboardMappingReply, GetModifierMappingReply, KEY_PRESS_EVENT,
-            KEY_RELEASE_EVENT, Window,
+            AtomEnum, ConnectionExt as _, GetKeyboardMappingReply, GetModifierMappingReply,
+            InputFocus, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, Window,
         },
         xtest::ConnectionExt as _,
     },
     rust_connection::RustConnection,
+    x11_utils::TryParse,
 };
 
 use super::{NativePasteError, NativePasteInjection, wait_until_modifiers_released};
-use crate::{
-    PasteKeys,
-    destination::{NativeDestination, capture_on, connect_x11, log_x11_error, reply},
-};
+use crate::{PasteKeys, destination::NativeDestination};
 
 const XK_V_LOWER: u32 = 0x0076;
 const SHIFT_MODIFIER_ROW: usize = 0;
@@ -73,6 +75,101 @@ pub(super) fn xtest_available() -> Option<bool> {
         .inspect_err(log_x11_error)
         .ok()
         .map(|(connection, _)| reply(connection.xtest_get_version(2, 1)).is_ok())
+}
+
+pub(super) fn capture_system_destination() -> Result<Option<NativeDestination>, NativePasteError> {
+    let (connection, root) = connect_x11()?;
+    capture_on(&connection, root)
+}
+
+fn connect_x11() -> Result<(RustConnection, Window), NativePasteError> {
+    let (connection, screen_number) = x11rb::connect(None)
+        .inspect_err(log_x11_error)
+        .map_err(|_| NativePasteError::Unavailable)?;
+    let root = connection
+        .setup()
+        .roots
+        .get(screen_number)
+        .ok_or(NativePasteError::Unavailable)?
+        .root;
+    Ok((connection, root))
+}
+
+fn reply<R: TryParse>(
+    request: Result<Cookie<'_, RustConnection, R>, ConnectionError>,
+) -> Result<R, NativePasteError> {
+    request
+        .inspect_err(log_x11_error)
+        .ok()
+        .and_then(|cookie| cookie.reply().inspect_err(log_x11_error).ok())
+        .ok_or(NativePasteError::Unavailable)
+}
+
+fn log_x11_error(error: &impl fmt::Display) {
+    tracing::debug!(%error, "an X11 request failed");
+}
+
+fn capture_on(
+    connection: &RustConnection,
+    root: Window,
+) -> Result<Option<NativeDestination>, NativePasteError> {
+    let window = x11_property_u32(connection, root, b"_NET_ACTIVE_WINDOW", AtomEnum::WINDOW)?;
+    if window == 0 || window == root {
+        return Ok(None);
+    }
+    let process_id = x11_property_u32(connection, window, b"_NET_WM_PID", AtomEnum::CARDINAL)?;
+    if process_id == 0 {
+        return Err(NativePasteError::Unavailable);
+    }
+    let focus = reply(connection.get_input_focus())?.focus;
+    if focus == 0 || focus == u32::from(InputFocus::POINTER_ROOT) || focus == root {
+        return Err(NativePasteError::Unavailable);
+    }
+    Ok(Some(NativeDestination::new(
+        u64::from(window),
+        process_id,
+        u64::from(focus),
+        x11_paste_keys(connection, window).unwrap_or(PasteKeys::ControlV),
+    )))
+}
+
+fn x11_property_u32(
+    connection: &RustConnection,
+    window: Window,
+    name: &[u8],
+    expected_type: AtomEnum,
+) -> Result<u32, NativePasteError> {
+    let property = reply(connection.intern_atom(false, name))?.atom;
+    let expected_type = u32::from(expected_type);
+    let value = reply(connection.get_property(false, window, property, expected_type, 0, 1))?;
+    if value.type_ != expected_type
+        || value.format != 32
+        || value.value_len != 1
+        || value.bytes_after != 0
+    {
+        return Err(NativePasteError::Unavailable);
+    }
+    value
+        .value32()
+        .and_then(|mut values| values.next())
+        .ok_or(NativePasteError::Unavailable)
+}
+
+/// The keys for the window's `WM_CLASS`, whose instance and class names are
+/// separated by NUL bytes.
+fn x11_paste_keys(connection: &RustConnection, window: Window) -> Option<PasteKeys> {
+    let class =
+        reply(connection.get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 64))
+            .ok()?;
+    if class.type_ != u32::from(AtomEnum::STRING) || class.format != 8 || class.bytes_after != 0 {
+        return None;
+    }
+    let keys = String::from_utf8_lossy(&class.value)
+        .split('\0')
+        .map(PasteKeys::for_application)
+        .find(|keys| *keys != PasteKeys::ControlV)
+        .unwrap_or(PasteKeys::ControlV);
+    Some(keys)
 }
 
 fn read_keys(connection: &RustConnection) -> Result<Keys, NativePasteError> {

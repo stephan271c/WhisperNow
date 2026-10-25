@@ -3,8 +3,8 @@
 
 use std::{fmt, time::Duration};
 
-use crate::ipc::ModelSummary;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use thiserror::Error;
 
 const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
 
@@ -92,21 +92,29 @@ const CLEANUP_MODELS: [CleanupModel; 3] = [
 #[serde(transparent)]
 pub struct ModelId(String);
 
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum InvalidModelId {
+    #[error("model identifier must not be empty")]
+    Empty,
+    #[error("model identifier must not be a filesystem path component")]
+    PathComponent,
+    #[error("model identifier must contain only lowercase ASCII letters, digits, '.', '_', or '-'")]
+    Character,
+}
+
 impl ModelId {
-    pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
+    pub fn new(value: impl Into<String>) -> Result<Self, InvalidModelId> {
         let value = value.into();
         if value.is_empty() {
-            return Err("model identifier must not be empty");
+            return Err(InvalidModelId::Empty);
         }
         if value == "." || value == ".." {
-            return Err("model identifier must not be a filesystem path component");
+            return Err(InvalidModelId::PathComponent);
         }
         if !value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
         }) {
-            return Err(
-                "model identifier must contain only lowercase ASCII letters, digits, '.', '_', or '-'",
-            );
+            return Err(InvalidModelId::Character);
         }
         Ok(Self(value))
     }
@@ -269,18 +277,13 @@ impl ModelSource {
     /// the extension. It can differ from the model id in case.
     #[must_use]
     pub fn archive_root(&self) -> &str {
-        let name = self
-            .url
-            .rsplit('/')
-            .next()
-            .expect("rsplit always yields an item");
+        let name = self.url.rsplit('/').next().unwrap_or(&self.url);
         name.strip_suffix(".tar.bz2").unwrap_or(name)
     }
 }
 
 /// A score from one to [`Rating::MAX`]; more is better.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Rating(u8);
 
 impl Rating {
@@ -413,20 +416,6 @@ impl ModelDefinition {
     #[must_use]
     pub fn is_recommended(&self) -> bool {
         self.id == ModelId::default()
-    }
-
-    #[must_use]
-    pub fn summary(self, availability: ModelAvailability) -> ModelSummary {
-        ModelSummary {
-            recommended: self.is_recommended(),
-            family: self.family(),
-            size_bytes: self.source.archive_size_bytes,
-            id: self.id,
-            display_name: self.display_name,
-            availability,
-            languages: self.languages,
-            benchmark: self.benchmark,
-        }
     }
 }
 

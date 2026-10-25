@@ -559,11 +559,11 @@ async fn inject_balanced_paste(
     output: &OutputSession,
     keys: PasteKeys,
 ) -> Result<(), PortalOutputError> {
-    let mut pressed = Vec::with_capacity(3);
-    for keysym in match keys {
-        PasteKeys::ControlV => vec![XK_CONTROL_L, XK_V_LOWER],
-        PasteKeys::ControlShiftV => vec![XK_CONTROL_L, XK_SHIFT_L, XK_V_LOWER],
-    } {
+    let keysyms: &[i32] = match keys {
+        PasteKeys::ControlV => &[XK_CONTROL_L, XK_V_LOWER],
+        PasteKeys::ControlShiftV => &[XK_CONTROL_L, XK_SHIFT_L, XK_V_LOWER],
+    };
+    for (index, keysym) in keysyms.iter().copied().enumerate() {
         if output
             .remote
             .notify_keyboard_keysym(
@@ -576,14 +576,13 @@ async fn inject_balanced_paste(
             .inspect_err(|error| tracing::debug!(%error, "a paste key could not be pressed"))
             .is_err()
         {
-            if !release_pressed(output, &pressed).await {
+            if !release_pressed(output, &keysyms[..index]).await {
                 let _ignored = output.session.close().await;
             }
             return Err(PortalOutputError::Backend);
         }
-        pressed.push(keysym);
     }
-    if release_pressed(output, &pressed).await {
+    if release_pressed(output, keysyms).await {
         Ok(())
     } else {
         // Closing the session is the only safe recovery after a partial key

@@ -2,14 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use super::known_cleanup_model;
 use crate::{
     ApiKey, HistoryLimit, HistoryRetention, LlmProvider, ModelId, ModelRegistry, ProviderEndpoint,
-    ProviderSettings, RecordingMode, Settings, SetupProgress, Shortcut, VocabularyReplacement,
-    WindowGeometry,
+    ProviderSettings, RecordingMode, Settings, SetupProgress, Shortcut, ShortcutKey,
+    ShortcutModifier, VocabularyReplacement, WindowGeometry,
 };
 
 /// Settings read from the Python release's `settings.json`, and the API keys it held in
@@ -27,59 +27,52 @@ impl PythonSettings {
     #[must_use]
     pub fn import(document: &Value) -> Self {
         let mut settings = Settings::default();
-        pick(document, "input_device", &mut settings.input_device);
-        pick(document, "model_id", &mut settings.model_id);
+        settings.input_device = read(document, "input_device").unwrap_or(settings.input_device);
+        settings.model_id = read(document, "model_id").unwrap_or(settings.model_id);
         if !ModelRegistry::builtin()
             .speech_models()
             .any(|model| model.id == settings.model_id)
         {
             settings.model_id = ModelId::default();
         }
-        pick(document, "start_minimized", &mut settings.start_minimized);
-        let mut first_run_complete = false;
-        pick(document, "first_run_complete", &mut first_run_complete);
-        if first_run_complete {
+        settings.start_minimized =
+            read(document, "start_minimized").unwrap_or(settings.start_minimized);
+        if read(document, "first_run_complete").unwrap_or(false) {
             settings.setup = SetupProgress::Complete;
         }
         settings.cleanup_enabled = document
             .get("active_enhancement_id")
             .is_some_and(Value::is_string);
-        pick(document, "llm_provider", &mut settings.llm_provider);
-        let mut vocabulary = Vec::<(String, String)>::new();
-        pick(document, "vocabulary_replacements", &mut vocabulary);
-        settings.vocabulary_replacements = vocabulary
-            .into_iter()
-            .map(|(source, replacement)| VocabularyReplacement::new(source, replacement))
-            .collect();
-        let mut geometry = None::<(i32, i32, u32, u32)>;
-        pick(document, "window_geometry", &mut geometry);
-        settings.window_geometry = geometry.map(|(x, y, width, height)| WindowGeometry {
-            x,
-            y,
-            width,
-            height,
-        });
-        // A stored shortcut missing its modifiers or key takes the default's.
-        if let Some(Value::Object(stored)) = document.get("hotkey") {
-            let mut shortcut_fields = serde_json::to_value(&settings.recording_shortcut)
-                .ok()
-                .and_then(|value| value.as_object().cloned())
-                .unwrap_or_default();
-            shortcut_fields.extend(stored.clone());
-            if let Ok(shortcut) = serde_json::from_value::<Shortcut>(Value::Object(shortcut_fields))
-                && shortcut.is_recording_shortcut()
-            {
-                settings.recording_shortcut = shortcut;
-            }
+        settings.llm_provider = read(document, "llm_provider").unwrap_or(settings.llm_provider);
+        settings.vocabulary_replacements =
+            read::<Vec<(String, String)>>(document, "vocabulary_replacements")
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(source, replacement)| VocabularyReplacement::new(source, replacement))
+                .collect();
+        settings.window_geometry = read::<(i32, i32, u32, u32)>(document, "window_geometry").map(
+            |(x, y, width, height)| WindowGeometry {
+                x,
+                y,
+                width,
+                height,
+            },
+        );
+        if let Some(shortcut) = document
+            .get("hotkey")
+            .filter(|hotkey| hotkey.is_object())
+            .and_then(|hotkey| StoredShortcut::deserialize(hotkey).ok())
+            .map(Shortcut::from)
+            .filter(Shortcut::is_recording_shortcut)
+        {
+            settings.recording_shortcut = shortcut;
         }
         // The Python release could run hold and toggle shortcuts side by side; hold wins
         // unless it was turned off.
-        let mut hold_enabled = true;
-        pick(document, "hotkey_enabled", &mut hold_enabled);
-        let mut toggle_shortcut = None::<Shortcut>;
-        pick(document, "toggle_hotkey", &mut toggle_shortcut);
+        let hold_enabled = read(document, "hotkey_enabled").unwrap_or(true);
         if !hold_enabled
-            && let Some(shortcut) = toggle_shortcut.filter(Shortcut::is_recording_shortcut)
+            && let Some(shortcut) =
+                read::<Shortcut>(document, "toggle_hotkey").filter(Shortcut::is_recording_shortcut)
         {
             settings.recording_shortcut = shortcut;
             settings.recording_mode = RecordingMode::Toggle;
@@ -106,11 +99,12 @@ impl PythonSettings {
                     .map_or_else(HistoryRetention::default, HistoryRetention::at_least_days),
             };
         }
-        pick(
-            document.get("audio_retention").unwrap_or(&Value::Null),
-            "enabled",
-            &mut settings.keep_audio,
-        );
+        if let Some(keep_audio) = document
+            .get("audio_retention")
+            .and_then(|retention| read(retention, "enabled"))
+        {
+            settings.keep_audio = keep_audio;
+        }
 
         let api_keys = import_providers(document, &mut settings);
         Self {
@@ -149,7 +143,7 @@ impl PythonSettings {
                 if let Some(fields) = entry.as_object_mut()
                     && !fields
                         .get("api_key")
-                        .is_some_and(|value| keep_key(LlmProvider::from_name(name), value))
+                        .is_some_and(|value| keep_key(name.parse().ok(), value))
                 {
                     fields.remove("api_key");
                 }
@@ -174,24 +168,24 @@ fn import_providers(document: &Value, settings: &mut Settings) -> BTreeMap<LlmPr
         .into_iter()
         .flatten();
     for (name, entry) in providers {
-        let Some(provider) = LlmProvider::from_name(name) else {
+        let Ok(provider) = name.parse::<LlmProvider>() else {
             continue;
         };
-        let mut model = None::<String>;
-        pick(entry, "model", &mut model);
+        let model = read::<String>(entry, "model");
         if provider == LlmProvider::LocalCleanup {
             if let Some(model) = model {
                 settings.cleanup_model = known_cleanup_model(&model);
             }
             continue;
         }
-        let mut api_base = None;
-        let mut saved_models = Vec::new();
-        pick(entry, "api_base", &mut api_base);
-        pick(entry, "saved_models", &mut saved_models);
         settings.llm_provider_settings.insert(
             provider,
-            provider_settings(provider, model, api_base, saved_models),
+            provider_settings(
+                provider,
+                model,
+                read(entry, "api_base"),
+                read(entry, "saved_models").unwrap_or_default(),
+            ),
         );
         if let Some(key) = text(entry, "api_key").and_then(|key| ApiKey::new(key).ok()) {
             api_keys.insert(provider, key);
@@ -256,12 +250,31 @@ fn provider_model(provider: LlmProvider, model: &str) -> String {
     model.strip_prefix(prefix).unwrap_or(model).to_owned()
 }
 
-fn pick<T: DeserializeOwned>(document: &Value, name: &str, target: &mut T) {
-    if let Some(value) = document
-        .get(name)
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-    {
-        *target = value;
+fn read<T: DeserializeOwned>(document: &Value, name: &str) -> Option<T> {
+    T::deserialize(document.get(name)?).ok()
+}
+
+/// A stored shortcut missing its modifiers or key takes the default's.
+#[derive(Deserialize)]
+#[serde(default)]
+struct StoredShortcut {
+    modifiers: BTreeSet<ShortcutModifier>,
+    key: ShortcutKey,
+}
+
+impl Default for StoredShortcut {
+    fn default() -> Self {
+        let Shortcut { modifiers, key } = Shortcut::default();
+        Self { modifiers, key }
+    }
+}
+
+impl From<StoredShortcut> for Shortcut {
+    fn from(stored: StoredShortcut) -> Self {
+        Self {
+            modifiers: stored.modifiers,
+            key: stored.key,
+        }
     }
 }
 

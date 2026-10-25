@@ -48,7 +48,7 @@ fn main() -> ExitCode {
         eprintln!("expected one recording shortcut chord");
         return ExitCode::from(64);
     };
-    match chord::Chord::parse(spec) {
+    match spec.parse::<chord::Chord>() {
         Ok(chord) => devices::run(devices::Mode::Watch(chord)),
         Err(error) => {
             eprintln!("{error}");

@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use whispernow_domain::{
-    CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, ModelBenchmark, ModelFamily, ModelId,
-    ModelRegistry,
+    CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, InvalidModelId, ModelBenchmark, ModelFamily,
+    ModelId, ModelRegistry,
 };
 
 const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
@@ -127,18 +127,18 @@ fn lookup_finds_registered_models_and_rejects_unknown_ones() {
 
 #[test]
 fn identifiers_reject_filesystem_components() {
-    for invalid in [
-        "",
-        ".",
-        "..",
-        "../model",
-        "nested/model",
-        r"nested\model",
-        "C:model",
-        "UPPERCASE",
-        "model name",
+    for (invalid, error) in [
+        ("", InvalidModelId::Empty),
+        (".", InvalidModelId::PathComponent),
+        ("..", InvalidModelId::PathComponent),
+        ("../model", InvalidModelId::Character),
+        ("nested/model", InvalidModelId::Character),
+        (r"nested\model", InvalidModelId::Character),
+        ("C:model", InvalidModelId::Character),
+        ("UPPERCASE", InvalidModelId::Character),
+        ("model name", InvalidModelId::Character),
     ] {
-        assert!(ModelId::new(invalid).is_err(), "accepted ID {invalid:?}");
+        assert_eq!(ModelId::new(invalid).err(), Some(error), "ID {invalid:?}");
     }
 }
 

@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, str::FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -51,16 +52,23 @@ impl ShortcutModifier {
             Self::Meta => "LOGO",
         }
     }
+}
 
-    /// Reads a stored modifier name or an alias such as `control`, `super` or `cmd`.
-    #[must_use]
-    pub fn from_name(value: &str) -> Option<Self> {
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("unknown shortcut modifier")]
+pub struct UnknownShortcutModifier;
+
+/// Reads a stored modifier name or an alias such as `control`, `super` or `cmd`.
+impl FromStr for ShortcutModifier {
+    type Err = UnknownShortcutModifier;
+
+    fn from_str(value: &str) -> Result<Self, UnknownShortcutModifier> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => Some(Self::Control),
-            "alt" => Some(Self::Alt),
-            "shift" => Some(Self::Shift),
-            "meta" | "super" | "cmd" => Some(Self::Meta),
-            _ => None,
+            "ctrl" | "control" => Ok(Self::Control),
+            "alt" => Ok(Self::Alt),
+            "shift" => Ok(Self::Shift),
+            "meta" | "super" | "cmd" => Ok(Self::Meta),
+            _ => Err(UnknownShortcutModifier),
         }
     }
 }
@@ -73,8 +81,9 @@ impl Serialize for ShortcutModifier {
 
 impl<'de> Deserialize<'de> for ShortcutModifier {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let name = String::deserialize(deserializer)?;
-        Self::from_name(&name).ok_or_else(|| D::Error::custom("unknown shortcut modifier"))
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(D::Error::custom)
     }
 }
 
@@ -193,16 +202,24 @@ shortcut_keys! {
     ArrowRight => "arrowright", "ArrowRight", "Right", "Right";
 }
 
-impl ShortcutKey {
-    #[must_use]
-    pub fn from_name(value: &str) -> Option<Self> {
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("unknown shortcut key")]
+pub struct UnknownShortcutKey;
+
+impl FromStr for ShortcutKey {
+    type Err = UnknownShortcutKey;
+
+    fn from_str(value: &str) -> Result<Self, UnknownShortcutKey> {
         let value = value.trim();
         Self::ALL
             .iter()
             .copied()
             .find(|key| key.name().eq_ignore_ascii_case(value))
+            .ok_or(UnknownShortcutKey)
     }
+}
 
+impl ShortcutKey {
     #[must_use]
     pub fn from_code(code: &str) -> Option<Self> {
         if code == "NumpadEnter" {
@@ -252,8 +269,9 @@ impl Serialize for ShortcutKey {
 
 impl<'de> Deserialize<'de> for ShortcutKey {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let name = String::deserialize(deserializer)?;
-        Self::from_name(&name).ok_or_else(|| D::Error::custom("unknown shortcut key"))
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(D::Error::custom)
     }
 }
 

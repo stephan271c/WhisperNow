@@ -49,9 +49,8 @@ pub enum ThemePreference {
 }
 
 /// An unfinished setup keeps its step and choices in [`Settings::setup`] so an interrupted wizard
-/// resumes without claiming setup is complete. Download operation identifiers are excluded
-/// because they are process-scoped. The saved settings stay in effect until setup finishes and
-/// commits these choices.
+/// resumes without claiming setup is complete. The saved settings stay in effect until setup
+/// finishes and commits these choices.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct SetupCheckpoint {
@@ -105,9 +104,8 @@ pub struct ApiKey(String);
 pub struct InvalidApiKey;
 
 impl ApiKey {
-    pub fn new(value: impl Into<String>) -> Result<Self, InvalidApiKey> {
-        let value = value.into();
-        let key = value.trim();
+    pub fn new(value: impl AsRef<str>) -> Result<Self, InvalidApiKey> {
+        let key = value.as_ref().trim();
         if key.is_empty() || key.chars().any(char::is_control) {
             return Err(InvalidApiKey);
         }

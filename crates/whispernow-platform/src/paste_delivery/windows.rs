@@ -1,7 +1,10 @@
-//! Windows paste: one fixed, balanced `SendInput` batch, sent only after the
-//! target's integrity level is no higher than ours, the physical modifiers are
+//! Windows destination capture and paste: one fixed, balanced `SendInput` batch, sent only
+//! after the target's integrity level is no higher than ours, the physical modifiers are
 //! released, and the capture-time window, process and focused child match.
-#![allow(unsafe_code, reason = "SendInput and token queries are Win32 FFI")]
+#![allow(
+    unsafe_code,
+    reason = "SendInput, token queries and User32 window queries are Win32 FFI"
+)]
 
 use std::{
     io,
@@ -10,7 +13,7 @@ use std::{
     ptr,
 };
 
-use super::{NativePasteError, NativePasteInjection, wait_until_modifiers_released};
+use super::{NativePasteError, NativePasteInjection, still_focused, wait_until_modifiers_released};
 use windows_sys::Win32::{
     Foundation::{ERROR_ACCESS_DENIED, ERROR_INSUFFICIENT_BUFFER, HANDLE},
     Security::{
@@ -25,12 +28,13 @@ use windows_sys::Win32::{
         KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_INSERT, VK_LCONTROL, VK_LMENU,
         VK_LSHIFT, VK_LWIN, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V,
     },
+    UI::WindowsAndMessaging::{
+        GUITHREADINFO, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo,
+        GetWindowThreadProcessId,
+    },
 };
 
-use crate::{
-    PasteKeys,
-    destination::{NativeDestination, still_focused},
-};
+use crate::{PasteKeys, destination::NativeDestination};
 
 const ACCESS_DENIED: Option<i32> = Some(ERROR_ACCESS_DENIED.cast_signed());
 const INSUFFICIENT_BUFFER: Option<i32> = Some(ERROR_INSUFFICIENT_BUFFER.cast_signed());
@@ -77,6 +81,52 @@ pub(super) fn inject_if_current(destination: NativeDestination) -> NativePasteIn
         Ok(()) => send_shortcut(destination.keys()),
         Err(failure) => NativePasteInjection::NotSent(failure),
     }
+}
+
+pub(super) fn capture_system_destination() -> Result<Option<NativeDestination>, NativePasteError> {
+    // SAFETY: these calls only query opaque window identities owned by User32.
+    let window = unsafe { GetForegroundWindow() };
+    if window.is_null() {
+        return Ok(None);
+    }
+    let mut process_id = 0_u32;
+    // SAFETY: `window` came from User32 and the process-id pointer is valid.
+    let thread_id = unsafe { GetWindowThreadProcessId(window, &raw mut process_id) };
+    if thread_id == 0 || process_id == 0 {
+        return Err(NativePasteError::Unavailable);
+    }
+    let mut gui = GUITHREADINFO {
+        cbSize: u32::try_from(size_of::<GUITHREADINFO>())
+            .map_err(|_| NativePasteError::Unavailable)?,
+        ..GUITHREADINFO::default()
+    };
+    // SAFETY: `gui` has the documented size and remains writable for the call.
+    if unsafe { GetGUIThreadInfo(thread_id, &raw mut gui) } == 0
+        || gui.hwndActive != window
+        || gui.hwndFocus.is_null()
+    {
+        return Err(NativePasteError::Unavailable);
+    }
+    let mut class_name = [0_u16; 128];
+    // SAFETY: the buffer is writable and the HWND came from User32.
+    let class_length = unsafe {
+        GetClassNameW(
+            window,
+            class_name.as_mut_ptr(),
+            i32::try_from(class_name.len()).unwrap_or(i32::MAX),
+        )
+    };
+    let keys = if class_length > 0 {
+        PasteKeys::for_window_class(&class_name[..usize::try_from(class_length).unwrap_or(0)])
+    } else {
+        PasteKeys::ControlV
+    };
+    Ok(Some(NativeDestination::new(
+        window as usize as u64,
+        process_id,
+        gui.hwndFocus as usize as u64,
+        keys,
+    )))
 }
 
 fn ensure_target_integrity(process_id: u32) -> Result<(), NativePasteError> {

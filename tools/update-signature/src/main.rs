@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf, process::ExitCode};
+use std::{env, ffi::OsString, fs, path::PathBuf, process::ExitCode};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use minisign_verify::{PublicKey, Signature};
@@ -10,7 +10,7 @@ struct Arguments {
 }
 
 fn main() -> ExitCode {
-    let result = parse_arguments().and_then(|arguments| verify(&arguments));
+    let result = parse_arguments(env::args_os().skip(1)).and_then(|arguments| verify(&arguments));
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -20,21 +20,26 @@ fn main() -> ExitCode {
     }
 }
 
-fn parse_arguments() -> Result<Arguments, String> {
+fn parse_arguments(mut arguments: impl Iterator<Item = OsString>) -> Result<Arguments, String> {
     let mut payload_path = None;
     let mut signature_path = None;
     let mut public_key = None;
-    let mut arguments = env::args().skip(1);
 
     while let Some(argument) = arguments.next() {
         let value = arguments
             .next()
-            .ok_or_else(|| format!("missing value for {argument}"))?;
-        match argument.as_str() {
-            "--payload" => payload_path = Some(PathBuf::from(value)),
-            "--signature" => signature_path = Some(PathBuf::from(value)),
-            "--public-key" => public_key = Some(value),
-            _ => return Err(format!("unknown argument: {argument}")),
+            .ok_or_else(|| format!("missing value for {}", argument.display()))?;
+        match argument.to_str() {
+            Some("--payload") => payload_path = Some(PathBuf::from(value)),
+            Some("--signature") => signature_path = Some(PathBuf::from(value)),
+            Some("--public-key") => {
+                public_key = Some(
+                    value
+                        .into_string()
+                        .map_err(|_| "--public-key is not valid UTF-8".to_owned())?,
+                );
+            }
+            _ => return Err(format!("unknown argument: {}", argument.display())),
         }
     }
 
@@ -77,7 +82,7 @@ fn verify_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::verify_bytes;
+    use super::{parse_arguments, verify_bytes};
 
     const PUBLIC_KEY: &str = include_str!("../../../release/fixtures/disposable-updater.key.pub");
     const ALPHA: &[u8] = include_bytes!("../../../release/fixtures/signatures/alpha.bin");
@@ -94,5 +99,26 @@ mod tests {
     fn rejects_changed_bytes_and_a_swapped_valid_signature() {
         assert!(verify_bytes(b"changed", ALPHA_SIGNATURE, PUBLIC_KEY).is_err());
         assert!(verify_bytes(ALPHA, BETA_SIGNATURE, PUBLIC_KEY).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_unicode_is_kept() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt as _, path::PathBuf};
+
+        let payload = OsString::from_vec(vec![b'a', 0xff]);
+        let arguments = parse_arguments(
+            [
+                OsString::from("--payload"),
+                payload.clone(),
+                OsString::from("--signature"),
+                OsString::from("a.sig"),
+                OsString::from("--public-key"),
+                OsString::from("key"),
+            ]
+            .into_iter(),
+        )
+        .expect("arguments");
+
+        assert_eq!(arguments.payload_path, PathBuf::from(payload));
     }
 }

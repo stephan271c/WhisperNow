@@ -17,7 +17,7 @@ fn always_running() -> LifecycleProbe {
 fn control(key: &str) -> Shortcut {
     Shortcut {
         modifiers: [ShortcutModifier::Control].into(),
-        key: ShortcutKey::from_name(key).expect("a shortcut key"),
+        key: key.parse().expect("a shortcut key"),
     }
 }
 

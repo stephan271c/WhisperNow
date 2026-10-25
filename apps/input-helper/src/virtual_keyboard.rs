@@ -4,6 +4,7 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, Write as _},
     os::{fd::AsRawFd, unix::fs::OpenOptionsExt as _},
+    str::FromStr,
     thread,
     time::Duration,
 };
@@ -37,15 +38,22 @@ pub enum PasteShortcut {
     ControlShiftV,
 }
 
-impl PasteShortcut {
-    pub fn parse(command: &str) -> Option<Self> {
+#[derive(Debug, Eq, PartialEq)]
+pub struct UnknownPasteShortcut;
+
+impl FromStr for PasteShortcut {
+    type Err = UnknownPasteShortcut;
+
+    fn from_str(command: &str) -> Result<Self, UnknownPasteShortcut> {
         match command {
-            "ctrl-v" => Some(Self::ControlV),
-            "ctrl-shift-v" => Some(Self::ControlShiftV),
-            _ => None,
+            "ctrl-v" => Ok(Self::ControlV),
+            "ctrl-shift-v" => Ok(Self::ControlShiftV),
+            _ => Err(UnknownPasteShortcut),
         }
     }
+}
 
+impl PasteShortcut {
     const fn keys(self) -> &'static [u16] {
         match self {
             Self::ControlV => &[KEY_LEFTCTRL, KEY_V],
@@ -162,16 +170,14 @@ mod tests {
 
     #[test]
     fn only_the_paste_shortcuts_are_accepted() {
-        assert_eq!(
-            PasteShortcut::parse("ctrl-v"),
-            Some(PasteShortcut::ControlV)
-        );
-        assert_eq!(
-            PasteShortcut::parse("ctrl-shift-v"),
-            Some(PasteShortcut::ControlShiftV)
-        );
+        assert_eq!("ctrl-v".parse(), Ok(PasteShortcut::ControlV));
+        assert_eq!("ctrl-shift-v".parse(), Ok(PasteShortcut::ControlShiftV));
         for other in ["", "ctrl-w", "ctrl-v ", "alt-f4"] {
-            assert_eq!(PasteShortcut::parse(other), None, "{other}");
+            assert_eq!(
+                other.parse::<PasteShortcut>(),
+                Err(UnknownPasteShortcut),
+                "{other}"
+            );
         }
         assert_eq!(PasteShortcut::ControlShiftV.keys(), [29, 42, 47]);
     }

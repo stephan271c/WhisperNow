@@ -1,6 +1,9 @@
 //! Tracks a shortcut chord across keyboards.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 
 use crate::{
     codes::{COMMAND_MODIFIERS, MAX_KEY_CODE},
@@ -17,10 +20,12 @@ pub struct Chord {
     groups: Vec<Vec<u16>>,
 }
 
-impl Chord {
+impl FromStr for Chord {
+    type Err = String;
+
     /// Parses Linux input codes: `+` joins required groups, `,` joins alternatives.
     /// For example, `29,97+57` is either Ctrl key held with Space.
-    pub fn parse(spec: &str) -> Result<Self, String> {
+    fn from_str(spec: &str) -> Result<Self, String> {
         let invalid = || format!("invalid chord `{spec}`");
         let groups = spec
             .split('+')
@@ -43,7 +48,9 @@ impl Chord {
         }
         Ok(Self { groups })
     }
+}
 
+impl Chord {
     fn held(&self, down: &HashSet<u16>) -> bool {
         self.groups
             .iter()
@@ -140,28 +147,32 @@ mod tests {
     const SPACE: u16 = 57;
     const A: u16 = 30;
 
+    fn parse(spec: &str) -> Result<Chord, String> {
+        spec.parse()
+    }
+
     fn tracker() -> ChordTracker {
-        ChordTracker::new(Some(Chord::parse("29,97+57").expect("chord")))
+        ChordTracker::new(Some(parse("29,97+57").expect("chord")))
     }
 
     #[test]
     fn chords_need_ctrl_alt_or_super_so_typing_is_never_reported() {
-        assert!(Chord::parse("29,97+57").is_ok());
-        assert!(Chord::parse("125+42+30").is_ok());
+        assert!(parse("29,97+57").is_ok());
+        assert!(parse("125+42+30").is_ok());
         // Shift with a letter is typing; a key alone is typing.
-        assert!(Chord::parse("42,54+30").is_err());
-        assert!(Chord::parse("30").is_err());
+        assert!(parse("42,54+30").is_err());
+        assert!(parse("30").is_err());
         // A group mixing a command modifier with a letter is not a modifier.
-        assert!(Chord::parse("29,30+57").is_err());
-        assert!(Chord::parse("29+57+30+31+32+33").is_err());
-        assert!(Chord::parse("29+768").is_err());
-        assert!(Chord::parse("29+16,17,18,19,20,21,22,23,24").is_err());
-        assert!(Chord::parse("zz=29+57").is_err());
+        assert!(parse("29,30+57").is_err());
+        assert!(parse("29+57+30+31+32+33").is_err());
+        assert!(parse("29+768").is_err());
+        assert!(parse("29+16,17,18,19,20,21,22,23,24").is_err());
+        assert!(parse("zz=29+57").is_err());
     }
 
     #[test]
     fn the_same_symbol_can_have_different_positions_in_several_layouts() {
-        let chord = Chord::parse("29,97+16,30,45").expect("layout alternatives");
+        let chord = parse("29,97+16,30,45").expect("layout alternatives");
         for code in [16, 30, 45] {
             let mut keys = ChordTracker::new(Some(chord.clone()));
             keys.key(0, KEY_LEFTCTRL, Press);

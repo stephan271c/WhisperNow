@@ -20,17 +20,20 @@ pub use history::{
     HistoryPageRequest, HistoryRetention, NewHistoryEntry, UtcMillis,
 };
 pub use models::{
-    CLEANUP_MODEL_IDS, CleanupBenchmark, DEFAULT_CLEANUP_MODEL_ID, DownloadPhase,
+    CLEANUP_MODEL_IDS, CleanupBenchmark, DEFAULT_CLEANUP_MODEL_ID, DownloadPhase, InvalidModelId,
     ModelAvailability, ModelBenchmark, ModelDefinition, ModelFamily, ModelId, ModelLayout,
     ModelRegistry, ModelSource, Rating, SpeechBenchmark, WerSource,
 };
-pub use provider::{EndpointError, LlmProvider, ProviderEndpoint};
+pub use provider::{EndpointError, LlmProvider, ProviderEndpoint, UnknownLlmProvider};
 pub use settings::{
     ApiKey, InvalidApiKey, ProviderSettings, PythonSettings, SettingChange, Settings,
     SetupCheckpoint, SetupProgress, SetupStep, ThemePreference, VocabularyReplacement,
     WindowGeometry,
 };
-pub use shortcut::{RecordingMode, Shortcut, ShortcutKey, ShortcutModifier};
+pub use shortcut::{
+    RecordingMode, Shortcut, ShortcutKey, ShortcutModifier, UnknownShortcutKey,
+    UnknownShortcutModifier,
+};
 pub use validation::SettingsError;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

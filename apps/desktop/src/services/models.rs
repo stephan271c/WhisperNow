@@ -63,7 +63,7 @@ impl ModelLibrary {
             .list()
             .map_err(|error| model_list_error(&error))?
             .into_iter()
-            .map(|entry| entry.definition.summary(entry.availability))
+            .map(|entry| ModelSummary::new(entry.definition, entry.availability))
             .collect();
         Ok(models)
     }

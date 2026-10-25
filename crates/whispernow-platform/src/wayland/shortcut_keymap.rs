@@ -1,4 +1,8 @@
-use std::{fs::File, io, os::unix::fs::FileExt as _};
+use std::{
+    fs::File,
+    io,
+    os::{fd::OwnedFd, unix::fs::FileExt as _},
+};
 
 use wayland_client::{
     Connection, Dispatch, QueueHandle, WEnum,
@@ -163,32 +167,38 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for ShortcutKeymap {
         _: &QueueHandle<Self>,
     ) {
         if let wl_keyboard::Event::Keymap { format, fd, size } = event {
-            let result = (|| {
-                if format != WEnum::Value(wl_keyboard::KeymapFormat::XkbV1) {
-                    return Err(io::Error::other("the compositor keymap is not XKB"));
+            match load_keymap(format, fd, size) {
+                Ok(keymap) => {
+                    for group in &mut state.groups {
+                        group.codes.extend(key_codes(&keymap, &group.symbols));
+                    }
                 }
-                let mut bytes = vec![0; usize::try_from(size).map_err(io::Error::other)?];
-                // The compositor may share the descriptor's cursor across clients.
-                File::from(fd).read_exact_at(&mut bytes, 0)?;
-                let text = String::from_utf8(bytes).map_err(io::Error::other)?;
-                let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-                let keymap = xkb::Keymap::new_from_string(
-                    &context,
-                    text.trim_end_matches('\0').to_owned(),
-                    xkb::KEYMAP_FORMAT_TEXT_V1,
-                    xkb::KEYMAP_COMPILE_NO_FLAGS,
-                )
-                .ok_or_else(|| io::Error::other("the compositor keymap could not be compiled"))?;
-                for group in &mut state.groups {
-                    group.codes.extend(key_codes(&keymap, &group.symbols));
-                }
-                Ok(())
-            })();
-            if let Err(error) = result {
-                state.error = Some(error);
+                Err(error) => state.error = Some(error),
             }
         }
     }
+}
+
+fn load_keymap(
+    format: WEnum<wl_keyboard::KeymapFormat>,
+    fd: OwnedFd,
+    size: u32,
+) -> io::Result<xkb::Keymap> {
+    if format != WEnum::Value(wl_keyboard::KeymapFormat::XkbV1) {
+        return Err(io::Error::other("the compositor keymap is not XKB"));
+    }
+    let mut bytes = vec![0; usize::try_from(size).map_err(io::Error::other)?];
+    // The compositor may share the descriptor's cursor across clients.
+    File::from(fd).read_exact_at(&mut bytes, 0)?;
+    let text = String::from_utf8(bytes).map_err(io::Error::other)?;
+    let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    xkb::Keymap::new_from_string(
+        &context,
+        text.trim_end_matches('\0').to_owned(),
+        xkb::KEYMAP_FORMAT_TEXT_V1,
+        xkb::KEYMAP_COMPILE_NO_FLAGS,
+    )
+    .ok_or_else(|| io::Error::other("the compositor keymap could not be compiled"))
 }
 
 fn key_codes(keymap: &xkb::Keymap, symbols: &[xkb::Keysym]) -> Vec<u16> {

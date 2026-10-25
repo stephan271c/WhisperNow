@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use thiserror::Error;
@@ -56,18 +56,25 @@ impl LlmProvider {
             Self::Custom => "Custom provider",
         }
     }
+}
 
-    #[must_use]
-    pub fn from_name(value: &str) -> Option<Self> {
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("unknown LLM provider")]
+pub struct UnknownLlmProvider;
+
+impl FromStr for LlmProvider {
+    type Err = UnknownLlmProvider;
+
+    fn from_str(value: &str) -> Result<Self, UnknownLlmProvider> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "openai" => Some(Self::OpenAi),
-            "anthropic" => Some(Self::Anthropic),
-            "gemini" | "google" => Some(Self::Gemini),
-            "ollama" => Some(Self::Ollama),
-            "local_cleanup" => Some(Self::LocalCleanup),
-            "openrouter" => Some(Self::OpenRouter),
-            "other" => Some(Self::Custom),
-            _ => None,
+            "openai" => Ok(Self::OpenAi),
+            "anthropic" => Ok(Self::Anthropic),
+            "gemini" | "google" => Ok(Self::Gemini),
+            "ollama" => Ok(Self::Ollama),
+            "local_cleanup" => Ok(Self::LocalCleanup),
+            "openrouter" => Ok(Self::OpenRouter),
+            "other" => Ok(Self::Custom),
+            _ => Err(UnknownLlmProvider),
         }
     }
 }
@@ -80,8 +87,9 @@ impl Serialize for LlmProvider {
 
 impl<'de> Deserialize<'de> for LlmProvider {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let name = String::deserialize(deserializer)?;
-        Self::from_name(&name).ok_or_else(|| D::Error::custom("unknown LLM provider"))
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(D::Error::custom)
     }
 }
 

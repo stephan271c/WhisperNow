@@ -1,14 +1,14 @@
 use whispernow_domain::{
     ApiKey, CLEANUP_MODEL_IDS, CleanupTarget, DEFAULT_CLEANUP_MODEL_ID, InvalidApiKey, LlmProvider,
     MissingCleanupField, ModelId, ProviderEndpoint, ProviderSettings, RecordingMode,
-    RemoteProvider, SettingChange, Settings, SettingsError, SetupCheckpoint, Shortcut, ShortcutKey,
+    RemoteProvider, SettingChange, Settings, SettingsError, SetupCheckpoint, Shortcut,
     ShortcutModifier, VocabularyReplacement,
 };
 
 fn shortcut(modifiers: &[ShortcutModifier], key: &str) -> Shortcut {
     Shortcut {
         modifiers: modifiers.iter().copied().collect(),
-        key: ShortcutKey::from_name(key).expect("a shortcut key"),
+        key: key.parse().expect("a shortcut key"),
     }
 }
 

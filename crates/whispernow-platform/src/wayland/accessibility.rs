@@ -27,17 +27,14 @@ async fn active_application() -> Option<String> {
     let connection = AccessibilityConnection::new().await.ok()?;
     let registry = connection.root_accessible_on_registry().await.ok()?;
     let applications = registry.get_children().await.ok()?;
-    let mut lookups = applications
+    applications
         .iter()
         .filter(|application| !application.is_null())
         .map(|application| active_window_owner(&connection, application))
-        .collect::<FuturesUnordered<_>>();
-    while let Some(lookup) = lookups.next().await {
-        if lookup.is_some() {
-            return lookup;
-        }
-    }
-    None
+        .collect::<FuturesUnordered<_>>()
+        .filter_map(std::future::ready)
+        .next()
+        .await
 }
 
 async fn active_window_owner(

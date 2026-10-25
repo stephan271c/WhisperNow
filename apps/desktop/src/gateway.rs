@@ -1,6 +1,6 @@
 pub(crate) mod commands;
 mod events;
-pub(crate) mod lifecycle;
+mod lifecycle;
 mod permissions;
 mod settings;
 mod shutdown;

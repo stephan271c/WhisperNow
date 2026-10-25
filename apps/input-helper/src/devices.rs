@@ -76,7 +76,7 @@ impl Session {
         let Self::Paste { pending, .. } = self else {
             return false;
         };
-        let Some(shortcut) = PasteShortcut::parse(command.trim()) else {
+        let Ok(shortcut) = command.trim().parse::<PasteShortcut>() else {
             return false;
         };
         if pending.is_some() {
