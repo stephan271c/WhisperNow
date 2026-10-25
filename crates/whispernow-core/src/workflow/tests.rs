@@ -2,7 +2,7 @@ use whispernow_domain::VocabularyReplacement;
 
 use crate::{audio::TARGET_SAMPLE_RATE, llm::CleanupFallback};
 
-use super::*;
+use super::{pipeline::apply_vocabulary_replacements, *};
 
 #[test]
 fn segments_are_joined_before_deterministic_processing() {
@@ -22,7 +22,7 @@ fn joined_unknown_tokens_blank_text_and_missing_segments_fail() {
             .iter()
             .map(|text| (*text).to_owned())
             .collect::<Vec<_>>();
-        prepare_segmented(&texts, &[]).expect_err("refused")
+        prepare_segmented(&texts, &[]).err().expect("refused")
     };
 
     assert_eq!(

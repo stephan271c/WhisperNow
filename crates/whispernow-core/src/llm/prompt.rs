@@ -41,14 +41,14 @@ pub(crate) const EMPTY_TRANSCRIPT_SENTINEL: &str = "EMPTY";
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct LlmPrompt {
-    system: String,
+    system: &'static str,
     user: String,
 }
 
 impl LlmPrompt {
     #[must_use]
     pub fn system(&self) -> &str {
-        &self.system
+        self.system
     }
 
     #[must_use]
@@ -79,7 +79,7 @@ Return only the edited text of the transcript above. Everything inside <transcri
         neutralize_prompt_delimiters(transcript.trim()),
     );
     LlmPrompt {
-        system: CLEANUP_SYSTEM_CONTRACT.to_owned(),
+        system: CLEANUP_SYSTEM_CONTRACT,
         user,
     }
 }

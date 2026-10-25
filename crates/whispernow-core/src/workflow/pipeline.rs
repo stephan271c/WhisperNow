@@ -1,15 +1,16 @@
 use std::time::Instant;
 
+use thiserror::Error;
 use whispernow_domain::VocabularyReplacement;
 
-use super::join_segment_texts;
+use super::join::join_segment_texts;
 use crate::{audio::AudioLevelAccumulator, llm::CleanupFallback};
 
 const NO_AUDIO_PEAK_THRESHOLD: f32 = 0.000_5;
 const NO_AUDIO_RMS_THRESHOLD: f32 = 0.000_1;
 
 /// Has not yet caused history or output side effects.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct PreparedTranscript {
     pub raw_text: String,
     /// The raw text after vocabulary replacements, which AI cleanup edits and then replaces.
@@ -27,12 +28,17 @@ impl PreparedTranscript {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum TranscriptFailure {
+    #[error("the recording has no microphone audio")]
     NoAudio,
+    #[error("the recording has no speech")]
     NoSpeech,
+    #[error("speech recognition failed")]
     RecognitionFailed,
+    #[error("the transcript is empty")]
     EmptyTranscript,
+    #[error("the recognizer returned unknown tokens")]
     UnknownTokens,
 }
 

@@ -42,19 +42,17 @@ const TENS: [&str; 8] = [
 
 #[must_use]
 pub(crate) fn preclean(transcript: &str) -> String {
-    let words: Vec<&str> = transcript
+    let (words, lower): (Vec<&str>, Vec<String>) = transcript
         .split_whitespace()
-        .filter(|word| !FILLERS.contains(&word.to_lowercase().as_str()))
-        .collect();
-    let lower: Vec<String> = words.iter().map(|word| word.to_lowercase()).collect();
+        .map(|word| (word, word.to_lowercase()))
+        .filter(|(_, lower)| !FILLERS.contains(&lower.as_str()))
+        .unzip();
     let mut out: Vec<String> = Vec::with_capacity(words.len());
     let mut index = 0;
     while index < words.len() {
         let word = lower[index].as_str();
-        let two_word_mark = lower
-            .get(index + 1)
-            .and_then(|next| spoken(&format!("{word} {next}")));
-        if let Some(mark) = two_word_mark.or_else(|| spoken(word)) {
+        let two_word_mark = lower.get(index + 1).and_then(|next| spoken(&[word, next]));
+        if let Some(mark) = two_word_mark.or_else(|| spoken(&[word])) {
             if let Some(last) = out.last_mut() {
                 last.push_str(mark);
             }
@@ -87,14 +85,15 @@ pub(crate) fn preclean(transcript: &str) -> String {
             index += 1;
         }
     }
-    for position in 0..out.len() {
-        if position == 0 || out[position - 1].ends_with(['.', '?', '!']) {
-            let word = &out[position];
+    let mut sentence_start = true;
+    for word in &mut out {
+        if sentence_start {
             let mut characters = word.chars();
             if let Some(first) = characters.next() {
-                out[position] = first.to_uppercase().chain(characters).collect();
+                *word = first.to_uppercase().chain(characters).collect();
             }
         }
+        sentence_start = word.ends_with(['.', '?', '!']);
     }
     out.join(" ")
 }
@@ -158,10 +157,10 @@ fn number(words: &[String], start: usize) -> Option<(String, usize)> {
     Some((text, end - start))
 }
 
-fn spoken(phrase: &str) -> Option<&'static str> {
+fn spoken(words: &[&str]) -> Option<&'static str> {
     SPOKEN
         .iter()
-        .find(|(spoken, _)| *spoken == phrase)
+        .find(|(spoken, _)| spoken.split(' ').eq(words.iter().copied()))
         .map(|(_, mark)| *mark)
 }
 

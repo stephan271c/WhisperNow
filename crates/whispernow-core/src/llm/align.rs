@@ -18,7 +18,6 @@ const LOOK_BEHIND: usize = 8;
 /// How far ahead of the pointer a match may be found before the aligner counts as lost.
 const LOOK_AHEAD: usize = 60;
 
-#[derive(Clone, Debug, Default)]
 pub struct WordAligner {
     words: Vec<Vec<u8>>,
     keys: Vec<Vec<u8>>,
@@ -28,7 +27,7 @@ pub struct WordAligner {
 impl WordAligner {
     #[must_use]
     pub fn new(text: &str) -> Self {
-        let words = split(text.as_bytes());
+        let words: Vec<Vec<u8>> = split(text.as_bytes()).map(<[u8]>::to_vec).collect();
         let keys = words.iter().map(|word| norm(word)).collect();
         Self {
             words,
@@ -48,7 +47,7 @@ impl WordAligner {
         let Some(&last_byte) = output.last() else {
             return self.join(0, self.words.len(), false);
         };
-        let parts = split(output);
+        let parts: Vec<&[u8]> = split(output).collect();
         let Some(last_part) = parts.last() else {
             return Vec::new();
         };
@@ -127,19 +126,13 @@ impl WordAligner {
     /// earliest on a tie.
     fn nearest(&self, keys: &[Vec<u8>], length: usize, low: usize, high: usize) -> Option<usize> {
         let tail = &keys[keys.len() - length..];
-        let mut best: Option<usize> = None;
-        let mut position = low;
-        while position + length <= high {
-            if self.keys[position..position + length] == *tail
-                && best.is_none_or(|best| {
-                    position.abs_diff(self.pointer) < best.abs_diff(self.pointer)
-                })
-            {
-                best = Some(position);
-            }
-            position += 1;
-        }
-        best
+        self.keys[..high]
+            .windows(length)
+            .enumerate()
+            .skip(low)
+            .filter(|&(_, window)| window == tail)
+            .map(|(position, _)| position)
+            .min_by_key(|&position| position.abs_diff(self.pointer))
     }
 
     fn join(&self, from: usize, to: usize, lead: bool) -> Vec<u8> {
@@ -163,11 +156,9 @@ fn norm(word: &[u8]) -> Vec<u8> {
 }
 
 /// Splits on C's `isspace`: space, tab, newline, vertical tab, form feed and carriage return.
-fn split(text: &[u8]) -> Vec<Vec<u8>> {
+fn split(text: &[u8]) -> impl Iterator<Item = &[u8]> {
     text.split(|byte| matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'))
         .filter(|word| !word.is_empty())
-        .map(<[u8]>::to_vec)
-        .collect()
 }
 
 #[cfg(test)]
@@ -262,6 +253,13 @@ mod tests {
         assert_eq!(draft(&mut aligner, "a b c x a b c"), " y a b c z");
         // The pointer is now after the second "a b c"; the third is nearer than the first.
         assert_eq!(draft(&mut aligner, "a b c y a b c"), " z");
+    }
+
+    #[test]
+    fn matches_equally_near_the_pointer_resolve_to_the_earlier() {
+        let mut aligner = WordAligner::new("r s t u v w x y r s t z");
+        assert_eq!(draft(&mut aligner, "u"), " v w x y r s t z");
+        assert_eq!(draft(&mut aligner, "r s t"), " u v w x y r s t z");
     }
 
     #[test]

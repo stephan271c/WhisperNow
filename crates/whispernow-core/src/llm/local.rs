@@ -36,11 +36,11 @@ const TURN_START: &str = "<|im_start|>";
 /// `ngram-simple`'s n-gram (`--spec-ngram-simple-size-n 4`).
 const NGRAM_SIZE: usize = 4;
 /// llama.cpp's `repeat_penalty`, as the cleanup model's evaluation ran it.
-pub const REPEAT_PENALTY: f32 = 1.05;
+pub(super) const REPEAT_PENALTY: f32 = 1.05;
 /// The repeat penalty's window (`repeat_last_n`), which covers the whole prompt and reply.
 /// llama.cpp's default is the last 64 tokens; the model was chosen with the whole context
 /// penalized, which keeps spoken numbers as digits more often.
-pub const REPEAT_LAST_N: usize = 4_096;
+pub(super) const REPEAT_LAST_N: usize = 4_096;
 /// `ngram-simple`'s draft length (`--spec-ngram-simple-size-m 4`), which is also the most
 /// tokens a text draft carries.
 pub const DRAFT_TOKENS: usize = 4;
@@ -418,8 +418,7 @@ impl State {
 
 /// llama.cpp's `common_ngram_simple_draft` with n = m = 4: the 4 tokens that followed the
 /// latest earlier occurrence of the last 4 tokens (the cached tail and `sampled`).
-#[must_use]
-pub fn ngram_draft(cached: &[Token], sampled: Token) -> Vec<Token> {
+fn ngram_draft(cached: &[Token], sampled: Token) -> Vec<Token> {
     let length = cached.len();
     if length <= NGRAM_SIZE + DRAFT_TOKENS + 1 {
         return Vec::new();
@@ -441,7 +440,7 @@ pub fn ngram_draft(cached: &[Token], sampled: Token) -> Vec<Token> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PromptBatching {
+enum PromptBatching {
     Plain,
     Checkpointed { user_turn: Option<usize> },
 }
@@ -449,8 +448,7 @@ pub enum PromptBatching {
 /// The server's prompt batches: at most `n_batch` tokens each, and with checkpointing
 /// (memory that is checkpointed), broken after the token before the user turn's start and
 /// 4 + `n_ubatch` and 4 tokens before the end, each capped at `n_batch`.
-#[must_use]
-pub fn prompt_chunks(
+fn prompt_chunks(
     length: usize,
     batch_size: usize,
     micro_batch_size: usize,

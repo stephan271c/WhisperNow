@@ -12,7 +12,7 @@ use std::{
 use crate::CancellationToken;
 
 /// Lets the clipboard change reach the focused application before the paste keystroke.
-pub const PASTE_PROPAGATION_DELAY: Duration = Duration::from_millis(80);
+const PASTE_PROPAGATION_DELAY: Duration = Duration::from_millis(80);
 /// Gives the target time to read the transcript before the previous clipboard is restored.
 pub const PASTE_RESTORE_DELAY: Duration = Duration::from_millis(400);
 

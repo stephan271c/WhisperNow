@@ -9,5 +9,5 @@ pub use pipeline::AudioProcessor;
 pub use ports::{
     AudioCapture, AudioDeviceChoice, AudioEvent, AudioInput, AudioInputError, AudioSink,
 };
-pub use processing::{AudioBlock, TARGET_SAMPLE_RATE};
-use processing::{AudioProcessingError, Resampling, convert_interleaved_to_mono};
+pub use processing::{AudioBlock, AudioProcessingError, TARGET_SAMPLE_RATE};
+use processing::{Resampling, convert_interleaved_to_mono};
