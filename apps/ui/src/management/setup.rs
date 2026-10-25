@@ -71,7 +71,6 @@ impl ManagementState {
             .is_some_and(|view| view.settings.setup.is_complete())
     }
 
-    /// The step first-run setup is on; `None` once it has finished, or before it loads.
     #[must_use]
     pub fn unfinished_setup_step(&self) -> Option<SetupStep> {
         self.setup
@@ -118,7 +117,6 @@ impl ManagementState {
         })
     }
 
-    /// Installs `view` and its checkpoint as the one setup shows; a fresh installation holds none.
     pub fn install_setup(&mut self, view: SettingsView) {
         self.setup = Some(
             view.settings
@@ -139,7 +137,6 @@ impl ManagementState {
         );
     }
 
-    /// Installs the fresh checkpoint of setup started again from Settings.
     pub fn restart_setup(&mut self, view: SettingsView) {
         self.permissions = None;
         self.end_permission_watch();
@@ -156,8 +153,6 @@ impl ManagementState {
         self.end_permission_watch();
     }
 
-    /// What the desktop reports for `kind`; `None` before the cards load or when this platform
-    /// does not need it.
     #[must_use]
     pub fn permission_status(&self, kind: PermissionKind) -> Option<PermissionStatus> {
         self.permissions

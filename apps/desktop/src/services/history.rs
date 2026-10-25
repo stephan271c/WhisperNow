@@ -25,8 +25,7 @@ impl HistoryStore {
         (Self { paths, repository }, diagnostic)
     }
 
-    /// Removes entries beyond a new `limit` or older than `retention`; returns whether any were
-    /// removed.
+    /// Returns whether any entry was removed.
     pub(super) fn prune(
         &self,
         limit: HistoryLimit,
@@ -37,8 +36,6 @@ impl HistoryStore {
             .map(|removed| removed > 0)
     }
 
-    /// Saves one dictation, with `audio` when given, and keeps at most `limit` entries of at
-    /// most `retention` age.
     pub(super) fn insert(
         &self,
         entry: NewHistoryEntry,
@@ -49,7 +46,6 @@ impl HistoryStore {
         self.repository()?.insert(entry, audio, limit, retention)
     }
 
-    /// Records that an entry's text never reached the focused application.
     pub(super) fn mark_not_delivered(&self, id: EntryId, error: &str) -> Result<(), AppError> {
         self.repository()?.mark_not_delivered(id, error)
     }
@@ -58,7 +54,6 @@ impl HistoryStore {
         self.repository()?.list(request)
     }
 
-    /// One entry's kept audio as WAV bytes.
     pub(crate) fn audio(&self, id: EntryId) -> Result<Vec<u8>, AppError> {
         self.repository()?.audio(id)?.ok_or_else(|| {
             AppError::new(

@@ -33,7 +33,6 @@ impl FieldWiring {
     }
 }
 
-/// Provides the wiring to the control below; it follows the frame's props as they change.
 fn use_field_wiring(id: &str, has_description: bool, has_error: bool) {
     let id = id.to_owned();
     let wiring = use_memo(use_reactive!(|(id, has_description, has_error)| {
@@ -65,7 +64,6 @@ pub(crate) fn Field(
     }
 }
 
-/// A settings row: title and description on the left, the control on the right.
 #[component]
 pub(crate) fn SettingRow(
     id: String,
@@ -91,7 +89,6 @@ pub(crate) fn SettingRow(
     }
 }
 
-/// A single-line text input. Inside a `Field` or `SettingRow` it takes the frame's id.
 #[component]
 pub(crate) fn TextInput(
     oninput: EventHandler<FormEvent>,
@@ -110,7 +107,6 @@ pub(crate) fn TextInput(
     }
 }
 
-/// What a [`DraftText`] shows instead of its saved `value`.
 #[derive(Clone, Debug, PartialEq)]
 enum Draft {
     /// Being typed, or refused before it was sent: shown until committed again.
@@ -226,7 +222,6 @@ pub(crate) fn Segmented<T: Clone + PartialEq + 'static>(
     }
 }
 
-/// An on/off switch named by the `Field` or `SettingRow` around it.
 #[component]
 pub(crate) fn Toggle(
     checked: bool,

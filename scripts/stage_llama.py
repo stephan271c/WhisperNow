@@ -28,7 +28,6 @@ from stage_native_dependencies import DEFAULT_ALLOWLIST, PLATFORMS, fetch, match
 
 
 def load_pins(path: Path, platform: str) -> tuple[dict, list[dict], list[str]]:
-    """Return the archive, the libraries pinned for a platform, and its runtime DLLs."""
     document = json.loads(path.read_text(encoding="utf-8"))
     llama = document["shared_libraries"]["llama"]
     archive = llama["archives"].get(platform)
@@ -44,7 +43,6 @@ def load_pins(path: Path, platform: str) -> tuple[dict, list[dict], list[str]]:
 
 
 def read_members(path: Path, members: set[str]) -> dict[str, bytes]:
-    """The named regular files of a .tar.gz or .zip archive."""
     found: dict[str, bytes] = {}
     if path.name.endswith(".zip"):
         with zipfile.ZipFile(path) as bundle:
@@ -92,7 +90,6 @@ def stage(
 
 
 def verify(directory: Path, libraries: list[dict], runtime: list[str]) -> None:
-    """Check that an installed `llama/` holds exactly the pinned libraries and runtime DLLs."""
     present = sorted(path.name for path in directory.iterdir()) if directory.is_dir() else []
     if present != sorted([library["name"] for library in libraries] + runtime):
         raise ValueError(f"packaged llama.cpp libraries are not the exact pinned set: {present}")

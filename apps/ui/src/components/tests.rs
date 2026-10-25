@@ -1529,6 +1529,33 @@ fn choosing_a_cleanup_source_picks_its_first_provider_and_shows_its_fields() {
 }
 
 #[test]
+fn a_typed_api_key_and_model_name_do_not_follow_a_switch_of_provider() {
+    let mut page = shell(snapshot(Phase::Idle), configured());
+    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+    page.input("provider-credential", "sk-test")
+        .input("provider-model-name", "gpt-draft");
+    let html = page.html();
+    assert!(
+        tag(&html, "provider-credential")
+            .expect("key field")
+            .contains("value=\"sk-test\"")
+    );
+
+    page.choose("provider-name", "Anthropic");
+    let html = page.html();
+    let key = tag(&html, "provider-credential").expect("key field");
+    assert!(!key.contains("sk-test"), "{key}");
+    let model = tag(&html, "provider-model-name").expect("model name field");
+    assert!(!model.contains("gpt-draft"), "{model}");
+    assert!(
+        tag(&html, "save-credential")
+            .expect("save key")
+            .contains(" disabled="),
+        "there is no key to save under Anthropic"
+    );
+}
+
+#[test]
 fn the_recording_shortcut_switches_between_hold_and_toggle() {
     let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-general"]);

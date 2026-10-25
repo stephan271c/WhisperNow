@@ -1,6 +1,10 @@
 use std::{
     collections::BTreeMap,
-    sync::{Mutex, MutexGuard, mpsc},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
 };
 use whispernow_domain::AppError;
 
@@ -13,16 +17,29 @@ use whispernow_domain::ipc::{
 /// Sending never blocks, so a snapshot can be sent while the state lock is held and arrives
 /// in change order.
 #[derive(Clone)]
-pub(crate) struct Events(mpsc::Sender<EventPayload>);
+pub(crate) struct Events {
+    sender: mpsc::Sender<EventPayload>,
+    pump_loss_logged: Arc<AtomicBool>,
+}
 
 impl Events {
     pub(crate) fn channel() -> (Self, mpsc::Receiver<EventPayload>) {
         let (sender, receiver) = mpsc::channel();
-        (Self(sender), receiver)
+        let events = Self {
+            sender,
+            pump_loss_logged: Arc::default(),
+        };
+        (events, receiver)
     }
 
+    /// Logs the first event the stopped pump could not take: audio levels would repeat it
+    /// many times a second.
     pub(crate) fn publish(&self, payload: EventPayload) {
-        let _closed = self.0.send(payload);
+        if self.sender.send(payload).is_err()
+            && !self.pump_loss_logged.swap(true, Ordering::Relaxed)
+        {
+            tracing::error!("the event pump stopped; the interface receives no more updates");
+        }
     }
 
     pub(crate) fn history_changed(&self) {
@@ -67,10 +84,8 @@ pub(crate) struct State {
     /// How setup's latest test dictation ended, kept apart from `last_transcript` and
     /// `last_error`.
     pub(crate) setup_test: Option<SetupTestResult>,
-    /// Where the local cleanup model runs, while it is loaded.
     pub(crate) cleanup_device: Option<CleanupDevice>,
     pub(crate) active_downloads: BTreeMap<ModelId, DownloadTask>,
-    /// The model whose latest download failed, until it is downloaded again.
     pub(crate) failed_download: Option<ModelId>,
     /// Set with `cancellation` when the dictation in flight is asked to end early.
     pub(crate) cancel: Option<CancelReason>,
@@ -207,7 +222,7 @@ impl StateCell {
         self.lock().snapshot()
     }
 
-    /// Applies one change and, when it succeeds, publishes the resulting snapshot.
+    /// Publishes only when `change` succeeds.
     pub(crate) fn update<R>(
         &self,
         change: impl FnOnce(&mut State) -> Result<R, AppError>,

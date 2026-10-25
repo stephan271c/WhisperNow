@@ -282,7 +282,6 @@ pub struct ActiveDownload {
     pub bytes_per_second: Option<u64>,
 }
 
-/// Where the local cleanup model runs once loaded.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CleanupDevice {

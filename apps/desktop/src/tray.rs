@@ -125,9 +125,7 @@ pub(crate) fn tray_state(snapshot: &AppState) -> TrayState {
     }
 }
 
-/// Everything the native tray shows. It is derived from snapshots alone and
-/// applied as a whole on the main thread, and only when it changes, so
-/// repeated snapshots never touch the native icon.
+/// Applied only when it changes, so repeated snapshots never touch the native icon.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TrayDesired {
     pub(crate) state: TrayState,
@@ -291,15 +289,11 @@ impl TrayController {
         }
     }
 
-    /// Derives the tray from a published snapshot. Snapshots arrive in
-    /// publication order, so the latest one always wins.
     pub(crate) fn apply_snapshot(&self, snapshot: &AppState) {
         self.apply(tray_desired(snapshot, self.copy_capable));
     }
 
-    /// Records the desired tray and, when it differs from the last one,
-    /// schedules one fire-and-forget render on the main thread. Renders are
-    /// scheduled under the `desired` lock, so they run in the order applied.
+    /// Renders are scheduled under the `desired` lock, so they run in the order applied.
     fn apply(&self, desired: TrayDesired) {
         let mut current = self.desired.lock().expect("tray desired lock poisoned");
         if *current == desired {
@@ -411,7 +405,6 @@ mod taskbar_theme {
         status == 0 && data != 0
     }
 
-    /// Calls `on_change` after every write under the Personalize key, on a background thread.
     #[allow(unsafe_code)]
     pub(super) fn watch(on_change: impl Fn() + Send + 'static) {
         thread::spawn(move || {
@@ -444,9 +437,10 @@ mod taskbar_theme {
     }
 }
 
-/// Every state is the app's key with a different face, so status does not depend on
-/// color: an empty key while loading, updating or clearing data, the logo's bars when idle, a solid key while recording,
-/// dots while processing, a pause sign when paused and an exclamation mark on error.
+/// Every state is the app's key with a different face, so status does not depend on color: an
+/// empty key while loading, updating or clearing data, the logo's bars when idle, a solid key
+/// while recording, dots while processing, a pause sign when paused and an exclamation mark on
+/// error.
 ///
 /// Drawn at 32 px on a 2 px grid so it stays sharp on 2x displays, with 4x4 supersampled edges.
 fn state_icon(state: TrayState, ink: Ink) -> Image<'static> {
@@ -475,10 +469,9 @@ fn state_icon(state: TrayState, ink: Ink) -> Image<'static> {
     Image::new_owned(pixels, u32::from(SIDE), u32::from(SIDE))
 }
 
-/// Whether the point lies inside the state's shape, in 32-unit icon coordinates.
 fn covers(state: TrayState, x: f32, y: f32) -> bool {
-    // The key: 28-unit body with 3-unit walls and a 6-unit bottom lip; the face is centred
-    // on `FACE_Y`.
+    // 32-unit icon coordinates. The key: 28-unit body with 3-unit walls and a 6-unit bottom
+    // lip; the face is centred on `FACE_Y`.
     const FACE_Y: f32 = 14.5;
     let key = rounded_rect(x, y, [2.0, 2.0, 30.0, 30.0], 7.0);
     let rim = key && !rounded_rect(x, y, [5.0, 5.0, 27.0, 24.0], 4.0);
@@ -512,7 +505,6 @@ fn rounded_rect(x: f32, y: f32, [left, top, right, bottom]: [f32; 4], radius: f3
     dot(x, y, nearest_x, nearest_y, radius)
 }
 
-/// A vertical bar with round ends.
 fn pill(x: f32, y: f32, center_x: f32, center_y: f32, width: f32, height: f32) -> bool {
     let (half_w, half_h) = (width / 2.0, height / 2.0);
     rounded_rect(

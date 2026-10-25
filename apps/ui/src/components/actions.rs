@@ -25,7 +25,6 @@ use crate::client;
 use crate::management::replace_task;
 use crate::{NoticeScope, Route, UiContext, UiOperation};
 
-/// How long the level meter stays up after a microphone test.
 const METER_MS: u32 = 20_000;
 
 impl UiContext {
@@ -63,7 +62,6 @@ impl UiContext {
         });
     }
 
-    /// Runs `call` like [`Self::run`] and reports a failure in `scope`.
     fn run_reporting(
         self,
         operation: UiOperation,
@@ -77,7 +75,6 @@ impl UiContext {
         });
     }
 
-    /// Runs `call` like [`Self::run`] unless `operation` is still waiting for its answer.
     fn run_unless_busy<R: 'static>(
         self,
         operation: UiOperation,
@@ -190,7 +187,6 @@ impl UiContext {
         );
     }
 
-    /// Removes every kind of application data, then reads everything again.
     pub(crate) fn clear_data(self) {
         self.run(
             UiOperation::ClearData,

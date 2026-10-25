@@ -23,17 +23,16 @@ pub(crate) use settings::shortcut_error;
 
 pub(crate) struct Gateway {
     pub(crate) services: Arc<NativeServices>,
-    /// Set when shutdown begins; commands that start after it are refused.
     shutdown_begun: Arc<AtomicBool>,
     /// Held for reading by every running command, so shutdown, which takes it for writing,
     /// releases the services only after they finished.
     commands: Arc<RwLock<()>>,
     pub(crate) shortcuts: Arc<ShortcutCoordinator>,
     autostart: Arc<dyn AutostartRegistration>,
-    /// Serializes persisting settings with applying their native side effects,
-    /// so the settings saved last are the settings registered last, and a
-    /// shortcut capture or clear-data never interleaves with that application.
-    /// It is held across awaits only; native calls run on blocking workers.
+    /// Serializes persisting settings with applying their native side effects, so the settings
+    /// saved last are the settings registered last, and a shortcut capture or clear-data never
+    /// interleaves with that application. Held across awaits only; native calls run on blocking
+    /// workers.
     native_settings: tokio::sync::Mutex<()>,
     activation: Arc<ActivationGate>,
     tray: TrayController,
@@ -61,7 +60,6 @@ impl Gateway {
         }
     }
 
-    /// Runs a command's work on a blocking worker, away from the async runtime.
     pub(crate) async fn run_command<R: Send + 'static>(
         &self,
         operation: &'static str,
@@ -113,10 +111,11 @@ where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    tokio::task::spawn_blocking(work).await.map_err(|_| {
+    tokio::task::spawn_blocking(work).await.map_err(|error| {
+        tracing::error!(%error, "a blocking task did not finish");
         AppError::new(
             ErrorCategory::General,
-            "worker_stopped",
+            "operation_aborted",
             "The application could not complete this operation",
         )
     })

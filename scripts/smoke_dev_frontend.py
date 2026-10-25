@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Smoke-test the frontend command and URL configured for ``tauri dev``.
 
-This deliberately tests the HTTP/bootstrap boundary only. A successful run
-proves that Tauri's configured development command serves the compiled Dioxus
-JavaScript and WebAssembly assets at its configured URL; it does not claim that
-a native WebKit/WebView2 window rendered them.
+Tests the HTTP boundary only: that the configured development command serves the
+compiled Dioxus JavaScript and WebAssembly assets at the configured URL, not that a
+WebView rendered them.
 """
 
 from __future__ import annotations

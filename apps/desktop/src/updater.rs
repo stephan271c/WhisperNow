@@ -4,7 +4,7 @@
 
 use std::{
     sync::{Arc, Mutex, MutexGuard},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use whispernow_domain::{AppError, ErrorCategory};
 
@@ -20,21 +20,20 @@ use crate::services::{Dictation, NativeServices};
 
 pub(crate) const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_hours(6);
 const MAX_RELEASE_NOTES_BYTES: usize = 8 * 1024;
+/// How long a download may go without receiving a byte. The builder's `timeout` bounds only
+/// the check, and a total limit would cut off a slow large download.
+const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_mins(1);
 
-/// The plugin's version comparator: only a stable release newer than the running one.
 pub(crate) fn is_newer_stable(current: &Version, release: &Version) -> bool {
     release.pre.is_empty() && release > current
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum UpdateDelivery {
-    /// The plugin replaces the running bundle after the user restarts.
     InPlace,
-    /// The user installs the release's package with the system package manager.
     Manual(ManualUpdatePackage),
 }
 
-/// A newer release the user installs by hand from its release page.
 struct ManualUpdate {
     version: String,
     notes: Option<String>,
@@ -52,7 +51,33 @@ impl ManualUpdate {
     }
 }
 
-/// A downloaded update and its signed bytes.
+/// Which download chunks publish progress: one per `INTERVAL`, and one whenever the whole
+/// percent changes.
+#[derive(Default)]
+struct ProgressThrottle {
+    published_at: Option<Instant>,
+    percent: Option<u64>,
+}
+
+impl ProgressThrottle {
+    const INTERVAL: Duration = Duration::from_millis(100);
+
+    fn poll_due(&mut self, now: Instant, downloaded: u64, total: Option<u64>) -> bool {
+        let percent = total
+            .filter(|total| *total > 0)
+            .map(|total| downloaded.saturating_mul(100) / total);
+        let waited = self
+            .published_at
+            .is_none_or(|at| now.saturating_duration_since(at) >= Self::INTERVAL);
+        if !waited && percent == self.percent {
+            return false;
+        }
+        self.published_at = Some(now);
+        self.percent = percent;
+        true
+    }
+}
+
 #[derive(Debug, PartialEq)]
 struct ReadyUpdate<U> {
     update: U,
@@ -300,8 +325,8 @@ impl UpdateController {
         self.updates.lock().expect("updater state lock poisoned")
     }
 
-    /// Changes the state and publishes the result. It is published under the lock, on the
-    /// channel the application state uses, so events arrive in the order things happened.
+    /// Publishes under the lock, on the channel the application state uses, so events arrive in
+    /// the order things happened.
     fn update<T>(&self, change: impl FnOnce(&mut Updates<Update>) -> T) -> T {
         let mut updates = self.lock();
         let result = change(&mut updates);
@@ -314,8 +339,7 @@ impl UpdateController {
         result
     }
 
-    /// Checks for a newer release and downloads it. Only one check runs at a time: a check
-    /// asked while one runs joins it and returns the current state.
+    /// A check asked while one runs joins it and returns the current state.
     pub(crate) async fn check(&self, manual: bool) -> UpdateState {
         if self.update(|updates| updates.begin_check(manual))
             && let Err(code) = self.check_and_download().await
@@ -325,7 +349,6 @@ impl UpdateController {
         self.snapshot()
     }
 
-    /// A check the user asked for, refused while data is being cleared or an update installs.
     pub(crate) async fn check_manual(&self) -> Result<UpdateState, AppError> {
         self.services.state.refuse_during_maintenance()?;
         Ok(self.check(true).await)
@@ -342,6 +365,7 @@ impl UpdateController {
             .app
             .updater_builder()
             .timeout(Duration::from_secs(30))
+            .configure_client(|client| client.read_timeout(DOWNLOAD_READ_TIMEOUT))
             // The Windows installer exits the process itself.
             .on_before_exit(move || {
                 shut_down_for_update(&exit_app);
@@ -373,11 +397,14 @@ impl UpdateController {
         let version = update.version.clone();
         self.update(|updates| updates.downloading(version, notes));
         let mut downloaded = 0_u64;
+        let mut throttle = ProgressThrottle::default();
         let bytes = update
             .download(
                 |chunk, total| {
                     downloaded = downloaded.saturating_add(chunk as u64);
-                    self.update(|updates| updates.progress(downloaded, total));
+                    if throttle.poll_due(Instant::now(), downloaded, total) {
+                        self.update(|updates| updates.progress(downloaded, total));
+                    }
                 },
                 || {},
             )
@@ -399,6 +426,7 @@ impl UpdateController {
             return self.snapshot();
         };
         let error = open_url(&release_page)
+            .inspect_err(|error| tracing::warn!(%error, "could not open the release page"))
             .err()
             .map(|_| UpdateError::ReleasePageUnavailable);
         self.update(|updates| {
@@ -425,8 +453,8 @@ impl UpdateController {
         Ok(self.snapshot())
     }
 
-    /// Runs on a blocking worker: waiting for the dictation in flight, installing, and shutting
-    /// down all block on native, filesystem, and process work.
+    /// Runs on a blocking worker: waiting for the dictation, installing and shutting down all
+    /// block.
     fn install(&self, ready: Arc<ReadyUpdate<Update>>) -> Result<(), AppError> {
         let dictation = &self.services.dictation;
         if let Err(error) = dictation.begin_update() {
@@ -466,7 +494,6 @@ fn sanitize_release_notes(notes: Option<&str>) -> Option<String> {
     Some(output)
 }
 
-/// The `latest.json` entry an installation reads and how its update is delivered.
 #[derive(Debug, Eq, PartialEq)]
 struct UpdateRoute {
     /// Explicit updater target; `None` keeps the plugin's own `{os}-{arch}` selection.
@@ -537,7 +564,7 @@ pub(crate) async fn restart_to_update(
     Arc::clone(controller.inner()).restart_to_update().await
 }
 
-/// Closes the application before the installer replaces it. Only the first call shuts down.
+/// Only the first call shuts down.
 fn shut_down_for_update(app: &AppHandle) {
     let state = app.state::<crate::gateway::Gateway>();
     if state.begin_shutdown() {
@@ -558,7 +585,7 @@ pub(crate) fn open_update_release_page(
     controller.open_release_page()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum UpdaterPhase {
     Check,
     Download,
@@ -568,6 +595,7 @@ enum UpdaterPhase {
 fn updater_error(error: tauri_plugin_updater::Error, phase: UpdaterPhase) -> UpdateError {
     use tauri_plugin_updater::Error;
 
+    tracing::warn!(%error, ?phase, "update failed");
     match error {
         Error::Minisign(_) | Error::Base64(_) | Error::SignatureUtf8(_) => {
             UpdateError::InvalidSignature
@@ -769,6 +797,66 @@ mod tests {
         };
         assert!(!error.is_recoverable());
         assert_eq!(updates.release_page(), None);
+    }
+
+    #[test]
+    fn a_download_that_stalls_fails_and_a_new_check_can_start() {
+        let mut updates = updates();
+        assert!(updates.begin_check(false));
+        updates.downloading("0.2.1".to_owned(), None);
+        updates.progress(2, Some(4));
+        assert!(!updates.begin_check(true), "the running download is joined");
+
+        updates.failed(UpdateError::DownloadInterrupted);
+        assert_eq!(
+            updates.state.phase,
+            UpdatePhase::Error {
+                error: UpdateError::DownloadInterrupted,
+            }
+        );
+        assert!(updates.begin_check(true));
+    }
+
+    #[test]
+    fn progress_is_published_every_hundred_milliseconds_and_at_each_whole_percent() {
+        let start = Instant::now();
+        let at = |millis| start + Duration::from_millis(millis);
+        let mut throttle = ProgressThrottle::default();
+        assert!(throttle.poll_due(at(0), 1, Some(1_000)), "the first chunk");
+        assert!(!throttle.poll_due(at(10), 5, Some(1_000)), "too soon");
+        assert!(
+            throttle.poll_due(at(20), 10, Some(1_000)),
+            "a whole percent"
+        );
+        assert!(!throttle.poll_due(at(119), 15, Some(1_000)), "99 ms later");
+        assert!(throttle.poll_due(at(120), 16, Some(1_000)), "100 ms later");
+
+        let mut unknown = ProgressThrottle::default();
+        assert!(unknown.poll_due(at(0), 1, None));
+        assert!(
+            !unknown.poll_due(at(99), 1_000_000, None),
+            "no total, no percent"
+        );
+        assert!(unknown.poll_due(at(100), 1_000_001, None));
+        assert!(
+            !unknown.poll_due(at(150), 1_000_002, Some(0)),
+            "an empty total is no percent"
+        );
+    }
+
+    #[test]
+    fn many_tiny_chunks_publish_a_bounded_number_of_states() {
+        let start = Instant::now();
+        let (chunk, total) = (256_u64, 1024 * 1024_u64);
+        let mut throttle = ProgressThrottle::default();
+        let published = (1..=total / chunk)
+            .filter(|index| {
+                let now = start + Duration::from_micros(index * 100);
+                throttle.poll_due(now, index * chunk, Some(total))
+            })
+            .count();
+        // 4096 chunks in 410 ms: the first, 100 whole percents, and one per 100 ms between them.
+        assert!((101..=105).contains(&published), "{published}");
     }
 
     #[test]

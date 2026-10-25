@@ -17,22 +17,16 @@ const OPENER: &str = if cfg!(target_os = "macos") {
     "xdg-open"
 };
 
-/// Opens `directory` in the desktop's file manager without waiting for it.
 pub fn open_in_file_manager(directory: &Path) -> io::Result<()> {
     spawn_opener(directory.as_os_str())
 }
 
-/// Opens `url` in the desktop's default browser without waiting for it.
 pub fn open_url(url: &str) -> io::Result<()> {
     spawn_opener(OsStr::new(url))
 }
 
-/// Opens the system settings `kind` without waiting for it.
-///
-/// # Errors
-///
-/// Returns [`io::ErrorKind::Unsupported`] where the platform has no such page (Linux, and
-/// Accessibility outside macOS), and the spawn error when the opener cannot be started.
+/// Fails with [`io::ErrorKind::Unsupported`] where the platform has no such page (Linux, and
+/// Accessibility outside macOS).
 pub fn open_privacy_settings(kind: PermissionKind) -> io::Result<()> {
     let uri = privacy_settings_uri(kind).ok_or(io::ErrorKind::Unsupported)?;
     spawn_opener(OsStr::new(uri))
@@ -71,8 +65,8 @@ fn spawn_opener(argument: &OsStr) -> io::Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    // Reap the opener so it never lingers as a zombie. Its exit status is not
-    // meaningful: `explorer` reports failure even after opening the folder.
+    // Reap the opener so it never lingers as a zombie. `explorer` reports failure even
+    // after opening the folder, so its exit status is ignored.
     std::thread::Builder::new()
         .name("whispernow-opener".to_owned())
         .spawn(move || {

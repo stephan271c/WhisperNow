@@ -107,7 +107,6 @@ impl ChordTracker {
             .any(|code| codes.contains(code))
     }
 
-    /// Forgets `device`'s keys: it was unplugged or its events overflowed.
     pub fn forget(&mut self, device: u32) -> Option<ChordTransition> {
         self.down.remove(&device);
         self.transition()

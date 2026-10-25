@@ -10,7 +10,7 @@ use whispernow_domain::ModelDefinition;
 
 pub use tokio_util::sync::CancellationToken;
 
-/// Validated model root passed only to native/platform adapters.
+/// Model root passed only to native/platform adapters.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedModel {
     pub definition: ModelDefinition,

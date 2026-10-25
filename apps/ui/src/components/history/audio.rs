@@ -41,7 +41,6 @@ pub(super) fn AudioPlayer(id: EntryId) -> Element {
 enum AudioSource {
     Idle,
     Loading,
-    /// An object URL owned by this player.
     Ready(String),
     Failed(String),
 }

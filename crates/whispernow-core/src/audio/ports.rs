@@ -57,10 +57,9 @@ pub enum AudioInputError {
 
 /// Native callbacks only enqueue bounded raw data; conversion and sink calls happen on a worker.
 pub trait AudioInput: Send + Sync {
-    /// Lists connected input devices, marking the current system default.
     fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError>;
 
-    /// Starts one recording. Dropping the returned capture stops it.
+    /// Dropping the returned capture stops the recording.
     fn start(
         &self,
         device: AudioDeviceChoice,

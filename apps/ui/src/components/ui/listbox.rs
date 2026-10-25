@@ -55,8 +55,10 @@ impl Placement {
         }
     }
 
-    fn room_style(self) -> Option<String> {
-        self.room.map(|room| format!("--select-room: {room:.0}px"))
+    /// Applied as a CSSOM property, never a `style` attribute, which the CSP forbids. 18rem
+    /// repeats the stylesheet's own limit.
+    fn max_height(self) -> Option<String> {
+        self.room.map(|room| format!("min(18rem, {room:.0}px)"))
     }
 }
 
@@ -143,7 +145,7 @@ pub(super) fn OptionList(
             aria_labelledby: labelled_by,
             aria_label: label,
             "data-placement": placement().map(Placement::side_name),
-            style: placement().and_then(Placement::room_style),
+            max_height: placement().and_then(Placement::max_height),
             // Keeps focus, and so the highlighted option, on the control.
             onmousedown: move |event| event.prevent_default(),
             onmounted: move |event: MountedEvent| {

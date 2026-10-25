@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
-"""Check that a macOS app is signed with WhisperNow's pinned self-signed certificate.
-
-The app bundle, each executable in `Contents/MacOS`, and each library in
-`Contents/Frameworks` must be signed by exactly the certificate in
-`release/macos-signing-certificate.pem`. The bundle's designated requirement must name
-that certificate by hash: macOS keeps the user's privacy grants (Microphone,
-Accessibility) for an update only while the requirement stays the
-same, which an ad-hoc signature or another certificate would not.
+"""Check that a macOS app and the code inside it (`Contents/MacOS`, `Contents/Frameworks`) are signed with
+`release/macos-signing-certificate.pem`, and that the bundle's designated requirement names it by hash.
 
 Uses `codesign --display`, which reads signatures without evaluating trust, so it also
 runs on a Mac that does not trust the certificate.
@@ -30,13 +24,11 @@ def pinned_certificate(path: Path) -> bytes:
 
 
 def requirement_pins(display: str, certificate: bytes) -> bool:
-    """Whether `codesign -d -r-` output's designated requirement names the certificate."""
     match = REQUIREMENT.search(display)
     return bool(match) and match.group(1).lower() == hashlib.sha1(certificate).hexdigest()
 
 
 def signed_code(app: Path) -> list[Path]:
-    """The bundle and the code inside it that must carry the pinned signature."""
     nested = [
         path
         for directory in ("MacOS", "Frameworks")
@@ -47,7 +39,6 @@ def signed_code(app: Path) -> list[Path]:
 
 
 def signer(path: Path) -> bytes | None:
-    """The DER bytes of the certificate that signed `path`, or None for ad-hoc code."""
     with tempfile.TemporaryDirectory() as directory:
         prefix = Path(directory) / "certificate"
         subprocess.run(

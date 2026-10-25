@@ -65,7 +65,6 @@ impl Navigator {
         (self.route)()
     }
 
-    /// Shows `route` and moves keyboard focus to its heading.
     pub(crate) fn go(mut self, route: Route) {
         self.route.set(route);
         self.focus_requests += 1;
@@ -81,7 +80,6 @@ struct NavEntry {
     nested: bool,
 }
 
-/// The sidebar links in order; Settings pages are listed while Settings is open.
 fn nav_entries(current: Route) -> Vec<NavEntry> {
     let mut entries = Vec::new();
     for top in TopLevel::ALL {
@@ -306,7 +304,6 @@ fn SidebarFooter() -> Element {
     }
 }
 
-/// A short footer line for update phases that need the user.
 const fn update_summary(phase: Option<&UpdatePhase>) -> Option<&'static str> {
     match phase {
         Some(UpdatePhase::ReadyToRestart { .. }) => Some("Update ready to install"),

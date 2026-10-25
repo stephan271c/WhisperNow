@@ -44,6 +44,7 @@ pub fn eval_bool(script: &str) -> bool {
         .expect("boolean probe result")
 }
 
+/// Records each call as Tauri's IPC sends it: through `JSON.stringify`, which drops `undefined`.
 pub fn install_tauri(invoke_js: &str) {
     js_sys::eval(&format!(
         r#"
@@ -52,7 +53,9 @@ pub fn install_tauri(invoke_js: &str) {
         window.__TAURI__ = {{
           core: {{
             invoke: async (command, payload) => {{
-              window.__whispernowAdapterCalls.push({{ command, payload }});
+              const sent = JSON.parse(JSON.stringify(payload, (_key, value) =>
+                value instanceof Map ? Object.fromEntries(value) : value));
+              window.__whispernowAdapterCalls.push({{ command, payload: sent }});
               {invoke_js}
             }}
           }},

@@ -1,4 +1,3 @@
-//! Tauri command transport and browser window integration.
 #![cfg_attr(
     not(target_arch = "wasm32"),
     allow(dead_code, reason = "natively only tests call the desktop")
@@ -20,7 +19,6 @@ pub(crate) fn connection_error() -> AppError {
 
 type Answer<R> = Result<R, AppError>;
 
-/// Invokes `command` with `request`; `()` sends no argument.
 pub(crate) async fn invoke<Q, R>(command: &'static str, request: Q) -> Answer<R>
 where
     Q: Serialize,
@@ -60,7 +58,6 @@ pub(crate) const fn viewport_height() -> Option<f64> {
     None
 }
 
-/// How the settings window's titlebar is drawn.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum WindowFrame {
@@ -234,19 +231,25 @@ mod wasm {
         serde_wasm_bindgen::from_value(value).unwrap_or_else(|_| connection_error())
     }
 
+    // Tauri sends arguments through `JSON.stringify`, which drops `undefined`, so `None` and `()`
+    // must reach it as `null`.
+    fn request_to_js(request: &impl Serialize) -> Result<JsValue, serde_wasm_bindgen::Error> {
+        request.serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+    }
+
     pub(super) async fn invoke<Q, R>(command: &str, request: Q) -> Answer<R>
     where
         Q: Serialize,
         R: DeserializeOwned,
     {
-        let request = serde_wasm_bindgen::to_value(&request).map_err(|_| connection_error())?;
+        let request = request_to_js(&request).map_err(|_| connection_error())?;
         let response = invoke_typed(command, request).await.map_err(from_js)?;
         serde_wasm_bindgen::from_value(response).map_err(|_| connection_error())
     }
 
     // Make the URL after the last await, in the same step that hands it to the player.
     pub(crate) async fn history_audio_url(id: EntryId) -> Result<String, String> {
-        let request = serde_wasm_bindgen::to_value(&id).map_err(|_| connection_error().summary)?;
+        let request = request_to_js(&id).map_err(|_| connection_error().summary)?;
         let audio = audio_blob("get_history_audio", request)
             .await
             .map_err(|error| from_js(error).summary)?;
@@ -331,7 +334,6 @@ mod wasm {
         let _ = delay_js(ms).await;
     }
 
-    /// Whether the page is hidden, as when its window is hidden in the tray.
     pub(crate) fn document_hidden() -> bool {
         let global = js_sys::global();
         js_sys::Reflect::get(&global, &JsValue::from_str("document"))
@@ -341,7 +343,6 @@ mod wasm {
             .unwrap_or(false)
     }
 
-    /// The height of the window's page area in CSS pixels.
     pub(crate) fn viewport_height() -> Option<f64> {
         js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("innerHeight"))
             .ok()
@@ -368,8 +369,6 @@ mod wasm {
             RefCell::new(ShortcutCaptureSync::default());
     }
 
-    /// Asks the desktop to suspend (`true`) or restore (`false`) its global
-    /// shortcuts while a shortcut capture control is listening.
     pub(crate) fn request_shortcut_capture(capturing: bool) {
         let start_sender = SHORTCUT_CAPTURE.with_borrow_mut(|sync| {
             sync.desired = capturing;

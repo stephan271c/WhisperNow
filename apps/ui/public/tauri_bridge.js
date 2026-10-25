@@ -9,9 +9,10 @@ function tauri() {
   return api;
 }
 
-// Commands without input take no arguments, so `request` is sent only when there is one.
+// Commands without input take no arguments, so `request` is sent only when there is one. The
+// page sends `()` as null.
 export async function invokeTyped(command, request) {
-  const args = request === undefined ? {} : { request };
+  const args = request == null ? {} : { request };
   return await tauri().core.invoke(command, args);
 }
 
@@ -53,7 +54,6 @@ export function currentWindowLabel() {
     ?? "settings";
 }
 
-// Called after a settings page renders; no dynamic evaluation is needed under the desktop CSP.
 export function resetSettingsScroll() {
   const content = document.querySelector(".settings-content");
   if (content) {
@@ -93,7 +93,6 @@ export function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Applies the chosen colour theme; without one the stylesheets follow the system scheme.
 export function applyTheme(theme) {
   const root = document.documentElement;
   if (theme === "light" || theme === "dark") {

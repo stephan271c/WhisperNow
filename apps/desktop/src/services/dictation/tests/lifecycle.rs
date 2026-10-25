@@ -507,6 +507,52 @@ fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
 }
 
 #[test]
+fn a_settings_view_reads_the_autostart_registration_off_the_runtime_thread() {
+    use std::thread::{self, ThreadId};
+
+    #[derive(Default)]
+    struct ReadingThread(Mutex<Option<ThreadId>>);
+
+    impl AutostartRegistration for ReadingThread {
+        fn is_enabled(&self) -> Result<bool, AppError> {
+            *self.0.lock().expect("reading thread") = Some(thread::current().id());
+            Ok(false)
+        }
+
+        fn set_enabled(&self, _enabled: bool) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (services, _root) = native_services(Fixture::new());
+    let autostart = Arc::new(ReadingThread::default());
+    let gateway = Gateway::new(
+        Arc::new(services),
+        Arc::new(ShortcutCoordinator::new(
+            Arc::new(MemoryRegistrar::default()),
+            None,
+            Arc::new(|| true),
+            None,
+        )),
+        autostart.clone(),
+        Arc::new(ActivationGate::default()),
+        TrayController::headless(true),
+    );
+
+    runtime
+        .block_on(gateway.settings_view())
+        .expect("settings view");
+
+    let read_on = autostart.0.lock().expect("reading thread").expect("read");
+    assert_ne!(read_on, thread::current().id());
+    shut_down(&gateway.services);
+}
+
+#[test]
 fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
     use crate::services::state::DownloadTask;
     use whispernow_domain::ipc::ActiveDownload;

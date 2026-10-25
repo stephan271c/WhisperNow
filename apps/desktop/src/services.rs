@@ -71,17 +71,20 @@ impl NativeServices {
         result.map(|_| ())
     }
 
-    /// Deletes aged-out history on its own: once now, then daily, so entries expire while the
-    /// app sits minimized for days.
+    /// Runs daily so entries expire while the app sits minimized for days.
     pub(crate) fn spawn_retention_checks(services: Arc<Self>) {
         tauri::async_runtime::spawn(async move {
-            services.prune_expired_history();
             let mut interval = tokio::time::interval(Duration::from_hours(24));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            interval.tick().await;
             loop {
                 interval.tick().await;
-                services.prune_expired_history();
+                let pruning = Arc::clone(&services);
+                if let Err(error) =
+                    tauri::async_runtime::spawn_blocking(move || pruning.prune_expired_history())
+                        .await
+                {
+                    tracing::error!(%error, "history pruning stopped before it finished");
+                }
             }
         });
     }
@@ -97,8 +100,8 @@ impl NativeServices {
         }
     }
 
-    /// Saves one change and runs its side effect on the stored data; the gateway runs the
-    /// native ones. A pruning failure after the save is a warning next to the saved settings.
+    /// The gateway runs the native side effects. A pruning failure after the save is a warning
+    /// next to the saved settings.
     pub(crate) fn update_settings(
         &self,
         change: &SettingChange,
@@ -139,8 +142,7 @@ impl NativeServices {
             .map_err(|error| audio_devices_unavailable(&error))
     }
 
-    /// Listens to the selected microphone for a few seconds and reports its levels. No audio
-    /// is kept.
+    /// No audio is kept.
     pub(crate) fn test_microphone(&self) -> Result<MicrophoneTestResponse, AppError> {
         let device = self.settings.input_device();
         Ok(self.listen(device, microphone_test::TEST_DURATION)?)
@@ -166,7 +168,6 @@ impl NativeServices {
         )
     }
 
-    /// Asks for one first-run permission where the desktop services can.
     pub(crate) fn request_permission(&self, kind: PermissionKind) -> Result<(), AppError> {
         match kind {
             PermissionKind::Microphone => self.request_microphone(),
@@ -186,9 +187,8 @@ impl NativeServices {
         }
     }
 
-    /// Listens to the default microphone briefly, which is how each platform
-    /// asks for it. A refusal is an answer, shown on the permission card; any
-    /// other failure is returned.
+    /// Each platform asks for the microphone by listening to it. A refusal is an answer, shown
+    /// on the permission card; any other failure is returned.
     fn request_microphone(&self) -> Result<(), AppError> {
         match self.listen(
             AudioDeviceChoice::SystemDefault,
@@ -199,8 +199,6 @@ impl NativeServices {
         }
     }
 
-    /// Asks the compositor for the paste keystroke's consent and waits for the
-    /// user's answer, which the permission card then shows.
     fn request_remote_desktop(&self) -> Result<(), AppError> {
         self.state.lock().phase.require_idle()?;
         self.output
@@ -261,10 +259,9 @@ impl NativeServices {
         })
     }
 
-    /// Reads one history page in any phase; only the history store's own lock
-    /// orders it against changes and data clearing. A search that is too long is the search
-    /// field's problem; a store that cannot be read, or a problem found while opening it, is
-    /// the application's.
+    /// Reads in any phase; only the history store's own lock orders it against changes and data
+    /// clearing. A search that is too long is the search field's problem; a store that cannot be
+    /// read, or a problem found while opening it, is the application's.
     pub(crate) fn history(&self, request: &HistoryPageRequest) -> Result<HistoryPage, AppError> {
         if request.filter.query.len() > HistoryFilter::MAX_QUERY_BYTES {
             return Err(AppError::new(
@@ -339,7 +336,6 @@ fn permission_not_requestable() -> AppError {
     )
 }
 
-/// This platform has no system page for the permission, or it could not be opened.
 fn no_permission_settings() -> AppError {
     AppError::new(
         ErrorCategory::General,
@@ -406,8 +402,6 @@ fn capture_start_error(error: &AudioInputError) -> AppError {
     }
 }
 
-/// Loads the chosen local cleanup model in the background when AI cleanup uses it, and frees it
-/// otherwise.
 fn follow_cleanup_provider(local_cleanup: &LocalCleanupService, settings: &Settings) {
     local_cleanup.set_use_gpu(settings.cleanup_uses_gpu);
     match settings.active_cleanup_target() {
@@ -416,7 +410,6 @@ fn follow_cleanup_provider(local_cleanup: &LocalCleanupService, settings: &Setti
     }
 }
 
-/// Whether saving `change` can load, free or move the local cleanup model.
 const fn moves_cleanup(change: &SettingChange) -> bool {
     matches!(
         change,

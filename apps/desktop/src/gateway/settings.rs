@@ -21,12 +21,12 @@ impl Gateway {
                 Ok(services.settings.get())
             })
             .await?;
-        Ok(self.finish_view(view))
+        Ok(self.finish_view(view).await)
     }
 
-    /// Adds what the desktop reports now to a view. The UI replaces its whole view with each
-    /// one it receives, so every view sent to it passes through here.
-    pub(super) fn finish_view(&self, mut view: SettingsView) -> SettingsView {
+    /// The UI replaces its whole view with each one it receives, so every view sent to it passes
+    /// through here.
+    pub(super) async fn finish_view(&self, mut view: SettingsView) -> SettingsView {
         if self.shortcuts_enabled() && !self.shortcuts.registration_active() {
             let summary = match self.shortcuts.failure() {
                 Some(ShortcutRegistrationError::PermissionDenied) => {
@@ -47,7 +47,11 @@ impl Gateway {
         {
             view.warnings.push("The cancel shortcut could not be activated during the last dictation; choose another key, or cancel from the recording bar or the tray".to_owned());
         }
-        match self.autostart.is_enabled() {
+        let registration = Arc::clone(&self.autostart);
+        match run_blocking(move || registration.is_enabled())
+            .await
+            .and_then(|result| result)
+        {
             Ok(enabled) => view.start_on_login = enabled,
             Err(error) => view.warnings.push(error.summary),
         }
@@ -63,7 +67,7 @@ impl Gateway {
                 services.settings.set_api_key(&request)
             })
             .await?;
-        Ok(self.finish_view(view))
+        Ok(self.finish_view(view).await)
     }
 
     pub(crate) async fn clear_api_key(
@@ -75,7 +79,7 @@ impl Gateway {
                 services.settings.clear_api_key(provider)
             })
             .await?;
-        Ok(self.finish_view(view))
+        Ok(self.finish_view(view).await)
     }
 
     pub(crate) async fn save_setup_checkpoint(
@@ -89,7 +93,7 @@ impl Gateway {
                 move |services| services.save_setup_checkpoint(request),
             )
             .await?;
-        Ok(self.finish_view(view))
+        Ok(self.finish_view(view).await)
     }
 
     pub(crate) async fn restart_setup(&self) -> Result<SettingsView, AppError> {
@@ -98,7 +102,7 @@ impl Gateway {
                 services.settings.restart_setup()
             })
             .await?;
-        Ok(self.finish_view(view))
+        Ok(self.finish_view(view).await)
     }
 
     /// Registers a new recording shortcut before it is saved and swaps the cancel shortcut
@@ -140,7 +144,7 @@ impl Gateway {
                 .await;
         }
         Ok(SaveSettingsResponse {
-            settings: self.finish_view(response.settings),
+            settings: self.finish_view(response.settings).await,
             warnings: response.warnings,
         })
     }
@@ -179,7 +183,7 @@ impl Gateway {
             .into_iter()
             .collect();
         Ok(SaveSettingsResponse {
-            settings: self.finish_view(settings),
+            settings: self.finish_view(settings).await,
             warnings,
         })
     }
@@ -224,9 +228,6 @@ impl Gateway {
         }
     }
 
-    /// Suspends or restores global shortcuts while the settings UI captures a
-    /// new combination. Serialized with settings saves so a capture never
-    /// observes a half-applied shortcut update.
     pub(crate) async fn set_shortcut_capture(&self, capturing: bool) -> Result<(), AppError> {
         let _native_settings = self.native_settings.lock().await;
         let shortcuts = Arc::clone(&self.shortcuts);
@@ -248,7 +249,6 @@ impl Gateway {
         Ok(())
     }
 
-    /// Registers `saved`'s shortcut again after a save that registered another failed.
     async fn restore_shortcuts(&self, saved: &Settings) {
         let Some(recording) = recording_binding(saved) else {
             tracing::warn!("the saved shortcuts break a rule; none is registered again");
@@ -278,8 +278,8 @@ impl Gateway {
         run_blocking(move || shortcuts.apply_update(recording)).await
     }
 
-    /// Swaps the cancel shortcut. It is registered only while a dictation
-    /// runs, so a refusal surfaces then, as a settings diagnostic.
+    /// The cancel shortcut is registered only while a dictation runs, so a refusal surfaces
+    /// then, as a settings diagnostic.
     async fn apply_cancel_shortcut(&self, binding: Option<ShortcutBinding>) {
         let shortcuts = Arc::clone(&self.shortcuts);
         if let Err(error) = run_blocking(move || shortcuts.set_cancel_binding(binding)).await {
@@ -307,9 +307,8 @@ impl Gateway {
         run_blocking(move || registration.set_enabled(enabled)).await?
     }
 
-    /// Clears all application data, including the start-on-login registration. A
-    /// registration that cannot be removed is published as an error; the data is
-    /// already gone.
+    /// A start-on-login registration that cannot be removed is published as an error; the data
+    /// is already gone.
     pub(super) async fn clear_data(&self) -> Result<ClearDataResult, AppError> {
         let _native_settings = self.native_settings.lock().await;
         let result = self
@@ -324,7 +323,6 @@ impl Gateway {
     }
 }
 
-/// What a settings save did to the registered recording shortcut.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutSwap {
     Unchanged,

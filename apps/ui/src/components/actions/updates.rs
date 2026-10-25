@@ -10,7 +10,6 @@ use crate::client;
 use dioxus::prelude::*;
 
 impl UiContext {
-    /// Runs an update command; its answer is the new update state.
     fn update_command(
         self,
         operation: UiOperation,

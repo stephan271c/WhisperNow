@@ -11,7 +11,6 @@ pub(super) struct WindowChrome {
 }
 
 impl WindowChrome {
-    /// The page draws a titlebar strip: with buttons when `Drawn`, under macOS's own when `Overlay`.
     pub(super) fn has_strip(self) -> bool {
         self.frame != WindowFrame::Native
     }
@@ -26,7 +25,6 @@ impl WindowChrome {
         format!("wn-app settings-shell{frame}{maximized}")
     }
 
-    /// The platform, for the few rules the shared strip varies by; the native frame needs none.
     pub(super) fn platform_name(self) -> Option<&'static str> {
         self.has_strip().then(|| self.platform.name())
     }

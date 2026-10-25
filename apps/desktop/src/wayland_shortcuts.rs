@@ -1,4 +1,5 @@
 use std::{
+    io,
     sync::{Arc, mpsc as std_mpsc},
     time::Duration,
 };
@@ -11,7 +12,7 @@ use ashpd::{
     },
 };
 use futures_util::{FutureExt as _, Stream, StreamExt as _, future, stream};
-use tokio::{sync::mpsc, time::Instant};
+use tokio::{sync::mpsc, task::AbortHandle, time::Instant};
 use whispernow_platform::wayland::shortcut_input_chord;
 
 use crate::{
@@ -66,7 +67,6 @@ enum Command {
     },
 }
 
-/// One portal key transition with the compositor timestamp that orders it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TimedTransition {
     timestamp: Duration,
@@ -103,10 +103,21 @@ trait ShortcutPortal: Send {
     async fn shutdown(&mut self);
 }
 
+struct AbortOnDrop(AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 struct BoundSession {
     id: ShortcutId,
     token: SessionToken,
     session: Arc<Session<GlobalShortcuts>>,
+    /// The portal does not emit `Closed` for a session this process closes, so
+    /// the watcher would otherwise stay parked for good.
+    _closed_watcher: AbortOnDrop,
 }
 
 struct AshpdShortcutPortal {
@@ -171,11 +182,11 @@ impl ShortcutPortal for AshpdShortcutPortal {
         binding: &ShortcutBinding,
     ) -> Result<SessionToken, ShortcutRegistrationError> {
         if let Some(session) = &self.session {
-            assert_eq!(
-                session.id, binding.id,
-                "one Wayland shortcut may be registered"
-            );
-            return Ok(session.token);
+            return if session.id == binding.id {
+                Ok(session.token)
+            } else {
+                Err(ShortcutRegistrationError::ConflictOrUnsupported)
+            };
         }
         let session = self
             .proxy
@@ -216,7 +227,7 @@ impl ShortcutPortal for AshpdShortcutPortal {
         let closed_signals = self.signals.clone();
         let token = SessionToken(self.next_session_token);
         self.next_session_token += 1;
-        tokio::spawn(async move {
+        let closed_watcher = tokio::spawn(async move {
             let Ok(mut closed) = closed_session.receive_closed().await else {
                 let _ = closed_signals.send(PortalSignal::Disconnected);
                 return;
@@ -224,16 +235,18 @@ impl ShortcutPortal for AshpdShortcutPortal {
             if closed.next().await.is_some() {
                 let _ = closed_signals.send(PortalSignal::SessionClosed(token));
             }
-        });
+        })
+        .abort_handle();
         self.session = Some(BoundSession {
             id: binding.id,
             token,
             session,
+            _closed_watcher: AbortOnDrop(closed_watcher),
         });
         let shortcut = binding.shortcut.clone();
         let chord = tokio::task::spawn_blocking(move || shortcut_input_chord(&shortcut))
             .await
-            .expect("shortcut keymap worker panicked");
+            .unwrap_or_else(|error| Err(io::Error::other(error)));
         let signals = self.signals.clone();
         match chord {
             Ok(chord) => self.releases.watch(&chord, move |event| {
@@ -272,15 +285,13 @@ impl ShortcutPortal for AshpdShortcutPortal {
     }
 }
 
-/// Synchronous registrar façade over the long-lived portal actor.
 pub(crate) struct WaylandShortcutRegistrar {
     commands: mpsc::UnboundedSender<Command>,
 }
 
 impl WaylandShortcutRegistrar {
-    /// Registers the portal identity first: the shortcut actor makes this
-    /// process's first portal call, and the output portal waits for a paste or
-    /// a setup consent request, both of which follow startup.
+    /// Registers the portal identity first: the shortcut actor makes this process's first
+    /// portal call.
     ///
     /// The actor runs on Tauri's runtime, which outlives every portal user: ashpd opens the
     /// process's one D-Bus connection on the first portal call and zbus runs its reader on the
@@ -343,10 +354,9 @@ impl ShortcutRegistrar for WaylandShortcutRegistrar {
         })
     }
 
-    /// Each registration opens a portal session the compositor may ask the user
-    /// to approve, so the cancel shortcut is not registered for every dictation;
-    /// the overlay's cancel button and the tray cancel instead. The portal actor holds one
-    /// session, so only the recording shortcut is registered.
+    /// Each registration opens a portal session the compositor may ask the user to approve, and
+    /// the actor holds one session, so only the recording shortcut is registered. Cancelling
+    /// goes through the overlay button and the tray.
     fn supports_transient_shortcuts(&self) -> bool {
         false
     }
@@ -381,7 +391,6 @@ struct HeldShortcut {
 }
 
 struct Hold {
-    /// The portal timestamp of the press.
     pressed_at: Duration,
     deadline: Option<Instant>,
 }
@@ -613,12 +622,13 @@ async fn actor_loop<P: ShortcutPortal>(
                             let _ = events.send(ShortcutEvent::Transition { id, transition });
                         }
                     }
-                    PortalSignal::ReleaseWatcher(token, _)
-                        if active.is_some_and(|(_, active_token)| active_token == token) =>
-                    {
-                        let (id, _) = active.expect("matched active session");
-                        for transition in held.key_signal(signal, Instant::now()) {
-                            let _ = events.send(ShortcutEvent::Transition { id, transition });
+                    PortalSignal::ReleaseWatcher(token, _) => {
+                        if let Some((id, active_token)) = active
+                            && active_token == token
+                        {
+                            for transition in held.key_signal(signal, Instant::now()) {
+                                let _ = events.send(ShortcutEvent::Transition { id, transition });
+                            }
                         }
                     }
                     PortalSignal::SessionClosed(token) => {
@@ -633,8 +643,7 @@ async fn actor_loop<P: ShortcutPortal>(
                             );
                         }
                     }
-                    PortalSignal::Transition(_)
-                    | PortalSignal::ReleaseWatcher(_, _) => {}
+                    PortalSignal::Transition(_) => {}
                     PortalSignal::Disconnected => {
                         notify_capability_lost(
                             &events,
@@ -650,11 +659,9 @@ async fn actor_loop<P: ShortcutPortal>(
     portal.shutdown().await;
 }
 
-/// Forwards the portal's separate `Activated` and `Deactivated` signal streams,
-/// given in either order, as one ordered sequence. Every transition already
-/// queued is sorted by its compositor timestamp before it is forwarded, so a
-/// fast tap cannot deliver its release ahead of its press. Reports the portal
-/// as disconnected when either stream ends.
+/// Transitions already queued are sorted by compositor timestamp before they are forwarded, so
+/// a fast tap cannot deliver its release ahead of its press. Either stream ending reports the
+/// portal as disconnected.
 async fn forward_ordered_transitions(
     first: impl Stream<Item = TimedTransition>,
     second: impl Stream<Item = TimedTransition>,
@@ -751,8 +758,11 @@ mod tests {
             }
             let mut registered = self.registered.lock().expect("registered");
             if let Some((id, token)) = *registered {
-                assert_eq!(id, binding.id, "one Wayland shortcut may be registered");
-                return Ok(token);
+                return if id == binding.id {
+                    Ok(token)
+                } else {
+                    Err(ShortcutRegistrationError::ConflictOrUnsupported)
+                };
             }
             self.next_session_token += 1;
             let token = SessionToken(self.next_session_token);
@@ -942,6 +952,43 @@ mod tests {
             .expect("new session release");
         actor.expect(2, KeyTransition::Released).await;
         actor.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_second_shortcut_is_refused_and_the_first_keeps_working() {
+        let mut actor = Actor::spawn(FakePortal::default());
+        actor.register(1).await.expect("registered");
+        assert_eq!(
+            actor.register(2).await,
+            Err(ShortcutRegistrationError::ConflictOrUnsupported)
+        );
+        actor
+            .signals
+            .send(PortalSignal::Transition(timed(
+                1000,
+                1,
+                KeyTransition::Pressed,
+            )))
+            .expect("press");
+        actor.expect(1, KeyTransition::Pressed).await;
+        actor.finish().await;
+    }
+
+    #[tokio::test]
+    async fn dropping_the_guard_aborts_the_parked_watcher() {
+        let alive = Arc::new(());
+        let held = Arc::clone(&alive);
+        let watcher = tokio::spawn(async move {
+            future::pending::<()>().await;
+            drop(held);
+        });
+        let guard = AbortOnDrop(watcher.abort_handle());
+        tokio::task::yield_now().await;
+        assert_eq!(Arc::strong_count(&alive), 2);
+
+        drop(guard);
+        assert!(watcher.await.expect_err("aborted").is_cancelled());
+        assert_eq!(Arc::strong_count(&alive), 1);
     }
 
     #[tokio::test]

@@ -302,9 +302,8 @@ impl CallbackPorts {
             }
         };
         buffer.clear();
-        // Hosts such as WASAPI shared mode or PipeWire may ignore the requested
-        // period. Growing keeps the whole callback; the grown buffer returns to the
-        // pool, so this allocates at most once per pooled buffer per larger period.
+        // Hosts such as WASAPI shared mode or PipeWire may ignore the requested period;
+        // growing keeps the whole callback and the grown buffer returns to the pool.
         buffer.reserve(data.len());
         buffer.extend(data.iter().map(|sample| {
             let normalized = f32::from_sample(*sample);
@@ -446,7 +445,6 @@ mod tests {
         assert_eq!(selected.sample_rate(), 32_000);
     }
 
-    /// Ports with one pool slot, seeded with `buffer` when given, and their chunks' receiver.
     fn ports(channels: usize, buffer: Option<Vec<f32>>) -> (CallbackPorts, Receiver<Vec<f32>>) {
         let (chunks, chunks_rx) = sync_channel(1);
         let (recycle, available) = sync_channel(1);

@@ -13,7 +13,7 @@ pub(crate) const SNAPSHOT_MIME_TYPES: [&str; 6] = [
     "image/png",
     "text/uri-list",
 ];
-pub(crate) const READ_TIMEOUT: Duration = Duration::from_millis(500);
+pub(crate) const CLIPBOARD_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const MAX_FORMAT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 

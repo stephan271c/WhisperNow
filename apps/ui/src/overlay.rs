@@ -15,12 +15,10 @@ const RELEASE: f32 = 0.6;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OverlayView {
-    /// Newest last; each value is in `0.0..=1.0`.
     pub levels: [f32; LEVEL_BARS],
     /// Whether real samples arrived for this recording; until then the bars are arming.
     pub levels_seen: bool,
     pub elapsed_ms: u64,
-    /// The recording the meter belongs to.
     session: Option<u64>,
     /// Why the last overlay action failed; cleared by the next phase.
     pub action_error: Option<String>,
@@ -36,7 +34,6 @@ impl OverlayView {
         }
     }
 
-    /// Adds one throttled meter reading while the microphone may be live.
     pub fn apply_level(&mut self, rms: f32, elapsed_ms: u64) {
         let decibels = 20.0 * rms.clamp(1e-6, 1.0).log10();
         let activity = ((decibels - FLOOR_DB) / (CEILING_DB - FLOOR_DB)).clamp(0.0, 1.0);
@@ -49,7 +46,6 @@ impl OverlayView {
     }
 }
 
-/// `m:ss` for the elapsed recording time.
 #[must_use]
 pub(crate) fn format_elapsed(elapsed_ms: u64) -> String {
     let seconds = elapsed_ms / 1_000;

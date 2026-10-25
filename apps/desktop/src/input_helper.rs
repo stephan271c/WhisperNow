@@ -303,7 +303,6 @@ fn copy_setup(app_dir: &Path, setup_dir: &Path) -> io::Result<PathBuf> {
     Ok(script)
 }
 
-/// `text` as one shell word.
 fn shell_quoted(text: &str) -> String {
     if text
         .chars()

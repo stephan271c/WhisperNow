@@ -31,7 +31,6 @@ pub(crate) enum SessionFacts {
     },
 }
 
-/// Who presses the paste keystroke in a native Wayland session.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WaylandPaste {
     /// The paste helper's virtual keyboard, which needs no consent.
@@ -40,8 +39,7 @@ pub(crate) enum WaylandPaste {
         expect(dead_code)
     )]
     Helper,
-    /// The `RemoteDesktop` portal, with its consent and the command that sets
-    /// the helper up instead.
+    /// The `RemoteDesktop` portal, with the command that sets the helper up instead.
     #[cfg_attr(
         all(not(test), any(target_os = "macos", target_os = "windows")),
         expect(dead_code)
@@ -184,8 +182,6 @@ impl SessionFacts {
     }
 }
 
-/// The command that sets the Wayland paste helper up, when this build carries its install
-/// script.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn paste_helper_setup_command(paths: &AppPaths) -> Option<String> {
     #[cfg(target_os = "linux")]

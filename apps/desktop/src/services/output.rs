@@ -174,8 +174,7 @@ impl OutputCoordinator {
         }
     }
 
-    /// The `RemoteDesktop` portal consent the paste keystroke needs, or `None`
-    /// outside a native Wayland session, where no portal is involved.
+    /// `None` outside a native Wayland session, where no portal is involved.
     #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     pub(crate) fn remote_desktop_consent(&self) -> Option<PermissionStatus> {
         match &self.operation {
@@ -185,8 +184,8 @@ impl OutputCoordinator {
         }
     }
 
-    /// Asks for the paste keystroke's portal consent now, while setup shows why,
-    /// instead of at the first paste. It waits for the user's answer.
+    /// Asks now, while setup shows why, instead of at the first paste. Waits for the user's
+    /// answer.
     pub(crate) fn request_remote_desktop_consent(&self) -> Option<PermissionStatus> {
         match &self.operation {
             #[cfg(target_os = "linux")]
@@ -441,8 +440,7 @@ impl WaylandOutputPortal {
         })
     }
 
-    /// Opens the portal's output session, which asks for consent unless the
-    /// restore token covers it. Stopping the application abandons the wait.
+    /// Asks for consent unless the restore token covers it.
     fn prepare(&self) -> PermissionStatus {
         if !self.available {
             return PermissionStatus::Unavailable;

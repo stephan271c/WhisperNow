@@ -1,4 +1,5 @@
 use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::{Arc, Mutex, MutexGuard},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -106,7 +107,11 @@ impl ModelCoordinator {
         let worker_model_id = model_id.clone();
         let worker = thread::Builder::new()
             .name(format!("model-download-{model_id}"))
-            .spawn(move || run_model_download(store, &state, worker_model_id, token));
+            .spawn(move || {
+                run_model_download(&state, &worker_model_id, |observer| {
+                    store.download(&worker_model_id, &token, observer)
+                });
+            });
         let Ok(worker) = worker else {
             self.state.apply(|state| {
                 state.active_downloads.remove(model_id);
@@ -137,9 +142,7 @@ impl ModelCoordinator {
         Ok(())
     }
 
-    /// Checks that the requested model is a downloaded, inactive model and not the last usable
-    /// one. The caller holds the model transition, so nothing changes that
-    /// before the file is deleted.
+    /// The caller holds the model transition, so nothing changes before the file is deleted.
     fn require_deletable(&self, model_id: &ModelId) -> Result<ModelFamily, AppError> {
         let state = self.state.lock();
         if state.selected_model_id == *model_id {
@@ -220,7 +223,9 @@ impl ModelCoordinator {
     pub(super) fn shutdown_downloads(&self) {
         self.request_shutdown();
         for worker in std::mem::take(&mut *lock(&self.workers)) {
-            let _worker_result = worker.join();
+            if worker.join().is_err() {
+                tracing::error!("a model download worker panicked while ending");
+            }
         }
     }
 }
@@ -278,12 +283,11 @@ fn model_list_error(error: &ModelStoreError) -> AppError {
     )
 }
 
-#[allow(clippy::needless_pass_by_value)]
+/// A download that panics ends as a failed one, so its entry cannot block later model changes.
 fn run_model_download(
-    store: Arc<ModelStore>,
     state: &StateCell,
-    model_id: ModelId,
-    cancellation: CancellationToken,
+    model_id: &ModelId,
+    download: impl FnOnce(&dyn Fn(DownloadProgress)) -> Result<ResolvedModel, ModelStoreError>,
 ) {
     let started = Instant::now();
     let observer = |progress: DownloadProgress| {
@@ -294,7 +298,7 @@ fn run_model_download(
         state.apply(|current| {
             let download = current
                 .active_downloads
-                .get_mut(&model_id)
+                .get_mut(model_id)
                 .expect("download worker owns its registered progress until completion");
             download.progress.phase = phase;
             download.progress.downloaded_bytes = progress.downloaded_bytes;
@@ -302,21 +306,25 @@ fn run_model_download(
             download.progress.bytes_per_second = bytes_per_second;
         });
     };
-    let failed = match store.download(&model_id, &cancellation, &observer) {
-        Ok(_) => false,
-        Err(ModelStoreError::Cancelled) => {
+    let failed = match catch_unwind(AssertUnwindSafe(|| download(&observer))) {
+        Ok(Ok(_)) => false,
+        Ok(Err(ModelStoreError::Cancelled)) => {
             tracing::info!(model_id = %model_id, "model download cancelled");
             false
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             tracing::warn!(%error, model_id = %model_id, "the model could not be installed");
+            true
+        }
+        Err(_) => {
+            tracing::error!(model_id = %model_id, "the model download panicked");
             true
         }
     };
     state.apply(|current| {
-        current.active_downloads.remove(&model_id);
+        current.active_downloads.remove(model_id);
         if failed {
-            current.failed_download = Some(model_id);
+            current.failed_download = Some(model_id.clone());
         }
     });
     state.events().models_changed();
@@ -356,12 +364,17 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use whispernow_domain::{DEFAULT_CLEANUP_MODEL_ID, ModelId, ModelRegistry};
+    use whispernow_core::CancellationToken;
+    use whispernow_domain::ipc::{ActiveDownload, EventPayload, ModelState};
+    use whispernow_domain::{DEFAULT_CLEANUP_MODEL_ID, DownloadPhase, ModelId, ModelRegistry};
     use whispernow_platform::{AppPaths, DownloadTimeouts, LocalCleanupService, ModelStore};
 
-    use crate::services::{Fixture, Phase, RecordingTrigger, state::StateCell};
+    use crate::services::{
+        Fixture, Phase, RecordingTrigger,
+        state::{DownloadTask, Events, State, StateCell},
+    };
 
-    use super::{ModelCoordinator, transfer_rate};
+    use super::{ModelCoordinator, run_model_download, transfer_rate};
 
     struct DownloadFixture {
         models: Arc<ModelCoordinator>,
@@ -586,6 +599,43 @@ mod tests {
         assert!(snapshot.active_downloads.is_empty());
         assert_eq!(snapshot.failed_download, Some(download.model_id.clone()));
         assert!(snapshot.error.is_none());
+    }
+
+    #[test]
+    fn a_panicking_download_leaves_no_active_entry_and_shows_as_failed() {
+        let model_id = ModelId::default();
+        let (events, published) = Events::channel();
+        let state = StateCell::new(State::new(model_id.clone()), events);
+        state.lock().active_downloads.insert(
+            model_id.clone(),
+            DownloadTask {
+                progress: ActiveDownload {
+                    model_id: model_id.clone(),
+                    phase: DownloadPhase::Downloading,
+                    downloaded_bytes: 0,
+                    total_bytes: 1_024,
+                    bytes_per_second: None,
+                },
+                cancellation: CancellationToken::default(),
+            },
+        );
+
+        run_model_download(&state, &model_id, |_| panic!("the download panicked"));
+
+        let snapshot = state.snapshot();
+        assert!(snapshot.active_downloads.is_empty());
+        assert_eq!(snapshot.failed_download, Some(model_id));
+        assert_eq!(snapshot.model_state, ModelState::Failed);
+        assert!(snapshot.error.is_none());
+        state
+            .lock()
+            .require_no_downloads()
+            .expect("later model changes are not blocked");
+        assert!(
+            published
+                .try_iter()
+                .any(|event| matches!(event, EventPayload::ModelsChanged))
+        );
     }
 
     #[test]

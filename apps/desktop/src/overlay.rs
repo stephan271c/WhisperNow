@@ -8,9 +8,7 @@ mod tauri_window;
 
 pub(crate) use tauri_window::{apply, monitor_area};
 
-/// Logical size of the transparent overlay window; the pill grows inside it.
 pub(crate) const OVERLAY_LOGICAL_SIZE: (f64, f64) = (360.0, 132.0);
-/// Logical distance between the overlay and the work-area edge.
 const EDGE_MARGIN: f64 = 48.0;
 /// A notification has no actions, so it points to History, where the text can be copied.
 const NOT_PASTED_NOTIFICATION: &str =
@@ -70,9 +68,8 @@ pub(crate) fn monitor_under_cursor(
         .or_else(|| monitors.first())
 }
 
-/// Physical top-left corner that centres a window of `logical_size` horizontally in the work
-/// area, against its bottom edge. Converting with the target monitor's own scale factor
-/// keeps placement correct on mixed-DPI setups.
+/// Converts with the target monitor's own scale factor, which keeps placement correct on
+/// mixed-DPI setups.
 #[allow(
     clippy::cast_possible_truncation,
     reason = "rounded window dimensions and margins are far inside i32"
@@ -89,8 +86,7 @@ pub(crate) fn overlay_origin(monitor: &MonitorArea, logical_size: (f64, f64)) ->
     (x, work.y + work_height - height - margin)
 }
 
-/// Where a phase is presented, given whether the session can keep a window floating above
-/// others (not native Wayland).
+/// `can_float` is false on native Wayland, which cannot keep a window above others.
 pub(crate) const fn overlay_presentation(phase: &Phase, can_float: bool) -> OverlayPresentation {
     match (phase, can_float) {
         (Phase::Idle | Phase::Paused | Phase::ClearingData | Phase::Updating, _) => {
@@ -123,7 +119,6 @@ impl RecordingOverlay {
         }
     }
 
-    /// The action `snapshot` calls for; none while the presentation is unchanged.
     pub(crate) fn observe(&mut self, snapshot: &AppState) -> Option<OverlayAction> {
         let presentation = overlay_presentation(&snapshot.phase, self.can_float);
         let previous = std::mem::replace(&mut self.presented, presentation);

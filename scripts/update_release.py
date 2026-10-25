@@ -105,7 +105,6 @@ def signature_text(path: Path) -> str:
 
 
 def subprocess_signature_verifier(executable: Path, public_key: str) -> SignatureVerifier:
-    """Verify signatures with the `whispernow-update-signature` binary."""
     if not public_key.strip():
         raise ValueError("updater public key is required")
     if not executable.is_file():
@@ -170,7 +169,6 @@ def stage(
     signature_verifier: SignatureVerifier,
     native_compliance: Path | None = None,
 ) -> Path:
-    """Copy one platform's signed packages under canonical names and write its manifest."""
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"staging output must be empty: {output}")
     output.mkdir(parents=True, exist_ok=True)
@@ -232,7 +230,6 @@ def generate(
     notes: str,
     signature_verifier: SignatureVerifier,
 ) -> Path:
-    """Combine every platform manifest into `latest.json` and `SHA256SUMS`."""
     validate_identity(repository, tag, version)
     parse_pub_date(pub_date)
     if not notes.strip() or len(notes.encode("utf-8")) > 64 * 1024:

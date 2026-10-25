@@ -46,12 +46,27 @@ test("a history deletion request reaches the production Tauri invoke adapter", a
 });
 
 test("a command without input is invoked without a request argument", async () => {
+  for (const request of [undefined, null]) {
+    const invocations = [];
+    installTauri(invocations);
+
+    await invokeTyped("get_state", request);
+
+    assert.deepEqual(invocations, [{ command: "get_state", payload: {} }]);
+  }
+});
+
+test("a request that is falsy but present is still sent", async () => {
   const invocations = [];
   installTauri(invocations);
 
-  await invokeTyped("get_state", undefined);
+  await invokeTyped("set_start_on_login", false);
+  await invokeTyped("copy_text", "");
 
-  assert.deepEqual(invocations, [{ command: "get_state", payload: {} }]);
+  assert.deepEqual(invocations, [
+    { command: "set_start_on_login", payload: { request: false } },
+    { command: "copy_text", payload: { request: "" } },
+  ]);
 });
 
 function installAudio(invocations, bytes) {

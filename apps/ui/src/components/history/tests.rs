@@ -23,7 +23,6 @@ fn fixed_clock_history() -> Element {
     rsx! { HistoryScreen {} }
 }
 
-/// The page with a fixed clock, wired to the fake desktop.
 fn history_page(management_state: ManagementState) -> Page {
     let mut state = UiState::default();
     state.hydrate(snapshot(Phase::Idle));
@@ -48,12 +47,10 @@ fn management(entries: Vec<HistoryEntry>) -> ManagementState {
     management
 }
 
-/// Entry 7, an hour old.
 fn one_entry() -> ManagementState {
     management(vec![entry(7, UtcMillis(NOW.0 - HOUR))])
 }
 
-/// Marks the loaded window as having an older page to load.
 fn more_to_load(management: &mut ManagementState) {
     let HistoryRows::Loaded { has_more, .. } = &mut management.history else {
         panic!("history is loaded");

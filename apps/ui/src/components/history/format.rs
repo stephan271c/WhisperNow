@@ -19,7 +19,6 @@ enum Zone {
     /// A fixed offset, in minutes east of UTC.
     #[cfg(test)]
     Fixed(i64),
-    /// The browser's time zone, including its daylight-saving changes.
     System,
 }
 
@@ -48,12 +47,10 @@ impl LocalClock {
         }
     }
 
-    /// Milliseconds since the Unix epoch on the local wall clock.
     fn local_millis(self, at: UtcMillis) -> i64 {
         at.0.saturating_add(self.offset_millis(at))
     }
 
-    /// The local calendar day `at` falls on, counted from 1970-01-01.
     pub(crate) fn local_day(self, at: UtcMillis) -> i64 {
         self.local_millis(at).div_euclid(DAY_MILLIS)
     }
@@ -88,13 +85,11 @@ impl LocalClock {
         self.clock_time(at)
     }
 
-    /// The local wall-clock time of `at`, as 24-hour `HH:MM`.
     pub(crate) fn clock_time(self, at: UtcMillis) -> String {
         let minutes = self.local_millis(at).rem_euclid(DAY_MILLIS) / MINUTE_MILLIS;
         format!("{:02}:{:02}", minutes / 60, minutes % 60)
     }
 
-    /// The local date and time of `at` in full, for a tooltip.
     pub(crate) fn full_time(self, at: UtcMillis) -> String {
         let date = date_of(self.local_day(at));
         format!(
@@ -123,7 +118,6 @@ pub(crate) fn machine_time(at: UtcMillis) -> String {
     )
 }
 
-/// Entries, newest first, split into runs that share a local day.
 pub(crate) fn group_by_day(
     clock: LocalClock,
     entries: &[HistoryEntry],
@@ -192,7 +186,6 @@ fn system_now() -> UtcMillis {
     UtcMillis::now()
 }
 
-/// Minutes east of UTC in the browser's zone at `at`.
 #[cfg(target_arch = "wasm32")]
 fn system_offset_minutes(at: UtcMillis) -> i64 {
     #[expect(

@@ -29,7 +29,6 @@ impl Target {
     }
 }
 
-/// The existing fixed targets of some categories, inspected once when the plan is made.
 #[derive(Debug)]
 pub struct ClearPlan {
     targets: Vec<Target>,
@@ -64,7 +63,6 @@ impl ClearPlan {
 }
 
 impl AppPaths {
-    /// The fixed targets that currently exist.
     pub fn data_locations(&self) -> io::Result<Vec<DataLocation>> {
         Ok(self.clear_plan(&ClearDataCategory::ALL)?.locations())
     }

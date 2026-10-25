@@ -5,7 +5,6 @@ use whispernow_domain::ipc::{AppState, COMMAND_NAMES, ModelState, Phase};
 
 use crate::{RECORDING_BAR_WINDOW, REGISTERED_COMMANDS, SETTINGS_WINDOW};
 
-/// A snapshot in `phase` with the default model ready.
 pub(crate) fn snapshot(phase: Phase) -> AppState {
     AppState {
         phase,
@@ -27,7 +26,6 @@ pub(crate) const fn recording() -> Phase {
     }
 }
 
-/// The app commands each window's capabilities allow, by window label.
 fn allowed_commands_by_window(manifest_dir: &Path) -> BTreeMap<String, BTreeSet<String>> {
     let mut allowed_by_window: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for entry in std::fs::read_dir(manifest_dir.join("capabilities")).expect("capabilities") {

@@ -11,7 +11,6 @@ use whispernow_domain::{RecordingMode, Settings, Shortcut, ShortcutModifier};
 
 use crate::services::RecordingTrigger;
 
-/// Derived by the native shortcut library.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ShortcutId(pub(crate) u32);
 
@@ -77,9 +76,7 @@ pub(crate) trait ShortcutRegistrar: Send + Sync {
     fn register(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError>;
     fn unregister(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError>;
 
-    /// Whether a shortcut may be registered for moments, such as the cancel
-    /// shortcut for each dictation. A desktop portal that asks the user to
-    /// approve every registration cannot.
+    /// False for a desktop portal that asks the user to approve every registration.
     fn supports_transient_shortcuts(&self) -> bool {
         true
     }
@@ -159,16 +156,14 @@ pub(crate) fn cancel_binding(settings: &Settings) -> Option<ShortcutBinding> {
     settings.cancel_shortcut.as_ref().map(binding)
 }
 
-/// Reports whether shortcuts may be registered: dictation is not paused, updating or
-/// clearing data, and the application is not closing. The application state is read,
-/// never mirrored.
+/// True while shortcuts may be registered: dictation is not paused, updating or clearing data,
+/// and the application is not closing.
 pub(crate) type LifecycleProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// The native registrations, changed only while the `native` lock is held.
 #[derive(Default)]
 struct Native {
     recording: Option<RecordingBinding>,
-    /// The recording shortcut while it is registered.
     live: Option<ShortcutBinding>,
     capturing: bool,
     cancel: CancelShortcut,
@@ -199,7 +194,6 @@ pub(crate) struct ShortcutCoordinator {
     /// The shortcuts held down, so the platform's key repeat is not taken as new presses.
     pressed: Mutex<HashSet<ShortcutId>>,
     published: Mutex<Published>,
-    /// Whether the latest published snapshot has a dictation running.
     dictation_active: AtomicBool,
     registrar: Arc<dyn ShortcutRegistrar>,
     enabled: LifecycleProbe,
@@ -316,8 +310,8 @@ impl ShortcutCoordinator {
         self.sync_cancel_locked(&mut native);
     }
 
-    /// Replaces the cancel shortcut; `None` turns it off. During a dictation the new shortcut
-    /// replaces the registered one immediately.
+    /// `None` turns the cancel shortcut off. During a dictation the new shortcut replaces the
+    /// registered one immediately.
     pub(crate) fn set_cancel_binding(&self, binding: Option<ShortcutBinding>) {
         let mut native = self.native();
         if native.cancel.binding != binding {
@@ -355,8 +349,6 @@ impl ShortcutCoordinator {
         published.failure = Some(error);
     }
 
-    /// Registers the configured shortcuts while dictation is enabled and unregisters them
-    /// otherwise.
     pub(crate) fn sync_lifecycle(&self) -> Result<(), ShortcutRegistrationError> {
         let mut native = self.native();
         self.sync_locked(&mut native, (self.enabled)())
@@ -399,8 +391,7 @@ impl ShortcutCoordinator {
         result
     }
 
-    /// Registers the configured shortcut when `enabled` and no capture runs, and releases it
-    /// otherwise. An unregistration failure is only logged.
+    /// An unregistration failure is only logged.
     fn sync_locked(
         &self,
         native: &mut Native,
@@ -483,11 +474,8 @@ pub(crate) enum ShortcutRegistrationError {
     SessionClosed,
 }
 
-/// The cancel shortcut: its configured binding and its native registration,
-/// which exists only while a dictation runs.
 #[derive(Clone, Debug, Default)]
 struct CancelShortcut {
-    /// `None` while the cancel shortcut is turned off.
     binding: Option<ShortcutBinding>,
     live: Option<ShortcutBinding>,
     /// The last registration failure, cleared by a success or a new binding.

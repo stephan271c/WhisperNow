@@ -19,7 +19,6 @@ type Reply = Result<Value, AppError>;
 #[derive(Default)]
 struct Slot {
     reply: Option<Reply>,
-    /// Whether the call has an answer, taken or not.
     answered: bool,
     waker: Option<Waker>,
 }
@@ -95,7 +94,6 @@ fn reply(answer: Result<impl Serialize, AppError>) -> Reply {
     answer.map(|value| serde_json::to_value(value).expect("serializable answer"))
 }
 
-/// Makes the window draw its titlebar as `frame` on `platform` from the next render on.
 pub(crate) fn set_frame(frame: WindowFrame, platform: Platform) {
     FRAME.set((frame, platform));
 }
@@ -110,7 +108,6 @@ pub(crate) fn reset() {
     TIMERS.with_borrow_mut(|timers| *timers = Timers::default());
 }
 
-/// Answers the oldest unanswered call of `command`.
 pub(crate) fn answer(command: &str, answer: Result<impl Serialize, AppError>) {
     let index = CALLS.with_borrow(|calls| {
         calls
@@ -141,12 +138,10 @@ pub(crate) fn answer_nth(command: &str, index: usize, answer: Result<impl Serial
     }
 }
 
-/// Every command called so far, oldest first.
 pub(crate) fn commands() -> Vec<&'static str> {
     CALLS.with_borrow(|calls| calls.iter().map(|call| call.command).collect())
 }
 
-/// The requests of every call of `command` so far, oldest first.
 pub(crate) fn requests<T: serde::de::DeserializeOwned>(command: &str) -> Vec<T> {
     CALLS.with_borrow(|calls| {
         calls

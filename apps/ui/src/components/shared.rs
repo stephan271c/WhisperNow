@@ -289,7 +289,6 @@ fn is_modifier_code(code: &str) -> bool {
     )
 }
 
-/// The recording mode and its shortcut, as a pair inside a `dl`.
 #[component]
 pub(super) fn ShortcutSummary(mode: RecordingMode, shortcut: Shortcut) -> Element {
     rsx! { div { dt { "{labels::recording_mode(mode)}" } dd { ShortcutLabel { shortcut } } } }

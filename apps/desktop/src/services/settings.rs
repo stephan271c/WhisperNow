@@ -61,7 +61,6 @@ impl SettingsCoordinator {
         self.persistence.api_key(provider)
     }
 
-    /// `provider` at its saved endpoint, with its API key when one is saved.
     pub(crate) fn provider_and_key(
         &self,
         provider: LlmProvider,
@@ -78,16 +77,14 @@ impl SettingsCoordinator {
         Ok((remote, api_key))
     }
 
-    /// Deletes every provider's API key from the credential store. Returns whether the
-    /// store accepted every deletion; it stops at the first refusal, because an
-    /// unavailable store typically refuses, or blocks on, every entry.
+    /// Returns whether the store accepted every deletion. It stops at the first refusal, because
+    /// an unavailable store typically refuses, or blocks on, every entry.
     pub(super) fn delete_api_keys(&self) -> bool {
         LlmProvider::ALL
             .into_iter()
             .all(|provider| self.persistence.delete_api_key(provider).is_ok())
     }
 
-    /// Publishes, once, what happened to the settings file as a state warning.
     fn report_notice(&self, notice: Option<SettingsNotice>) {
         let (code, summary) = match notice {
             None => return,
@@ -109,9 +106,8 @@ impl SettingsCoordinator {
         self.warn(code, &summary);
     }
 
-    /// Publishes what happened to the settings file as it loaded, and warns when the saved
-    /// settings break a rule, such as after a hand edit. They stay in effect, and an edit that
-    /// leaves that rule alone still saves.
+    /// Saved settings that break a rule, such as after a hand edit, stay in effect, and an edit
+    /// that leaves that rule alone still saves.
     pub(super) fn report_loaded(&self, saved: &Settings, notice: Option<SettingsNotice>) {
         self.report_notice(notice);
         if let Err(error) = saved.validate() {
@@ -169,8 +165,6 @@ impl SettingsCoordinator {
         })
     }
 
-    /// Saves one change from the settings window. It must not break a rule in what it edits,
-    /// and a chosen microphone must be connected.
     pub(super) fn update(
         &self,
         change: &SettingChange,
@@ -231,9 +225,8 @@ impl SettingsCoordinator {
         })
     }
 
-    /// Starts first-run setup again from its first step. The checkpoint begins
-    /// with the saved choices, and the saved settings stay in effect until setup
-    /// finishes again.
+    /// The checkpoint begins with the saved choices, and the saved settings stay in effect until
+    /// setup finishes again.
     pub(crate) fn restart_setup(&self) -> Result<SettingsView, AppError> {
         self.edit(|settings| {
             if !settings.setup.is_complete() {
@@ -257,7 +250,6 @@ impl SettingsCoordinator {
     }
 }
 
-/// A settings rule an edit broke, worded for the control that made it.
 pub(crate) fn settings_error(error: &SettingsError) -> AppError {
     AppError::new(
         ErrorCategory::General,
@@ -266,8 +258,6 @@ pub(crate) fn settings_error(error: &SettingsError) -> AppError {
     )
 }
 
-/// What a dictation records with: `settings`' vocabulary and history rules, with the given
-/// model, microphone and cleanup.
 fn recording(
     settings: Settings,
     model_id: ModelId,
@@ -287,7 +277,7 @@ fn recording(
     }
 }
 
-/// Refuses a chosen input device that is not connected; the system default (`None`) always is.
+/// The system default (`None`) is always connected.
 pub(super) fn require_connected_device(
     audio: &dyn AudioInput,
     device: Option<&AudioDeviceId>,

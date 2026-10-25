@@ -34,8 +34,6 @@ pub(crate) struct LocalCleanupEngine {
 }
 
 impl LocalCleanupEngine {
-    /// Loads llama.cpp from `library_directory` and the model from `model_path`, on the CPU
-    /// unless `use_gpu`.
     pub(crate) fn load(
         library_directory: &Path,
         model_path: &Path,
@@ -71,7 +69,6 @@ impl LocalCleanupEngine {
         .map(drop)
     }
 
-    /// Decodes the reply to `transcript` speculatively from the draft.
     /// `between_passes` sees the reply so far and stops the decode by breaking.
     pub(crate) fn decode(
         &mut self,
@@ -106,16 +103,31 @@ impl LocalCleanupEngine {
         .map_err(EngineError::Decode)
     }
 
-    /// The kept context when it holds `context_size` tokens, else a new one that does.
     fn context(&mut self, context_size: u32) -> Result<&mut LlamaContext, EngineError> {
-        let context = match self.context.take() {
-            Some(context) if context.context_size() >= context_size as usize => context,
-            // The old context is freed before the larger one is created.
-            _ => LlamaContext::new(Rc::clone(&self.model), context_size, self.threads)
-                .map_err(EngineError::Load)?,
-        };
-        Ok(self.context.insert(context))
+        keep_or_replace(
+            &mut self.context,
+            |context| context.context_size() >= context_size as usize,
+            || {
+                LlamaContext::new(Rc::clone(&self.model), context_size, self.threads)
+                    .map_err(EngineError::Load)
+            },
+        )
     }
+}
+
+/// Keeps the value in `slot` if `fits`, else replaces it with `create()`. A rejected value is
+/// dropped before `create` runs: a context holds the KV cache and compute buffers (VRAM on the
+/// GPU backend), so creating first would hold two at once.
+fn keep_or_replace<T, E>(
+    slot: &mut Option<T>,
+    fits: impl FnOnce(&T) -> bool,
+    create: impl FnOnce() -> Result<T, E>,
+) -> Result<&mut T, E> {
+    let value = match slot.take().filter(fits) {
+        Some(kept) => kept,
+        None => create()?,
+    };
+    Ok(slot.insert(value))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -124,4 +136,64 @@ pub(crate) enum EngineError {
     Load(LlamaError),
     #[error(transparent)]
     Decode(LocalDecodeError),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    type Events = Rc<RefCell<Vec<&'static str>>>;
+
+    struct Tracked {
+        size: usize,
+        events: Events,
+    }
+
+    impl Tracked {
+        fn new(size: usize, events: &Events) -> Self {
+            Self {
+                size,
+                events: Rc::clone(events),
+            }
+        }
+    }
+
+    impl Drop for Tracked {
+        fn drop(&mut self) {
+            self.events.borrow_mut().push("dropped");
+        }
+    }
+
+    #[test]
+    fn a_rejected_value_is_dropped_before_its_replacement_is_created() {
+        let events = Events::default();
+        let mut slot = Some(Tracked::new(100, &events));
+
+        let replacement = keep_or_replace(
+            &mut slot,
+            |old| old.size >= 200,
+            || {
+                events.borrow_mut().push("created");
+                Ok::<_, ()>(Tracked::new(200, &events))
+            },
+        )
+        .expect("replacement");
+
+        assert_eq!(replacement.size, 200);
+        assert_eq!(*events.borrow(), ["dropped", "created"]);
+    }
+
+    #[test]
+    fn a_fitting_value_is_kept_without_creating_another() {
+        let events = Events::default();
+        let mut slot = Some(Tracked::new(300, &events));
+
+        let kept = keep_or_replace(&mut slot, |old| old.size >= 200, || Err("created"))
+            .expect("kept value");
+
+        assert_eq!(kept.size, 300);
+        assert!(events.borrow().is_empty());
+    }
 }

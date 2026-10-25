@@ -30,8 +30,8 @@ pub(super) const RECORDING_MODES: [SegmentedOption<RecordingMode>; 2] = [
     },
 ];
 
-/// Input device choices for a select: the system default, then each device. Give the select
-/// the saved device as its placeholder, so one that is no longer connected still shows.
+/// Give the select the saved device as its placeholder, so one that is no longer connected
+/// still shows.
 pub(super) fn device_options(devices: &[AudioDevice]) -> Vec<(Option<AudioDeviceId>, String)> {
     std::iter::once((None, "System default".to_owned()))
         .chain(
@@ -290,7 +290,6 @@ pub(super) fn PrivacyPage() -> Element {
     } }
 }
 
-/// Where AI cleanup sends a transcript, or `None` when it stays on this computer.
 pub(crate) fn cleanup_destination(settings: &Settings) -> Option<String> {
     let CleanupTarget::Remote(target) = settings.active_cleanup_target()? else {
         return None;

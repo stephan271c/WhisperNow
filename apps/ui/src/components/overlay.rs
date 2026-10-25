@@ -25,7 +25,6 @@ struct MeterBar {
     height: f32,
 }
 
-/// Oldest first.
 fn meter_bars(view: &OverlayView) -> Vec<MeterBar> {
     view.levels
         .iter()

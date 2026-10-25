@@ -58,9 +58,7 @@ pub(crate) struct DictationSettings {
     pub(crate) vocabulary: Vec<VocabularyReplacement>,
     pub(crate) cleanup: Option<CleanupPlan>,
     pub(crate) history_limit: HistoryLimit,
-    /// Entries older than this are deleted from history.
     pub(crate) history_retention: HistoryRetention,
-    /// Whether a dictation keeps its audio in history.
     pub(crate) keep_audio: bool,
 }
 
@@ -92,15 +90,12 @@ pub(super) enum Message {
     Stop {
         session: u64,
     },
-    /// A recording shortcut went down: it ends the toggle recording it started, or starts one.
     ShortcutPressed {
         trigger: RecordingTrigger,
     },
-    /// The hold shortcut came up: it ends the recording it started.
     HoldReleased,
-    /// The dictation in flight was asked to end early; `State::cancel` says why.
+    /// `State::cancel` says why.
     Cancel,
-    /// The recording `session` found another speech segment.
     Segments {
         session: u64,
     },
@@ -212,9 +207,8 @@ impl Dictation {
         self.ask(|reply| Message::Start { trigger, reply })
     }
 
-    /// A recording shortcut went down. The worker decides from its recording whether this
-    /// starts one or ends the toggle recording it started. A press during a slower cleanup,
-    /// a pause or an update is dropped.
+    /// The worker decides from its recording whether this starts one or ends the toggle
+    /// recording it started. A press during a slower cleanup, a pause or an update is dropped.
     pub(crate) fn shortcut_pressed(&self, trigger: RecordingTrigger) -> Result<(), AppError> {
         let accepted = matches!(
             self.state.lock().phase,
@@ -320,7 +314,6 @@ impl Dictation {
         Ok(clear)
     }
 
-    /// Listens to `device` for `duration` and reports its levels; no audio is kept.
     pub(crate) fn test_microphone(
         &self,
         device: AudioDeviceChoice,
@@ -367,8 +360,10 @@ impl Dictation {
             .lock()
             .expect("dictation worker lock poisoned")
             .take();
-        if let Some(worker) = worker {
-            let _worker_panicked = worker.join();
+        if let Some(worker) = worker
+            && worker.join().is_err()
+        {
+            tracing::error!("the dictation worker panicked while ending");
         }
     }
 }
@@ -380,7 +375,6 @@ impl Drop for Dictation {
     }
 }
 
-/// One recording from the start of capture until its processing ends.
 struct Recording {
     session: u64,
     trigger: RecordingTrigger,
@@ -391,7 +385,6 @@ struct Recording {
     settings: DictationSettings,
     cancellation: CancellationToken,
     model: ResolvedModel,
-    /// The text of each segment decoded while capture continued.
     decoded: Vec<String>,
     /// A segment failed to decode while recording; the retry after stopping decodes them all.
     live_failed: bool,
@@ -415,7 +408,20 @@ struct Worker {
 }
 
 impl Worker {
+    /// A panic outside the inner `catch_unwind` calls ends the worker, so the phase moves to
+    /// `Error` instead of staying at `Recording` or `Processing`.
     fn run(mut self, receiver: &mpsc::Receiver<Message>) {
+        if catch_unwind(AssertUnwindSafe(|| self.serve(receiver))).is_err() {
+            tracing::error!("the dictation worker panicked and stopped");
+            self.parts.state.apply(|state| {
+                state.cancel = None;
+                state.last_error = Some(worker_panicked());
+                state.phase = Phase::Error;
+            });
+        }
+    }
+
+    fn serve(&mut self, receiver: &mpsc::Receiver<Message>) {
         self.preload_model();
         for message in receiver {
             match message {
@@ -544,9 +550,9 @@ impl Worker {
         }
     }
 
-    /// Loads the selected model at startup. Loading takes seconds, and a first dictation that
-    /// loaded it would have its stop wait behind the load. A model that is not installed or
-    /// fails to load is left for the first dictation to report.
+    /// Loading takes seconds, and a first dictation that loaded it would have its stop wait
+    /// behind the load. A model that is not installed or fails to load is left for the first
+    /// dictation to report.
     fn preload_model(&mut self) {
         let settings = self.parts.settings.load();
         if let Ok(model) = installed(self.parts.models.as_ref(), settings.selected_model_id()) {
@@ -659,7 +665,6 @@ impl Worker {
         self.deliver(recording, &samples, prepared)
     }
 
-    /// Saves the transcript to history, pastes it, and records whether the paste worked.
     fn deliver(
         &self,
         recording: &Recording,
@@ -887,6 +892,14 @@ fn worker_stopped() -> AppError {
         ErrorCategory::General,
         "worker_stopped",
         "The dictation worker stopped",
+    )
+}
+
+fn worker_panicked() -> AppError {
+    AppError::new(
+        ErrorCategory::General,
+        "worker_panicked",
+        "Dictation stopped unexpectedly. Restart the application to use it again.",
     )
 }
 

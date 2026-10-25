@@ -16,12 +16,13 @@ use ashpd::{
         },
     },
 };
-use futures_util::StreamExt as _;
+use futures_util::{FutureExt as _, StreamExt as _, future::BoxFuture};
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::unix::pipe,
-    sync::mpsc,
+    runtime::Handle,
+    sync::mpsc::{self, error::TryRecvError},
     task::JoinHandle,
 };
 use whispernow_core::{
@@ -34,8 +35,8 @@ use crate::PasteKeys;
 use super::{
     accessibility::active_paste_keys,
     clipboard::{
-        ClipboardOffer, MAX_FORMAT_BYTES, PortalClipboardState, READ_TIMEOUT, SNAPSHOT_MIME_TYPES,
-        SecretBytes,
+        CLIPBOARD_TIMEOUT, ClipboardOffer, MAX_FORMAT_BYTES, PortalClipboardState,
+        SNAPSHOT_MIME_TYPES, SecretBytes,
     },
     token::RemoteDesktopRestoreTokenStore,
 };
@@ -72,12 +73,51 @@ enum ClipboardSignal {
     Closed,
 }
 
+/// Stops the listener and closes the portal session when dropped, so an output
+/// abandoned half-way (a cancelled consent wait, a failed setup) leaves neither
+/// behind. The portal does not emit `Closed` for a close we ask for.
+struct CloseOnDrop {
+    listener: JoinHandle<()>,
+    close: Option<BoxFuture<'static, ()>>,
+}
+
+impl CloseOnDrop {
+    fn new(listener: JoinHandle<()>, close: impl Future<Output = ()> + Send + 'static) -> Self {
+        Self {
+            listener,
+            close: Some(close.boxed()),
+        }
+    }
+
+    /// Waits for the listener to stop and the session to close.
+    async fn close(mut self) {
+        self.listener.abort();
+        let _ignored = (&mut self.listener).await;
+        if let Some(close) = self.close.take() {
+            close.await;
+        }
+    }
+}
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        self.listener.abort();
+        // Without a runtime the portal closes the session when the process
+        // leaves the bus.
+        if let Some(close) = self.close.take()
+            && let Ok(runtime) = Handle::try_current()
+        {
+            runtime.spawn(close);
+        }
+    }
+}
+
 struct OutputSession {
     remote: RemoteDesktop,
     clipboard: Arc<Clipboard>,
     session: Arc<Session<RemoteDesktop>>,
     signals: mpsc::UnboundedReceiver<ClipboardSignal>,
-    listener: JoinHandle<()>,
+    cleanup: CloseOnDrop,
     clipboard_state: Arc<Mutex<PortalClipboardState>>,
     advertised_mime_types: Option<Vec<String>>,
 }
@@ -93,6 +133,64 @@ impl OutputSession {
             }
             ClipboardSignal::Closed => false,
         }
+    }
+
+    /// Takes in the signals queued so far; true when the session closed or the
+    /// listener is gone.
+    fn poll_closed(&mut self) -> bool {
+        loop {
+            match self.signals.try_recv() {
+                Ok(signal) => {
+                    if !self.note(signal) {
+                        return true;
+                    }
+                }
+                Err(TryRecvError::Empty) => return false,
+                Err(TryRecvError::Disconnected) => return true,
+            }
+        }
+    }
+
+    /// Asks for the clipboard and keyboard access, which prompts for consent
+    /// unless the saved restore token covers it.
+    async fn start(
+        &self,
+        token_store: &RemoteDesktopRestoreTokenStore,
+    ) -> Result<(), WaylandPortalError> {
+        self.clipboard
+            .request(&self.session, RequestClipboardOptions::default())
+            .await
+            .map_err(map_portal_error)?;
+        let restore_token = token_store.load();
+        self.remote
+            .select_devices(
+                &self.session,
+                SelectDevicesOptions::default()
+                    .set_devices(Some(DeviceType::Keyboard.into()))
+                    .set_persist_mode(PersistMode::ExplicitlyRevoked)
+                    .set_restore_token(restore_token.as_deref()),
+            )
+            .await
+            .map_err(map_portal_error)?
+            .response()
+            .map_err(map_portal_error)?;
+        let selected = self
+            .remote
+            .start(&self.session, None, StartOptions::default())
+            .await
+            .map_err(map_portal_error)?
+            .response()
+            .map_err(map_portal_error)?;
+        if !selected.devices().contains(DeviceType::Keyboard) {
+            return Err(WaylandPortalError::KeyboardUnavailable);
+        }
+        if !selected.is_clipboard_enabled() {
+            return Err(WaylandPortalError::ClipboardUnavailable);
+        }
+        if let Some(token) = selected.restore_token() {
+            token_store.replace(token)?;
+        }
+        Ok(())
     }
 }
 
@@ -113,10 +211,6 @@ impl WaylandOutput {
         }
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "portal consent setup and listener ownership stay together for auditability"
-    )]
     async fn create_output_session(&self) -> Result<OutputSession, WaylandPortalError> {
         let remote = RemoteDesktop::new().await.map_err(map_portal_error)?;
         if remote.version() < 2 {
@@ -131,122 +225,35 @@ impl WaylandOutput {
         );
 
         let (signal_tx, signals) = mpsc::unbounded_channel();
-        let listener_clipboard = Arc::clone(&clipboard);
-        let listener_session = Arc::clone(&session);
         let clipboard_state = Arc::new(Mutex::new(PortalClipboardState::default()));
-        let listener_state = Arc::clone(&clipboard_state);
-        let listener = tokio::spawn(async move {
-            let Ok(owner_stream) = listener_clipboard
-                .receive_selection_owner_changed::<RemoteDesktop>()
-                .await
-            else {
+        let listener = tokio::spawn({
+            let clipboard = Arc::clone(&clipboard);
+            let session = Arc::clone(&session);
+            let clipboard_state = Arc::clone(&clipboard_state);
+            async move {
+                listen(&clipboard, &session, &clipboard_state, &signal_tx).await;
                 let _ignored = signal_tx.send(ClipboardSignal::Closed);
-                return;
-            };
-            let Ok(transfer_stream) = listener_clipboard
-                .receive_selection_transfer::<RemoteDesktop>()
-                .await
-            else {
-                let _ignored = signal_tx.send(ClipboardSignal::Closed);
-                return;
-            };
-            let Ok(closed_stream) = listener_session.receive_closed().await else {
-                let _ignored = signal_tx.send(ClipboardSignal::Closed);
-                return;
-            };
-            let owner_stream = owner_stream.fuse();
-            let transfer_stream = transfer_stream.fuse();
-            let closed_stream = closed_stream.fuse();
-            futures_util::pin_mut!(owner_stream, transfer_stream, closed_stream);
-            loop {
-                tokio::select! {
-                    owner = owner_stream.next() => {
-                        let Some((_session, owner)) = owner else { break };
-                        listener_state
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .owner_changed(owner.session_is_owner());
-                        if signal_tx.send(ClipboardSignal::OwnerChanged {
-                            mime_types: owner.mime_types().to_vec(),
-                        }).is_err() { break; }
-                    }
-                    transfer = transfer_stream.next() => {
-                        let Some((_session, mime_type, serial)) = transfer else { break };
-                        serve_transfer(
-                            &listener_clipboard,
-                            &listener_session,
-                            &listener_state,
-                            &mime_type,
-                            serial,
-                        ).await;
-                    }
-                    closed = closed_stream.next() => {
-                        let _ignored = closed;
-                        let _ignored = signal_tx.send(ClipboardSignal::Closed);
-                        break;
-                    }
-                }
             }
         });
-
-        let setup = async {
-            clipboard
-                .request(&session, RequestClipboardOptions::default())
-                .await
-                .map_err(map_portal_error)?;
-            let restore_token = self.token_store.load()?;
-            remote
-                .select_devices(
-                    &session,
-                    SelectDevicesOptions::default()
-                        .set_devices(Some(DeviceType::Keyboard.into()))
-                        .set_persist_mode(PersistMode::ExplicitlyRevoked)
-                        .set_restore_token(restore_token.as_deref()),
-                )
-                .await
-                .map_err(map_portal_error)?
-                .response()
-                .map_err(map_portal_error)?;
-            let selected = remote
-                .start(&session, None, StartOptions::default())
-                .await
-                .map_err(map_portal_error)?
-                .response()
-                .map_err(map_portal_error)?;
-            if !selected.devices().contains(DeviceType::Keyboard) {
-                return Err(WaylandPortalError::KeyboardUnavailable);
-            }
-            if !selected.is_clipboard_enabled() {
-                return Err(WaylandPortalError::ClipboardUnavailable);
-            }
-            if let Some(token) = selected.restore_token() {
-                self.token_store.replace(token)?;
-            }
-            Ok(())
-        }
-        .await;
-        if let Err(error) = setup {
-            listener.abort();
-            let _ignored = listener.await;
-            let _ignored = session.close().await;
-            return Err(error);
-        }
-        Ok(OutputSession {
+        let close_session = Arc::clone(&session);
+        let output = OutputSession {
             remote,
             clipboard,
             session,
             signals,
-            listener,
+            cleanup: CloseOnDrop::new(listener, async move {
+                let _ignored = close_session.close().await;
+            }),
             clipboard_state,
             advertised_mime_types: None,
-        })
+        };
+        output.start(&self.token_store).await?;
+        Ok(output)
     }
 
     async fn close_output(&mut self) {
         if let Some(output) = self.output.take() {
-            output.listener.abort();
-            let _ignored = output.listener.await;
-            let _ignored = output.session.close().await;
+            output.cleanup.close().await;
         }
     }
 
@@ -254,14 +261,7 @@ impl WaylandOutput {
     /// the clipboard it offers (the transcript or the restored snapshot) is
     /// gone once it closes.
     async fn ensure_output(&mut self) -> Result<&mut OutputSession, WaylandPortalError> {
-        let closed = self.output.as_mut().is_some_and(|output| {
-            let mut closed = false;
-            while let Ok(signal) = output.signals.try_recv() {
-                closed |= !output.note(signal);
-            }
-            closed
-        });
-        if closed {
+        if self.output.as_mut().is_some_and(OutputSession::poll_closed) {
             self.close_output().await;
         }
         let output = match self.output.take() {
@@ -326,7 +326,7 @@ impl WaylandOutput {
 
     /// Opens the `RemoteDesktop` output session the paste keystroke uses, asking
     /// the user for consent unless a saved restore token covers it. Dropping the
-    /// future abandons the wait for the user's answer.
+    /// future abandons the wait for the user's answer and closes the session.
     pub async fn prepare_output(&mut self) -> Result<(), WaylandPortalError> {
         self.ensure_output().await.map(drop)
     }
@@ -369,7 +369,7 @@ async fn snapshot_clipboard(
         if let Some(advertised) = output.advertised_mime_types.clone() {
             break advertised;
         }
-        let signal = tokio::time::timeout(READ_TIMEOUT, output.signals.recv())
+        let signal = tokio::time::timeout(CLIPBOARD_TIMEOUT, output.signals.recv())
             .await
             .map_err(|_| WaylandPortalError::ClipboardUnavailable)?
             .ok_or(WaylandPortalError::Disconnected)?;
@@ -407,7 +407,7 @@ async fn read_selection(
         pipe::Receiver::from_owned_fd(fd).map_err(|_| WaylandPortalError::ClipboardUnavailable)?;
     let mut bytes = SecretBytes::default();
     tokio::time::timeout(
-        READ_TIMEOUT,
+        CLIPBOARD_TIMEOUT,
         pipe.take(MAX_FORMAT_BYTES as u64 + 1)
             .read_to_end(&mut bytes),
     )
@@ -460,6 +460,57 @@ async fn serve_for(
     }
 }
 
+/// Forwards clipboard owner changes and serves selection transfers until the
+/// session closes or a signal stream ends.
+async fn listen(
+    clipboard: &Clipboard,
+    session: &Session<RemoteDesktop>,
+    state: &Mutex<PortalClipboardState>,
+    signals: &mpsc::UnboundedSender<ClipboardSignal>,
+) {
+    let Ok(owner_stream) = clipboard
+        .receive_selection_owner_changed::<RemoteDesktop>()
+        .await
+    else {
+        return;
+    };
+    let Ok(transfer_stream) = clipboard
+        .receive_selection_transfer::<RemoteDesktop>()
+        .await
+    else {
+        return;
+    };
+    let Ok(closed_stream) = session.receive_closed().await else {
+        return;
+    };
+    let owner_stream = owner_stream.fuse();
+    let transfer_stream = transfer_stream.fuse();
+    let closed_stream = closed_stream.fuse();
+    futures_util::pin_mut!(owner_stream, transfer_stream, closed_stream);
+    loop {
+        tokio::select! {
+            owner = owner_stream.next() => {
+                let Some((_session, owner)) = owner else { break };
+                state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .owner_changed(owner.session_is_owner());
+                let owner_changed = ClipboardSignal::OwnerChanged {
+                    mime_types: owner.mime_types().to_vec(),
+                };
+                if signals.send(owner_changed).is_err() {
+                    break;
+                }
+            }
+            transfer = transfer_stream.next() => {
+                let Some((_session, mime_type, serial)) = transfer else { break };
+                serve_transfer(clipboard, session, state, &mime_type, serial).await;
+            }
+            _ = closed_stream.next() => break,
+        }
+    }
+}
+
 async fn serve_transfer(
     clipboard: &Clipboard,
     session: &Session<RemoteDesktop>,
@@ -477,7 +528,7 @@ async fn serve_transfer(
     };
     let success = match clipboard.selection_write(session, serial).await {
         Ok(fd) => match pipe::Sender::from_owned_fd(fd.into()) {
-            Ok(mut pipe) => pipe.write_all(&bytes).await.is_ok(),
+            Ok(pipe) => write_selection(pipe, &bytes).await,
             Err(_) => false,
         },
         Err(_) => false,
@@ -485,6 +536,15 @@ async fn serve_transfer(
     let _ignored = clipboard
         .selection_write_done(session, serial, success)
         .await;
+}
+
+/// Gives up on a reader that does not drain the pipe: transfers run inside the
+/// listener, which must keep serving the session's end.
+async fn write_selection(mut pipe: pipe::Sender, bytes: &[u8]) -> bool {
+    matches!(
+        tokio::time::timeout(CLIPBOARD_TIMEOUT, pipe.write_all(bytes)).await,
+        Ok(Ok(()))
+    )
 }
 
 async fn inject_balanced_paste(
@@ -555,5 +615,104 @@ fn map_portal_error(error: AshpdError) -> WaylandPortalError {
             WaylandPortalError::PortalUnavailable
         }
         _ => WaylandPortalError::Backend,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        future,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use super::*;
+
+    struct Counted(Arc<AtomicUsize>);
+
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct Parked {
+        listener_drops: Arc<AtomicUsize>,
+        closes: Arc<AtomicUsize>,
+        guard: CloseOnDrop,
+    }
+
+    fn parked() -> Parked {
+        let listener_drops = Arc::new(AtomicUsize::new(0));
+        let closes = Arc::new(AtomicUsize::new(0));
+        let held = Counted(Arc::clone(&listener_drops));
+        let listener = tokio::spawn(async move {
+            let _held = held;
+            future::pending::<()>().await;
+        });
+        let counter = Arc::clone(&closes);
+        let guard = CloseOnDrop::new(listener, async move {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        Parked {
+            listener_drops,
+            closes,
+            guard,
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_a_half_prepared_session_stops_its_listener_and_closes_it() {
+        let parked = parked();
+        tokio::task::yield_now().await;
+        drop(parked.guard);
+        tokio::task::yield_now().await;
+        assert_eq!(parked.listener_drops.load(Ordering::SeqCst), 1);
+        assert_eq!(parked.closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn closing_explicitly_closes_once() {
+        let parked = parked();
+        parked.guard.close().await;
+        assert_eq!(parked.listener_drops.load(Ordering::SeqCst), 1);
+        assert_eq!(parked.closes.load(Ordering::SeqCst), 1);
+        tokio::task::yield_now().await;
+        assert_eq!(parked.closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn dropping_outside_a_runtime_stops_the_listener_without_closing() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let parked = runtime.block_on(async { parked() });
+        drop(parked.guard);
+        runtime.block_on(tokio::task::yield_now());
+        assert_eq!(parked.listener_drops.load(Ordering::SeqCst), 1);
+        assert_eq!(parked.closes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_reader_that_never_drains_the_pipe_is_given_up_on() {
+        let (sender, _receiver) = pipe::pipe().expect("pipe");
+        let bytes = vec![0_u8; 1 << 20];
+        let written = tokio::time::timeout(CLIPBOARD_TIMEOUT * 4, write_selection(sender, &bytes))
+            .await
+            .expect("the write gave up on its own");
+        assert!(!written);
+    }
+
+    #[tokio::test]
+    async fn a_draining_reader_receives_the_whole_selection() {
+        let (sender, mut reader) = pipe::pipe().expect("pipe");
+        let bytes = vec![7_u8; 1 << 20];
+        let mut read_back = Vec::new();
+        let (written, read) = tokio::join!(
+            write_selection(sender, &bytes),
+            reader.read_to_end(&mut read_back),
+        );
+        assert!(written);
+        read.expect("read");
+        assert_eq!(read_back, bytes);
     }
 }

@@ -9,7 +9,6 @@ pub enum Route {
     Home,
     History,
     Settings(SettingsRoute),
-    /// The first-run setup steps, reached from the Home checklist.
     Setup,
 }
 
@@ -26,7 +25,6 @@ pub enum SettingsRoute {
 }
 
 impl SettingsRoute {
-    /// Every sub-page in sidebar order.
     pub const ALL: [Self; 7] = [
         Self::General,
         Self::Audio,

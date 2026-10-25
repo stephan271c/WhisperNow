@@ -28,7 +28,6 @@ use whispernow_domain::{ModelId, ipc::CleanupDevice};
 
 enum Command {
     Load(ModelId),
-    /// Frees the model, then signals the sender.
     Unload(Option<mpsc::Sender<()>>),
     Decode(Job),
 }
@@ -53,9 +52,8 @@ pub struct LocalCleanupService {
 }
 
 impl LocalCleanupService {
-    /// The engine with llama.cpp's libraries from `library_directory` and the models installed
-    /// in `store`. Nothing loads until the first cleanup or [`Self::preload`]. `observer` hears
-    /// each change of the device the loaded model runs on, and `None` when it is freed.
+    /// Nothing loads until the first cleanup or [`Self::preload`]. `observer` hears each change
+    /// of the device the loaded model runs on, and `None` when it is freed.
     #[must_use]
     pub fn new(
         library_directory: PathBuf,
@@ -75,8 +73,6 @@ impl LocalCleanupService {
         }
     }
 
-    /// Loads the model `model_id` names in the background, so the first cleanup does not
-    /// wait for it.
     pub fn preload(&self, model_id: ModelId) {
         let _ = self.send(Command::Load(model_id));
     }
@@ -89,7 +85,6 @@ impl LocalCleanupService {
         }
     }
 
-    /// Frees the model, if it is loaded, in the background.
     pub fn unload(&self) {
         if self.lock_worker().is_some() {
             let _ = self.send(Command::Unload(None));
@@ -114,8 +109,7 @@ impl LocalCleanupService {
         self.worker.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Sends a command to the decode thread, starting it if needed. After the thread
-    /// panicked every command fails.
+    /// After the decode thread panicked every command fails.
     fn send(&self, command: Command) -> Result<(), LlmError> {
         let mut worker = self.lock_worker();
         let worker = match worker.as_ref() {
@@ -155,7 +149,6 @@ struct Shared {
     store: Arc<ModelStore>,
     use_gpu: AtomicBool,
     shutdown: AtomicBool,
-    /// Prevents a model from loading while its file is being removed.
     held: AtomicBool,
     observer: Box<dyn Fn(Option<CleanupDevice>) + Send + Sync>,
 }

@@ -36,7 +36,6 @@ impl UiContext {
         replace_task(&mut management.write().history_read, Some(read));
     }
 
-    /// Searches for the typed search text, unless it is already the search shown.
     pub(crate) fn search_history(mut self) {
         if self.management.write().apply_history_search() {
             self.refresh_history();

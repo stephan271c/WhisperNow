@@ -24,8 +24,7 @@ const LEVEL_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Every start creates a dedicated worker that owns downmixing, resampling,
 /// level aggregation, and sink delivery. The CPAL callback only normalizes into
-/// a pooled buffer and calls `try_send` on a bounded queue; a pooled buffer
-/// grows only when the host delivers a larger period than it negotiated.
+/// a pooled buffer and calls `try_send` on a bounded queue.
 pub struct CpalAudioInput {
     backend: Arc<dyn CaptureBackend>,
     default_device_poll: Duration,
@@ -440,8 +439,6 @@ mod tests {
         service.start(AudioDeviceChoice::SystemDefault, sink)
     }
 
-    /// Waits for the capture worker to reach `condition`, bounded so a broken
-    /// worker fails the test instead of hanging it.
     fn wait_until(condition: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !condition() {

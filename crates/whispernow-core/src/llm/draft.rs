@@ -1,14 +1,9 @@
-//! The draft sent with each local cleanup request for speculative decoding.
+//! The draft sent with each local cleanup request for speculative decoding: the transcript as
+//! code can clean it (fillers dropped, spoken punctuation and numbers written as symbols and
+//! digits, spelled-out letters joined, sentences capitalized). `llama-server` built with
+//! `serving/llama-server-draft-text.patch` takes it as `draft_text`; a stock server ignores it.
 //!
-//! `llama-server` built with the training side's `serving/llama-server-draft-text.patch` takes it
-//! as the request field `draft_text`: each pass it proposes the draft's words after the output's
-//! last words, and the model keeps those it would have written itself. A stock server ignores the
-//! field. The closer the draft is to the cleaned text, the more each pass keeps, so it is the
-//! transcript as code can clean it: fillers dropped, spoken punctuation and numbers written as
-//! symbols and digits, spelled-out letters joined, and sentences capitalized.
-//!
-//! A port of `training/src/whispernow_training/model/draft.py`; both are tested against
-//! `training/serving/prompt_golden.json`.
+//! Must agree with the training drafter; both are tested against `training/serving/prompt_golden.json`.
 
 const FILLERS: [&str; 8] = ["um", "uh", "erm", "er", "ah", "hmm", "mm", "uhm"];
 const SPOKEN: [(&str, &str); 6] = [
@@ -45,7 +40,6 @@ const TENS: [&str; 8] = [
     "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
 ];
 
-/// The transcript as code can clean it: the text the server drafts from.
 #[must_use]
 pub(crate) fn preclean(transcript: &str) -> String {
     let words: Vec<&str> = transcript
@@ -93,7 +87,6 @@ pub(crate) fn preclean(transcript: &str) -> String {
             index += 1;
         }
     }
-    // Sentence case: the first word and every word after a sentence end.
     for position in 0..out.len() {
         if position == 0 || out[position - 1].ends_with(['.', '?', '!']) {
             let word = &out[position];

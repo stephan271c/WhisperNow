@@ -50,8 +50,7 @@ pub(crate) const RECORDING_BAR_WINDOW: &str = "recording-bar";
 
 const SHUTDOWN_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Declares the Tauri invoke handler and, from the same tokens, the command
-/// paths it registers, so the command catalog test checks the real handler.
+/// The command catalog test reads the paths from the same tokens as the handler.
 macro_rules! registered_commands {
     ($($($segment:ident)::+),+ $(,)?) => {
         #[cfg(test)]
@@ -186,10 +185,9 @@ pub fn run() {
             if let Some(geometry) = settings.window_geometry {
                 restore_settings_geometry(app, geometry);
             }
-            // The page draws the titlebar of an undecorated settings window and asks the
-            // window whether it is decorated. Windows is undecorated by
-            // tauri.windows.conf.json; Linux is undecorated here. Setup finishes before the
-            // event loop answers any page request, so the page only ever sees this frame.
+            // The page draws its own titlebar when the window is undecorated. Windows is
+            // undecorated by tauri.windows.conf.json; Linux here, before the event loop can
+            // answer a page request.
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window(SETTINGS_WINDOW)
                 && window.set_decorations(false).is_err()
@@ -219,7 +217,6 @@ pub fn run() {
                 tracing::warn!("configured push-to-talk shortcut is unavailable");
                 services.state.publish_error(gateway::shortcut_error(error));
             }
-            // Registered only while a dictation runs, so nothing is registered here.
             shortcuts.set_cancel_binding(cancel_binding(&settings));
             app.manage(Gateway::new(
                 services,
@@ -261,10 +258,17 @@ pub fn run() {
                             tracing::warn!(?error, "Wayland shortcut portal capability was lost");
                             // Invalidation waits for any in-flight native registration.
                             let lost_app = shortcut_app.clone();
-                            let _ = tauri::async_runtime::spawn_blocking(move || {
-                                lost_app.state::<Gateway>().shortcut_capability_lost(error);
-                            })
-                            .await;
+                            if let Err(join_error) =
+                                tauri::async_runtime::spawn_blocking(move || {
+                                    lost_app.state::<Gateway>().shortcut_capability_lost(error);
+                                })
+                                .await
+                            {
+                                tracing::error!(
+                                    error = %join_error,
+                                    "the lost shortcut capability was not handled"
+                                );
+                            }
                         }
                     }
                 }
@@ -383,10 +387,9 @@ const fn native_wayland_session() -> bool {
     false
 }
 
-/// GNOME gives a native Wayland window no way to stay above other apps or choose
-/// its position, so the recording bar could not float. In a Wayland session the
-/// windows use `XWayland` instead, before GTK starts; shortcuts and paste
-/// still go through the portals. An explicit `GDK_BACKEND` wins.
+/// GNOME gives a native Wayland window no way to stay above other apps or choose its position,
+/// so the recording bar could not float. Windows use `XWayland` instead, chosen before GTK
+/// starts; shortcuts and paste still go through the portals. An explicit `GDK_BACKEND` wins.
 #[cfg(target_os = "linux")]
 fn use_xwayland_windows() -> bool {
     if let Some(backend) = std::env::var_os("GDK_BACKEND") {
@@ -406,9 +409,8 @@ const fn use_xwayland_windows() -> bool {
     false
 }
 
-/// Runs on the event-loop thread. Lifecycle actions can wait for processing,
-/// native shortcut round trips, and state publication, so they run on a
-/// blocking worker and report their outcome through state and error events.
+/// Runs on the event-loop thread, so actions that can wait for processing or native shortcut
+/// round trips run on a worker and report through state and error events.
 fn handle_tray_action(app: &tauri::AppHandle, action: TrayAction) {
     match action {
         TrayAction::Settings => {

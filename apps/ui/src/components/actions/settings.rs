@@ -21,7 +21,6 @@ impl UiContext {
         }
     }
 
-    /// Saves the vocabulary rules `edit` makes of the shown ones.
     pub(crate) fn change_vocabulary(self, edit: impl FnOnce(&mut Vec<VocabularyReplacement>)) {
         let shown = self
             .management

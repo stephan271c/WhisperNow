@@ -258,7 +258,6 @@ fn facts_lost_detail(benchmark: &CleanupBenchmark) -> String {
     )
 }
 
-/// `bytes` in decimal gigabytes, to a tenth.
 fn gigabytes(bytes: u64) -> String {
     let tenths = (bytes + 50_000_000) / 100_000_000;
     format!("{}.{} GB", tenths / 10, tenths % 10)
@@ -289,7 +288,6 @@ fn Measurement(label: &'static str, value: String, detail: &'static str) -> Elem
     }
 }
 
-/// `detail` is the measurement behind the rating, shown on hover.
 #[component]
 fn RatingBars(label: &'static str, value: Rating, detail: String) -> Element {
     let filled = value.get();
@@ -306,7 +304,6 @@ fn RatingBars(label: &'static str, value: Rating, detail: String) -> Element {
     }
 }
 
-/// A model's id as element ids spell it.
 pub(super) fn model_slug(id: &ModelId) -> String {
     id.as_str().replace('.', "-")
 }

@@ -47,8 +47,7 @@ pub use voice_activity::{silero_vad_model_path, silero_voice_activity};
 pub fn init_logging() {
     let mut filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     // Rig provider targets can include request/response bodies and, for Gemini,
-    // credential-bearing request URLs. Application code uses its own metadata-only
-    // events, so provider-library logging is disabled structurally at the root.
+    // credential-bearing request URLs.
     for directive in ["rig=off", "rig_core=off"] {
         filter = filter.add_directive(directive.parse().expect("static logging directive"));
     }

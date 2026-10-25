@@ -112,9 +112,8 @@ impl NativeServices {
     }
 }
 
-/// Where llama.cpp's libraries are: the resources' `llama/`, or on macOS the bundle's
-/// `Contents/Frameworks/`, beside `Contents/Resources/`, where they are signed. A development
-/// build can point `WHISPERNOW_LLAMA_DIR` at a llama.cpp b11259 release instead.
+/// On macOS the libraries sit in the bundle's `Contents/Frameworks/`, where they are signed. A
+/// development build can point `WHISPERNOW_LLAMA_DIR` at a llama.cpp b11259 release instead.
 fn llama_dir(resource_dir: &Path) -> PathBuf {
     if let Some(directory) = std::env::var_os("WHISPERNOW_LLAMA_DIR") {
         PathBuf::from(directory)
@@ -128,7 +127,6 @@ fn llama_dir(resource_dir: &Path) -> PathBuf {
     }
 }
 
-/// AI cleanup's providers: the local cleanup model in process, every other one through Rig.
 struct ProviderRouter {
     local: Arc<LocalCleanupService>,
 }

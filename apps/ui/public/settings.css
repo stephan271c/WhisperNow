@@ -1,8 +1,5 @@
-/*
- * Settings window screens. Primitives live in ui.css; this file lays out the shell and
- * the screens. Element rules are wrapped in :where() so they carry no specificity and never
- * override a primitive.
- */
+/* Element rules in this file are wrapped in :where() so they carry no specificity and never
+   override a primitive. */
 
 .wn-app {
   width: 100%;
@@ -100,8 +97,6 @@ small {
   margin: 0;
 }
 
-/* Setup: permissions */
-
 .permission-cards {
   display: grid;
   gap: var(--space-3);
@@ -166,8 +161,6 @@ small {
   color: var(--color-text-primary);
   font-weight: var(--font-weight-semibold);
 }
-
-/* Setup: speech model */
 
 .setup-models {
   display: grid;
@@ -244,8 +237,6 @@ small {
   justify-content: flex-end;
 }
 
-/* Setup: shortcuts and the test dictation */
-
 .setup-test {
   display: grid;
   gap: var(--space-3);
@@ -271,8 +262,6 @@ small {
 .setup-test-result:empty {
   display: none;
 }
-
-/* Shell ------------------------------------------------------------------- */
 
 .settings-shell {
   display: grid;
@@ -318,8 +307,6 @@ small {
   font-size: var(--font-size-lg);
 }
 
-/* Scrollbars --------------------------------------------------------------- */
-
 /* One thin scrollbar on every platform. The thumb shows while its area scrolls (the
    `is-scrolling` class from trackScrollActivity) or is under the pointer, and fades out
    after. Setting scrollbar-color or scrollbar-width would make Chromium ignore these rules. */
@@ -352,8 +339,6 @@ small {
   background-color: var(--color-border-control);
   transition-duration: var(--duration-fast);
 }
-
-/* Window chrome ------------------------------------------------------------ */
 
 /* The sidebar runs full height and the content column gains a titlebar strip that drags the
    window, along with the brand. Where the page draws the buttons (.custom-chrome) the window is
@@ -529,8 +514,6 @@ small {
   margin-inline: auto;
 }
 
-/* Shared screen layout ---------------------------------------------------- */
-
 .settings-card {
   display: grid;
   align-content: start;
@@ -579,8 +562,6 @@ small {
   font-size: var(--font-size-xs);
   line-height: var(--line-height-normal);
 }
-
-/* Shortcut capture -------------------------------------------------------- */
 
 .shortcut-capture {
   display: flex;
@@ -637,8 +618,6 @@ small {
   margin-top: var(--space-1);
   font-size: var(--font-size-xs);
 }
-
-/* Updates and data -------------------------------------------------------- */
 
 .danger-zone {
   display: grid;
@@ -715,7 +694,6 @@ small {
   display: none;
 }
 
-/* Content between settings rows keeps the card's inner spacing. */
 .section-card > :first-child:not(.setting-row, .model-list) {
   margin-top: var(--space-4);
 }
@@ -738,7 +716,6 @@ small {
   justify-self: start;
 }
 
-/* A switch, then the current keys and the capture button, with guidance below. */
 .shortcut-control {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -774,8 +751,6 @@ small {
   width: 100%;
   min-width: 0;
 }
-
-/* Speech models ----------------------------------------------------------- */
 
 .model-list,
 .vocabulary-list {
@@ -859,9 +834,6 @@ small {
   background: var(--color-accent-soft);
 }
 
-/* AI cleanup -------------------------------------------------------------- */
-
-/* The saved models and their Remove button, then a new name and Add model. */
 .model-picker {
   display: grid;
   grid-template-columns: minmax(0, 16rem) auto;
@@ -879,8 +851,6 @@ small {
   justify-self: stretch;
 }
 
-/* Vocabulary -------------------------------------------------------------- */
-
 .vocabulary-add {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
@@ -894,7 +864,6 @@ small {
   margin-top: var(--space-3);
 }
 
-/* Under the button, in the last column however many there are. */
 .vocabulary-add-hint {
   grid-column: -2 / -1;
 }
@@ -920,8 +889,6 @@ small {
   display: flex;
   gap: var(--space-1);
 }
-
-/* History ----------------------------------------------------------------- */
 
 .history-page {
   display: grid;
@@ -1197,8 +1164,6 @@ small {
   justify-content: center;
 }
 
-/* Setup ------------------------------------------------------------------- */
-
 .setup-steps {
   display: flex;
   gap: var(--space-2);
@@ -1322,8 +1287,6 @@ small {
   overflow-wrap: anywhere;
 }
 
-/* Shell ------------------------------------------------------------------- */
-
 .settings-shell {
   position: relative;
 }
@@ -1434,8 +1397,6 @@ small {
   background: var(--color-danger);
 }
 
-/* Home -------------------------------------------------------------------- */
-
 .home-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1479,7 +1440,6 @@ small {
   margin: 0;
 }
 
-/* Lines the button's text up with the card's text. */
 .home-card > .btn-ghost {
   margin-inline-start: calc(-1 * (var(--space-2) + 1px));
 }
@@ -1563,8 +1523,6 @@ small {
     grid-column: auto;
   }
 }
-
-/* Responsive -------------------------------------------------------------- */
 
 @media (min-width: 1450px) {
   .settings-content {

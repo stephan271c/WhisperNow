@@ -11,12 +11,11 @@ mod state;
 
 use blocked_reason::BlockedReason;
 use components::Navigator;
-use operations::UiOperation;
-// The two windows' roots; `app` picks one.
 pub use components::{AppShell, RecordingBar};
 use home_status::{Fix, FixTarget, HomeStatus, HomeStatusKind};
 use management::{ManagementState, SettingKey, SetupTest};
 use notice::{Notice, NoticeScope};
+use operations::UiOperation;
 use overlay::OverlayView;
 use route::{Route, SettingsRoute, TopLevel, nav_keyboard_target};
 use state::UiState;

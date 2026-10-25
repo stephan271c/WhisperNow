@@ -55,8 +55,6 @@ pub(crate) fn wait_until_modifiers_released(
     Ok(())
 }
 
-/// The clipboard plus the paste keystroke for whichever application has focus
-/// when the keystroke is sent.
 pub struct NativePastePlatform {
     clipboard: NativeClipboard,
 }
@@ -69,8 +67,7 @@ impl NativePastePlatform {
     }
 }
 
-/// Whether macOS trusts this process with Accessibility, which the paste
-/// keystroke needs. It never prompts.
+/// Never prompts.
 #[cfg(target_os = "macos")]
 #[must_use]
 #[allow(unsafe_code)]

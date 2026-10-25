@@ -27,7 +27,6 @@ mod tests;
 /// The step heading's id; focus moves to it on each new step.
 const STEP_HEADING: &str = "setup-step-heading";
 
-/// The step heading; `None` is the finished setup.
 const fn step_title(step: Option<SetupStep>) -> &'static str {
     match step {
         Some(SetupStep::Welcome) => "Welcome to WhisperNow",
@@ -86,7 +85,6 @@ pub(super) fn SetupScreen() -> Element {
     } }
 }
 
-/// Where setup is; the current step is marked with `aria-current="step"`.
 #[component]
 fn SetupStepper(step: SetupStep) -> Element {
     rsx! { nav { aria_label: "Setup progress",
@@ -187,7 +185,6 @@ fn SetupFooter(step: SetupStep) -> Element {
     }
 }
 
-/// Why the step's action is not available yet.
 const fn step_hint(step: SetupStep) -> Option<&'static str> {
     match step {
         SetupStep::Welcome | SetupStep::TryIt => None,
@@ -207,7 +204,6 @@ fn WelcomeStep() -> Element {
     } }
 }
 
-/// One card per permission this platform needs.
 #[component]
 fn PermissionsStep() -> Element {
     let context = use_context::<UiContext>();
@@ -315,7 +311,6 @@ const fn status_class(status: PermissionStatus) -> &'static str {
     }
 }
 
-/// Each permission's name, plus an explanation for the less obvious ones.
 const fn permission_text(kind: PermissionKind) -> (&'static str, Option<&'static str>) {
     match kind {
         PermissionKind::Microphone => ("Microphone", None),
@@ -334,7 +329,6 @@ const fn permission_text(kind: PermissionKind) -> (&'static str, Option<&'static
     }
 }
 
-/// What to do when a permission is refused or cannot be asked for.
 const fn permission_help(kind: PermissionKind, status: PermissionStatus) -> Option<&'static str> {
     match (kind, status) {
         (_, PermissionStatus::Granted) => None,
@@ -467,7 +461,6 @@ fn ModelChoice(
     } }
 }
 
-/// Shortcuts that other software commonly takes, with advice for each.
 fn shortcut_conflict(shortcut: &Shortcut) -> Option<&'static str> {
     let only = |modifier: ShortcutModifier| shortcut.modifiers == [modifier].into();
     match shortcut.key {

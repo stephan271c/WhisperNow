@@ -179,8 +179,6 @@ class NativeStagingTests(unittest.TestCase):
 
 
 class LlamaLibraryTests(unittest.TestCase):
-    """`stage_llama.py`: only the pinned files, renamed to their sonames, byte for byte."""
-
     def fixture(self, root: Path) -> tuple[Path, Path]:
         source = root / "llama-b11259"
         source.mkdir()
@@ -348,8 +346,6 @@ def portable_executable(imports=(), delay_imports=()) -> bytes:
 
 
 class WindowsImportTests(unittest.TestCase):
-    """`check_windows_imports.py`: what a fresh Windows would fail to load."""
-
     def test_import_and_delay_import_tables_are_read(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "app.exe"
@@ -391,8 +387,6 @@ class WindowsImportTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("openssl"), "needs openssl")
 class MacSignatureTests(unittest.TestCase):
-    """The self-signed macOS certificate and `check_macos_signature.py`."""
-
     def make_certificate(self, root: Path) -> Path:
         (root / "scripts").mkdir()
         (root / "release").mkdir()

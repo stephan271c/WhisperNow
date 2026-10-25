@@ -102,7 +102,6 @@ impl FixtureServer {
         format!("http://{}{path}", self.address)
     }
 
-    /// Lets a paused response go on.
     pub fn release(&self) {
         if let Some(release) = &*self.release.lock().unwrap_or_else(PoisonError::into_inner) {
             let _ = release.send(());
@@ -195,7 +194,6 @@ fn read_request(stream: &mut TcpStream) {
     }
 }
 
-/// The lowercase hex SHA-256 digest of `bytes`.
 pub fn sha256(bytes: &[u8]) -> String {
     let mut encoded = String::new();
     for byte in Sha256::digest(bytes) {

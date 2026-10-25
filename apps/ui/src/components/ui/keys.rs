@@ -17,7 +17,6 @@ pub(crate) fn ShortcutLabel(shortcut: Shortcut) -> Element {
     }
 }
 
-/// The single display form of a shortcut: modifiers in display order, then the key.
 pub(crate) fn shortcut_parts(shortcut: &Shortcut) -> Vec<&'static str> {
     shortcut
         .modifiers

@@ -148,7 +148,6 @@ static DEFAULT_PROVIDER_SETTINGS: ProviderSettings = ProviderSettings {
 };
 
 impl ProviderSettings {
-    /// Makes `model` the active model, saving it if it is new.
     pub fn choose_model(&mut self, model: String) {
         if !self.saved_models.contains(&model) {
             self.saved_models.push(model.clone());
@@ -226,7 +225,6 @@ pub struct Settings {
     pub history_limit: HistoryLimit,
     /// Entries older than this are deleted with the history, or nothing when `Forever`.
     pub history_retention: HistoryRetention,
-    /// Whether dictations keep their audio in history.
     pub keep_audio: bool,
 }
 
@@ -260,7 +258,6 @@ fn default_cleanup_model() -> ModelId {
     ModelId::new(DEFAULT_CLEANUP_MODEL_ID).expect("cleanup registry IDs are valid")
 }
 
-/// A known local cleanup model, else the default.
 pub(crate) fn known_cleanup_model(id: &str) -> ModelId {
     CLEANUP_MODEL_IDS
         .into_iter()

@@ -47,8 +47,8 @@ pub enum LlmRequest {
     Local {
         model: ModelId,
         /// The trimmed transcript alone: the local cleanup model was trained without a system
-        /// message, instructions or delimiters. The training side renders the same messages
-        /// from `training/serving/`, and both are held to `prompt_golden.json` there.
+        /// message, instructions or delimiters. `training/serving/` renders the same messages,
+        /// and both are held to `prompt_golden.json` there.
         transcript: String,
         max_output_tokens: usize,
         draft: DraftText,

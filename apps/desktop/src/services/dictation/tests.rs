@@ -38,7 +38,6 @@ use crate::services::{
 
 const TRANSCRIPT: &str = "hello from the worker";
 
-/// What the scripted recognizer does next.
 #[derive(Default)]
 struct Script {
     /// Decodes that fail before one succeeds.
@@ -910,6 +909,32 @@ fn closing_during_processing_keeps_the_audio_and_stops_the_worker() {
         .start(RecordingTrigger::Toggle)
         .expect_err("a closed worker starts nothing");
     assert_eq!(refused.code, "application_shutting_down");
+}
+
+#[test]
+fn a_panicking_worker_moves_the_phase_to_error_and_refuses_later_work() {
+    let speech = vec![0.25; TARGET_SAMPLE_RATE as usize];
+    let audio = FakeAudioInput::recording(speech).before_start(|| panic!("capture panicked"));
+    let fixture = Fixture::with_script(
+        OutputNotice::Pasted,
+        Arc::new(audio),
+        Arc::new(Script::default()),
+    );
+
+    let refused = fixture
+        .dictation
+        .start(RecordingTrigger::Toggle)
+        .expect_err("the worker stopped before it replied");
+    assert_eq!(refused.code, "worker_stopped");
+    assert_eq!(fixture.settled_error().code, "worker_panicked");
+
+    let later = fixture
+        .dictation
+        .start(RecordingTrigger::Toggle)
+        .expect_err("no worker is left");
+    assert_eq!(later.code, "worker_stopped");
+    fixture.state.dismiss_error();
+    assert_eq!(fixture.state.snapshot().phase, Phase::Idle);
 }
 
 #[test]

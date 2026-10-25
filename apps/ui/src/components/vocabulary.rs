@@ -15,12 +15,10 @@ use crate::{SettingKey, UiContext};
 /// The add form's id; tests submit it as Enter does.
 const ADD_FORM: &str = "vocabulary-add-form";
 
-/// How a rule is named in the accessible names of its controls.
 fn rule_name(entry: &VocabularyReplacement) -> String {
     format!("‘{} → {}’", entry.source, entry.replacement)
 }
 
-/// Where focus goes after a rule is deleted.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum RuleFocus {
     Rule(usize),
@@ -28,7 +26,6 @@ enum RuleFocus {
     AddForm,
 }
 
-/// Whether either text holds `query`, which is trimmed and lowercased.
 fn matches(entry: &VocabularyReplacement, query: &str) -> bool {
     entry.source.to_lowercase().contains(query) || entry.replacement.to_lowercase().contains(query)
 }
@@ -42,11 +39,12 @@ pub(super) fn VocabularyPage() -> Element {
     let mut source = use_signal(String::new);
     let mut replacement = use_signal(String::new);
     let mut search = use_signal(String::new);
-    let focus = use_signal(|| None::<RuleFocus>);
+    let mut focus = use_signal(|| None::<RuleFocus>);
     let mut add_form = use_signal(|| None::<Rc<MountedData>>);
     use_effect(move || {
         if focus() == Some(RuleFocus::AddForm) {
             take_focus(add_form);
+            focus.set(None);
         }
     });
     let Some(settings) = management.read().shown_settings().cloned() else {
@@ -131,7 +129,7 @@ fn VocabularyRow(
     last: bool,
     reorder: bool,
     disabled: bool,
-    focus: Signal<Option<RuleFocus>>,
+    mut focus: Signal<Option<RuleFocus>>,
     after_delete: RuleFocus,
 ) -> Element {
     let context = use_context::<UiContext>();
@@ -139,6 +137,7 @@ fn VocabularyRow(
     use_effect(move || {
         if focus() == Some(RuleFocus::Rule(index)) {
             take_focus(row);
+            focus.set(None);
         }
     });
     let name = rule_name(&entry);
@@ -182,7 +181,6 @@ fn VocabularyRow(
                 IconButton { id: "vocabulary-rule-{number}-delete", icon: IconName::Trash, label: "Delete rule {name}",
                     disabled,
                     onclick: move |_| {
-                        let mut focus = focus;
                         change(|rules, index| if index < rules.len() { rules.remove(index); });
                         focus.set(Some(after_delete));
                     }

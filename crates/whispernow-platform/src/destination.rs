@@ -60,7 +60,6 @@ fn foreign(
         .ok_or(NativePasteError::Unavailable)
 }
 
-/// Whether focus is still where `expected` was captured.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) fn still_focused(expected: NativeDestination) -> Result<(), NativePasteError> {
     if capture_system_destination()? == Some(expected) {
@@ -253,7 +252,6 @@ pub(crate) fn capture_on(
     }))
 }
 
-/// A window property holding exactly one 32-bit value of `expected_type`.
 #[cfg(target_os = "linux")]
 fn x11_property_u32(
     connection: &RustConnection,

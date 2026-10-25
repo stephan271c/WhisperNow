@@ -30,8 +30,6 @@ const fn millis(milliseconds: usize) -> usize {
     milliseconds * TARGET_SAMPLE_RATE as usize / 1_000
 }
 
-// Segmentation constants, in samples at 16 kHz. These are tuning constants, not user settings.
-
 pub const FRAME_SAMPLES: usize = 512;
 /// About the 95th percentile of pauses in recorded dictations. Recognizers often end a sentence at
 /// a cut, so the shorter pauses inside a thought must not end a segment.
@@ -103,7 +101,6 @@ pub struct SpeechSegmenter {
 }
 
 impl SpeechSegmenter {
-    /// Segments for a recognizer of `family`.
     #[must_use]
     pub fn new(activity: Box<dyn VoiceActivity>, family: ModelFamily) -> Self {
         Self {
@@ -116,7 +113,6 @@ impl SpeechSegmenter {
         }
     }
 
-    /// Classifies complete frames of `samples` and returns the segments they finished.
     pub fn push(&mut self, mut samples: &[f32]) -> Vec<AudioSegment> {
         let mut finished = Vec::new();
         if !self.partial.is_empty() {
@@ -139,7 +135,6 @@ impl SpeechSegmenter {
         finished
     }
 
-    /// Classifies the final partial frame and closes any open segment.
     #[must_use]
     pub fn finish(mut self) -> Vec<AudioSegment> {
         let mut finished = Vec::new();

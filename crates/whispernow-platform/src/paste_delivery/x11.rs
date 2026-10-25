@@ -1,9 +1,6 @@
-//! X11 paste injection through the server-provided XTEST extension.
-//!
-//! Keycodes come from the live core keyboard and modifier maps. The adapter
-//! never releases a key the user owns: it waits until no modifier key is
-//! physically down, then grabs the server, re-checks the destination and the
-//! modifiers, and sends one balanced shortcut.
+//! X11 paste injection through the XTEST extension: waits until no modifier key is
+//! physically down, then grabs the server, re-checks the destination and the modifiers,
+//! and sends one balanced shortcut.
 
 use x11rb::{
     connection::Connection,
@@ -196,7 +193,6 @@ fn send_shortcut(
     }
 }
 
-/// Releases `pressed` in reverse order, attempting every key.
 fn release(connection: &RustConnection, root: Window, pressed: &[u8]) -> bool {
     let mut released = true;
     for keycode in pressed.iter().rev() {

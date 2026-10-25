@@ -1,4 +1,8 @@
-use std::{fs, io::ErrorKind, path::PathBuf};
+use std::{
+    fs,
+    io::{self, ErrorKind},
+    path::PathBuf,
+};
 
 use crate::atomic_file::write_atomically;
 
@@ -23,18 +27,30 @@ impl RemoteDesktopRestoreTokenStore {
     /// session can skip the consent prompt.
     #[must_use]
     pub fn has_token(&self) -> bool {
-        matches!(self.load(), Ok(Some(_)))
+        matches!(self.read(), Ok(Some(_)))
     }
 
-    pub(crate) fn load(&self) -> Result<Option<String>, WaylandPortalError> {
+    /// The saved token. One that cannot be read or is malformed counts as
+    /// absent: the next consent saves a new token over it.
+    pub(crate) fn load(&self) -> Option<String> {
+        self.read().unwrap_or_else(|error| {
+            tracing::warn!(%error, "the saved restore token is unusable; asking for consent again");
+            None
+        })
+    }
+
+    fn read(&self) -> io::Result<Option<String>> {
         let token = match fs::read_to_string(&self.path) {
             Ok(token) => token,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(WaylandPortalError::TokenStore),
+            Err(error) => return Err(error),
         };
         if token.is_empty() || token.len() > MAX_TOKEN_BYTES || token.chars().any(char::is_control)
         {
-            return Err(WaylandPortalError::TokenStore);
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "the token is empty, too long or has control characters",
+            ));
         }
         Ok(Some(token))
     }
@@ -57,16 +73,13 @@ mod tests {
         let root = tempdir().expect("temporary directory");
         let path = root.path().join("token");
         let store = RemoteDesktopRestoreTokenStore::new(path.clone());
-        assert_eq!(store.load().expect("missing token"), None);
+        assert_eq!(store.load(), None);
         assert!(!store.has_token());
 
         store.replace("first-token").expect("first token");
         assert!(store.has_token());
         store.replace("rotated-token").expect("rotated token");
-        assert_eq!(
-            store.load().expect("load token").as_deref(),
-            Some("rotated-token")
-        );
+        assert_eq!(store.load().as_deref(), Some("rotated-token"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -79,12 +92,29 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_token_does_not_count_as_consent() {
+    fn a_damaged_token_counts_as_absent_until_a_new_one_replaces_it() {
         let root = tempdir().expect("temporary directory");
         let path = root.path().join("token");
         let store = RemoteDesktopRestoreTokenStore::new(path.clone());
-        fs::write(&path, "bad\ntoken").expect("invalid token");
-        assert_eq!(store.load(), Err(WaylandPortalError::TokenStore));
+        for damaged in [
+            &b"bad\ntoken"[..],
+            b"",
+            b"\xff\xfe",
+            &[b'a'; MAX_TOKEN_BYTES + 1],
+        ] {
+            fs::write(&path, damaged).expect("damaged token");
+            assert_eq!(store.load(), None);
+            assert!(!store.has_token());
+        }
+        fs::remove_file(&path).expect("remove damaged token");
+        fs::create_dir(&path).expect("unreadable token");
+        assert_eq!(store.load(), None);
         assert!(!store.has_token());
+        fs::remove_dir(&path).expect("remove unreadable token");
+
+        fs::write(&path, "bad\ntoken").expect("damaged token");
+        store.replace("fresh-token").expect("replace damaged token");
+        assert_eq!(store.load().as_deref(), Some("fresh-token"));
+        assert!(store.has_token());
     }
 }

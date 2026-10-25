@@ -98,16 +98,13 @@ pub trait DecodeContext {
     /// when it cannot remove a sequence's tail freely, or only a bounded one.
     fn checkpoints_prompt(&self) -> bool;
     fn clear(&mut self);
-    /// Decodes `tokens` at positions `first_position..`.
     fn decode(
         &mut self,
         tokens: &[Token],
         first_position: usize,
         outputs: Outputs,
     ) -> Result<(), LocalDecodeError>;
-    /// The logits at `batch_index` of the last decode.
     fn logits(&mut self, batch_index: usize) -> Result<&[f32], LocalDecodeError>;
-    /// Removes positions `from..` from the memory.
     fn remove_from(&mut self, from: usize) -> Result<(), LocalDecodeError>;
 }
 

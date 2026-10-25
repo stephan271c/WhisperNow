@@ -56,7 +56,6 @@ pub trait PastePlatform {
     /// platform supports it.
     fn write_transcript(&mut self, text: &str) -> Result<(), Self::Error>;
 
-    /// Reports whether the clipboard's text is exactly `text`.
     fn clipboard_holds(&mut self, text: &str) -> Result<bool, Self::Error>;
 
     fn restore_clipboard(&mut self, snapshot: Self::Snapshot) -> Result<(), Self::Error>;
@@ -116,9 +115,6 @@ impl<P: PastePlatform> PasteQueue<P> {
     }
 }
 
-/// Snapshots the clipboard, writes and pastes `text`, waits, then restores the
-/// snapshot only if the clipboard still holds `text`.
-///
 /// A snapshot failure never blocks the paste; it only skips the restore. Every
 /// path after the write, including cancellation, ends in the same
 /// compare-and-restore. Cancellation only shortens the wait before the

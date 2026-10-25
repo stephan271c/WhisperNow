@@ -66,7 +66,6 @@ pub(crate) const fn setup_step(step: SetupStep) -> &'static str {
     }
 }
 
-/// English names of the BCP-47 tags speech models list.
 const LANGUAGE_NAMES: &[(&str, &str)] = &[
     ("af", "Afrikaans"),
     ("am", "Amharic"),

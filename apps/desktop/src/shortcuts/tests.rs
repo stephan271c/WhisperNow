@@ -29,7 +29,6 @@ fn escape() -> ShortcutBinding {
     binding(&Shortcut::default_cancel())
 }
 
-/// Ctrl+`key` in `mode`, as the coordinator receives it.
 fn recording(key: &str, mode: RecordingMode) -> RecordingBinding {
     RecordingBinding {
         mode,

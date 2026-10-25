@@ -4,7 +4,6 @@ use dioxus::prelude::*;
 
 use super::listbox::{OptionList, use_open};
 
-/// How a suggestion matches the typed text, best first.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Match {
     Whole,
@@ -30,7 +29,6 @@ fn match_of(suggestion: &str, typed: &str) -> Option<Match> {
         .then_some(Match::WordStart)
 }
 
-/// The suggestions `typed` matches, best match first and otherwise in their order.
 fn matching(suggestions: &[String], typed: &str) -> Vec<String> {
     let typed = typed.to_lowercase();
     let mut matches = suggestions

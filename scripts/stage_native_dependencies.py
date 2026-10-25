@@ -35,7 +35,6 @@ def matches_pin(path: Path, pin: dict) -> bool:
 
 
 def load_allowlist(path: Path, platform: str) -> tuple[dict, dict, dict, list[dict]]:
-    """Return the components, archive, license files, and libraries pinned for a platform."""
     document = json.loads(path.read_text(encoding="utf-8"))
     archive = document["source_archives"].get(platform)
     libraries = document["libraries"].get(platform)
@@ -97,7 +96,6 @@ def extract_archive(path: Path, output: Path) -> Path:
 def stage_compliance(
     components: dict, license_files: dict, source: Path, output: Path
 ) -> Path:
-    """Zip the pinned license files and source offers into `native-compliance.zip`."""
     members = [(f"licenses/{name}", name, pin) for name, pin in license_files.items()]
     members += [
         (f"source/{offer['name']}", offer["name"], offer)

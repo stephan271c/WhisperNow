@@ -27,7 +27,6 @@ const EVIOCSCLOCKID: libc::Ioctl = libc::_IOW::<libc::c_int>(EVDEV_IOCTL_BASE, 0
 const EVIOCGNAME: libc::Ioctl = libc::_IOR::<[u8; 256]>(EVDEV_IOCTL_BASE, 0x06);
 const KEY_STATE_BYTES: usize = (MAX_KEY_CODE as usize + 1) / 8;
 const EVIOCGKEY: libc::Ioctl = libc::_IOR::<[u8; KEY_STATE_BYTES]>(EVDEV_IOCTL_BASE, 0x18);
-/// `EVIOCGBIT(EV_KEY, KEY_STATE_BYTES)`.
 const EVIOCGBIT_KEY: libc::Ioctl =
     libc::_IOR::<[u8; KEY_STATE_BYTES]>(EVDEV_IOCTL_BASE, 0x20 + EV_KEY as u32);
 const RESCAN_INTERVAL: Duration = Duration::from_secs(2);
@@ -45,7 +44,6 @@ enum Message {
         device: u32,
         path: Option<PathBuf>,
     },
-    /// A line of standard input.
     Command(String),
     InputClosed,
 }
@@ -198,7 +196,6 @@ fn reply_availability(
     Ok(())
 }
 
-/// Opens event devices not already being read, each on its own thread.
 fn scan(
     devices: &mut HashMap<PathBuf, HashSet<u16>>,
     next_device: &mut u32,

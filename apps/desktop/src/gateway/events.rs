@@ -6,8 +6,6 @@ use whispernow_domain::ipc::{AppState, EVENT, EventPayload};
 use super::Gateway;
 use crate::overlay::RecordingOverlay;
 
-/// Starts the thread that forwards every published event, in publication order. It ends when
-/// the last event sender is dropped.
 pub(crate) fn forward_events(
     app: tauri::AppHandle,
     mut overlay: RecordingOverlay,

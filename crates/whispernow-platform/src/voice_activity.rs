@@ -158,9 +158,8 @@ mod tests {
         impulse[SECOND / 2] = 1.0;
         assert!(segments(&impulse).is_empty());
 
-        // Two seconds of fixed-seed xorshift32 white noise bounded to 0.01
-        // normalized amplitude (approximately -40 dBFS peak). This is a
-        // deterministic stand-in for steady low-level room or microphone noise.
+        // Two seconds of fixed-seed xorshift32 white noise bounded to 0.01 amplitude
+        // (about -40 dBFS peak), a deterministic stand-in for steady room noise.
         let mut state = 0x4d59_5df4_u32;
         let background_noise = (0..SECOND * 2)
             .map(|_| {

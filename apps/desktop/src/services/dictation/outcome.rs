@@ -18,9 +18,8 @@ pub(super) enum Outcome {
         /// The transcript was delivered with a problem worth mentioning.
         warning: Option<AppError>,
     },
-    /// Setup's test dictation heard this text.
     Heard(String),
-    /// Setup's test dictation heard no speech, or no audio at all.
+    /// No speech, or no audio at all.
     HeardNothing,
     Failed(AppError),
     Cancelled,
@@ -32,7 +31,7 @@ pub(super) enum DecodeFailure {
 }
 
 impl Worker {
-    /// Publishes where the dictation ended and, when an update waited for it, starts it.
+    /// Starts the update that waited for this dictation, if any.
     pub(super) fn finish(&mut self, trigger: RecordingTrigger, outcome: Outcome) {
         let setup_test = trigger.is_setup_test();
         self.parts.state.apply(|state| {
@@ -135,7 +134,7 @@ impl Worker {
         }
     }
 
-    /// Records a dictation that has no transcript, when it heard anything.
+    /// Skipped for setup tests and recordings with no microphone audio.
     pub(super) fn keep_untranscribed(
         &self,
         recording: &Recording,
@@ -209,7 +208,6 @@ fn capture_duration_millis(samples: &[f32]) -> u64 {
 }
 
 impl OutputNotice {
-    /// Why the history entry's text never reached the focused application.
     pub(super) const fn history_reason(self) -> Option<&'static str> {
         match self {
             Self::PermissionDenied => {

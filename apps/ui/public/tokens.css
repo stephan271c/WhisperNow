@@ -1,10 +1,7 @@
 /*
- * WhisperNow design tokens and base rules, loaded by every window.
- *
- * Components use these custom properties instead of literal values. Colour tokens are
- * plain hex so `tests/design_tokens.rs` can check their contrast; the dark palette is
- * declared twice (system preference and explicit `data-theme="dark"`) and the test keeps
- * both copies identical.
+ * Colour tokens are plain hex so `tests/design_tokens.rs` can check their contrast; the dark
+ * palette is declared twice (system preference and explicit `data-theme="dark"`) and the test
+ * keeps both copies identical.
  */
 
 :root {
@@ -28,7 +25,6 @@
   --line-height-normal: 1.5;
   --line-height-relaxed: 1.65;
 
-  /* Spacing: a 4px scale. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -39,7 +35,6 @@
   --space-10: 40px;
   --space-12: 48px;
 
-  /* Shape and depth. */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-window: 12px;
@@ -48,7 +43,6 @@
   --shadow-2: 0 4px 12px rgb(31 28 23 / 8%);
   --shadow-3: 0 12px 32px rgb(31 28 23 / 16%);
 
-  /* Controls and motion. */
   --control-height-sm: 28px;
   --control-height-md: 36px;
   --duration-fast: 140ms;

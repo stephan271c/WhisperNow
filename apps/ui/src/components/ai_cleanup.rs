@@ -15,8 +15,6 @@ use crate::blocked_reason::DisabledReason;
 use crate::client;
 use crate::{NoticeScope, SettingKey, UiContext, UiOperation};
 
-/// Where cleanup runs: one of the app's own cleanup models, an LLM server on this computer,
-/// or a cloud API.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CleanupSource {
     WhisperNow,
@@ -124,7 +122,8 @@ pub(super) fn AiCleanupPage() -> Element {
                     }
                 }
             } else {
-                ProviderRows { provider, provider_settings: settings.provider_settings(provider).clone(), disabled }
+                // Keyed so a typed key or model name stays with its provider.
+                ProviderRows { key: "{provider.as_str()}", provider, provider_settings: settings.provider_settings(provider).clone(), disabled }
             }
         }
         if source == CleanupSource::WhisperNow {
@@ -263,7 +262,6 @@ fn ProviderRows(
     }
 }
 
-/// The app's own cleanup models, which run on this computer.
 #[component]
 fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
     let context = use_context::<UiContext>();

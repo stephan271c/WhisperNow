@@ -2,7 +2,6 @@ use dioxus::prelude::*;
 
 use super::{Icon, IconName};
 
-/// A titled group of settings rows on one card; the heading names the region.
 #[component]
 pub(crate) fn Section(
     id: String,
@@ -23,7 +22,6 @@ pub(crate) fn Section(
     }
 }
 
-/// Placeholder for a list or panel with nothing to show yet; `children` explains what to do.
 #[component]
 pub(crate) fn EmptyState(icon: IconName, title: String, children: Element) -> Element {
     rsx! {

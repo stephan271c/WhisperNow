@@ -18,8 +18,7 @@ pub struct AppPaths {
 }
 
 impl AppPaths {
-    /// Resolves the same config/data roots used by the Python `platformdirs`
-    /// release and retains its capitalized application directory.
+    /// The config and data roots and the capitalized application directory match `platformdirs`.
     pub fn discover() -> io::Result<Self> {
         let base = BaseDirs::new().ok_or_else(|| {
             io::Error::new(
@@ -29,8 +28,7 @@ impl AppPaths {
         })?;
         #[cfg(target_os = "windows")]
         {
-            // platformdirs uses non-roaming LocalAppData for both calls when
-            // `roaming` is omitted, as it is in the Python release.
+            // platformdirs uses non-roaming LocalAppData for both when `roaming` is omitted.
             Ok(Self::from_windows_local_data_dir(base.data_local_dir()))
         }
         #[cfg(not(target_os = "windows"))]
@@ -55,8 +53,7 @@ impl AppPaths {
         Self::from_base_dirs(root.join("config"), root.join("data"))
     }
 
-    /// Reproduces Python `platformdirs` defaults on Windows, where config and
-    /// data both live below non-roaming `LocalAppData`.
+    /// Config and data both live below non-roaming `LocalAppData`, as in `platformdirs`.
     #[must_use]
     pub fn from_windows_local_data_dir(local_data: impl AsRef<Path>) -> Self {
         Self::from_base_dirs(&local_data, &local_data)

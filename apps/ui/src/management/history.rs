@@ -14,7 +14,6 @@ pub(crate) enum HistoryRows {
     /// The current search could not be read; the reason replaces the list.
     SearchFailed(String),
     Loaded {
-        /// The search and failed filter the rows were read with.
         filter: HistoryFilter,
         entries: Vec<HistoryEntry>,
         has_more: bool,
@@ -47,7 +46,6 @@ impl ManagementState {
         }
     }
 
-    /// Grows the window by one page and returns the read for it.
     pub(crate) fn older_history_request(&mut self) -> HistoryPageRequest {
         self.history_extra_pages = self.history_extra_pages.saturating_add(1);
         self.history_request()

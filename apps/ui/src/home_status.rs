@@ -14,7 +14,6 @@ pub enum HomeStatusKind {
     Problem,
 }
 
-/// A link to the page that fixes a problem.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fix {
     pub label: &'static str,
@@ -27,7 +26,6 @@ pub enum FixTarget {
     SystemSettings(PermissionKind),
 }
 
-/// Home's live status line.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HomeStatus {
     pub kind: HomeStatusKind,

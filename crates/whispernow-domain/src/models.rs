@@ -543,7 +543,6 @@ impl ModelRegistry {
             .filter(|model| model.family().is_speech())
     }
 
-    /// Returns the supported models in display order.
     #[must_use]
     pub fn models(&self) -> &[ModelDefinition] {
         &self.models

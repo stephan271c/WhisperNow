@@ -29,8 +29,7 @@ impl AudioProcessor {
         })
     }
 
-    /// Accepts interleaved `f32` from a bounded worker queue. It may return zero
-    /// blocks while the resampler accumulates frames.
+    /// May return zero blocks while the resampler accumulates frames.
     pub fn push_interleaved(
         &mut self,
         input: &[f32],
@@ -40,7 +39,6 @@ impl AudioProcessor {
         Ok(self.process_resampled(resampled))
     }
 
-    /// Flushes the resampler and any final partial delivery block.
     pub fn finish(mut self) -> Result<(Vec<AudioBlock>, AudioLevelSummary), AudioProcessingError> {
         let tail = self.resampler.finish()?;
         let mut blocks = self.process_resampled(tail);

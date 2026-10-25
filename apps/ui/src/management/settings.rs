@@ -9,7 +9,6 @@ use crate::NoticeScope;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SettingKey {
     InputDevice,
-    /// The recording shortcut's keys and mode.
     RecordingShortcut,
     CancelShortcut,
     StartMinimized,
@@ -114,7 +113,6 @@ impl ManagementState {
         true
     }
 
-    /// Shows why a value typed into a control cannot be saved; nothing is sent.
     pub fn reject_setting(&mut self, key: SettingKey, message: impl Into<String>) {
         self.setting_errors.insert(key, message.into());
     }

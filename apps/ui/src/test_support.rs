@@ -16,7 +16,6 @@ use whispernow_domain::{
 
 use crate::{UiContext, client::fake};
 
-/// Hands a mounted surface's window context to the test after the first render.
 #[derive(Clone, Default)]
 pub(crate) struct Probe(Rc<RefCell<Option<UiContext>>>);
 
@@ -47,7 +46,6 @@ pub(crate) struct Page {
     pub(crate) dom: VirtualDom,
     rendered: Mutations,
     probe: Probe,
-    /// How many desktop calls [`Self::sent`] has already returned.
     seen: usize,
 }
 
@@ -129,7 +127,6 @@ impl Page {
         self.dispatch(("aria-label", name), "click", click_event())
     }
 
-    /// Opens the select rendered with `id` and clicks its option labelled `label`.
     pub(crate) fn choose(&mut self, id: &str, label: &str) -> &mut Self {
         self.click(id);
         let html = self.html();
@@ -171,7 +168,6 @@ impl Page {
         )
     }
 
-    /// Mounts `id` as the browser does, so taking focus is recorded.
     pub(crate) fn mount(&mut self, id: &str) -> &mut Self {
         let mutations = mount_rendered(&mut self.dom, &self.rendered, id);
         self.keep(mutations);
@@ -192,7 +188,6 @@ impl Page {
         self.settle()
     }
 
-    /// The commands called since the last look.
     pub(crate) fn sent(&mut self) -> Vec<&'static str> {
         let commands = fake::commands();
         let sent = commands[self.seen..].to_vec();
@@ -399,7 +394,6 @@ pub(crate) fn focused() -> Option<String> {
     FOCUSED.with_borrow_mut(Option::take)
 }
 
-/// A mounted element that records when it takes focus.
 #[derive(Clone)]
 struct ProbeElement(String);
 

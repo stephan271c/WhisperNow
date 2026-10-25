@@ -37,7 +37,6 @@ impl ButtonSize {
     }
 }
 
-/// A `type="button"` control; element attributes such as `id`, `disabled` and `title` pass through.
 #[component]
 pub(crate) fn Button(
     #[props(default)] variant: ButtonVariant,
@@ -57,7 +56,6 @@ pub(crate) fn Button(
     }
 }
 
-/// An icon-only button whose required `label` is its accessible name and tooltip.
 #[component]
 pub(crate) fn IconButton(
     icon: IconName,
@@ -80,8 +78,6 @@ pub(crate) fn IconButton(
     }
 }
 
-/// A destructive action that asks for a second, explicit confirmation.
-///
 /// The first press reveals `confirm_label` (id `{id}-confirm`) and a cancel button
 /// (id `{id}-cancel`); focus moves to the confirmation and returns to the trigger once the
 /// choice is made, so keyboard users keep their place. In a repeated row, `target` names what

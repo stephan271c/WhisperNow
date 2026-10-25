@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the single-source WhisperNow stable release version contract."""
+"""Check that Cargo, Tauri, updater, tag and artifact versions agree."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ SEMVER_IN_NAME = re.compile(
 
 
 def parse_stable_tag(tag: str) -> str:
-    """Return the SemVer from one stable ``vMAJOR.MINOR.PATCH`` tag."""
     if not tag.startswith("v"):
         raise ValueError("stable release tag must start with exactly one leading 'v'")
     version = tag[1:]

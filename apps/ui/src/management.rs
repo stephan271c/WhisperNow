@@ -19,7 +19,6 @@ pub(crate) use history::HistoryRows;
 pub(crate) use settings::SettingKey;
 pub(crate) use setup::SetupTest;
 
-/// Stores `next` in `slot`, cancelling the task it held.
 pub(crate) fn replace_task(slot: &mut Option<Task>, next: Option<Task>) {
     if let Some(previous) = std::mem::replace(slot, next) {
         previous.cancel();
@@ -38,11 +37,8 @@ pub(crate) struct ManagementState {
     pub models: Vec<ModelSummary>,
     pub models_loaded: bool,
     pub history: HistoryRows,
-    /// The search and failed filter the latest window request reads with.
     pub history_filter: HistoryFilter,
-    /// The search text as typed, applied once typing pauses.
     pub history_search: String,
-    /// Pages beyond the first in the history window; "Load more" adds one.
     history_extra_pages: u32,
     /// The window read in flight; a newer read cancels it, so an older answer never lands.
     pub(crate) history_read: Option<Task>,
@@ -54,10 +50,8 @@ pub(crate) struct ManagementState {
     pub notice: Option<Notice>,
     next_notice: u64,
     pub microphone_test: Option<MicrophoneTestResponse>,
-    /// The latest microphone test, which hides its level meter after a moment.
     pub(crate) microphone_test_task: Option<Task>,
     pub permissions: Option<PermissionsResponse>,
-    /// The polls setup runs after a permission request until no card can change any more.
     pub(crate) permission_watch: Option<Task>,
     pub setup_test: Option<SetupTest>,
 }
@@ -120,7 +114,6 @@ impl ManagementState {
         self.busy.contains(&operation)
     }
 
-    /// Shows what a clear removed; the window then reads everything again.
     pub fn apply_clear_result(&mut self, result: ClearDataResult) {
         self.data_locations = None;
         let failed = result.items.iter().any(|item| !item.deleted);

@@ -60,7 +60,6 @@ pub(crate) async fn clear_api_key(
     state.clear_api_key(request).await
 }
 
-/// The model names `request` offers, asked with its saved endpoint and API key.
 #[tauri::command]
 pub(crate) async fn list_provider_models(
     request: LlmProvider,
@@ -123,7 +122,6 @@ pub(crate) async fn data_locations(
         .await
 }
 
-/// Dismisses the failure the recording bar shows.
 #[tauri::command]
 pub(crate) async fn dismiss_recording_overlay(
     state: tauri::State<'_, Gateway>,

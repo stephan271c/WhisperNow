@@ -31,7 +31,6 @@ fn serve(response: Response) -> FixtureServer {
     FixtureServer::start([(MODEL_PATH, response)])
 }
 
-/// `body` stopping after `at` bytes until `resume`.
 fn paused(body: Vec<u8>, at: usize, resume: Resume) -> Response {
     Response {
         pause: Some((at, resume)),

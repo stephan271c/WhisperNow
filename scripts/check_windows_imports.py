@@ -25,7 +25,6 @@ IMPORT_TABLES = ((1, 20, 12), (13, 32, 4))
 
 
 def imported_dlls(path: Path) -> list[str]:
-    """The DLL names in a PE file's import and delay-import tables."""
     data = path.read_bytes()
 
     def u16(offset: int) -> int:

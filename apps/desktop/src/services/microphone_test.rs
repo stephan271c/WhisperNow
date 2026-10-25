@@ -86,8 +86,6 @@ impl AudioSink for LevelProbe {
     }
 }
 
-/// Captures from `device` for at most `duration`, stopping early when `cancelled` turns true
-/// or the device goes away, and returns the observed levels.
 pub(super) fn run(
     audio: &dyn AudioInput,
     device: AudioDeviceChoice,

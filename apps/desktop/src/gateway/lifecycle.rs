@@ -34,7 +34,7 @@ impl Gateway {
             ShortcutAction::CancelDictation => self.services.dictation.cancel(),
         };
         if let Err(error) = sent {
-            tracing::debug!(code = error.code, "a shortcut was ignored");
+            tracing::warn!(code = error.code, "a shortcut was ignored");
         }
     }
 
@@ -51,8 +51,7 @@ impl Gateway {
         }
     }
 
-    /// The tray offers the copy only where the session can copy, and has no place to show a
-    /// failure, so a failed copy is only logged.
+    /// The tray has no place to show a failure, so a failed copy is only logged.
     pub(crate) async fn copy_last_transcript_from_tray(&self) {
         if let Err(error) = self
             .run_command("copy_last_transcript", Failure::Local, |services| {
@@ -64,9 +63,8 @@ impl Gateway {
         }
     }
 
-    /// Follows a published snapshot: the cancel shortcut is registered while a
-    /// dictation runs. Registration may wait on the event-loop thread, so it
-    /// runs on a worker and is never awaited here.
+    /// Registration may wait on the event-loop thread, so it runs on a worker and is never
+    /// awaited here.
     pub(crate) fn observe_dictation(&self, active: bool) {
         if self.shortcuts.observe_dictation(active) {
             let shortcuts = Arc::clone(&self.shortcuts);
@@ -82,12 +80,11 @@ impl Gateway {
         }
     }
 
-    /// Refuses new commands. Returns false when shutdown had already begun.
+    /// Returns false when shutdown had already begun.
     pub(crate) fn begin_shutdown(&self) -> bool {
         !self.shutdown_begun.swap(true, Ordering::AcqRel)
     }
 
-    /// Stops shortcuts, waits for the running commands, and releases services.
     /// The caller must have received `true` from [`Self::begin_shutdown`].
     pub(crate) fn finish_shutdown(&self) {
         self.shortcuts.shutdown();
