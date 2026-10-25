@@ -120,6 +120,16 @@ fn an_entry_round_trips_and_only_kept_audio_is_written() {
 }
 
 #[test]
+fn every_entry_status_reads_back() {
+    let fixture = Fixture::new();
+    let mut history = fixture.open();
+    for status in EntryStatus::ALL {
+        let id = store(&mut history, entry(1, status, "text"), None).expect("insert");
+        assert_eq!(find(&history, id).status, status);
+    }
+}
+
+#[test]
 fn history_reads_do_not_parse_the_asr_model_id_saved_for_training() {
     let fixture = Fixture::new();
     let mut history = fixture.open();

@@ -17,13 +17,13 @@ use super::{
 };
 
 /// Owns settings persistence and serializes its writers.
-pub(crate) struct SettingsCoordinator {
+pub(crate) struct SavedSettings {
     persistence: Arc<SettingsStore>,
     state: Arc<StateCell>,
     current: Mutex<Settings>,
 }
 
-impl SettingsCoordinator {
+impl SavedSettings {
     pub(super) fn new(
         persistence: Arc<SettingsStore>,
         state: Arc<StateCell>,
@@ -65,7 +65,7 @@ impl SettingsCoordinator {
         &self,
         provider: LlmProvider,
     ) -> Result<(RemoteProvider, Option<ApiKey>), AppError> {
-        let settings = self.load();
+        let settings = self.snapshot();
         let endpoint = settings.provider_settings(provider).api_base.clone();
         let remote =
             RemoteProvider::new(provider, endpoint).ok_or_else(provider_models_unavailable)?;
@@ -129,7 +129,7 @@ impl SettingsCoordinator {
 
     /// Provider configurations in the snapshot carry no API key.
     pub(super) fn recording_settings(&self) -> RecordingSettings {
-        let settings = self.load();
+        let settings = self.snapshot();
         let input_device = settings.input_device.clone().into();
         let cleanup = cleanup_plan(&settings);
         let model_id = settings.model_id.clone();
@@ -140,7 +140,7 @@ impl SettingsCoordinator {
     /// has chosen so far, or the saved ones once setup has finished. It never runs AI cleanup,
     /// so the test never reaches a provider.
     pub(super) fn setup_test_settings(&self) -> RecordingSettings {
-        let settings = self.load();
+        let settings = self.snapshot();
         let (model_id, input_device) = match &settings.setup {
             SetupProgress::Complete => (settings.model_id.clone(), settings.input_device.clone()),
             SetupProgress::Unfinished(checkpoint) => {
@@ -150,12 +150,12 @@ impl SettingsCoordinator {
         recording(settings, model_id, input_device.into(), None)
     }
 
-    pub(crate) fn load(&self) -> Settings {
+    pub(crate) fn snapshot(&self) -> Settings {
         self.lock().clone()
     }
 
-    pub(crate) fn get(&self) -> SettingsView {
-        SettingsView::new(&self.load())
+    pub(crate) fn view(&self) -> SettingsView {
+        SettingsView::new(&self.snapshot())
     }
 
     pub(crate) fn save_window_geometry(&self, geometry: WindowGeometry) -> Result<(), AppError> {
@@ -318,7 +318,7 @@ mod tests {
     };
     use whispernow_platform::SettingsStore;
 
-    use super::SettingsCoordinator;
+    use super::SavedSettings;
     use crate::services::test_support::{FakeAudioInput, SettingsHarness};
 
     fn fixture() -> SettingsHarness {
@@ -328,7 +328,7 @@ mod tests {
     impl SettingsHarness {
         fn restart(&mut self) {
             let loaded = self.persistence.load().expect("startup load");
-            self.settings = Arc::new(SettingsCoordinator::new(
+            self.settings = Arc::new(SavedSettings::new(
                 Arc::clone(&self.persistence),
                 Arc::clone(&self.state),
                 loaded.settings.clone(),
@@ -399,14 +399,14 @@ mod tests {
                 release: Mutex::new(blocked),
             }),
         ));
-        let coordinator = SettingsCoordinator::new(
+        let settings = SavedSettings::new(
             persistence,
             Arc::clone(&fixture.state),
-            fixture.settings.load(),
+            fixture.settings.snapshot(),
         );
         std::thread::scope(|scope| {
             let write = scope.spawn(|| {
-                coordinator.set_api_key(&SetApiKeyRequest {
+                settings.set_api_key(&SetApiKeyRequest {
                     provider: LlmProvider::OpenAi,
                     key: ApiKey::new("blocked-key").expect("key"),
                 })
@@ -415,9 +415,9 @@ mod tests {
                 .recv_timeout(Duration::from_secs(5))
                 .expect("keyring entered");
             let (ready, snapshot) = mpsc::channel();
-            let coordinator = &coordinator;
+            let settings = &settings;
             scope.spawn(move || {
-                coordinator.recording_settings();
+                settings.recording_settings();
                 ready.send(()).expect("snapshot");
             });
             let result = snapshot.recv_timeout(Duration::from_secs(5));
@@ -545,7 +545,7 @@ mod tests {
             })
             .expect("change");
         assert!(fixture.paths.settings_file().exists());
-        assert_eq!(fixture.settings.load().theme, ThemePreference::Dark);
+        assert_eq!(fixture.settings.snapshot().theme, ThemePreference::Dark);
     }
 
     #[test]
@@ -560,7 +560,7 @@ mod tests {
             .expect_err("refused");
 
         assert_eq!(error.code, "refused");
-        assert_eq!(fixture.settings.load().theme, ThemePreference::System);
+        assert_eq!(fixture.settings.snapshot().theme, ThemePreference::System);
         assert!(!fixture.paths.settings_file().exists());
     }
 
@@ -612,7 +612,7 @@ mod tests {
         .expect("hand-edited settings");
 
         fixture.restart();
-        let saved = fixture.settings.get().settings;
+        let saved = fixture.settings.view().settings;
         assert_eq!(saved.vocabulary_replacements[0].source, " ");
         assert_eq!(
             fixture.warning_code().as_deref(),
@@ -627,7 +627,7 @@ mod tests {
                 &whispernow_platform::CpalAudioInput::new(),
             )
             .expect("an edit that leaves the broken rule alone saves");
-        let reloaded = fixture.settings.get().settings;
+        let reloaded = fixture.settings.view().settings;
         assert_eq!(
             (reloaded.theme, reloaded.vocabulary_replacements),
             (ThemePreference::Dark, saved_rules)
@@ -637,12 +637,12 @@ mod tests {
     #[test]
     fn settings_reads_ignore_disk_changes_until_restart() {
         let fixture = fixture();
-        let before = fixture.settings.load();
+        let before = fixture.settings.snapshot();
         let malformed = "{ unreadable hand edit";
         fs::write(fixture.paths.settings_file(), malformed).expect("hand edit");
 
-        assert_eq!(fixture.settings.get().settings, before);
-        assert!(!fixture.settings.load().setup.is_complete());
+        assert_eq!(fixture.settings.view().settings, before);
+        assert!(!fixture.settings.snapshot().setup.is_complete());
         assert_eq!(
             fs::read_to_string(fixture.paths.settings_file()).expect("original file"),
             malformed
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn a_failed_save_keeps_the_last_settings_in_memory() {
         let fixture = fixture();
-        let before = fixture.settings.load();
+        let before = fixture.settings.snapshot();
         fs::create_dir(fixture.paths.settings_file()).expect("block settings replacement");
         let error = fixture
             .settings
@@ -670,7 +670,7 @@ mod tests {
             )
             .expect_err("settings write refused");
         assert_eq!(error.code, "settings_write");
-        assert_eq!(fixture.settings.load(), before);
+        assert_eq!(fixture.settings.snapshot(), before);
     }
 
     #[test]
@@ -697,7 +697,7 @@ mod tests {
 
         let saved = fs::read_to_string(fixture.paths.settings_file()).expect("settings");
         assert!(!saved.contains(&secret));
-        let view = fixture.settings.get();
+        let view = fixture.settings.view();
         assert!(view.settings.api_keys.contains(&LlmProvider::OpenAi));
         assert_eq!(fixture.stored_key(), Some(secret));
 
@@ -709,7 +709,7 @@ mod tests {
         assert!(
             !fixture
                 .settings
-                .get()
+                .view()
                 .settings
                 .api_keys
                 .contains(&LlmProvider::OpenAi)
@@ -755,8 +755,8 @@ mod tests {
         assert_eq!(warning.code, "settings_unreadable");
         assert!(warning.summary.contains(&moved[0].display().to_string()));
 
-        fixture.state.lock().last_error = None;
-        fixture.settings.get();
+        fixture.state.apply(|state| state.last_error = None);
+        fixture.settings.view();
         assert_eq!(fixture.warning_code(), None);
     }
 }

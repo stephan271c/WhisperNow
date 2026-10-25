@@ -158,7 +158,7 @@ impl DecodeContext for Fake {
         self.outputs = (0..tokens.len())
             .map(|index| {
                 let wanted = match outputs {
-                    Outputs::None => false,
+                    Outputs::Nothing => false,
                     Outputs::Last => index + 1 == tokens.len(),
                     Outputs::All => true,
                 };
@@ -348,8 +348,8 @@ fn plain_decoding_follows_the_model_to_its_end_of_turn() {
     assert_eq!(
         prompt_batches,
         [
-            (0, 1, Outputs::None),
-            (1, prompt_len - 5, Outputs::None),
+            (0, 1, Outputs::Nothing),
+            (1, prompt_len - 5, Outputs::Nothing),
             (prompt_len - 4, 4, Outputs::Last)
         ]
     );

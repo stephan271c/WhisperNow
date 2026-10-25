@@ -76,7 +76,7 @@ pub enum LocalDecodeError {
 /// Which positions of a decoded batch produce logits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outputs {
-    None,
+    Nothing,
     Last,
     All,
 }
@@ -218,7 +218,7 @@ pub fn decode<C: DecodeContext>(
         let outputs = if index == last_chunk {
             Outputs::Last
         } else {
-            Outputs::None
+            Outputs::Nothing
         };
         last_length = chunk.len();
         context.decode(&prompt[chunk.clone()], chunk.start, outputs)?;

@@ -55,7 +55,7 @@ pub async fn list_models(
     provider: &RemoteProvider,
     api_key: Option<&ApiKey>,
 ) -> Result<Vec<String>, LlmError> {
-    let http = http_client(Some(LIST_TIMEOUT))?;
+    let http = http_client()?;
     let optional_bearer = |request: reqwest::RequestBuilder| match api_key {
         Some(key) => request.bearer_auth(key.expose_secret()),
         None => request,
@@ -134,7 +134,11 @@ fn ids(list: IdList) -> Vec<String> {
 async fn fetch<T: serde::de::DeserializeOwned>(
     request: reqwest::RequestBuilder,
 ) -> Result<T, LlmError> {
-    let response = request.send().await.map_err(|_| LlmError::Transport)?;
+    let response = request
+        .timeout(LIST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|_| LlmError::Transport)?;
     let status = response.status();
     if !status.is_success() {
         return Err(status_error(status.as_u16()));

@@ -27,22 +27,25 @@ const STREAM_BUILD_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub(crate) enum StreamFault {
-    None = 0,
     DeviceLost = 1,
     StreamError = 2,
 }
 
-impl StreamFault {
-    pub(super) fn load(source: &AtomicU8) -> Self {
-        match source.load(Ordering::Acquire) {
-            1 => Self::DeviceLost,
-            2 => Self::StreamError,
-            _ => Self::None,
-        }
+/// The latest fault, shared between the stream callback and the capture worker.
+#[derive(Debug, Default)]
+pub(crate) struct FaultFlag(AtomicU8);
+
+impl FaultFlag {
+    pub(super) fn raise(&self, fault: StreamFault) {
+        self.0.store(fault as u8, Ordering::Release);
     }
 
-    pub(super) fn store(self, destination: &AtomicU8) {
-        destination.store(self as u8, Ordering::Release);
+    pub(super) fn get(&self) -> Option<StreamFault> {
+        match self.0.load(Ordering::Acquire) {
+            code if code == StreamFault::DeviceLost as u8 => Some(StreamFault::DeviceLost),
+            code if code == StreamFault::StreamError as u8 => Some(StreamFault::StreamError),
+            _ => None,
+        }
     }
 }
 
@@ -69,7 +72,7 @@ pub(crate) struct OpenedCapture {
     pub sample_rate_hz: u32,
     pub channels: NonZeroUsize,
     pub recycle: SyncSender<Vec<f32>>,
-    pub fault: Arc<AtomicU8>,
+    pub fault: Arc<FaultFlag>,
     pub dropped_frames: Arc<AtomicUsize>,
 }
 
@@ -152,7 +155,7 @@ impl CaptureBackend for CpalBackend {
                 .send(Vec::with_capacity(callback_capacity))
                 .map_err(|_| backend("prepare callback buffer pool"))?;
         }
-        let fault = Arc::new(AtomicU8::new(StreamFault::None as u8));
+        let fault = Arc::new(FaultFlag::default());
         let dropped_frames = Arc::new(AtomicUsize::new(0));
         let callback = CallbackPorts {
             channels,
@@ -327,7 +330,7 @@ fn build_stream(
     format: SampleFormat,
     config: StreamConfig,
     callback: CallbackPorts,
-    fault: Arc<AtomicU8>,
+    fault: Arc<FaultFlag>,
 ) -> Result<Stream, AudioInputError> {
     macro_rules! typed_stream {
         ($sample:ty) => {
@@ -355,7 +358,7 @@ fn build_typed_stream<T>(
     device: &Device,
     config: StreamConfig,
     callback: CallbackPorts,
-    fault: Arc<AtomicU8>,
+    fault: Arc<FaultFlag>,
 ) -> Result<Stream, AudioInputError>
 where
     T: cpal::SizedSample + Copy,
@@ -365,7 +368,7 @@ where
         .build_input_stream::<T, _, _>(
             config,
             move |data, _| callback.deliver(data),
-            move |error| map_stream_fault(error.kind()).store(&fault),
+            move |error| fault.raise(map_stream_fault(error.kind())),
             Some(STREAM_BUILD_TIMEOUT),
         )
         .map_err(|error| map_device_error(&error, "build input stream"))
@@ -423,6 +426,16 @@ mod tests {
             },
             format,
         )
+    }
+
+    #[test]
+    fn a_fault_flag_reads_back_the_latest_fault() {
+        let flag = FaultFlag::default();
+        assert_eq!(flag.get(), None);
+        for fault in [StreamFault::DeviceLost, StreamFault::StreamError] {
+            flag.raise(fault);
+            assert_eq!(flag.get(), Some(fault));
+        }
     }
 
     #[test]

@@ -48,7 +48,7 @@ const XK_V_LOWER: i32 = 0x0076;
 const BEFORE_PASTE_DELAY: Duration = Duration::from_millis(20);
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum WaylandPortalError {
+pub enum PortalOutputError {
     #[error("desktop portal operation failed")]
     Backend,
     #[error("the paste was cancelled")]
@@ -157,7 +157,7 @@ impl OutputSession {
     async fn start(
         &self,
         token_store: &RemoteDesktopRestoreTokenStore,
-    ) -> Result<(), WaylandPortalError> {
+    ) -> Result<(), PortalOutputError> {
         self.clipboard
             .request(&self.session, RequestClipboardOptions::default())
             .await
@@ -183,10 +183,10 @@ impl OutputSession {
             .response()
             .map_err(map_portal_error)?;
         if !selected.devices().contains(DeviceType::Keyboard) {
-            return Err(WaylandPortalError::KeyboardUnavailable);
+            return Err(PortalOutputError::KeyboardUnavailable);
         }
         if !selected.is_clipboard_enabled() {
-            return Err(WaylandPortalError::ClipboardUnavailable);
+            return Err(PortalOutputError::ClipboardUnavailable);
         }
         if let Some(token) = selected.restore_token() {
             token_store.replace(token)?;
@@ -198,12 +198,12 @@ impl OutputSession {
 /// Pastes through the `RemoteDesktop` and clipboard portals: offers the
 /// transcript on the clipboard, sends one paste chord, then puts the previous
 /// clipboard back. One owner drives it, one paste at a time.
-pub struct WaylandOutput {
+pub struct PortalOutput {
     token_store: RemoteDesktopRestoreTokenStore,
     output: Option<OutputSession>,
 }
 
-impl WaylandOutput {
+impl PortalOutput {
     #[must_use]
     pub fn new(restore_token_path: PathBuf) -> Self {
         Self {
@@ -212,10 +212,10 @@ impl WaylandOutput {
         }
     }
 
-    async fn create_output_session(&self) -> Result<OutputSession, WaylandPortalError> {
+    async fn create_output_session(&self) -> Result<OutputSession, PortalOutputError> {
         let remote = RemoteDesktop::new().await.map_err(map_portal_error)?;
         if remote.version() < 2 {
-            return Err(WaylandPortalError::ClipboardUnavailable);
+            return Err(PortalOutputError::ClipboardUnavailable);
         }
         let clipboard = Arc::new(Clipboard::new().await.map_err(map_portal_error)?);
         let session = Arc::new(
@@ -261,7 +261,7 @@ impl WaylandOutput {
     /// Reuses the open session, or opens one. It stays open between pastes:
     /// the clipboard it offers (the transcript or the restored snapshot) is
     /// gone once it closes.
-    async fn ensure_output(&mut self) -> Result<&mut OutputSession, WaylandPortalError> {
+    async fn ensure_output(&mut self) -> Result<&mut OutputSession, PortalOutputError> {
         if self.output.as_mut().is_some_and(OutputSession::poll_closed) {
             self.close_output().await;
         }
@@ -282,12 +282,12 @@ impl WaylandOutput {
         &mut self,
         transcript: &str,
         cancellation: &CancellationToken,
-    ) -> PasteOutcome<WaylandPortalError> {
+    ) -> PasteOutcome<PortalOutputError> {
         let result = async {
             // Until the transcript is offered, cancellation abandons the work.
             let output = tokio::select! {
                 output = self.ensure_output() => output?,
-                () = cancellation.cancelled() => return Err(WaylandPortalError::Cancelled),
+                () = cancellation.cancelled() => return Err(PortalOutputError::Cancelled),
             };
             // A snapshot failure is never fatal: paste anyway and leave the
             // transcript on the clipboard.
@@ -295,7 +295,7 @@ impl WaylandOutput {
                 snapshot = snapshot_clipboard(output) => snapshot
                     .inspect_err(|error| tracing::warn!(%error, "clipboard snapshot failed"))
                     .ok(),
-                () = cancellation.cancelled() => return Err(WaylandPortalError::Cancelled),
+                () = cancellation.cancelled() => return Err(PortalOutputError::Cancelled),
             };
             set_offer(output, ClipboardOffer::transcript(transcript)).await?;
             let delivered = async {
@@ -305,7 +305,7 @@ impl WaylandOutput {
                         serve_for(output, BEFORE_PASTE_DELAY).await?;
                         Ok(active_paste_keys().await)
                     } => keys?,
-                    () = cancellation.cancelled() => return Err(WaylandPortalError::Cancelled),
+                    () = cancellation.cancelled() => return Err(PortalOutputError::Cancelled),
                 };
                 inject_balanced_paste(output, keys).await?;
                 // Once the keystroke is sent, the target always gets the whole
@@ -320,7 +320,7 @@ impl WaylandOutput {
         .await;
         match result {
             Ok(outcome) => outcome,
-            Err(WaylandPortalError::Cancelled) => PasteOutcome::Cancelled,
+            Err(PortalOutputError::Cancelled) => PasteOutcome::Cancelled,
             Err(error) => PasteOutcome::Failed(error),
         }
     }
@@ -328,7 +328,7 @@ impl WaylandOutput {
     /// Opens the `RemoteDesktop` output session the paste keystroke uses, asking
     /// the user for consent unless a saved restore token covers it. Dropping the
     /// future abandons the wait for the user's answer and closes the session.
-    pub async fn prepare_output(&mut self) -> Result<(), WaylandPortalError> {
+    pub async fn prepare_output(&mut self) -> Result<(), PortalOutputError> {
         self.ensure_output().await.map(drop)
     }
 
@@ -340,7 +340,7 @@ impl WaylandOutput {
 async fn restore_if_current(
     output: &mut OutputSession,
     snapshot: Option<ClipboardOffer>,
-) -> PasteOutcome<WaylandPortalError> {
+) -> PasteOutcome<PortalOutputError> {
     let Some(snapshot) = snapshot else {
         return PasteOutcome::PastedWithoutRestore;
     };
@@ -365,7 +365,7 @@ async fn restore_if_current(
 
 async fn snapshot_clipboard(
     output: &mut OutputSession,
-) -> Result<ClipboardOffer, WaylandPortalError> {
+) -> Result<ClipboardOffer, PortalOutputError> {
     let advertised = loop {
         if let Some(advertised) = output.advertised_mime_types.clone() {
             break advertised;
@@ -373,9 +373,9 @@ async fn snapshot_clipboard(
         let signal = tokio::time::timeout(CLIPBOARD_TIMEOUT, output.signals.recv())
             .await
             .map_err(clipboard_unreadable)?
-            .ok_or(WaylandPortalError::Disconnected)?;
+            .ok_or(PortalOutputError::Disconnected)?;
         if !output.note(signal) {
-            return Err(WaylandPortalError::Disconnected);
+            return Err(PortalOutputError::Disconnected);
         }
     };
     let mut formats = Vec::new();
@@ -397,7 +397,7 @@ async fn snapshot_clipboard(
         }
     }
     if !advertised.is_empty() && formats.is_empty() {
-        return Err(WaylandPortalError::ClipboardUnavailable);
+        return Err(PortalOutputError::ClipboardUnavailable);
     }
     ClipboardOffer::snapshot(formats)
 }
@@ -405,7 +405,7 @@ async fn snapshot_clipboard(
 async fn read_selection(
     output: &OutputSession,
     mime_type: &str,
-) -> Result<SecretBytes, WaylandPortalError> {
+) -> Result<SecretBytes, PortalOutputError> {
     let fd = output
         .clipboard
         .selection_read(&output.session, mime_type)
@@ -423,7 +423,7 @@ async fn read_selection(
     .map_err(clipboard_unreadable)?
     .map_err(clipboard_unreadable)?;
     if bytes.len() > MAX_FORMAT_BYTES {
-        Err(WaylandPortalError::ClipboardSnapshotTooLarge)
+        Err(PortalOutputError::ClipboardSnapshotTooLarge)
     } else {
         Ok(bytes)
     }
@@ -432,7 +432,7 @@ async fn read_selection(
 async fn set_offer(
     output: &mut OutputSession,
     offer: ClipboardOffer,
-) -> Result<(), WaylandPortalError> {
+) -> Result<(), PortalOutputError> {
     let mime_types = offer.mime_types();
     output
         .clipboard
@@ -453,15 +453,15 @@ async fn set_offer(
 async fn serve_for(
     output: &mut OutputSession,
     duration: Duration,
-) -> Result<(), WaylandPortalError> {
+) -> Result<(), PortalOutputError> {
     let deadline = tokio::time::Instant::now() + duration;
     loop {
         match tokio::time::timeout_at(deadline, output.signals.recv()).await {
             Err(_) => return Ok(()),
-            Ok(None) => return Err(WaylandPortalError::Disconnected),
+            Ok(None) => return Err(PortalOutputError::Disconnected),
             Ok(Some(signal)) => {
                 if !output.note(signal) {
-                    return Err(WaylandPortalError::Disconnected);
+                    return Err(PortalOutputError::Disconnected);
                 }
             }
         }
@@ -558,7 +558,7 @@ async fn write_selection(mut pipe: pipe::Sender, bytes: &[u8]) -> bool {
 async fn inject_balanced_paste(
     output: &OutputSession,
     keys: PasteKeys,
-) -> Result<(), WaylandPortalError> {
+) -> Result<(), PortalOutputError> {
     let mut pressed = Vec::with_capacity(3);
     for keysym in match keys {
         PasteKeys::ControlV => vec![XK_CONTROL_L, XK_V_LOWER],
@@ -579,7 +579,7 @@ async fn inject_balanced_paste(
             if !release_pressed(output, &pressed).await {
                 let _ignored = output.session.close().await;
             }
-            return Err(WaylandPortalError::Backend);
+            return Err(PortalOutputError::Backend);
         }
         pressed.push(keysym);
     }
@@ -589,7 +589,7 @@ async fn inject_balanced_paste(
         // Closing the session is the only safe recovery after a partial key
         // release; it prevents a virtual modifier remaining logically held.
         let _ignored = output.session.close().await;
-        Err(WaylandPortalError::Backend)
+        Err(PortalOutputError::Backend)
     }
 }
 
@@ -615,18 +615,18 @@ async fn release_pressed(output: &OutputSession, pressed: &[i32]) -> bool {
     clippy::needless_pass_by_value,
     reason = "Result::map_err supplies the owned ashpd error"
 )]
-fn map_portal_error(error: AshpdError) -> WaylandPortalError {
+fn map_portal_error(error: AshpdError) -> PortalOutputError {
     match error {
         AshpdError::Response(ashpd::desktop::ResponseError::Cancelled)
         | AshpdError::Portal(
             ashpd::PortalError::NotAllowed(_) | ashpd::PortalError::Cancelled(_),
-        ) => WaylandPortalError::PermissionDenied,
+        ) => PortalOutputError::PermissionDenied,
         AshpdError::PortalNotFound(_) | AshpdError::RequiresVersion(_, _) => {
-            WaylandPortalError::PortalUnavailable
+            PortalOutputError::PortalUnavailable
         }
         _ => {
             tracing::debug!(%error, "the desktop portal failed");
-            WaylandPortalError::Backend
+            PortalOutputError::Backend
         }
     }
 }
@@ -635,9 +635,9 @@ fn map_portal_error(error: AshpdError) -> WaylandPortalError {
     clippy::needless_pass_by_value,
     reason = "Result::map_err supplies the owned error"
 )]
-fn clipboard_unreadable(error: impl fmt::Display) -> WaylandPortalError {
+fn clipboard_unreadable(error: impl fmt::Display) -> PortalOutputError {
     tracing::debug!(%error, "the clipboard selection could not be read");
-    WaylandPortalError::ClipboardUnavailable
+    PortalOutputError::ClipboardUnavailable
 }
 
 #[cfg(test)]

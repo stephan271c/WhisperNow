@@ -27,13 +27,13 @@ fn joined_unknown_tokens_blank_text_and_missing_segments_fail() {
 
     assert_eq!(
         joined(&["fine", "bad <unk>"]),
-        PipelineFailureKind::UnknownTokens
+        TranscriptFailure::UnknownTokens
     );
     assert_eq!(
         joined(&[" ", "Thank you for watching."]),
-        PipelineFailureKind::EmptyTranscription
+        TranscriptFailure::EmptyTranscript
     );
-    assert_eq!(joined(&[]), PipelineFailureKind::NoSpeech);
+    assert_eq!(joined(&[]), TranscriptFailure::NoSpeech);
 }
 
 #[test]

@@ -1,4 +1,6 @@
-use whispernow_domain::ipc::{CleanupDevice, ModelState};
+use std::borrow::Cow;
+
+use whispernow_domain::ipc::{CleanupDevice, DataPlace, ModelState};
 use whispernow_domain::{ClearDataCategory, DownloadPhase, RecordingMode, SetupStep};
 
 pub(crate) const fn recording_mode(mode: RecordingMode) -> &'static str {
@@ -40,6 +42,14 @@ pub(crate) const fn clear_category(category: ClearDataCategory) -> &'static str 
         ClearDataCategory::Settings => "Settings",
         ClearDataCategory::History => "History",
         ClearDataCategory::Models => "Models",
+    }
+}
+
+pub(crate) fn data_place(place: &DataPlace) -> Cow<'_, str> {
+    match place {
+        DataPlace::Path(path) => path.to_string_lossy(),
+        DataPlace::HistoryEntries => Cow::Borrowed("History entries, recordings, and legacy files"),
+        DataPlace::CredentialStore => Cow::Borrowed("OS credential store: saved LLM API keys"),
     }
 }
 

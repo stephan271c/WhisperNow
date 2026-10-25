@@ -188,7 +188,7 @@ impl ModelStore {
         let file = File::open(archive_file).map_err(filesystem("open model archive"))?;
         let archive_root = Path::new(definition.source.archive_root());
         let staged_root = staging_base.join(definition.id.as_str());
-        let mut members: Vec<_> = definition
+        let members = definition
             .layout
             .required_artifacts()
             .into_iter()
@@ -197,17 +197,9 @@ impl ModelStore {
         extract_tar(
             BzDecoder::new(BufReader::new(file)),
             &staged_root,
-            &mut members,
+            members,
             cancellation,
         )?;
-        if !members.is_empty() {
-            let mut artifacts: Vec<String> = members
-                .into_iter()
-                .map(|(_, artifact)| artifact.to_owned())
-                .collect();
-            artifacts.sort();
-            return Err(ModelStoreError::MissingArtifacts { artifacts });
-        }
         Ok(staged_root)
     }
 
@@ -483,7 +475,7 @@ fn validate_artifact_path(root: &Path, relative: &Path) -> Result<bool, ModelSto
 fn extract_tar(
     input: impl Read,
     into: &Path,
-    members: &mut Vec<(PathBuf, &str)>,
+    mut members: Vec<(PathBuf, &str)>,
     cancellation: &CancellationToken,
 ) -> Result<(), ModelStoreError> {
     let mut archive = Archive::new(input);
@@ -506,7 +498,15 @@ fn extract_tar(
         let (_, name) = members.swap_remove(index);
         write_member(&mut entry, &into.join(name), cancellation)?;
     }
-    Ok(())
+    if members.is_empty() {
+        return Ok(());
+    }
+    let mut artifacts: Vec<String> = members
+        .into_iter()
+        .map(|(_, artifact)| artifact.to_owned())
+        .collect();
+    artifacts.sort();
+    Err(ModelStoreError::MissingArtifacts { artifacts })
 }
 
 fn write_member(

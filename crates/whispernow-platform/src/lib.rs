@@ -6,11 +6,11 @@ mod audio;
 mod clear_data;
 mod credential_store;
 mod destination;
-mod file_manager;
 mod llama;
 mod llm;
 mod local_cleanup;
 mod models;
+mod opener;
 mod paste_delivery;
 mod paste_keys;
 mod paths;
@@ -26,10 +26,10 @@ pub use clear_data::ClearPlan;
 #[cfg(any(test, feature = "test-support"))]
 pub use credential_store::MemoryCredentialStore;
 pub use credential_store::{CredentialStore, CredentialStoreUnavailable};
-pub use file_manager::{open_in_file_manager, open_privacy_settings, open_url};
 pub use llm::{complete, list_models};
-pub use local_cleanup::LocalCleanupService;
+pub use local_cleanup::{HeldUnloaded, LocalCleanupService};
 pub use models::{DownloadProgress, DownloadTimeouts, ModelListEntry, ModelStore, ModelStoreError};
+pub use opener::{open_directory, open_privacy_settings, open_url};
 #[cfg(target_os = "linux")]
 pub use paste_delivery::x11_paste_injection_available;
 pub use paste_delivery::{

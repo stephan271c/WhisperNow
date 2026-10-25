@@ -43,10 +43,10 @@ const PRELOAD: &[&str] = &[];
 const ALL_LAYERS: i32 = 99;
 
 /// Held while llama.cpp loads, so its global state is initialized once.
-static LOADED: Mutex<Option<&'static Llama>> = Mutex::new(None);
+static LOADED: Mutex<Option<&'static Libraries>> = Mutex::new(None);
 
 #[derive(Debug, Error)]
-pub(crate) enum LlamaError {
+pub(crate) enum LoadError {
     #[error("llama.cpp could not be loaded from {directory}: {source}")]
     Library {
         directory: PathBuf,
@@ -67,25 +67,25 @@ pub(crate) enum LlamaError {
     Probe(i32),
 }
 
-pub(crate) struct Llama {
+pub(crate) struct Libraries {
     api: ffi::Api,
     _libraries: Vec<Library>,
 }
 
 // SAFETY: the function table holds plain function pointers into libraries that are never
 // unloaded; llama.cpp's global state is initialized once, under `LOADED`'s lock.
-unsafe impl Send for Llama {}
+unsafe impl Send for Libraries {}
 // SAFETY: as above; the functions used without a model or context are thread-safe.
-unsafe impl Sync for Llama {}
+unsafe impl Sync for Libraries {}
 
-impl Llama {
+impl Libraries {
     /// Loads llama.cpp from `directory`, or returns the copy already loaded.
-    pub(crate) fn load(directory: &Path) -> Result<&'static Self, LlamaError> {
+    pub(crate) fn load(directory: &Path) -> Result<&'static Self, LoadError> {
         let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(llama) = *loaded {
-            return Ok(llama);
+        if let Some(libraries) = *loaded {
+            return Ok(libraries);
         }
-        let failed = |source| LlamaError::Library {
+        let failed = |source| LoadError::Library {
             directory: directory.to_owned(),
             source,
         };
@@ -100,7 +100,7 @@ impl Llama {
         for name in LIBRARIES {
             core.push(open(&directory.join(name)).map_err(failed)?);
         }
-        // SAFETY: these are the pinned release's libraries, and `Llama` keeps them loaded
+        // SAFETY: these are the pinned release's libraries, and `Libraries` keeps them loaded
         // for the life of the process.
         let api = unsafe { ffi::Api::resolve(&core[0], &core[1], &core[2]) }.map_err(failed)?;
         libraries.extend(core);
@@ -115,12 +115,12 @@ impl Llama {
             }
             (api.llama_backend_init)();
         }
-        let llama: &'static Self = Box::leak(Box::new(Self {
+        let leaked: &'static Self = Box::leak(Box::new(Self {
             api,
             _libraries: libraries,
         }));
-        *loaded = Some(llama);
-        Ok(llama)
+        *loaded = Some(leaked);
+        Ok(leaked)
     }
 
     /// The GPUs to try, best first: discrete ones, then integrated ones; within each, the most
@@ -206,32 +206,36 @@ unsafe extern "C" fn log(level: c_int, message: *const c_char, _data: *mut c_voi
     }
 }
 
-pub(crate) struct LlamaModel {
-    llama: &'static Llama,
-    model: NonNull<ffi::Model>,
+pub(crate) struct Model {
+    libraries: &'static Libraries,
+    raw: NonNull<ffi::RawModel>,
     vocab: *const ffi::Vocab,
     device: CleanupDevice,
 }
 
-impl LlamaModel {
+impl Model {
     /// Loads a GGUF on the first GPU that takes it, else on the CPU; with `use_gpu` off, on
     /// the CPU.
     pub(crate) fn load(
-        llama: &'static Llama,
+        libraries: &'static Libraries,
         path: &Path,
         use_gpu: bool,
-    ) -> Result<Self, LlamaError> {
+    ) -> Result<Self, LoadError> {
         let path =
-            CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| LlamaError::Model)?;
-        let gpus = if use_gpu { llama.gpus() } else { Vec::new() };
+            CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| LoadError::Model)?;
+        let gpus = if use_gpu {
+            libraries.gpus()
+        } else {
+            Vec::new()
+        };
         for (handle, device) in gpus {
             let mut devices = [handle, std::ptr::null_mut()];
-            match Self::load_on(llama, &path, devices.as_mut_ptr(), ALL_LAYERS) {
-                Ok((model, vocab)) => {
+            match Self::load_on(libraries, &path, devices.as_mut_ptr(), ALL_LAYERS) {
+                Ok((raw, vocab)) => {
                     tracing::info!(target: "whispernow::llama", backend = "gpu", ?device, "model loaded");
                     return Ok(Self {
-                        llama,
-                        model,
+                        libraries,
+                        raw,
                         vocab,
                         device,
                     });
@@ -243,11 +247,11 @@ impl LlamaModel {
         }
         // An empty device list keeps everything, the KV cache included, on the CPU.
         let mut devices = [std::ptr::null_mut()];
-        let (model, vocab) = Self::load_on(llama, &path, devices.as_mut_ptr(), 0)?;
+        let (raw, vocab) = Self::load_on(libraries, &path, devices.as_mut_ptr(), 0)?;
         tracing::info!(target: "whispernow::llama", backend = "cpu", "model loaded");
         Ok(Self {
-            llama,
-            model,
+            libraries,
+            raw,
             vocab,
             device: CleanupDevice::Cpu,
         })
@@ -258,12 +262,12 @@ impl LlamaModel {
     }
 
     fn load_on(
-        llama: &Llama,
+        libraries: &Libraries,
         path: &CStr,
         devices: *mut ffi::Device,
         gpu_layers: i32,
-    ) -> Result<(NonNull<ffi::Model>, *const ffi::Vocab), LlamaError> {
-        let api = &llama.api;
+    ) -> Result<(NonNull<ffi::RawModel>, *const ffi::Vocab), LoadError> {
+        let api = &libraries.api;
         // SAFETY: the parameters are the library's defaults with valid pointers; `devices`
         // is NULL-terminated and only read during the load.
         unsafe {
@@ -271,11 +275,11 @@ impl LlamaModel {
             params.devices = devices;
             params.n_gpu_layers = gpu_layers;
             let model = NonNull::new((api.llama_model_load_from_file)(path.as_ptr(), params))
-                .ok_or(LlamaError::Model)?;
+                .ok_or(LoadError::Model)?;
             let vocab = (api.llama_model_get_vocab)(model.as_ptr());
             if vocab.is_null() {
                 (api.llama_model_free)(model.as_ptr());
-                return Err(LlamaError::Model);
+                return Err(LoadError::Model);
             }
             Ok((model, vocab))
         }
@@ -285,7 +289,7 @@ impl LlamaModel {
     #[must_use]
     pub(crate) fn bos_text(&self) -> String {
         // SAFETY: the vocabulary lives as long as the model.
-        let bos = unsafe { (self.llama.api.llama_vocab_bos)(self.vocab) };
+        let bos = unsafe { (self.libraries.api.llama_vocab_bos)(self.vocab) };
         if bos < 0 {
             return String::new();
         }
@@ -298,7 +302,7 @@ impl LlamaModel {
             let length = i32::try_from(buffer.len()).unwrap_or(i32::MAX);
             // SAFETY: the buffer holds `length` bytes.
             let written = unsafe {
-                (self.llama.api.llama_token_to_piece)(
+                (self.libraries.api.llama_token_to_piece)(
                     self.vocab,
                     token,
                     buffer.as_mut_ptr().cast(),
@@ -328,7 +332,7 @@ impl LlamaModel {
             let capacity = i32::try_from(tokens.len()).map_err(|_| LocalDecodeError::Tokenize)?;
             // SAFETY: `text` holds `length` bytes and `tokens` `capacity` tokens.
             let count = unsafe {
-                (self.llama.api.llama_tokenize)(
+                (self.libraries.api.llama_tokenize)(
                     self.vocab,
                     text.as_ptr().cast(),
                     length,
@@ -352,10 +356,10 @@ impl LlamaModel {
     }
 }
 
-impl Drop for LlamaModel {
+impl Drop for Model {
     fn drop(&mut self) {
-        // SAFETY: sessions hold the model, so none outlives it.
-        unsafe { (self.llama.api.llama_model_free)(self.model.as_ptr()) };
+        // SAFETY: contexts hold the model, so none outlives it.
+        unsafe { (self.libraries.api.llama_model_free)(self.raw.as_ptr()) };
     }
 }
 
@@ -365,30 +369,30 @@ const _: () =
     assert!(SPECULATIVE_OUTPUTS as usize == 1 + whispernow_core::llm::local::DRAFT_TOKENS);
 
 /// One context on a model: its memory holds one sequence.
-pub(crate) struct LlamaContext {
-    model: Rc<LlamaModel>,
-    context: NonNull<ffi::Context>,
+pub(crate) struct Context {
+    model: Rc<Model>,
+    raw: NonNull<ffi::RawContext>,
     memory: *mut ffi::Memory,
     batch: ffi::Batch,
     vocab_size: usize,
-    context_size: usize,
+    capacity: usize,
     batch_size: usize,
     micro_batch_size: usize,
     checkpoints: bool,
 }
 
-impl LlamaContext {
+impl Context {
     /// Creates a context of at least `context_size` tokens as `llama-server` b11259 does for
     /// one slot with speculative decoding: batches of 2,048 tokens in micro-batches of 512,
     /// room for 4 draft tokens' outputs, recurrent state that can roll back 4 tokens
     /// (`n_rs_seq`) as the patched server sets up for `ngram-simple`, Flash Attention when
     /// the backend supports it, and a warm-up decode.
     pub(crate) fn new(
-        model: Rc<LlamaModel>,
+        model: Rc<Model>,
         context_size: u32,
         threads: i32,
-    ) -> Result<Self, LlamaError> {
-        let api = &model.llama.api;
+    ) -> Result<Self, LoadError> {
+        let api = &model.libraries.api;
         // SAFETY: the parameters are the library's defaults with plain values set.
         let context = unsafe {
             let mut params = (api.llama_context_default_params)();
@@ -404,8 +408,8 @@ impl LlamaContext {
             // The server's defaults where the library's differ.
             params.swa_full = false;
             params.no_perf = true;
-            NonNull::new((api.llama_init_from_model)(model.model.as_ptr(), params))
-                .ok_or(LlamaError::Context)?
+            NonNull::new((api.llama_init_from_model)(model.raw.as_ptr(), params))
+                .ok_or(LoadError::Context)?
         };
         // SAFETY: the context is valid until `Drop`.
         let (memory, context_size, batch_size, micro_batch_size, rollback, vocab_size) = unsafe {
@@ -423,20 +427,20 @@ impl LlamaContext {
         let batch = unsafe { (api.llama_batch_init)(batch_size.cast_signed(), 0, 1) };
         let batch_size = batch_size as usize;
         // SAFETY: the model is loaded.
-        let n_swa = unsafe { (api.llama_model_n_swa)(model.model.as_ptr()) };
+        let n_swa = unsafe { (api.llama_model_n_swa)(model.raw.as_ptr()) };
         let mut context = Self {
             model,
-            context,
+            raw: context,
             memory,
             batch,
             vocab_size: usize::try_from(vocab_size).unwrap_or_default(),
-            context_size: context_size as usize,
+            capacity: context_size as usize,
             batch_size,
             micro_batch_size: micro_batch_size as usize,
             checkpoints: true,
         };
         if memory.is_null() {
-            return Err(LlamaError::Context);
+            return Err(LoadError::Context);
         }
         let tail_removal_failed = context.probe_rollback()?;
         context.checkpoints = rollback > 0 || tail_removal_failed || n_swa > 0;
@@ -445,21 +449,21 @@ impl LlamaContext {
 
     /// Whether the memory cannot remove a sequence's tail, by trying it after two tokens
     /// (llama.cpp's `common_context_can_seq_rm`). Doubles as the server's warm-up decode.
-    fn probe_rollback(&mut self) -> Result<bool, LlamaError> {
-        let api = &self.model.llama.api;
+    fn probe_rollback(&mut self) -> Result<bool, LoadError> {
+        let api = &self.model.libraries.api;
         self.clear();
         self.fill(&[0, 0], 0, Outputs::Last);
         // SAFETY: the batch holds two tokens of sequence 0.
-        let status = unsafe { (api.llama_decode)(self.context.as_ptr(), self.batch) };
+        let status = unsafe { (api.llama_decode)(self.raw.as_ptr(), self.batch) };
         if status != 0 {
             self.clear();
-            return Err(LlamaError::Probe(status));
+            return Err(LoadError::Probe(status));
         }
         // SAFETY: the memory belongs to the live context.
         let removed = unsafe { (api.llama_memory_seq_rm)(self.memory, 0, 1, -1) };
         self.clear();
         // SAFETY: as above.
-        unsafe { (api.llama_synchronize)(self.context.as_ptr()) };
+        unsafe { (api.llama_synchronize)(self.raw.as_ptr()) };
         Ok(!removed)
     }
 
@@ -475,7 +479,7 @@ impl LlamaContext {
                 *self.batch.n_seq_id.add(index) = 1;
                 *(*self.batch.seq_id.add(index)) = 0;
                 *self.batch.logits.add(index) = i8::from(match outputs {
-                    Outputs::None => false,
+                    Outputs::Nothing => false,
                     Outputs::Last => index + 1 == count,
                     Outputs::All => true,
                 });
@@ -485,18 +489,18 @@ impl LlamaContext {
     }
 }
 
-impl Drop for LlamaContext {
+impl Drop for Context {
     fn drop(&mut self) {
-        let api = &self.model.llama.api;
+        let api = &self.model.libraries.api;
         // SAFETY: both were created in `new` and are freed once.
         unsafe {
             (api.llama_batch_free)(self.batch);
-            (api.llama_free)(self.context.as_ptr());
+            (api.llama_free)(self.raw.as_ptr());
         }
     }
 }
 
-impl DecodeContext for LlamaContext {
+impl DecodeContext for Context {
     fn tokenize(&self, text: &[u8], parse_special: bool) -> Result<Vec<Token>, LocalDecodeError> {
         self.model.tokenize(text, parse_special)
     }
@@ -507,7 +511,7 @@ impl DecodeContext for LlamaContext {
 
     fn is_end_of_generation(&self, token: Token) -> bool {
         // SAFETY: the vocabulary lives as long as the model.
-        unsafe { (self.model.llama.api.llama_vocab_is_eog)(self.model.vocab, token) }
+        unsafe { (self.model.libraries.api.llama_vocab_is_eog)(self.model.vocab, token) }
     }
 
     fn vocabulary_size(&self) -> usize {
@@ -518,7 +522,7 @@ impl DecodeContext for LlamaContext {
         let mut count = 0;
         // SAFETY: returns `count` tokens owned by the vocabulary, or NULL.
         unsafe {
-            let tokens = (self.model.llama.api.llama_vocab_get_suppress_tokens)(
+            let tokens = (self.model.libraries.api.llama_vocab_get_suppress_tokens)(
                 self.model.vocab,
                 &raw mut count,
             );
@@ -532,7 +536,7 @@ impl DecodeContext for LlamaContext {
     }
 
     fn context_size(&self) -> usize {
-        self.context_size
+        self.capacity
     }
 
     fn batch_size(&self) -> usize {
@@ -549,7 +553,7 @@ impl DecodeContext for LlamaContext {
 
     fn clear(&mut self) {
         // SAFETY: the memory belongs to the live context.
-        unsafe { (self.model.llama.api.llama_memory_clear)(self.memory, true) };
+        unsafe { (self.model.libraries.api.llama_memory_clear)(self.memory, true) };
     }
 
     fn decode(
@@ -564,7 +568,7 @@ impl DecodeContext for LlamaContext {
         self.fill(tokens, first_position, outputs);
         // SAFETY: the batch was filled above for sequence 0.
         let status =
-            unsafe { (self.model.llama.api.llama_decode)(self.context.as_ptr(), self.batch) };
+            unsafe { (self.model.libraries.api.llama_decode)(self.raw.as_ptr(), self.batch) };
         if status == 0 {
             Ok(())
         } else {
@@ -577,7 +581,7 @@ impl DecodeContext for LlamaContext {
         // SAFETY: returns `n_vocab` logits owned by the context until its next decode, or
         // NULL when that position produced none.
         unsafe {
-            let logits = (self.model.llama.api.llama_get_logits_ith)(self.context.as_ptr(), index);
+            let logits = (self.model.libraries.api.llama_get_logits_ith)(self.raw.as_ptr(), index);
             if logits.is_null() {
                 Err(LocalDecodeError::Logits)
             } else {
@@ -589,7 +593,7 @@ impl DecodeContext for LlamaContext {
     fn remove_from(&mut self, from: usize) -> Result<(), LocalDecodeError> {
         let from = i32::try_from(from).map_err(|_| LocalDecodeError::Memory)?;
         // SAFETY: the memory belongs to the live context.
-        if unsafe { (self.model.llama.api.llama_memory_seq_rm)(self.memory, 0, from, -1) } {
+        if unsafe { (self.model.libraries.api.llama_memory_seq_rm)(self.memory, 0, from, -1) } {
             Ok(())
         } else {
             Err(LocalDecodeError::Memory)

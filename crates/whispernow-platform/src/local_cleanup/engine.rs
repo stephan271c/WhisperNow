@@ -8,7 +8,7 @@ use whispernow_core::llm::{
 };
 use whispernow_domain::ipc::CleanupDevice;
 
-use crate::llama::{Llama, LlamaContext, LlamaError, LlamaModel};
+use crate::llama;
 
 /// The server's context per slot; contexts are never smaller, so the app decodes in the
 /// same memory layout as the evaluation did.
@@ -28,8 +28,8 @@ pub(crate) fn default_threads() -> i32 {
 }
 
 pub(crate) struct LocalCleanupEngine {
-    model: Rc<LlamaModel>,
-    context: Option<LlamaContext>,
+    model: Rc<llama::Model>,
+    context: Option<llama::Context>,
     threads: i32,
 }
 
@@ -39,9 +39,9 @@ impl LocalCleanupEngine {
         model_path: &Path,
         threads: i32,
         use_gpu: bool,
-    ) -> Result<Self, LlamaError> {
-        let llama = Llama::load(library_directory)?;
-        let model = LlamaModel::load(llama, model_path, use_gpu)?;
+    ) -> Result<Self, llama::LoadError> {
+        let libraries = llama::Libraries::load(library_directory)?;
+        let model = llama::Model::load(libraries, model_path, use_gpu)?;
         Ok(Self {
             model: Rc::new(model),
             context: None,
@@ -103,12 +103,12 @@ impl LocalCleanupEngine {
         .map_err(EngineError::Decode)
     }
 
-    fn context(&mut self, context_size: u32) -> Result<&mut LlamaContext, EngineError> {
+    fn context(&mut self, context_size: u32) -> Result<&mut llama::Context, EngineError> {
         keep_or_replace(
             &mut self.context,
             |context| context.context_size() >= context_size as usize,
             || {
-                LlamaContext::new(Rc::clone(&self.model), context_size, self.threads)
+                llama::Context::new(Rc::clone(&self.model), context_size, self.threads)
                     .map_err(EngineError::Load)
             },
         )
@@ -133,7 +133,7 @@ fn keep_or_replace<T, E>(
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EngineError {
     #[error(transparent)]
-    Load(LlamaError),
+    Load(llama::LoadError),
     #[error(transparent)]
     Decode(LocalDecodeError),
 }

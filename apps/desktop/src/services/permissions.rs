@@ -8,7 +8,7 @@ use whispernow_domain::ipc::{
 use whispernow_platform::AppPaths;
 
 use super::microphone_test::MicrophoneTestError;
-use super::output::OutputCoordinator;
+use super::output::Output;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SessionFacts {
@@ -138,7 +138,7 @@ fn portal_card(kind: PermissionKind, status: PermissionStatus) -> Permission {
 
 impl SessionFacts {
     pub(super) fn collect(
-        output: &OutputCoordinator,
+        output: &Output,
         paths: &AppPaths,
         global_shortcuts: PermissionStatus,
     ) -> Self {

@@ -157,8 +157,16 @@ pub struct ModelSummary {
 #[serde(rename_all = "camelCase")]
 pub struct DataLocation {
     pub category: ClearDataCategory,
-    #[serde(serialize_with = "serialize_display_path")]
-    pub path: PathBuf,
+    pub place: DataPlace,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DataPlace {
+    Path(#[serde(serialize_with = "serialize_display_path")] PathBuf),
+    /// What the history store clears itself: entries, kept recordings and legacy files.
+    HistoryEntries,
+    CredentialStore,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

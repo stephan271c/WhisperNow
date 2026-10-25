@@ -4,7 +4,7 @@ use std::{
 };
 use whispernow_domain::AppError;
 
-use whispernow_domain::ipc::{ClearDataItem, DataLocation};
+use whispernow_domain::ipc::{ClearDataItem, DataLocation, DataPlace};
 use whispernow_domain::{ClearDataCategory, ErrorCategory};
 use whispernow_domain::{
     EntryId, HistoryLimit, HistoryPage, HistoryPageRequest, HistoryRetention, NewHistoryEntry,
@@ -16,13 +16,21 @@ pub(crate) struct HistoryStore {
     repository: Result<Mutex<SqliteHistoryRepository>, AppError>,
 }
 
+pub(super) struct OpenedHistory {
+    pub(super) store: HistoryStore,
+    pub(super) diagnostic: Option<AppError>,
+}
+
 impl HistoryStore {
-    pub(super) fn open(paths: AppPaths) -> (Self, Option<AppError>) {
+    pub(super) fn open(paths: AppPaths) -> OpenedHistory {
         let (repository, diagnostic) = match SqliteHistoryRepository::open(&paths) {
             Ok((repository, diagnostic)) => (Ok(Mutex::new(repository)), diagnostic),
             Err(error) => (Err(error.clone()), Some(error)),
         };
-        (Self { paths, repository }, diagnostic)
+        OpenedHistory {
+            store: Self { paths, repository },
+            diagnostic,
+        }
     }
 
     /// Returns whether any entry was removed.
@@ -113,7 +121,7 @@ impl HistoryStore {
         ClearDataItem {
             location: DataLocation {
                 category: ClearDataCategory::History,
-                path: "History entries, recordings, and legacy files".into(),
+                place: DataPlace::HistoryEntries,
             },
             deleted,
         }
@@ -136,7 +144,7 @@ mod tests {
     fn store() -> (tempfile::TempDir, HistoryStore) {
         let dir = tempfile::tempdir().expect("temp dir");
         let paths = AppPaths::under(dir.path());
-        (dir, HistoryStore::open(paths).0)
+        (dir, HistoryStore::open(paths).store)
     }
 
     fn entry(text: &str) -> NewHistoryEntry {
@@ -192,7 +200,7 @@ mod tests {
         let data = dir.path().join("data");
         std::fs::write(&data, b"obstructed").expect("block data directory");
         let paths = AppPaths::under(dir.path());
-        let (store, diagnostic) = HistoryStore::open(paths.clone());
+        let OpenedHistory { store, diagnostic } = HistoryStore::open(paths.clone());
         let error = diagnostic.expect("startup error");
         std::fs::remove_file(data).expect("repair data directory");
         let request = HistoryPageRequest::first_page(HistoryFilter::default());
@@ -217,7 +225,7 @@ mod tests {
         let paths = AppPaths::under(dir.path());
         std::fs::create_dir_all(paths.config_dir()).expect("config directory");
         std::fs::write(paths.history_file(), b"malformed").expect("legacy history");
-        let (store, diagnostic) = HistoryStore::open(paths.clone());
+        let OpenedHistory { store, diagnostic } = HistoryStore::open(paths.clone());
         assert!(diagnostic.is_some());
         std::fs::write(paths.history_file(), b"also malformed").expect("new legacy history");
         store.clear().expect("clear");

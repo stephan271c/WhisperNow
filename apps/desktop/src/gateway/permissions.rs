@@ -9,8 +9,8 @@ use crate::shortcuts::ShortcutRegistrationError;
 impl Gateway {
     pub(crate) async fn permissions(&self) -> Result<PermissionsResponse, AppError> {
         let global_shortcuts = self.global_shortcuts_consent();
-        self.run_command("get_permissions", Failure::Local, move |services| {
-            Ok(services.permissions(global_shortcuts))
+        self.run_command("get_permissions", Failure::Local, move |backend| {
+            Ok(backend.permissions(global_shortcuts))
         })
         .await
     }
@@ -23,7 +23,7 @@ impl Gateway {
     ) -> Result<PermissionsResponse, AppError> {
         if request == PermissionKind::GlobalShortcuts {
             let shortcuts = Arc::clone(&self.shortcuts);
-            self.services.state.lock().phase.require_idle()?;
+            self.backend.state.lock().phase.require_idle()?;
             // Registering the saved shortcuts again opens the compositor's consent
             // dialog. Serialized with settings saves like a shortcut capture.
             let _native_settings = self.native_settings.lock().await;
@@ -37,8 +37,8 @@ impl Gateway {
                 return Err(shortcut_error(error));
             }
         } else {
-            self.run_command("request_permission", Failure::Local, move |services| {
-                services.request_permission(request)
+            self.run_command("request_permission", Failure::Local, move |backend| {
+                backend.request_permission(request)
             })
             .await?;
         }

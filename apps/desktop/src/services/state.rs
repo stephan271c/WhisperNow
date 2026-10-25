@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    ops::Deref,
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
@@ -192,6 +193,17 @@ impl State {
     }
 }
 
+/// Read access to the state; [`StateCell::apply`] and [`StateCell::update`] change it.
+pub(crate) struct StateGuard<'a>(MutexGuard<'a, State>);
+
+impl Deref for StateGuard<'_> {
+    type Target = State;
+
+    fn deref(&self) -> &State {
+        &self.0
+    }
+}
+
 /// Each change publishes its snapshot before the lock is released.
 pub(crate) struct StateCell {
     value: Mutex<State>,
@@ -210,7 +222,11 @@ impl StateCell {
         self.lock().require_not_in_maintenance()
     }
 
-    pub(crate) fn lock(&self) -> MutexGuard<'_, State> {
+    pub(crate) fn lock(&self) -> StateGuard<'_> {
+        StateGuard(self.locked())
+    }
+
+    fn locked(&self) -> MutexGuard<'_, State> {
         self.value.lock().expect("application state lock poisoned")
     }
 
@@ -227,7 +243,7 @@ impl StateCell {
         &self,
         change: impl FnOnce(&mut State) -> Result<R, AppError>,
     ) -> Result<R, AppError> {
-        let mut state = self.lock();
+        let mut state = self.locked();
         let result = change(&mut state)?;
         self.events.publish(EventPayload::StateChanged {
             state: state.snapshot(),
@@ -236,7 +252,7 @@ impl StateCell {
     }
 
     pub(crate) fn apply(&self, change: impl FnOnce(&mut State)) {
-        let mut state = self.lock();
+        let mut state = self.locked();
         change(&mut state);
         self.events.publish(EventPayload::StateChanged {
             state: state.snapshot(),
@@ -250,7 +266,7 @@ impl StateCell {
     /// Ends a failed dictation's `Error` phase once the user has dealt with it. Any other phase
     /// is left alone, so a dismissal that raced a new dictation does nothing.
     pub(crate) fn dismiss_error(&self) {
-        let mut state = self.lock();
+        let mut state = self.locked();
         if state.phase == Phase::Error {
             state.phase = Phase::Idle;
             state.last_error = None;
@@ -272,7 +288,7 @@ impl StateCell {
 
 #[cfg(test)]
 mod tests {
-    use whispernow_domain::DownloadPhase;
+    use whispernow_domain::{DownloadPhase, ErrorCategory};
 
     use super::*;
 
@@ -290,6 +306,45 @@ mod tests {
                 cancellation: CancellationToken::default(),
             },
         );
+    }
+
+    fn published_phases(published: &mpsc::Receiver<EventPayload>) -> Vec<Phase> {
+        published
+            .try_iter()
+            .filter_map(|event| match event {
+                EventPayload::StateChanged { state } => Some(state.phase),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_change_to_the_state_publishes_its_snapshot() {
+        let (events, published) = Events::channel();
+        let cell = StateCell::new(State::new(ModelId::default()), events);
+
+        cell.apply(|state| state.phase = Phase::Paused);
+        assert_eq!(published_phases(&published), [Phase::Paused]);
+
+        cell.update(|state| {
+            state.phase = Phase::Idle;
+            Ok(())
+        })
+        .expect("update");
+        assert_eq!(published_phases(&published), [Phase::Idle]);
+
+        cell.update::<()>(|_| Err(AppError::new(ErrorCategory::General, "refused", "Refused")))
+            .expect_err("refused update");
+        assert!(published_phases(&published).is_empty());
+
+        cell.publish_error(AppError::new(ErrorCategory::General, "failed", "Failed"));
+        cell.apply(|state| state.phase = Phase::Error);
+        cell.dismiss_error();
+        assert_eq!(
+            published_phases(&published),
+            [Phase::Idle, Phase::Error, Phase::Idle]
+        );
+        assert!(cell.lock().last_error.is_none());
     }
 
     #[test]

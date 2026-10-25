@@ -5,13 +5,13 @@ use crate::{
     autostart::AutostartRegistration,
     gateway::Gateway,
     services::{
-        NativeServices,
-        models::ModelCoordinator,
-        output::OutputCoordinator,
+        Backend,
+        models::ModelLibrary,
+        output::Output,
         permissions::MicrophoneAccess,
         test_support::{install_artifacts, shut_down},
     },
-    shortcuts::{ShortcutCoordinator, memory_registrar::MemoryRegistrar, recording_binding},
+    shortcuts::{Shortcuts, memory_registrar::MemoryRegistrar, recording_binding},
     tray::TrayController,
 };
 use whispernow_core::audio::AudioInputError;
@@ -34,14 +34,12 @@ impl AutostartRegistration for Autostart {
     }
 }
 
-pub(super) fn native_services(fixture: Fixture) -> (NativeServices, tempfile::TempDir) {
+pub(super) fn test_backend(fixture: Fixture) -> (Backend, tempfile::TempDir) {
     fixture.flush();
-    native_services_before_preload(fixture)
+    test_backend_before_preload(fixture)
 }
 
-pub(super) fn native_services_before_preload(
-    fixture: Fixture,
-) -> (NativeServices, tempfile::TempDir) {
+pub(super) fn test_backend_before_preload(fixture: Fixture) -> (Backend, tempfile::TempDir) {
     let paths = fixture.paths.clone();
     let store = Arc::new(ModelStore::new(paths.clone()));
     let local_cleanup = Arc::new(LocalCleanupService::new(
@@ -49,11 +47,11 @@ pub(super) fn native_services_before_preload(
         Arc::clone(&store),
         |_| {},
     ));
-    let services = NativeServices {
+    let backend = Backend {
         settings: fixture.settings,
         history: fixture.history,
         audio: Arc::new(FakeAudioInput::recording(Vec::new())),
-        models: ModelCoordinator::new(
+        models: ModelLibrary::new(
             store,
             Arc::clone(&fixture.state),
             Arc::clone(&local_cleanup),
@@ -61,11 +59,11 @@ pub(super) fn native_services_before_preload(
         state: fixture.state,
         dictation: fixture.dictation,
         paths: paths.clone(),
-        output: Arc::new(OutputCoordinator::native(None)),
+        output: Arc::new(Output::native(None)),
         microphone_access: MicrophoneAccess::default(),
         local_cleanup,
     };
-    (services, fixture.root)
+    (backend, fixture.root)
 }
 
 #[test]
@@ -81,10 +79,10 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         .enable_all()
         .build()
         .expect("runtime");
-    let (services, _root) = native_services(Fixture::new());
-    let saved = services.settings.get().settings;
+    let (backend, _root) = test_backend(Fixture::new());
+    let saved = backend.settings.view().settings;
     let registrar = Arc::new(MemoryRegistrar::default());
-    let shortcuts = Arc::new(ShortcutCoordinator::new(
+    let shortcuts = Arc::new(Shortcuts::new(
         registrar.clone(),
         recording_binding(&saved),
         Arc::new(|| true),
@@ -92,7 +90,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
     ));
     let autostart = Arc::new(Autostart::default());
     let gateway = Arc::new(Gateway::new(
-        Arc::new(services),
+        Arc::new(backend),
         shortcuts,
         autostart.clone(),
         Arc::new(ActivationGate::default()),
@@ -123,7 +121,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         height: 600,
     };
     gateway
-        .services
+        .backend
         .settings
         .save_window_geometry(geometry)
         .expect("independent geometry save");
@@ -159,7 +157,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         .expect("settings saves completed");
     });
 
-    let saved = gateway.services.settings.get().settings;
+    let saved = gateway.backend.settings.view().settings;
     assert_eq!(saved.window_geometry, Some(geometry));
     assert_eq!(saved.recording_shortcut.key, ShortcutKey::F2);
     assert_eq!(
@@ -185,7 +183,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         assert!(!view.start_on_login);
         assert!(view.warnings.is_empty());
     });
-    shut_down(&gateway.services);
+    shut_down(&gateway.backend);
 }
 
 #[test]
@@ -196,17 +194,17 @@ fn a_settings_save_keeps_registers_or_refuses_the_recording_shortcut() {
         .enable_all()
         .build()
         .expect("runtime");
-    let (services, _root) = native_services(Fixture::new());
-    let saved = services.settings.get().settings;
+    let (backend, _root) = test_backend(Fixture::new());
+    let saved = backend.settings.view().settings;
     let registrar = Arc::new(MemoryRegistrar::default());
-    let shortcuts = Arc::new(ShortcutCoordinator::new(
+    let shortcuts = Arc::new(Shortcuts::new(
         registrar.clone(),
         recording_binding(&saved),
         Arc::new(|| true),
         None,
     ));
     let gateway = Gateway::new(
-        Arc::new(services),
+        Arc::new(backend),
         shortcuts,
         Arc::new(Autostart::default()),
         Arc::new(ActivationGate::default()),
@@ -257,7 +255,7 @@ fn a_settings_save_keeps_registers_or_refuses_the_recording_shortcut() {
         );
         assert_eq!(registrar.bindings(), [held(ShortcutKey::F1)]);
 
-        let settings_file = gateway.services.paths.settings_file();
+        let settings_file = gateway.backend.paths.settings_file();
         std::fs::remove_file(&settings_file).expect("remove settings");
         std::fs::create_dir(&settings_file).expect("block settings replacement");
         let error = gateway
@@ -271,7 +269,7 @@ fn a_settings_save_keeps_registers_or_refuses_the_recording_shortcut() {
             "the saved shortcut is registered again"
         );
     });
-    shut_down(&gateway.services);
+    shut_down(&gateway.backend);
 }
 
 #[test]
@@ -284,10 +282,10 @@ fn a_cancel_shortcut_change_swaps_the_cancel_shortcut_and_other_changes_leave_it
         .enable_all()
         .build()
         .expect("runtime");
-    let (services, _root) = native_services(Fixture::new());
-    let saved = services.settings.get().settings;
+    let (backend, _root) = test_backend(Fixture::new());
+    let saved = backend.settings.view().settings;
     let registrar = Arc::new(MemoryRegistrar::default());
-    let shortcuts = Arc::new(ShortcutCoordinator::new(
+    let shortcuts = Arc::new(Shortcuts::new(
         registrar.clone(),
         recording_binding(&saved),
         Arc::new(|| true),
@@ -297,7 +295,7 @@ fn a_cancel_shortcut_change_swaps_the_cancel_shortcut_and_other_changes_leave_it
     shortcuts.observe_dictation(true);
     shortcuts.sync_cancel_shortcut();
     let gateway = Gateway::new(
-        Arc::new(services),
+        Arc::new(backend),
         shortcuts,
         Arc::new(Autostart::default()),
         Arc::new(ActivationGate::default()),
@@ -320,7 +318,7 @@ fn a_cancel_shortcut_change_swaps_the_cancel_shortcut_and_other_changes_leave_it
         .expect("cancel shortcut save");
     assert!(registrar.holds(&binding(&f12)));
     assert!(!registrar.holds(&escape));
-    shut_down(&gateway.services);
+    shut_down(&gateway.backend);
 }
 
 #[test]
@@ -329,8 +327,8 @@ fn a_history_limit_change_prunes_history_and_other_changes_do_not() {
         EntryStatus, HistoryLimit, HistoryRetention, NewHistoryEntry, ThemePreference, UtcMillis,
     };
 
-    let (services, _root) = native_services(Fixture::new());
-    services
+    let (backend, _root) = test_backend(Fixture::new());
+    backend
         .update_settings(&SettingChange::HistoryLimit(HistoryLimit::Unlimited))
         .expect("unlimited history");
     for _ in 0..21 {
@@ -343,7 +341,7 @@ fn a_history_limit_change_prunes_history_and_other_changes_do_not() {
             error: None,
             asr_model_id: ModelId::default(),
         };
-        services
+        backend
             .history
             .insert(
                 entry,
@@ -354,22 +352,22 @@ fn a_history_limit_change_prunes_history_and_other_changes_do_not() {
             .expect("insert");
     }
     let count = || {
-        services
-            .history(&HistoryPageRequest::first_page(HistoryFilter::default()))
+        backend
+            .history_page(&HistoryPageRequest::first_page(HistoryFilter::default()))
             .expect("history")
             .entries
             .len()
     };
-    services
+    backend
         .update_settings(&SettingChange::Theme(ThemePreference::Dark))
         .expect("theme save");
     assert_eq!(count(), 21);
-    let saved = services
+    let saved = backend
         .update_settings(&SettingChange::HistoryLimit(HistoryLimit::Last20))
         .expect("limit save");
     assert!(saved.warnings.is_empty());
     assert_eq!(count(), 20);
-    shut_down(&services);
+    shut_down(&backend);
 }
 
 #[test]
@@ -405,7 +403,7 @@ fn saved_shortcuts_that_break_a_rule_leave_the_settings_warning_published() {
         ..Settings::default()
     };
     fixture.settings.report_loaded(&invalid, None);
-    let shortcuts = ShortcutCoordinator::new(
+    let shortcuts = Shortcuts::new(
         Arc::new(MemoryRegistrar::default()),
         recording_binding(&invalid),
         Arc::new(|| true),
@@ -434,15 +432,15 @@ fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
         .enable_all()
         .build()
         .expect("runtime");
-    let (services, _root) = native_services(Fixture::new());
-    let shortcuts = Arc::new(ShortcutCoordinator::new(
+    let (backend, _root) = test_backend(Fixture::new());
+    let shortcuts = Arc::new(Shortcuts::new(
         Arc::new(MemoryRegistrar::default()),
         None,
         Arc::new(|| true),
         None,
     ));
     let gateway = Gateway::new(
-        Arc::new(services),
+        Arc::new(backend),
         shortcuts,
         Arc::new(Autostart::default()),
         Arc::new(ActivationGate::default()),
@@ -488,7 +486,7 @@ fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
             ..SetupCheckpoint::default()
         };
         gateway
-            .services
+            .backend
             .complete_setup(&checkpoint)
             .expect("complete setup");
         let restarted = gateway.restart_setup().await.expect("restart setup");
@@ -503,7 +501,7 @@ fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
             Some(SetupStep::Welcome)
         );
     });
-    shut_down(&gateway.services);
+    shut_down(&gateway.backend);
 }
 
 #[test]
@@ -528,11 +526,11 @@ fn a_settings_view_reads_the_autostart_registration_off_the_runtime_thread() {
         .enable_all()
         .build()
         .expect("runtime");
-    let (services, _root) = native_services(Fixture::new());
+    let (backend, _root) = test_backend(Fixture::new());
     let autostart = Arc::new(ReadingThread::default());
     let gateway = Gateway::new(
-        Arc::new(services),
-        Arc::new(ShortcutCoordinator::new(
+        Arc::new(backend),
+        Arc::new(Shortcuts::new(
             Arc::new(MemoryRegistrar::default()),
             None,
             Arc::new(|| true),
@@ -549,7 +547,7 @@ fn a_settings_view_reads_the_autostart_registration_off_the_runtime_thread() {
 
     let read_on = autostart.0.lock().expect("reading thread").expect("read");
     assert_ne!(read_on, thread::current().id());
-    shut_down(&gateway.services);
+    shut_down(&gateway.backend);
 }
 
 #[test]
@@ -559,49 +557,51 @@ fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
     use whispernow_domain::{DEFAULT_CLEANUP_MODEL_ID, DownloadPhase, SetupCheckpoint, SetupStep};
 
     for expected in ["model_transition_busy", "model_not_speech"] {
-        let (services, _root) = native_services(Fixture::new());
+        let (backend, _root) = test_backend(Fixture::new());
         let mut checkpoint = SetupCheckpoint {
             step: SetupStep::TryIt,
             ..SetupCheckpoint::default()
         };
         if expected == "model_transition_busy" {
-            services.state.lock().active_downloads.insert(
-                checkpoint.model_id.clone(),
-                DownloadTask {
-                    progress: ActiveDownload {
-                        model_id: checkpoint.model_id.clone(),
-                        phase: DownloadPhase::Downloading,
-                        downloaded_bytes: 0,
-                        total_bytes: 1_024,
-                        bytes_per_second: None,
+            backend.state.apply(|state| {
+                state.active_downloads.insert(
+                    checkpoint.model_id.clone(),
+                    DownloadTask {
+                        progress: ActiveDownload {
+                            model_id: checkpoint.model_id.clone(),
+                            phase: DownloadPhase::Downloading,
+                            downloaded_bytes: 0,
+                            total_bytes: 1_024,
+                            bytes_per_second: None,
+                        },
+                        cancellation: CancellationToken::default(),
                     },
-                    cancellation: CancellationToken::default(),
-                },
-            );
+                );
+            });
         } else {
             checkpoint.model_id = ModelId::new(DEFAULT_CLEANUP_MODEL_ID).expect("cleanup model id");
             let registry = ModelRegistry::builtin();
             install_artifacts(
-                &services.paths,
+                &backend.paths,
                 registry
                     .get(DEFAULT_CLEANUP_MODEL_ID)
                     .expect("cleanup model"),
             );
         }
-        let saved = services.settings.get().settings;
-        let selected = services.state.lock().selected_model_id.clone();
-        let loaded = services.state.lock().model.clone();
+        let saved = backend.settings.view().settings;
+        let selected = backend.state.lock().selected_model_id.clone();
+        let loaded = backend.state.lock().model.clone();
 
-        let error = services
+        let error = backend
             .complete_setup(&checkpoint)
             .expect_err("setup refused");
 
         assert_eq!(error.code, expected);
-        let state = services.state.snapshot();
-        assert_eq!(services.state.lock().model.clone(), loaded);
+        let state = backend.state.snapshot();
+        assert_eq!(backend.state.lock().model.clone(), loaded);
         assert_eq!(state.selected_model_id, selected);
-        assert!(!services.settings.load().setup.is_complete());
-        assert_eq!(services.settings.get().settings, saved);
+        assert!(!backend.settings.snapshot().setup.is_complete());
+        assert_eq!(backend.settings.view().settings, saved);
     }
 }
 
@@ -609,15 +609,13 @@ fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
 fn setup_loads_and_selects_the_model_then_saves_its_choices() {
     use whispernow_domain::{SetupCheckpoint, SetupStep};
 
-    let (services, _root) = native_services(Fixture::new());
+    let (backend, _root) = test_backend(Fixture::new());
     let checkpoint = SetupCheckpoint {
         step: SetupStep::TryIt,
         ..SetupCheckpoint::default()
     };
 
-    let view = services
-        .complete_setup(&checkpoint)
-        .expect("complete setup");
+    let view = backend.complete_setup(&checkpoint).expect("complete setup");
 
     assert!(view.settings.setup.is_complete());
     assert_eq!(view.settings.model_id, checkpoint.model_id);
@@ -625,18 +623,18 @@ fn setup_loads_and_selects_the_model_then_saves_its_choices() {
         view.settings.recording_shortcut,
         checkpoint.recording_shortcut
     );
-    let state = services.state.lock();
+    let state = backend.state.lock();
     assert_eq!(state.selected_model_id, checkpoint.model_id);
     assert_eq!(state.model, LoadedModel::Ready(checkpoint.model_id.clone()));
     drop(state);
     assert_eq!(
-        services
+        backend
             .save_setup_checkpoint(checkpoint.clone())
             .expect_err("completed setup cannot save a checkpoint")
             .code,
         "setup_already_complete"
     );
-    let restarted = services.settings.restart_setup().expect("restart setup");
+    let restarted = backend.settings.restart_setup().expect("restart setup");
     assert!(!restarted.settings.setup.is_complete());
     assert_eq!(
         restarted
@@ -646,7 +644,7 @@ fn setup_loads_and_selects_the_model_then_saves_its_choices() {
             .map(|setup| setup.step),
         Some(SetupStep::Welcome)
     );
-    services
+    backend
         .save_setup_checkpoint(checkpoint)
         .expect("restarted setup accepts checkpoints");
 }
@@ -655,8 +653,8 @@ fn setup_loads_and_selects_the_model_then_saves_its_choices() {
 fn a_saved_setup_checkpoint_selects_its_model_and_keeps_the_saved_one() {
     use whispernow_domain::{SetupCheckpoint, SetupStep};
 
-    let (services, _root) = native_services(Fixture::new());
-    let saved = services.settings.get().settings.model_id;
+    let (backend, _root) = test_backend(Fixture::new());
+    let saved = backend.settings.view().settings.model_id;
     let registry = ModelRegistry::builtin();
     let chosen = registry
         .speech_models()
@@ -668,12 +666,12 @@ fn a_saved_setup_checkpoint_selects_its_model_and_keeps_the_saved_one() {
         ..SetupCheckpoint::default()
     };
 
-    services
+    backend
         .save_setup_checkpoint(checkpoint)
         .expect("save checkpoint");
 
-    assert_eq!(services.state.snapshot().selected_model_id, chosen.id);
-    assert_eq!(services.settings.get().settings.model_id, saved);
+    assert_eq!(backend.state.snapshot().selected_model_id, chosen.id);
+    assert_eq!(backend.settings.view().settings.model_id, saved);
 }
 
 #[cfg(unix)]
@@ -682,19 +680,19 @@ fn setup_checkpoints_do_not_scan_unrelated_installed_artifacts() {
     use std::os::unix::fs::PermissionsExt as _;
     use whispernow_domain::SetupCheckpoint;
 
-    let (services, _root) = native_services(Fixture::new());
+    let (backend, _root) = test_backend(Fixture::new());
     let registry = ModelRegistry::builtin();
     let other = registry
         .speech_models()
         .find(|model| model.id != ModelId::default())
         .expect("another model");
-    let inaccessible = services.paths.models_dir().join(other.id.as_str());
+    let inaccessible = backend.paths.models_dir().join(other.id.as_str());
     fs::create_dir_all(&inaccessible).expect("unrelated installation");
     fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o000))
         .expect("inaccessible artifacts");
-    let scan = services.models.model_store().list();
+    let scan = backend.models.model_store().list();
     let checkpoint = SetupCheckpoint::default();
-    let saved = services.save_setup_checkpoint(checkpoint.clone());
+    let saved = backend.save_setup_checkpoint(checkpoint.clone());
     fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o700))
         .expect("restore artifacts access");
 
@@ -711,7 +709,7 @@ fn setup_checkpoints_do_not_scan_unrelated_installed_artifacts() {
         Some(&checkpoint)
     );
     assert_eq!(
-        services.settings.get().settings.setup.checkpoint(),
+        backend.settings.view().settings.setup.checkpoint(),
         Some(&checkpoint)
     );
     let unknown = SetupCheckpoint {
@@ -719,7 +717,7 @@ fn setup_checkpoints_do_not_scan_unrelated_installed_artifacts() {
         ..SetupCheckpoint::default()
     };
     assert_eq!(
-        services
+        backend
             .save_setup_checkpoint(unknown)
             .expect_err("unsupported choice")
             .code,
@@ -729,11 +727,11 @@ fn setup_checkpoints_do_not_scan_unrelated_installed_artifacts() {
 
 #[test]
 fn audio_device_listing_reports_the_system_failure() {
-    let (mut services, _root) = native_services(Fixture::new());
-    services.audio = Arc::new(FakeAudioInput::listing(Err(AudioInputError::Backend {
+    let (mut backend, _root) = test_backend(Fixture::new());
+    backend.audio = Arc::new(FakeAudioInput::listing(Err(AudioInputError::Backend {
         operation: "list devices",
     })));
-    let error = services
+    let error = backend
         .list_audio_devices()
         .expect_err("device listing failed");
     assert_eq!(error.category, ErrorCategory::Audio);
@@ -744,14 +742,14 @@ fn audio_device_listing_reports_the_system_failure() {
 fn invalid_setup_choices_leave_the_saved_and_selected_model_unchanged() {
     use whispernow_domain::{SetupCheckpoint, SetupStep, Shortcut};
 
-    let (services, _root) = native_services(Fixture::new());
-    let before = services.settings.get().settings;
+    let (backend, _root) = test_backend(Fixture::new());
+    let before = backend.settings.view().settings;
     let registry = ModelRegistry::builtin();
     let model = registry
         .speech_models()
         .find(|model| model.id != before.model_id)
         .expect("another speech model");
-    install_artifacts(&services.paths, model);
+    install_artifacts(&backend.paths, model);
     let checkpoint = SetupCheckpoint {
         step: SetupStep::TryIt,
         model_id: model.id.clone(),
@@ -759,12 +757,12 @@ fn invalid_setup_choices_leave_the_saved_and_selected_model_unchanged() {
         ..SetupCheckpoint::default()
     };
 
-    let error = services
+    let error = backend
         .complete_setup(&checkpoint)
         .expect_err("invalid setup choices");
 
     assert_eq!(error.code, "invalid_settings");
-    assert_eq!(services.settings.get().settings, before);
-    assert_eq!(services.state.snapshot().selected_model_id, before.model_id);
-    assert!(!services.settings.load().setup.is_complete());
+    assert_eq!(backend.settings.view().settings, before);
+    assert_eq!(backend.state.snapshot().selected_model_id, before.model_id);
+    assert!(!backend.settings.snapshot().setup.is_complete());
 }

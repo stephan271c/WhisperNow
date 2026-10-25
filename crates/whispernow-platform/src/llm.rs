@@ -2,7 +2,7 @@
 //!
 //! Provider request and response bodies are intentionally never logged.
 
-use std::time::Duration;
+use std::{sync::LazyLock, time::Duration};
 
 use futures_util::StreamExt as _;
 use rig_core::{
@@ -38,76 +38,107 @@ pub async fn complete(
     api_key: Option<ApiKey>,
     prompt: LlmPrompt,
 ) -> Result<LlmResponse, LlmError> {
-    let http = http_client(None)?;
+    let http = http_client()?;
     let key = api_key.as_ref();
-    let (secret, base) = match &target.provider {
+    let model = target.model;
+    match &target.provider {
         RemoteProvider::Anthropic(endpoint) => {
-            let mut builder = anthropic::Client::builder()
-                .api_key(required_key(key)?)
-                .http_client(http);
-            if let Some(endpoint) = endpoint {
-                builder = builder.base_url(endpoint.base());
-            }
-            let client = builder.build().map_err(|_| LlmError::InvalidRequest)?;
-            let mut model = client.completion_model(target.model);
-            model
-                .default_max_tokens
-                .get_or_insert(ANTHROPIC_FALLBACK_MAX_TOKENS);
-            return stream_model(model, &prompt, |_| LlmFinishReason::Unknown).await;
+            anthropic(http, endpoint.as_ref(), required_key(key)?, model, &prompt).await
         }
         RemoteProvider::Gemini(endpoint) => {
-            let mut builder = gemini::Client::builder()
-                .api_key(required_key(key)?)
-                .http_client(http);
-            if let Some(endpoint) = endpoint {
-                builder = builder.base_url(endpoint.base());
-            }
-            let client = builder.build().map_err(|_| LlmError::InvalidRequest)?;
-            return stream_model(client.completion_model(target.model), &prompt, |response| {
-                gemini_finish_reason(response.and_then(|response| response.finish_reason.as_ref()))
-            })
-            .await;
+            gemini(http, endpoint.as_ref(), required_key(key)?, model, &prompt).await
         }
-        RemoteProvider::OpenAi(endpoint) => (
-            required_key(key)?,
-            base_url(endpoint.as_ref(), OPENAI_BASE_URL).to_owned(),
-        ),
-        RemoteProvider::OpenRouter(endpoint) => (
-            required_key(key)?,
-            base_url(endpoint.as_ref(), OPENROUTER_BASE_URL).to_owned(),
-        ),
-        RemoteProvider::Ollama(endpoint) => (
-            required_key(key).unwrap_or_default(),
-            format!("{}/v1", ollama_root(endpoint.as_ref())),
-        ),
-        RemoteProvider::Custom(endpoint) => (
-            required_key(key).unwrap_or_default(),
-            endpoint.base().to_owned(),
-        ),
-    };
+        RemoteProvider::OpenAi(endpoint) => {
+            let base = base_url(endpoint.as_ref(), OPENAI_BASE_URL);
+            openai_compatible(http, required_key(key)?, base, model, &prompt).await
+        }
+        RemoteProvider::OpenRouter(endpoint) => {
+            let base = base_url(endpoint.as_ref(), OPENROUTER_BASE_URL);
+            openai_compatible(http, required_key(key)?, base, model, &prompt).await
+        }
+        RemoteProvider::Ollama(endpoint) => {
+            let base = format!("{}/v1", ollama_root(endpoint.as_ref()));
+            openai_compatible(http, optional_key(key), &base, model, &prompt).await
+        }
+        RemoteProvider::Custom(endpoint) => {
+            openai_compatible(http, optional_key(key), endpoint.base(), model, &prompt).await
+        }
+    }
+}
+
+async fn anthropic(
+    http: reqwest::Client,
+    endpoint: Option<&ProviderEndpoint>,
+    key: String,
+    model: String,
+    prompt: &LlmPrompt,
+) -> Result<LlmResponse, LlmError> {
+    let mut builder = anthropic::Client::builder().api_key(key).http_client(http);
+    if let Some(endpoint) = endpoint {
+        builder = builder.base_url(endpoint.base());
+    }
+    let client = builder.build().map_err(|_| LlmError::InvalidRequest)?;
+    let mut model = client.completion_model(model);
+    model
+        .default_max_tokens
+        .get_or_insert(ANTHROPIC_FALLBACK_MAX_TOKENS);
+    stream_model(model, prompt, |_| LlmFinishReason::Unknown).await
+}
+
+async fn gemini(
+    http: reqwest::Client,
+    endpoint: Option<&ProviderEndpoint>,
+    key: String,
+    model: String,
+    prompt: &LlmPrompt,
+) -> Result<LlmResponse, LlmError> {
+    let mut builder = gemini::Client::builder().api_key(key).http_client(http);
+    if let Some(endpoint) = endpoint {
+        builder = builder.base_url(endpoint.base());
+    }
+    let client = builder.build().map_err(|_| LlmError::InvalidRequest)?;
+    stream_model(client.completion_model(model), prompt, |response| {
+        gemini_finish_reason(response.and_then(|response| response.finish_reason.as_ref()))
+    })
+    .await
+}
+
+async fn openai_compatible(
+    http: reqwest::Client,
+    key: String,
+    base: &str,
+    model: String,
+    prompt: &LlmPrompt,
+) -> Result<LlmResponse, LlmError> {
     let client = openai::CompletionsClient::builder()
-        .api_key(secret)
+        .api_key(key)
         .base_url(base)
         .http_client(http)
         .build()
         .map_err(|_| LlmError::InvalidRequest)?;
-    stream_model(client.completion_model(target.model), &prompt, |_| {
+    stream_model(client.completion_model(model), prompt, |_| {
         LlmFinishReason::Unknown
     })
     .await
 }
 
-/// A client that follows no redirect. reqwest strips only `Authorization` and cookies when a
-/// redirect changes host, so following one would resend `x-api-key`, `x-goog-api-key` and the
-/// request body to whatever host the endpoint names.
-fn http_client(total_timeout: Option<Duration>) -> Result<reqwest::Client, LlmError> {
-    let mut builder = reqwest::Client::builder()
+/// The one client every provider call uses, so connections and TLS sessions are reused. It
+/// follows no redirect: reqwest strips only `Authorization` and cookies when a redirect changes
+/// host, so following one would resend `x-api-key`, `x-goog-api-key` and the request body to
+/// whatever host the endpoint names. It has no total timeout, since a completion streams for as
+/// long as the model generates; a call that needs one sets it on its request.
+static HTTP_CLIENT: LazyLock<Result<reqwest::Client, reqwest::Error>> = LazyLock::new(|| {
+    reqwest::Client::builder()
         .connect_timeout(HTTP_CONNECT_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none());
-    if let Some(timeout) = total_timeout {
-        builder = builder.timeout(timeout);
-    }
-    builder.build().map_err(|_| LlmError::InvalidRequest)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+});
+
+fn http_client() -> Result<reqwest::Client, LlmError> {
+    HTTP_CLIENT
+        .as_ref()
+        .cloned()
+        .map_err(|_| LlmError::InvalidRequest)
 }
 
 fn base_url<'a>(endpoint: Option<&'a ProviderEndpoint>, default: &'a str) -> &'a str {
@@ -124,6 +155,11 @@ fn ollama_root(endpoint: Option<&ProviderEndpoint>) -> &str {
 fn required_key(key: Option<&ApiKey>) -> Result<String, LlmError> {
     key.map(|key| key.expose_secret().to_owned())
         .ok_or(LlmError::Authentication)
+}
+
+/// For the providers that also run without a key.
+fn optional_key(key: Option<&ApiKey>) -> String {
+    key.map_or_else(String::new, |key| key.expose_secret().to_owned())
 }
 
 fn gemini_finish_reason(reason: Option<&GeminiFinishReason>) -> LlmFinishReason {
@@ -221,7 +257,8 @@ mod tests {
     use super::{
         ANTHROPIC_FALLBACK_MAX_TOKENS, GeminiFinishReason, OLLAMA_ROOT, OPENROUTER_BASE_URL,
         base_url, complete, gemini_finish_reason, map_error, ollama_root, required_key,
-        status_error, test_server::serve_once,
+        status_error,
+        test_server::{serve_keep_alive, serve_once},
     };
     use std::{net::TcpListener, time::Duration};
 
@@ -393,6 +430,18 @@ mod tests {
         )
         .await;
         assert_eq!(body["max_tokens"], ANTHROPIC_FALLBACK_MAX_TOKENS);
+    }
+
+    #[tokio::test]
+    async fn two_calls_reuse_one_connection() {
+        let (address, server) = serve_keep_alive("400 Bad Request", "{}", 2);
+        for _ in 0..2 {
+            let endpoint = ProviderEndpoint::parse(format!("{address}/v1")).expect("endpoint");
+            let (target, api_key, prompt) = request(RemoteProvider::Custom(endpoint), "local");
+            let result = complete(target, api_key, prompt).await;
+            assert_eq!(result, Err(LlmError::InvalidRequest));
+        }
+        assert_eq!(server.join().expect("fixture provider"), 1);
     }
 
     #[tokio::test]

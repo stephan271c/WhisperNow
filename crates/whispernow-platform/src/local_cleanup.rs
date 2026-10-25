@@ -23,7 +23,7 @@ use whispernow_core::llm::{
 };
 
 use self::engine::{EngineError, LocalCleanupEngine, default_threads};
-use crate::{llama::LlamaError, models::ModelStore};
+use crate::{llama, models::ModelStore};
 use whispernow_domain::{ModelId, ipc::CleanupDevice};
 
 enum Command {
@@ -41,14 +41,14 @@ struct Job {
     reply: oneshot::Sender<Result<LocalDecodeOutput, EngineError>>,
 }
 
-struct Worker {
+struct CleanupWorker {
     commands: mpsc::Sender<Command>,
     thread: JoinHandle<()>,
 }
 
 pub struct LocalCleanupService {
     shared: Arc<Shared>,
-    worker: Mutex<Option<Worker>>,
+    worker: Mutex<Option<CleanupWorker>>,
 }
 
 impl LocalCleanupService {
@@ -105,7 +105,7 @@ impl LocalCleanupService {
             .then_some(held)
     }
 
-    fn lock_worker(&self) -> std::sync::MutexGuard<'_, Option<Worker>> {
+    fn lock_worker(&self) -> std::sync::MutexGuard<'_, Option<CleanupWorker>> {
         self.worker.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -124,15 +124,15 @@ impl LocalCleanupService {
 
     fn spawn<'worker>(
         &self,
-        worker: &'worker mut Option<Worker>,
-    ) -> Result<&'worker Worker, LlmError> {
+        worker: &'worker mut Option<CleanupWorker>,
+    ) -> Result<&'worker CleanupWorker, LlmError> {
         let (commands, commands_rx) = mpsc::channel();
         let shared = Arc::clone(&self.shared);
         let thread = std::thread::Builder::new()
             .name("whispernow-cleanup".to_owned())
             .spawn(move || run(&commands_rx, &shared))
             .map_err(|_| LlmError::TemporarilyUnavailable)?;
-        Ok(worker.insert(Worker { commands, thread }))
+        Ok(worker.insert(CleanupWorker { commands, thread }))
     }
 }
 
@@ -206,7 +206,7 @@ fn load<'engine>(
     shared: &Shared,
     engine: &'engine mut Option<(ModelId, LocalCleanupEngine)>,
     model_id: &ModelId,
-) -> Result<&'engine mut LocalCleanupEngine, LlamaError> {
+) -> Result<&'engine mut LocalCleanupEngine, llama::LoadError> {
     let (_, loaded) = match engine.take().filter(|(loaded, _)| loaded == model_id) {
         Some(kept) => engine.insert(kept),
         None => engine.insert((model_id.to_owned(), load_engine(shared, model_id)?)),
@@ -214,14 +214,17 @@ fn load<'engine>(
     Ok(loaded)
 }
 
-fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine, LlamaError> {
+fn load_engine(
+    shared: &Shared,
+    model_id: &ModelId,
+) -> Result<LocalCleanupEngine, llama::LoadError> {
     if shared.held.load(Ordering::Acquire) {
-        return Err(LlamaError::Held);
+        return Err(llama::LoadError::Held);
     }
     let path = shared
         .store
         .cleanup_model_path(model_id)?
-        .ok_or(LlamaError::NotInstalled)?;
+        .ok_or(llama::LoadError::NotInstalled)?;
     let threads = default_threads();
     let loaded = LocalCleanupEngine::load(
         &shared.library_directory,
@@ -387,23 +390,29 @@ mod tests {
             .hold_unloaded(Duration::from_secs(5))
             .expect("an idle model is freed at once");
         let load = || load_engine(&service.shared, &model_id("small")).err();
-        assert!(matches!(load(), Some(LlamaError::Held)));
+        assert!(matches!(load(), Some(llama::LoadError::Held)));
         let result = complete(&service, "small");
         assert!(matches!(result, Err(LlmError::InvalidRequest)));
         drop(held);
         // Past the model lookup; llama.cpp is not at the library directory.
-        assert!(matches!(load(), Some(LlamaError::Library { .. })));
+        assert!(matches!(load(), Some(llama::LoadError::Library { .. })));
     }
 
     #[test]
     fn a_model_is_found_in_the_store_by_the_id_it_names() {
         let (_root, service) = service(&["small"]);
         let load = |model| load_engine(&service.shared, &model_id(model)).err();
-        assert!(matches!(load("small"), Some(LlamaError::Library { .. })));
-        assert!(matches!(load("large"), Some(LlamaError::NotInstalled)));
+        assert!(matches!(
+            load("small"),
+            Some(llama::LoadError::Library { .. })
+        ));
+        assert!(matches!(
+            load("large"),
+            Some(llama::LoadError::NotInstalled)
+        ));
         assert!(matches!(
             load("unknown"),
-            Some(LlamaError::Store(ModelStoreError::UnknownModel))
+            Some(llama::LoadError::Store(ModelStoreError::UnknownModel))
         ));
     }
 }

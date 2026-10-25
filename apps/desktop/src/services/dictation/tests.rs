@@ -31,7 +31,7 @@ use crate::services::{
     Phase, RecordingTrigger,
     history::HistoryStore,
     output::{OutputNotice, TranscriptOutput},
-    settings::SettingsCoordinator,
+    settings::SavedSettings,
     state::{LoadedModel, StateCell},
     test_support::{FakeAudioInput, SettingsHarness, install_artifacts},
 };
@@ -112,7 +112,7 @@ impl TranscriptOutput for FakeOutput {
 struct Loudness;
 
 impl VoiceActivity for Loudness {
-    fn is_speech(&mut self, frame: &[f32]) -> bool {
+    fn poll_speech(&mut self, frame: &[f32]) -> bool {
         frame.iter().any(|sample| sample.abs() > 0.01)
     }
 }
@@ -150,7 +150,7 @@ pub(crate) struct Fixture {
     // Declared first so the worker stops before the temporary files go.
     pub(crate) dictation: Dictation,
     pub(crate) state: Arc<StateCell>,
-    settings: Arc<SettingsCoordinator>,
+    settings: Arc<SavedSettings>,
     history: Arc<HistoryStore>,
     output: Arc<FakeOutput>,
     script: Arc<Script>,
@@ -203,7 +203,7 @@ impl Fixture {
             registry.get(model_id.as_str()).expect("default model"),
         );
         persistence.save(&saved).expect("save settings");
-        let history = Arc::new(HistoryStore::open(paths.clone()).0);
+        let history = Arc::new(HistoryStore::open(paths.clone()).store);
         let models = Arc::new(ModelStore::new(paths.clone()));
         let model = models
             .resolve(&model_id)
@@ -373,7 +373,9 @@ fn a_dictation_keeps_no_audio_with_keep_audio_off() {
 #[test]
 fn vocabulary_that_empties_a_transcript_clears_the_last_transcript() {
     let fixture = Fixture::new();
-    fixture.state.lock().last_transcript = Some("earlier dictation".to_owned());
+    fixture
+        .state
+        .apply(|state| state.last_transcript = Some("earlier dictation".to_owned()));
     fixture
         .settings
         .edit(|settings| {

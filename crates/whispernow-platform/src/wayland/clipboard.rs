@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt, time::Duration};
 
 use zeroize::Zeroizing;
 
-use super::portal::WaylandPortalError;
+use super::portal::PortalOutputError;
 
 const TRANSCRIPT_MIME_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "text/plain"];
 pub(crate) const SNAPSHOT_MIME_TYPES: [&str; 6] = [
@@ -36,14 +36,12 @@ impl ClipboardOffer {
 
     /// `read_selection` already bounds each format to [`MAX_FORMAT_BYTES`];
     /// this bounds their total.
-    pub(crate) fn snapshot(
-        formats: Vec<(String, SecretBytes)>,
-    ) -> Result<Self, WaylandPortalError> {
+    pub(crate) fn snapshot(formats: Vec<(String, SecretBytes)>) -> Result<Self, PortalOutputError> {
         let total = formats.iter().fold(0usize, |total, (_, bytes)| {
             total.saturating_add(bytes.len())
         });
         if total > MAX_TOTAL_BYTES {
-            return Err(WaylandPortalError::ClipboardSnapshotTooLarge);
+            return Err(PortalOutputError::ClipboardSnapshotTooLarge);
         }
         Ok(Self(formats.into_iter().collect()))
     }
@@ -121,7 +119,7 @@ mod tests {
                 ("text/html".to_owned(), half()),
             ])
             .expect_err("oversized snapshot"),
-            WaylandPortalError::ClipboardSnapshotTooLarge
+            PortalOutputError::ClipboardSnapshotTooLarge
         );
     }
 

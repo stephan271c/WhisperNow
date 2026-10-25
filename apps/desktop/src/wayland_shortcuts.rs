@@ -20,7 +20,7 @@ use crate::{
     portal_identity::PortalIdentity,
     shortcuts::{
         KeyTransition, ShortcutBinding, ShortcutEvent, ShortcutId, ShortcutRegistrar,
-        ShortcutRegistrationError,
+        ShortcutRegistrationError, StartedRegistrar,
     },
 };
 
@@ -174,6 +174,31 @@ impl AshpdShortcutPortal {
             receiver,
         ))
     }
+
+    async fn bind(
+        &self,
+        session: &Session<GlobalShortcuts>,
+        binding: &ShortcutBinding,
+    ) -> Result<(), ShortcutRegistrationError> {
+        let portal_id = portal_id(binding.id);
+        let shortcut = NewShortcut::new(&portal_id, "Record with WhisperNow")
+            .preferred_trigger(Some(binding.portal_trigger().as_str()));
+        let request = self
+            .proxy
+            .bind_shortcuts(session, &[shortcut], None, BindShortcutsOptions::default())
+            .await
+            .map_err(map_portal_error)?;
+        let response = request.response().map_err(map_portal_error)?;
+        if response
+            .shortcuts()
+            .iter()
+            .any(|bound| bound.id() == portal_id)
+        {
+            Ok(())
+        } else {
+            Err(ShortcutRegistrationError::PermissionDenied)
+        }
+    }
 }
 
 impl ShortcutPortal for AshpdShortcutPortal {
@@ -193,34 +218,9 @@ impl ShortcutPortal for AshpdShortcutPortal {
             .create_session(CreateSessionOptions::default())
             .await
             .map_err(map_portal_error)?;
-        let portal_id = portal_id(binding.id);
-        let shortcut = NewShortcut::new(&portal_id, "Record with WhisperNow")
-            .preferred_trigger(Some(binding.portal_trigger().as_str()));
-        let request = match self
-            .proxy
-            .bind_shortcuts(&session, &[shortcut], None, BindShortcutsOptions::default())
-            .await
-        {
-            Ok(request) => request,
-            Err(error) => {
-                let _ = session.close().await;
-                return Err(map_portal_error(error));
-            }
-        };
-        let response = match request.response() {
-            Ok(response) => response,
-            Err(error) => {
-                let _ = session.close().await;
-                return Err(map_portal_error(error));
-            }
-        };
-        if !response
-            .shortcuts()
-            .iter()
-            .any(|bound| bound.id() == portal_id)
-        {
+        if let Err(error) = self.bind(&session, binding).await {
             let _ = session.close().await;
-            return Err(ShortcutRegistrationError::PermissionDenied);
+            return Err(error);
         }
         let session = Arc::new(session);
         let closed_session = Arc::clone(&session);
@@ -301,7 +301,7 @@ impl WaylandShortcutRegistrar {
     pub(crate) fn spawn(
         identity: PortalIdentity,
         events: mpsc::UnboundedSender<ShortcutEvent>,
-    ) -> (Arc<Self>, Option<ShortcutRegistrationError>) {
+    ) -> StartedRegistrar {
         let (commands, receiver) = mpsc::unbounded_channel();
         let (ready, ready_receiver) = std_mpsc::sync_channel(1);
         tauri::async_runtime::spawn(async move {
@@ -316,11 +316,14 @@ impl WaylandShortcutRegistrar {
                 }
             }
         });
-        let startup_failure = match ready_receiver.recv_timeout(STARTUP_TIMEOUT) {
+        let failure = match ready_receiver.recv_timeout(STARTUP_TIMEOUT) {
             Ok(result) => result.err(),
             Err(_) => Some(ShortcutRegistrationError::PortalUnavailable),
         };
-        (Arc::new(Self { commands }), startup_failure)
+        StartedRegistrar {
+            registrar: Arc::new(Self { commands }),
+            failure,
+        }
     }
 
     fn request(
@@ -402,22 +405,29 @@ struct KeyRelease {
 }
 
 impl HeldShortcut {
-    fn key_signal(&mut self, signal: PortalSignal, now: Instant) -> Vec<KeyTransition> {
-        let released = match signal {
-            PortalSignal::Transition(TimedTransition {
-                timestamp,
-                transition: KeyTransition::Pressed,
-                ..
-            }) => return self.activated(timestamp, now),
-            PortalSignal::Transition(TimedTransition { timestamp, .. }) => {
-                self.deactivated(timestamp)
-            }
-            PortalSignal::ReleaseWatcher(_, ReleaseEvent::Released(at)) => self.key_released(at),
-            PortalSignal::ReleaseWatcher(_, ReleaseEvent::Ready) => {
+    fn portal(
+        &mut self,
+        TimedTransition {
+            timestamp,
+            transition,
+            ..
+        }: TimedTransition,
+        now: Instant,
+    ) -> Vec<KeyTransition> {
+        match transition {
+            KeyTransition::Pressed => self.activated(timestamp, now),
+            KeyTransition::Released => released_if(self.deactivated(timestamp)),
+        }
+    }
+
+    fn helper(&mut self, event: ReleaseEvent, now: Instant) -> Vec<KeyTransition> {
+        let ended_hold = match event {
+            ReleaseEvent::Released(at) => self.key_released(at),
+            ReleaseEvent::Ready => {
                 self.helper_ready = true;
                 false
             }
-            PortalSignal::ReleaseWatcher(_, ReleaseEvent::Held(at)) => {
+            ReleaseEvent::Held(at) => {
                 self.helper_pressed_at = Some(at);
                 if self.helper_ready
                     && let Some(hold) = &mut self.held
@@ -427,7 +437,7 @@ impl HeldShortcut {
                 }
                 false
             }
-            PortalSignal::ReleaseWatcher(_, ReleaseEvent::Unavailable) => {
+            ReleaseEvent::Unavailable => {
                 self.helper_ready = false;
                 self.helper_pressed_at = None;
                 if let Some(hold) = &mut self.held {
@@ -438,13 +448,8 @@ impl HeldShortcut {
                 );
                 false
             }
-            PortalSignal::SessionClosed(_) | PortalSignal::Disconnected => false,
         };
-        if released {
-            vec![KeyTransition::Released]
-        } else {
-            Vec::new()
-        }
+        released_if(ended_hold)
     }
 
     /// The transitions an activation at portal time `at` stands for: a press,
@@ -552,6 +557,10 @@ impl HeldShortcut {
     }
 }
 
+fn released_if(ended_hold: bool) -> Vec<KeyTransition> {
+    Vec::from_iter(ended_hold.then_some(KeyTransition::Released))
+}
+
 async fn sleep_until(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -607,26 +616,21 @@ async fn actor_loop<P: ShortcutPortal>(
                 }
             }
             signal = signals.recv() => {
-                let Some(signal) = signal else {
-                    notify_capability_lost(
-                        &events,
-                        ShortcutRegistrationError::PortalUnavailable,
-                    );
-                    break;
-                };
-                match signal {
-                    PortalSignal::Transition(TimedTransition { id, .. })
-                        if active.is_some_and(|(active_id, _)| active_id == id) =>
-                    {
-                        for transition in held.key_signal(signal, Instant::now()) {
-                            let _ = events.send(ShortcutEvent::Transition { id, transition });
+                match signal.unwrap_or(PortalSignal::Disconnected) {
+                    PortalSignal::Transition(timed) => {
+                        if let Some((id, _)) = active
+                            && id == timed.id
+                        {
+                            for transition in held.portal(timed, Instant::now()) {
+                                let _ = events.send(ShortcutEvent::Transition { id, transition });
+                            }
                         }
                     }
-                    PortalSignal::ReleaseWatcher(token, _) => {
+                    PortalSignal::ReleaseWatcher(token, event) => {
                         if let Some((id, active_token)) = active
                             && active_token == token
                         {
-                            for transition in held.key_signal(signal, Instant::now()) {
+                            for transition in held.helper(event, Instant::now()) {
                                 let _ = events.send(ShortcutEvent::Transition { id, transition });
                             }
                         }
@@ -643,13 +647,11 @@ async fn actor_loop<P: ShortcutPortal>(
                             );
                         }
                     }
-                    PortalSignal::Transition(_) => {}
                     PortalSignal::Disconnected => {
                         notify_capability_lost(
                             &events,
                             ShortcutRegistrationError::PortalUnavailable,
                         );
-                        portal.shutdown().await;
                         break;
                     }
                 }
@@ -657,6 +659,11 @@ async fn actor_loop<P: ShortcutPortal>(
         }
     }
     portal.shutdown().await;
+}
+
+enum Arrival {
+    Transition(TimedTransition),
+    Ended,
 }
 
 /// Transitions already queued are sorted by compositor timestamp before they are forwarded, so
@@ -667,22 +674,27 @@ async fn forward_ordered_transitions(
     second: impl Stream<Item = TimedTransition>,
     signals: &mpsc::UnboundedSender<PortalSignal>,
 ) {
-    // `None` marks the end of either signal stream.
     let merged = stream::select(
-        first.map(Some).chain(stream::once(future::ready(None))),
-        second.map(Some).chain(stream::once(future::ready(None))),
+        first
+            .map(Arrival::Transition)
+            .chain(stream::once(future::ready(Arrival::Ended))),
+        second
+            .map(Arrival::Transition)
+            .chain(stream::once(future::ready(Arrival::Ended))),
     );
     let mut merged = std::pin::pin!(merged);
     let mut batch = Vec::new();
-    while let Some(Some(next)) = merged.next().await {
+    while let Some(Arrival::Transition(next)) = merged.next().await {
         batch.push(next);
         let mut ended = false;
         while let Some(queued) = merged.next().now_or_never() {
-            let Some(transition) = queued.flatten() else {
-                ended = true;
-                break;
-            };
-            batch.push(transition);
+            match queued {
+                Some(Arrival::Transition(transition)) => batch.push(transition),
+                Some(Arrival::Ended) | None => {
+                    ended = true;
+                    break;
+                }
+            }
         }
         batch.sort_by_key(TimedTransition::order);
         for transition in batch.drain(..) {
@@ -886,7 +898,7 @@ mod tests {
             Err(ShortcutRegistrationError::PortalUnavailable)
         );
 
-        let coordinator = crate::shortcuts::ShortcutCoordinator::new(
+        let shortcuts = crate::shortcuts::Shortcuts::new(
             Arc::new(registrar),
             Some(crate::shortcuts::RecordingBinding {
                 mode: whispernow_domain::RecordingMode::Hold,
@@ -895,9 +907,9 @@ mod tests {
             Arc::new(|| true),
             Some(ShortcutRegistrationError::PermissionDenied),
         );
-        assert!(!coordinator.registration_active());
+        assert!(!shortcuts.registration_active());
         assert_eq!(
-            coordinator.failure(),
+            shortcuts.failure(),
             Some(ShortcutRegistrationError::PermissionDenied)
         );
     }
@@ -972,6 +984,74 @@ mod tests {
             .expect("press");
         actor.expect(1, KeyTransition::Pressed).await;
         actor.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_transition_for_another_shortcut_is_ignored() {
+        let mut actor = Actor::spawn(FakePortal::default());
+        actor.register(1).await.expect("registered");
+        actor
+            .signals
+            .send(PortalSignal::Transition(timed(
+                1000,
+                2,
+                KeyTransition::Pressed,
+            )))
+            .expect("other press");
+        actor
+            .signals
+            .send(PortalSignal::SessionClosed(SessionToken(1)))
+            .expect("closed");
+
+        assert_eq!(
+            actor.events.recv().await,
+            Some(ShortcutEvent::CapabilityLost(
+                ShortcutRegistrationError::SessionClosed
+            ))
+        );
+        actor.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_lost_portal_connection_reports_the_capability_lost_and_stops_the_actor() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let mut actor = Actor::spawn(FakePortal {
+            stopped: Arc::clone(&stopped),
+            ..FakePortal::default()
+        });
+        actor.register(1).await.expect("registered");
+        actor
+            .signals
+            .send(PortalSignal::Disconnected)
+            .expect("disconnected");
+
+        assert_eq!(
+            actor.events.recv().await,
+            Some(ShortcutEvent::CapabilityLost(
+                ShortcutRegistrationError::PortalUnavailable
+            ))
+        );
+        actor.task.await.expect("actor");
+        assert!(stopped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn a_closed_signal_channel_is_a_lost_portal_connection() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let mut actor = Actor::spawn(FakePortal {
+            stopped: Arc::clone(&stopped),
+            ..FakePortal::default()
+        });
+        drop(actor.signals);
+
+        assert_eq!(
+            actor.events.recv().await,
+            Some(ShortcutEvent::CapabilityLost(
+                ShortcutRegistrationError::PortalUnavailable
+            ))
+        );
+        actor.task.await.expect("actor");
+        assert!(stopped.load(Ordering::Acquire));
     }
 
     #[tokio::test]
@@ -1156,14 +1236,8 @@ mod tests {
     fn a_ready_helper_keeps_a_hold_active_when_key_repeats_pause() {
         let now = Instant::now();
         let mut held = HeldShortcut::default();
-        held.key_signal(
-            PortalSignal::ReleaseWatcher(SessionToken(1), ReleaseEvent::Ready),
-            now,
-        );
-        held.key_signal(
-            PortalSignal::ReleaseWatcher(SessionToken(1), ReleaseEvent::Held(Duration::ZERO)),
-            now,
-        );
+        held.helper(ReleaseEvent::Ready, now);
+        held.helper(ReleaseEvent::Held(Duration::ZERO), now);
         assert_eq!(
             held.activated(Duration::ZERO, now),
             [KeyTransition::Pressed]
@@ -1180,20 +1254,11 @@ mod tests {
         let mut held = HeldShortcut::default();
         held.activated(Duration::ZERO, now);
         assert!(held.next_deadline().is_some());
-        held.key_signal(
-            PortalSignal::ReleaseWatcher(SessionToken(1), ReleaseEvent::Ready),
-            now,
-        );
+        held.helper(ReleaseEvent::Ready, now);
         assert!(held.next_deadline().is_some());
-        held.key_signal(
-            PortalSignal::ReleaseWatcher(SessionToken(1), ReleaseEvent::Held(Duration::ZERO)),
-            now,
-        );
+        held.helper(ReleaseEvent::Held(Duration::ZERO), now);
         assert_eq!(held.next_deadline(), None);
-        held.key_signal(
-            PortalSignal::ReleaseWatcher(SessionToken(1), ReleaseEvent::Unavailable),
-            now,
-        );
+        held.helper(ReleaseEvent::Unavailable, now);
         assert_eq!(held.next_deadline(), Some(now + INITIAL_RELEASE_TIMEOUT));
         assert!(held.expire(now + INITIAL_RELEASE_TIMEOUT));
     }
@@ -1202,18 +1267,9 @@ mod tests {
     fn an_unmatched_helper_press_or_release_does_not_override_the_portal_hold() {
         let now = Instant::now();
         let mut held = HeldShortcut::default();
-        held.key_signal(
-            PortalSignal::ReleaseWatcher(SessionToken(1), ReleaseEvent::Ready),
-            now,
-        );
+        held.helper(ReleaseEvent::Ready, now);
         held.activated(Duration::from_secs(1), now);
-        held.key_signal(
-            PortalSignal::ReleaseWatcher(
-                SessionToken(1),
-                ReleaseEvent::Held(Duration::from_secs(2)),
-            ),
-            now,
-        );
+        held.helper(ReleaseEvent::Held(Duration::from_secs(2)), now);
         assert!(!held.key_released(Duration::from_millis(2100)));
         assert_eq!(held.next_deadline(), Some(now + INITIAL_RELEASE_TIMEOUT));
         assert!(held.expire(now + INITIAL_RELEASE_TIMEOUT));
@@ -1223,34 +1279,19 @@ mod tests {
     fn a_short_released_tap_cannot_restart_from_a_stale_repeat() {
         let now = Instant::now();
         let mut held = HeldShortcut::default();
-        held.key_signal(
-            PortalSignal::ReleaseWatcher(SessionToken(1), ReleaseEvent::Ready),
-            now,
-        );
-        held.key_signal(
-            PortalSignal::ReleaseWatcher(SessionToken(1), ReleaseEvent::Held(Duration::ZERO)),
-            now,
-        );
+        held.helper(ReleaseEvent::Ready, now);
+        held.helper(ReleaseEvent::Held(Duration::ZERO), now);
         assert_eq!(
             held.activated(Duration::ZERO, now),
             [KeyTransition::Pressed]
         );
         assert_eq!(
-            held.key_signal(
-                PortalSignal::Transition(timed(20, 1, KeyTransition::Released)),
-                now
-            ),
+            held.portal(timed(20, 1, KeyTransition::Released), now),
             [KeyTransition::Released]
         );
         assert!(!held.key_released(Duration::from_millis(22)));
         assert!(held.activated(Duration::from_millis(40), now).is_empty());
-        held.key_signal(
-            PortalSignal::ReleaseWatcher(
-                SessionToken(1),
-                ReleaseEvent::Held(Duration::from_millis(60)),
-            ),
-            now,
-        );
+        held.helper(ReleaseEvent::Held(Duration::from_millis(60)), now);
         assert_eq!(
             held.activated(Duration::from_millis(60), now),
             [KeyTransition::Pressed]

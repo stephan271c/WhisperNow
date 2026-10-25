@@ -17,8 +17,8 @@ pub(super) struct Opaque {
     _private: [u8; 0],
 }
 
-pub(super) type Model = Opaque;
-pub(super) type Context = Opaque;
+pub(super) type RawModel = Opaque;
+pub(super) type RawContext = Opaque;
 pub(super) type Vocab = Opaque;
 pub(super) type Memory = Opaque;
 pub(super) type Device = *mut Opaque;
@@ -183,30 +183,30 @@ api! {
         llama_backend_init: fn();
         llama_log_set: fn(Option<LogCallback>, *mut c_void);
         llama_model_default_params: fn() -> ModelParams;
-        llama_model_load_from_file: fn(*const c_char, ModelParams) -> *mut Model;
-        llama_model_free: fn(*mut Model);
-        llama_model_get_vocab: fn(*const Model) -> *const Vocab;
-        llama_model_n_swa: fn(*const Model) -> i32;
+        llama_model_load_from_file: fn(*const c_char, ModelParams) -> *mut RawModel;
+        llama_model_free: fn(*mut RawModel);
+        llama_model_get_vocab: fn(*const RawModel) -> *const Vocab;
+        llama_model_n_swa: fn(*const RawModel) -> i32;
         llama_vocab_n_tokens: fn(*const Vocab) -> i32;
         llama_vocab_is_eog: fn(*const Vocab, Token) -> bool;
         llama_vocab_bos: fn(*const Vocab) -> Token;
         llama_vocab_get_suppress_tokens: fn(*const Vocab, *mut i32) -> *const Token;
         llama_context_default_params: fn() -> ContextParams;
-        llama_init_from_model: fn(*mut Model, ContextParams) -> *mut Context;
-        llama_free: fn(*mut Context);
-        llama_n_ctx: fn(*const Context) -> u32;
-        llama_n_batch: fn(*const Context) -> u32;
-        llama_n_ubatch: fn(*const Context) -> u32;
-        llama_n_rs_seq: fn(*const Context) -> u32;
-        llama_get_memory: fn(*const Context) -> *mut Memory;
+        llama_init_from_model: fn(*mut RawModel, ContextParams) -> *mut RawContext;
+        llama_free: fn(*mut RawContext);
+        llama_n_ctx: fn(*const RawContext) -> u32;
+        llama_n_batch: fn(*const RawContext) -> u32;
+        llama_n_ubatch: fn(*const RawContext) -> u32;
+        llama_n_rs_seq: fn(*const RawContext) -> u32;
+        llama_get_memory: fn(*const RawContext) -> *mut Memory;
         llama_memory_clear: fn(*mut Memory, bool);
         llama_memory_seq_rm: fn(*mut Memory, i32, i32, i32) -> bool;
         llama_tokenize: fn(*const Vocab, *const c_char, i32, *mut Token, i32, bool, bool) -> i32;
         llama_token_to_piece: fn(*const Vocab, Token, *mut c_char, i32, i32, bool) -> i32;
         llama_batch_init: fn(i32, i32, i32) -> Batch;
         llama_batch_free: fn(Batch);
-        llama_decode: fn(*mut Context, Batch) -> i32;
-        llama_get_logits_ith: fn(*mut Context, i32) -> *mut f32;
-        llama_synchronize: fn(*mut Context);
+        llama_decode: fn(*mut RawContext, Batch) -> i32;
+        llama_get_logits_ith: fn(*mut RawContext, i32) -> *mut f32;
+        llama_synchronize: fn(*mut RawContext);
     }
 }

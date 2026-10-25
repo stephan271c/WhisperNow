@@ -16,7 +16,7 @@ use whispernow_domain::ipc::{
 use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_platform::open_url;
 
-use crate::services::{Dictation, NativeServices};
+use crate::services::{Backend, Dictation};
 
 pub(crate) const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_hours(6);
 const MAX_RELEASE_NOTES_BYTES: usize = 8 * 1024;
@@ -304,15 +304,15 @@ impl<U> Updates<U> {
 
 pub(crate) struct UpdateController {
     app: AppHandle,
-    services: Arc<NativeServices>,
+    backend: Arc<Backend>,
     updates: Mutex<Updates<Update>>,
 }
 
 impl UpdateController {
-    pub(crate) fn new(app: AppHandle, services: Arc<NativeServices>, enabled: bool) -> Arc<Self> {
+    pub(crate) fn new(app: AppHandle, backend: Arc<Backend>, enabled: bool) -> Arc<Self> {
         Arc::new(Self {
             app,
-            services,
+            backend,
             updates: Mutex::new(Updates::new(enabled)),
         })
     }
@@ -330,7 +330,7 @@ impl UpdateController {
     fn update<T>(&self, change: impl FnOnce(&mut Updates<Update>) -> T) -> T {
         let mut updates = self.lock();
         let result = change(&mut updates);
-        self.services
+        self.backend
             .state
             .events()
             .publish(EventPayload::UpdateChanged {
@@ -350,7 +350,7 @@ impl UpdateController {
     }
 
     pub(crate) async fn check_manual(&self) -> Result<UpdateState, AppError> {
-        self.services.state.refuse_during_maintenance()?;
+        self.backend.state.refuse_during_maintenance()?;
         Ok(self.check(true).await)
     }
 
@@ -376,10 +376,10 @@ impl UpdateController {
         }
         let update = builder
             .build()
-            .map_err(|error| updater_error(error, UpdaterPhase::Check))?
+            .map_err(|error| updater_error(error, UpdateStep::Check))?
             .check()
             .await
-            .map_err(|error| updater_error(error, UpdaterPhase::Check))?;
+            .map_err(|error| updater_error(error, UpdateStep::Check))?;
         let Some(update) = update else {
             self.update(Updates::up_to_date);
             return Ok(());
@@ -409,7 +409,7 @@ impl UpdateController {
                 || {},
             )
             .await
-            .map_err(|error| updater_error(error, UpdaterPhase::Download))?;
+            .map_err(|error| updater_error(error, UpdateStep::Download))?;
         self.update(|updates| updates.downloaded(update, bytes));
         Ok(())
     }
@@ -440,7 +440,7 @@ impl UpdateController {
     }
 
     pub(crate) async fn restart_to_update(self: &Arc<Self>) -> Result<UpdateState, AppError> {
-        let dictating = self.services.state.snapshot().phase.is_busy();
+        let dictating = self.backend.state.snapshot().phase.is_busy();
         let Some(ready) = self.update(|updates| updates.take_ready(dictating)) else {
             return Ok(self.snapshot());
         };
@@ -448,7 +448,7 @@ impl UpdateController {
         let worker_ready = Arc::clone(&ready);
         let result = tokio::task::spawn_blocking(move || controller.install(worker_ready)).await;
         self.update(|updates| {
-            updates.finish_install_worker(result, ready, &self.services.dictation)
+            updates.finish_install_worker(result, ready, &self.backend.dictation)
         })?;
         Ok(self.snapshot())
     }
@@ -456,7 +456,7 @@ impl UpdateController {
     /// Runs on a blocking worker: waiting for the dictation, installing and shutting down all
     /// block.
     fn install(&self, ready: Arc<ReadyUpdate<Update>>) -> Result<(), AppError> {
-        let dictation = &self.services.dictation;
+        let dictation = &self.backend.dictation;
         if let Err(error) = dictation.begin_update() {
             self.update(|updates| updates.restore_ready(ready, None));
             return Err(error);
@@ -469,7 +469,7 @@ impl UpdateController {
             }
             Err(error) => {
                 dictation.end_update();
-                let code = updater_error(error, UpdaterPhase::Install);
+                let code = updater_error(error, UpdateStep::Install);
                 self.update(|updates| updates.restore_ready(ready, Some(code)));
             }
         }
@@ -586,16 +586,16 @@ pub(crate) fn open_update_release_page(
 }
 
 #[derive(Clone, Copy, Debug)]
-enum UpdaterPhase {
+enum UpdateStep {
     Check,
     Download,
     Install,
 }
 
-fn updater_error(error: tauri_plugin_updater::Error, phase: UpdaterPhase) -> UpdateError {
+fn updater_error(error: tauri_plugin_updater::Error, step: UpdateStep) -> UpdateError {
     use tauri_plugin_updater::Error;
 
-    tracing::warn!(%error, ?phase, "update failed");
+    tracing::warn!(%error, ?step, "update failed");
     match error {
         Error::Minisign(_) | Error::Base64(_) | Error::SignatureUtf8(_) => {
             UpdateError::InvalidSignature
@@ -609,26 +609,26 @@ fn updater_error(error: tauri_plugin_updater::Error, phase: UpdaterPhase) -> Upd
         }
         Error::ReleaseNotFound => UpdateError::ServerUnavailable,
         Error::Reqwest(error) if error.is_connect() => UpdateError::Offline,
-        Error::Reqwest(_) | Error::Network(_) => match phase {
-            UpdaterPhase::Check => UpdateError::ServerUnavailable,
-            UpdaterPhase::Download => UpdateError::DownloadInterrupted,
-            UpdaterPhase::Install => UpdateError::InstallFailed,
+        Error::Reqwest(_) | Error::Network(_) => match step {
+            UpdateStep::Check => UpdateError::ServerUnavailable,
+            UpdateStep::Download => UpdateError::DownloadInterrupted,
+            UpdateStep::Install => UpdateError::InstallFailed,
         },
-        Error::Io(error) => match phase {
-            UpdaterPhase::Install => match error.kind() {
+        Error::Io(error) => match step {
+            UpdateStep::Install => match error.kind() {
                 std::io::ErrorKind::PermissionDenied => UpdateError::InsufficientPrivileges,
                 std::io::ErrorKind::ReadOnlyFilesystem => UpdateError::ReadOnlyFilesystem,
                 _ => UpdateError::InstallFailed,
             },
-            UpdaterPhase::Download => UpdateError::DownloadInterrupted,
-            UpdaterPhase::Check => UpdateError::Internal,
+            UpdateStep::Download => UpdateError::DownloadInterrupted,
+            UpdateStep::Check => UpdateError::Internal,
         },
         Error::DebInstallFailed | Error::PackageInstallFailed | Error::InvalidUpdaterFormat => {
             UpdateError::InstallFailed
         }
-        _ => match phase {
-            UpdaterPhase::Install => UpdateError::InstallFailed,
-            UpdaterPhase::Check | UpdaterPhase::Download => UpdateError::Internal,
+        _ => match step {
+            UpdateStep::Install => UpdateError::InstallFailed,
+            UpdateStep::Check | UpdateStep::Download => UpdateError::Internal,
         },
     }
 }
@@ -1023,12 +1023,12 @@ mod tests {
             (std::io::ErrorKind::Other, UpdateError::InstallFailed),
         ] {
             let error = tauri_plugin_updater::Error::Io(std::io::Error::from(kind));
-            assert_eq!(updater_error(error, UpdaterPhase::Install), expected);
+            assert_eq!(updater_error(error, UpdateStep::Install), expected);
         }
         assert_eq!(
             updater_error(
                 tauri_plugin_updater::Error::Io(std::io::Error::other("download")),
-                UpdaterPhase::Download,
+                UpdateStep::Download,
             ),
             UpdateError::DownloadInterrupted
         );

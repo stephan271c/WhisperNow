@@ -40,142 +40,140 @@ fn hold(key: &str) -> RecordingBinding {
     recording(key, RecordingMode::Hold)
 }
 
-/// A coordinator with Ctrl+`key` registered for hold-to-record and a switch for whether
+/// A shortcuts with Ctrl+`key` registered for hold-to-record and a switch for whether
 /// dictation is enabled.
-fn switchable_memory_coordinator(
-    key: &str,
-) -> (Arc<MemoryRegistrar>, Arc<AtomicBool>, ShortcutCoordinator) {
+fn switchable_memory_shortcuts(key: &str) -> (Arc<MemoryRegistrar>, Arc<AtomicBool>, Shortcuts) {
     let registrar = Arc::new(MemoryRegistrar::default());
     let (running, probe) = lifecycle_switch();
-    let coordinator = ShortcutCoordinator::new(registrar.clone(), Some(hold(key)), probe, None);
-    (registrar, running, coordinator)
+    let shortcuts = Shortcuts::new(registrar.clone(), Some(hold(key)), probe, None);
+    (registrar, running, shortcuts)
 }
 
-fn memory_coordinator(key: &str) -> (Arc<MemoryRegistrar>, ShortcutCoordinator) {
-    let (registrar, _running, coordinator) = switchable_memory_coordinator(key);
-    (registrar, coordinator)
+fn memory_shortcuts(key: &str) -> (Arc<MemoryRegistrar>, Shortcuts) {
+    let (registrar, _running, shortcuts) = switchable_memory_shortcuts(key);
+    (registrar, shortcuts)
 }
 
-/// A coordinator with a registered Ctrl+F1 hold shortcut and the Escape cancel shortcut.
+/// A shortcuts with a registered Ctrl+F1 hold shortcut and the Escape cancel shortcut.
 fn cancel_fixture() -> (
     Arc<MemoryRegistrar>,
     Arc<AtomicBool>,
-    ShortcutCoordinator,
+    Shortcuts,
     ShortcutBinding,
 ) {
-    let (registrar, running, coordinator) = switchable_memory_coordinator("F1");
+    let (registrar, running, shortcuts) = switchable_memory_shortcuts("F1");
     let cancel = escape();
-    coordinator.set_cancel_binding(Some(cancel.clone()));
-    (registrar, running, coordinator, cancel)
+    shortcuts.set_cancel_binding(Some(cancel.clone()));
+    (registrar, running, shortcuts, cancel)
 }
 
 #[test]
 fn cancel_shortcut_is_registered_while_a_dictation_runs_and_unregistered_when_idle() {
-    let (registrar, _running, coordinator, cancel) = cancel_fixture();
+    let (registrar, _running, shortcuts, cancel) = cancel_fixture();
     assert!(!registrar.holds(&cancel), "Escape is free while idle");
-    assert_eq!(coordinator.input(cancel.id, KeyTransition::Pressed), None);
-    coordinator.input(cancel.id, KeyTransition::Released);
+    assert_eq!(shortcuts.input(cancel.id, KeyTransition::Pressed), None);
+    shortcuts.input(cancel.id, KeyTransition::Released);
 
     // Recording, then processing: both snapshots have a dictation.
-    assert!(coordinator.observe_dictation(true));
-    coordinator.sync_cancel_shortcut();
+    assert!(shortcuts.observe_dictation(true));
+    shortcuts.sync_cancel_shortcut();
     assert!(registrar.holds(&cancel));
-    assert!(!coordinator.observe_dictation(true), "processing keeps it");
+    assert!(!shortcuts.observe_dictation(true), "processing keeps it");
     assert_eq!(
-        coordinator.input(cancel.id, KeyTransition::Pressed),
+        shortcuts.input(cancel.id, KeyTransition::Pressed),
         Some(ShortcutAction::CancelDictation)
     );
     assert_eq!(
-        coordinator.input(cancel.id, KeyTransition::Pressed),
+        shortcuts.input(cancel.id, KeyTransition::Pressed),
         None,
         "a key repeat does not cancel again"
     );
-    assert_eq!(coordinator.input(cancel.id, KeyTransition::Released), None);
+    assert_eq!(shortcuts.input(cancel.id, KeyTransition::Released), None);
 
-    assert!(coordinator.observe_dictation(false));
-    coordinator.sync_cancel_shortcut();
+    assert!(shortcuts.observe_dictation(false));
+    shortcuts.sync_cancel_shortcut();
     assert!(!registrar.holds(&cancel), "Escape is returned when idle");
-    assert_eq!(coordinator.input(cancel.id, KeyTransition::Pressed), None);
-    assert_eq!(coordinator.cancel_registration_failure(), None);
+    assert_eq!(shortcuts.input(cancel.id, KeyTransition::Pressed), None);
+    assert_eq!(shortcuts.cancel_registration_failure(), None);
 }
 
 #[test]
 fn cancel_shortcut_stays_unregistered_while_paused_capturing_or_behind_a_portal() {
-    let (registrar, running, coordinator, cancel) = cancel_fixture();
-    coordinator.observe_dictation(true);
+    let (registrar, running, shortcuts, cancel) = cancel_fixture();
+    shortcuts.observe_dictation(true);
 
     running.store(false, Ordering::SeqCst);
-    coordinator.sync_lifecycle().expect("pause");
+    shortcuts.sync_lifecycle().expect("pause");
     assert!(!registrar.holds(&cancel));
     running.store(true, Ordering::SeqCst);
-    coordinator.sync_lifecycle().expect("resume");
+    shortcuts.sync_lifecycle().expect("resume");
     assert!(registrar.holds(&cancel));
 
-    coordinator.suspend_for_capture().expect("capture");
+    shortcuts.suspend_for_capture().expect("capture");
     assert!(!registrar.holds(&cancel));
-    coordinator.resume_after_capture().expect("end capture");
+    shortcuts.resume_after_capture().expect("end capture");
     assert!(registrar.holds(&cancel));
 
-    coordinator.set_cancel_binding(None);
+    shortcuts.set_cancel_binding(None);
     assert!(!registrar.holds(&cancel), "turning it off unregisters");
     registrar.refuses_transient.store(true, Ordering::SeqCst);
-    coordinator.set_cancel_binding(Some(cancel.clone()));
+    shortcuts.set_cancel_binding(Some(cancel.clone()));
     assert!(!registrar.holds(&cancel));
 
     registrar.refuses_transient.store(false, Ordering::SeqCst);
-    coordinator.sync_cancel_shortcut();
+    shortcuts.sync_cancel_shortcut();
     assert!(registrar.holds(&cancel));
-    coordinator.shutdown();
+    shortcuts.shutdown();
     assert!(registrar.registered().is_empty());
 }
 
 #[test]
 fn a_refused_cancel_shortcut_is_reported_quietly_and_recording_shortcuts_keep_working() {
-    let (registrar, _running, coordinator, cancel) = cancel_fixture();
+    let (registrar, _running, shortcuts, cancel) = cancel_fixture();
     *registrar.fail_register.lock().expect("fail register") = Some(cancel.id.0);
-    coordinator.observe_dictation(true);
-    coordinator.sync_cancel_shortcut();
+    shortcuts.observe_dictation(true);
+    shortcuts.sync_cancel_shortcut();
 
     assert!(!registrar.holds(&cancel));
     assert_eq!(
-        coordinator.cancel_registration_failure(),
+        shortcuts.cancel_registration_failure(),
         Some(ShortcutRegistrationError::ConflictOrUnsupported)
     );
-    assert!(coordinator.registration_active());
-    assert_eq!(coordinator.failure(), None);
+    assert!(shortcuts.registration_active());
+    assert_eq!(shortcuts.failure(), None);
     assert_eq!(
-        coordinator.input(binding_id("F1"), KeyTransition::Pressed),
+        shortcuts.input(binding_id("F1"), KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
     );
 
     *registrar.fail_register.lock().expect("fail register") = None;
-    coordinator.observe_dictation(false);
-    coordinator.sync_cancel_shortcut();
-    coordinator.observe_dictation(true);
-    coordinator.sync_cancel_shortcut();
+    shortcuts.observe_dictation(false);
+    shortcuts.sync_cancel_shortcut();
+    shortcuts.observe_dictation(true);
+    shortcuts.sync_cancel_shortcut();
     assert!(registrar.holds(&cancel), "the next dictation retries");
-    assert_eq!(coordinator.cancel_registration_failure(), None);
+    assert_eq!(shortcuts.cancel_registration_failure(), None);
 }
 
 #[test]
 fn a_cancel_press_whose_release_was_lost_does_not_swallow_the_next_cancel() {
-    let (registrar, _running, coordinator, cancel) = cancel_fixture();
-    coordinator.observe_dictation(true);
-    coordinator.sync_cancel_shortcut();
+    let (registrar, _running, shortcuts, cancel) = cancel_fixture();
+    shortcuts.observe_dictation(true);
+    shortcuts.sync_cancel_shortcut();
     assert_eq!(
-        coordinator.input(cancel.id, KeyTransition::Pressed),
+        shortcuts.input(cancel.id, KeyTransition::Pressed),
         Some(ShortcutAction::CancelDictation)
     );
     // The cancel ends the dictation, and Escape is unregistered before its
     // release arrives, so the release is never delivered.
-    coordinator.observe_dictation(false);
-    coordinator.sync_cancel_shortcut();
+    shortcuts.observe_dictation(false);
+    shortcuts.sync_cancel_shortcut();
     assert!(!registrar.holds(&cancel));
 
-    coordinator.observe_dictation(true);
-    coordinator.sync_cancel_shortcut();
+    shortcuts.observe_dictation(true);
+    shortcuts.sync_cancel_shortcut();
     assert_eq!(
-        coordinator.input(cancel.id, KeyTransition::Pressed),
+        shortcuts.input(cancel.id, KeyTransition::Pressed),
         Some(ShortcutAction::CancelDictation),
         "the next dictation's first press cancels"
     );
@@ -183,67 +181,67 @@ fn a_cancel_press_whose_release_was_lost_does_not_swallow_the_next_cancel() {
 
 #[test]
 fn a_cancel_shortcut_that_could_not_be_released_is_released_by_the_next_sync() {
-    let (registrar, _running, coordinator, cancel) = cancel_fixture();
-    coordinator.observe_dictation(true);
-    coordinator.sync_cancel_shortcut();
+    let (registrar, _running, shortcuts, cancel) = cancel_fixture();
+    shortcuts.observe_dictation(true);
+    shortcuts.sync_cancel_shortcut();
     *registrar.fail_unregister.lock().expect("fail unregister") = Some(cancel.id.0);
 
-    coordinator.observe_dictation(false);
-    coordinator.sync_cancel_shortcut();
+    shortcuts.observe_dictation(false);
+    shortcuts.sync_cancel_shortcut();
     assert!(registrar.holds(&cancel));
     assert_eq!(
-        coordinator.cancel_registration_failure(),
+        shortcuts.cancel_registration_failure(),
         Some(ShortcutRegistrationError::ConflictOrUnsupported)
     );
 
     *registrar.fail_unregister.lock().expect("fail unregister") = None;
-    coordinator.sync_lifecycle().expect("a later sync");
+    shortcuts.sync_lifecycle().expect("a later sync");
     assert!(!registrar.holds(&cancel));
 }
 
 #[test]
 fn a_changed_mode_keeps_the_shortcut_registered_and_a_changed_key_replaces_it() {
-    let (registrar, coordinator) = memory_coordinator("F1");
+    let (registrar, shortcuts) = memory_shortcuts("F1");
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F1").0]));
     // Registering the unchanged shortcut again would fail.
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F1").0);
 
-    coordinator
+    shortcuts
         .apply_update(recording("F1", RecordingMode::Toggle))
         .expect("switch to toggle");
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F1").0]));
     assert_eq!(
-        coordinator.input(binding_id("F1"), KeyTransition::Pressed),
+        shortcuts.input(binding_id("F1"), KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Toggle))
     );
 
-    coordinator
+    shortcuts
         .apply_update(recording("F3", RecordingMode::Toggle))
         .expect("replace the key");
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F3").0]));
     assert_eq!(
-        coordinator.input(binding_id("F1"), KeyTransition::Pressed),
+        shortcuts.input(binding_id("F1"), KeyTransition::Pressed),
         None
     );
 }
 
 #[test]
 fn a_refused_shortcut_change_registers_the_previous_shortcut_again() {
-    let (registrar, coordinator) = memory_coordinator("F1");
+    let (registrar, shortcuts) = memory_shortcuts("F1");
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F3").0);
     assert_eq!(
-        coordinator.apply_update(recording("F3", RecordingMode::Toggle)),
+        shortcuts.apply_update(recording("F3", RecordingMode::Toggle)),
         Err(ShortcutRegistrationError::ConflictOrUnsupported)
     );
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F1").0]));
-    assert!(coordinator.registration_active());
-    assert_eq!(coordinator.failure(), None);
+    assert!(shortcuts.registration_active());
+    assert_eq!(shortcuts.failure(), None);
     assert_eq!(
-        coordinator.input(binding_id("F1"), KeyTransition::Pressed),
+        shortcuts.input(binding_id("F1"), KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
     );
     assert_eq!(
-        coordinator.input(binding_id("F3"), KeyTransition::Pressed),
+        shortcuts.input(binding_id("F3"), KeyTransition::Pressed),
         None
     );
 }
@@ -252,25 +250,24 @@ fn a_refused_shortcut_change_registers_the_previous_shortcut_again() {
 fn unavailable_shortcuts_are_reported_and_retried_without_restarting() {
     let registrar = Arc::new(MemoryRegistrar::default());
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F1").0);
-    let coordinator =
-        ShortcutCoordinator::new(registrar.clone(), Some(hold("F1")), always_running(), None);
-    assert!(!coordinator.registration_active());
+    let shortcuts = Shortcuts::new(registrar.clone(), Some(hold("F1")), always_running(), None);
+    assert!(!shortcuts.registration_active());
     assert_eq!(
-        coordinator.failure(),
+        shortcuts.failure(),
         Some(ShortcutRegistrationError::ConflictOrUnsupported)
     );
     assert_eq!(
-        coordinator.input(binding_id("F1"), KeyTransition::Pressed),
+        shortcuts.input(binding_id("F1"), KeyTransition::Pressed),
         None
     );
 
     *registrar.fail_register.lock().expect("fail register") = None;
-    coordinator.sync_lifecycle().expect("retry");
-    assert!(coordinator.registration_active());
-    assert_eq!(coordinator.failure(), None);
+    shortcuts.sync_lifecycle().expect("retry");
+    assert!(shortcuts.registration_active());
+    assert_eq!(shortcuts.failure(), None);
 
     let registered = registrar.registered();
-    let invalid = ShortcutCoordinator::new(registrar.clone(), None, always_running(), None);
+    let invalid = Shortcuts::new(registrar.clone(), None, always_running(), None);
     assert_eq!(
         invalid.failure(),
         None,
@@ -287,18 +284,18 @@ fn unavailable_shortcuts_are_reported_and_retried_without_restarting() {
 #[test]
 fn registration_after_a_backend_startup_timeout_reports_its_actual_result() {
     let registrar = Arc::new(MemoryRegistrar::default());
-    let coordinator = ShortcutCoordinator::new(
+    let shortcuts = Shortcuts::new(
         registrar.clone(),
         Some(hold("F1")),
         always_running(),
         Some(ShortcutRegistrationError::PortalUnavailable),
     );
-    assert!(coordinator.registration_active());
-    assert_eq!(coordinator.failure(), None);
+    assert!(shortcuts.registration_active());
+    assert_eq!(shortcuts.failure(), None);
     assert!(registrar.holds(&binding(&control("F1"))));
 
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F2").0);
-    let conflict = ShortcutCoordinator::new(
+    let conflict = Shortcuts::new(
         registrar,
         Some(hold("F2")),
         always_running(),
@@ -313,12 +310,12 @@ fn registration_after_a_backend_startup_timeout_reports_its_actual_result() {
 
 #[test]
 fn paused_dictation_releases_the_shortcuts_and_resuming_restores_them() {
-    let (registrar, running, coordinator) = switchable_memory_coordinator("F1");
+    let (registrar, running, shortcuts) = switchable_memory_shortcuts("F1");
     running.store(false, Ordering::SeqCst);
-    coordinator.sync_lifecycle().expect("pause");
+    shortcuts.sync_lifecycle().expect("pause");
     assert!(registrar.registered().is_empty());
 
-    coordinator
+    shortcuts
         .apply_update(hold("F2"))
         .expect("a change while paused");
     assert!(
@@ -326,47 +323,47 @@ fn paused_dictation_releases_the_shortcuts_and_resuming_restores_them() {
         "nothing registers while paused"
     );
     assert_eq!(
-        coordinator.input(binding_id("F2"), KeyTransition::Pressed),
+        shortcuts.input(binding_id("F2"), KeyTransition::Pressed),
         None
     );
 
     running.store(true, Ordering::SeqCst);
-    coordinator.sync_lifecycle().expect("resume");
+    shortcuts.sync_lifecycle().expect("resume");
     assert_eq!(registrar.registered(), BTreeSet::from([binding_id("F2").0]));
-    assert!(coordinator.registration_active());
-    coordinator.input(binding_id("F2"), KeyTransition::Released);
+    assert!(shortcuts.registration_active());
+    shortcuts.input(binding_id("F2"), KeyTransition::Released);
     assert_eq!(
-        coordinator.input(binding_id("F2"), KeyTransition::Pressed),
+        shortcuts.input(binding_id("F2"), KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
     );
 }
 
 #[test]
 fn capture_suspension_ignores_presses_and_forgets_held_keys() {
-    let (registrar, running, coordinator) = switchable_memory_coordinator("F1");
+    let (registrar, running, shortcuts) = switchable_memory_shortcuts("F1");
     let hold = binding_id("F1");
     assert_eq!(
-        coordinator.input(hold, KeyTransition::Pressed),
+        shortcuts.input(hold, KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
     );
 
-    coordinator.suspend_for_capture().expect("suspend");
+    shortcuts.suspend_for_capture().expect("suspend");
     assert!(registrar.registered().is_empty());
-    assert_eq!(coordinator.input(hold, KeyTransition::Pressed), None);
-    assert!(coordinator.registration_active());
+    assert_eq!(shortcuts.input(hold, KeyTransition::Pressed), None);
+    assert!(shortcuts.registration_active());
 
     // A pause and resume during the capture keep the shortcuts released.
     running.store(false, Ordering::SeqCst);
-    coordinator.sync_lifecycle().expect("pause");
+    shortcuts.sync_lifecycle().expect("pause");
     running.store(true, Ordering::SeqCst);
-    coordinator.sync_lifecycle().expect("resume");
+    shortcuts.sync_lifecycle().expect("resume");
     assert!(registrar.registered().is_empty());
 
-    coordinator.resume_after_capture().expect("resume");
+    shortcuts.resume_after_capture().expect("resume");
     assert!(!registrar.registered().is_empty());
-    coordinator.input(hold, KeyTransition::Released);
+    shortcuts.input(hold, KeyTransition::Released);
     assert_eq!(
-        coordinator.input(hold, KeyTransition::Pressed),
+        shortcuts.input(hold, KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
     );
 }
@@ -381,29 +378,29 @@ fn presses_ignore_repeats_and_only_hold_releases_reach_the_worker() {
         ),
         (RecordingMode::Toggle, RecordingTrigger::Toggle, None),
     ] {
-        let (_registrar, coordinator) = memory_coordinator("F1");
-        coordinator
+        let (_registrar, shortcuts) = memory_shortcuts("F1");
+        shortcuts
             .apply_update(recording("F2", mode))
             .expect("recording shortcut");
         let binding = binding_id("F2");
         let press = Some(ShortcutAction::Pressed(trigger));
         assert_eq!(
-            coordinator.input(binding, KeyTransition::Pressed),
+            shortcuts.input(binding, KeyTransition::Pressed),
             press,
             "{mode:?}"
         );
         assert_eq!(
-            coordinator.input(binding, KeyTransition::Pressed),
+            shortcuts.input(binding, KeyTransition::Pressed),
             None,
             "{mode:?} repeat"
         );
         assert_eq!(
-            coordinator.input(binding, KeyTransition::Released),
+            shortcuts.input(binding, KeyTransition::Released),
             release,
             "{mode:?}"
         );
         assert_eq!(
-            coordinator.input(binding, KeyTransition::Pressed),
+            shortcuts.input(binding, KeyTransition::Pressed),
             press,
             "{mode:?} next press"
         );
@@ -412,51 +409,51 @@ fn presses_ignore_repeats_and_only_hold_releases_reach_the_worker() {
 
 #[test]
 fn a_key_released_while_paused_presses_again_after_resuming() {
-    let (_registrar, running, coordinator) = switchable_memory_coordinator("F1");
+    let (_registrar, running, shortcuts) = switchable_memory_shortcuts("F1");
     let hold = binding_id("F1");
     let set_running = |value: bool| {
         running.store(value, Ordering::SeqCst);
-        coordinator.sync_lifecycle().expect("lifecycle sync");
+        shortcuts.sync_lifecycle().expect("lifecycle sync");
     };
 
-    coordinator.input(hold, KeyTransition::Pressed);
+    shortcuts.input(hold, KeyTransition::Pressed);
     set_running(false);
-    assert_eq!(coordinator.input(hold, KeyTransition::Released), None);
-    assert_eq!(coordinator.input(hold, KeyTransition::Pressed), None);
+    assert_eq!(shortcuts.input(hold, KeyTransition::Released), None);
+    assert_eq!(shortcuts.input(hold, KeyTransition::Pressed), None);
     set_running(true);
-    coordinator.input(hold, KeyTransition::Released);
+    shortcuts.input(hold, KeyTransition::Released);
     assert_eq!(
-        coordinator.input(hold, KeyTransition::Pressed),
+        shortcuts.input(hold, KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
     );
 }
 
 #[test]
 fn a_release_before_its_press_leaves_nothing_stuck() {
-    let (_registrar, coordinator) = memory_coordinator("F1");
+    let (_registrar, shortcuts) = memory_shortcuts("F1");
     let hold = binding_id("F1");
     assert_eq!(
-        coordinator.input(hold, KeyTransition::Released),
+        shortcuts.input(hold, KeyTransition::Released),
         Some(ShortcutAction::HoldReleased)
     );
     assert_eq!(
-        coordinator.input(hold, KeyTransition::Pressed),
+        shortcuts.input(hold, KeyTransition::Pressed),
         Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
     );
 }
 
 #[test]
 fn a_lost_shortcut_backend_unregisters_everything_and_forgets_held_keys() {
-    let (_registrar, coordinator) = memory_coordinator("F1");
-    coordinator.input(binding_id("F1"), KeyTransition::Pressed);
-    coordinator.capability_lost(ShortcutRegistrationError::SessionClosed);
-    assert!(!coordinator.registration_active());
+    let (_registrar, shortcuts) = memory_shortcuts("F1");
+    shortcuts.input(binding_id("F1"), KeyTransition::Pressed);
+    shortcuts.capability_lost(ShortcutRegistrationError::SessionClosed);
+    assert!(!shortcuts.registration_active());
     assert_eq!(
-        coordinator.failure(),
+        shortcuts.failure(),
         Some(ShortcutRegistrationError::SessionClosed)
     );
     assert_eq!(
-        coordinator.input(binding_id("F1"), KeyTransition::Pressed),
+        shortcuts.input(binding_id("F1"), KeyTransition::Pressed),
         None
     );
 }
@@ -467,7 +464,7 @@ fn a_lost_shortcut_backend_unregisters_everything_and_forgets_held_keys() {
 fn native_registration_never_runs_under_the_input_locks() {
     let registrar = Arc::new(MemoryRegistrar::default());
     let (running, probe) = lifecycle_switch();
-    let coordinator = Arc::new(ShortcutCoordinator::new(
+    let shortcuts = Arc::new(Shortcuts::new(
         registrar.clone(),
         Some(hold("F1")),
         probe,
@@ -476,24 +473,23 @@ fn native_registration_never_runs_under_the_input_locks() {
     let native_calls = Arc::new(AtomicUsize::new(0));
     let locked_calls = Arc::new(AtomicUsize::new(0));
     let (counted, locked) = (Arc::clone(&native_calls), Arc::clone(&locked_calls));
-    let probed = Arc::downgrade(&coordinator);
+    let probed = Arc::downgrade(&shortcuts);
     assert!(
         registrar
             .probe
             .set(Box::new(move || {
-                let Some(coordinator) = probed.upgrade() else {
+                let Some(shortcuts) = probed.upgrade() else {
                     return;
                 };
                 counted.fetch_add(1, Ordering::SeqCst);
-                if coordinator.pressed.try_lock().is_err()
-                    || coordinator.published.try_lock().is_err()
+                if shortcuts.pressed.try_lock().is_err() || shortcuts.published.try_lock().is_err()
                 {
                     locked.fetch_add(1, Ordering::SeqCst);
                 }
             }))
             .is_ok()
     );
-    coordinator.set_cancel_binding(Some(escape()));
+    shortcuts.set_cancel_binding(Some(escape()));
     let calls = || native_calls.load(Ordering::SeqCst);
     let observed = std::cell::Cell::new(calls());
     let native_step = |step: &str| {
@@ -501,26 +497,26 @@ fn native_registration_never_runs_under_the_input_locks() {
         observed.set(calls());
     };
 
-    coordinator.apply_update(hold("F2")).expect("apply update");
+    shortcuts.apply_update(hold("F2")).expect("apply update");
     native_step("apply update");
-    coordinator.observe_dictation(true);
-    coordinator.sync_cancel_shortcut();
+    shortcuts.observe_dictation(true);
+    shortcuts.sync_cancel_shortcut();
     native_step("cancel shortcut");
     running.store(false, Ordering::SeqCst);
-    coordinator.sync_lifecycle().expect("pause");
+    shortcuts.sync_lifecycle().expect("pause");
     native_step("pause");
     running.store(true, Ordering::SeqCst);
-    coordinator.sync_lifecycle().expect("resume");
+    shortcuts.sync_lifecycle().expect("resume");
     native_step("resume");
-    coordinator
+    shortcuts
         .suspend_for_capture()
         .expect("suspend for capture");
     native_step("capture suspension");
-    coordinator
+    shortcuts
         .resume_after_capture()
         .expect("resume after capture");
     native_step("capture resumption");
-    coordinator.shutdown();
+    shortcuts.shutdown();
     native_step("shutdown");
 
     assert_eq!(locked_calls.load(Ordering::SeqCst), 0);

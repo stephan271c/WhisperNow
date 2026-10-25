@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use whispernow_core::{
     CancellationToken,
     llm::{CleanupFallback, LlmService, clean_up},
-    workflow::PreparedTranscription,
+    workflow::PreparedTranscript,
 };
 use whispernow_domain::CleanupTarget;
 use whispernow_platform::SettingsStore;
@@ -25,7 +25,7 @@ pub(crate) struct AiCleanup {
 impl AiCleanup {
     pub(super) fn apply(
         &self,
-        prepared: &mut PreparedTranscription,
+        prepared: &mut PreparedTranscript,
         plan: &CleanupPlan,
         cancellation: &CancellationToken,
     ) {

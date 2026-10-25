@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{
     ActiveDownload, AppState, CleanupDevice, ClearDataItem, ClearDataResult, DataLocation,
-    EventPayload, MainWindowSection, MicrophoneTestResponse, ModelState, ModelSummary, Phase,
-    SaveSettingsResponse, SettingsView,
+    DataPlace, EventPayload, MainWindowSection, MicrophoneTestResponse, ModelState, ModelSummary,
+    Phase, SaveSettingsResponse, SettingsView,
 };
 use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{
@@ -1627,13 +1627,21 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
     assert_eq!(fake::count("data_locations"), 1);
     fake::answer(
         "data_locations",
-        Ok(vec![DataLocation {
-            category: ClearDataCategory::History,
-            path: "/data/history.sqlite3".into(),
-        }]),
+        Ok(vec![
+            DataLocation {
+                category: ClearDataCategory::History,
+                place: DataPlace::Path("/data/history.sqlite3".into()),
+            },
+            DataLocation {
+                category: ClearDataCategory::Settings,
+                place: DataPlace::CredentialStore,
+            },
+        ]),
     );
     page.settle();
-    assert!(page.html().contains("/data/history.sqlite3"));
+    let listed = page.html();
+    assert!(listed.contains("/data/history.sqlite3"));
+    assert!(listed.contains("OS credential store: saved LLM API keys"));
 
     open(&mut page, &["execute-clear-data"]);
     open(&mut page, &["execute-clear-data-confirm"]);
@@ -1647,19 +1655,32 @@ fn clearing_data_lists_where_it_lives_and_removes_it_after_a_confirmation() {
     fake::answer(
         "clear_data",
         Ok(ClearDataResult {
-            items: vec![ClearDataItem {
-                location: DataLocation {
-                    category: ClearDataCategory::History,
-                    path: "/data/history.sqlite3".into(),
+            items: vec![
+                ClearDataItem {
+                    location: DataLocation {
+                        category: ClearDataCategory::History,
+                        place: DataPlace::Path("/data/history.sqlite3".into()),
+                    },
+                    deleted: true,
                 },
-                deleted: true,
-            }],
+                ClearDataItem {
+                    location: DataLocation {
+                        category: ClearDataCategory::History,
+                        place: DataPlace::HistoryEntries,
+                    },
+                    deleted: true,
+                },
+            ],
             restart_required: false,
         }),
     );
     page.settle();
     let html = page.html();
     assert!(html.contains("Removed"), "{html}");
+    assert!(
+        html.contains("History entries, recordings, and legacy files"),
+        "{html}"
+    );
     for read in ["get_state", "get_settings", "list_models", "get_history"] {
         assert_eq!(
             fake::count(read),

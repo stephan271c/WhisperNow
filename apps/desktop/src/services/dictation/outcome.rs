@@ -1,7 +1,7 @@
 use whispernow_core::{
     audio::TARGET_SAMPLE_RATE,
     llm::{CleanupFallback, LlmError},
-    workflow::{PipelineFailureKind, PreparedTranscription, has_microphone_audio},
+    workflow::{PreparedTranscript, TranscriptFailure, has_microphone_audio},
 };
 use whispernow_domain::ipc::{Phase, SetupTestResult};
 use whispernow_domain::{AppError, ErrorCategory};
@@ -111,26 +111,24 @@ impl Worker {
         Outcome::Failed(error)
     }
 
-    pub(super) fn pipeline_failure(
+    pub(super) fn transcript_failure(
         &self,
         recording: &Recording,
         samples: &[f32],
-        kind: PipelineFailureKind,
+        failure: TranscriptFailure,
     ) -> Outcome {
-        let error = pipeline_error(kind);
-        match kind {
-            PipelineFailureKind::NoAudio | PipelineFailureKind::NoSpeech => {
+        let error = transcript_error(failure);
+        match failure {
+            TranscriptFailure::NoAudio | TranscriptFailure::NoSpeech => {
                 if recording.trigger.is_setup_test() {
                     Outcome::HeardNothing
                 } else {
                     Outcome::Failed(error)
                 }
             }
-            PipelineFailureKind::RecognitionFailed
-            | PipelineFailureKind::EmptyTranscription
-            | PipelineFailureKind::UnknownTokens => {
-                self.failed_with_audio(recording, samples, error)
-            }
+            TranscriptFailure::RecognitionFailed
+            | TranscriptFailure::EmptyTranscript
+            | TranscriptFailure::UnknownTokens => self.failed_with_audio(recording, samples, error),
         }
     }
 
@@ -193,7 +191,7 @@ impl Worker {
 }
 
 pub(super) enum NewEntry<'a> {
-    Transcribed(&'a PreparedTranscription),
+    Transcribed(&'a PreparedTranscript),
     Untranscribed {
         status: EntryStatus,
         reason: Option<String>,
@@ -245,7 +243,7 @@ impl OutputNotice {
 }
 
 pub(super) fn cleanup_fallback_warning(
-    prepared: &PreparedTranscription,
+    prepared: &PreparedTranscript,
     target: Option<&CleanupTarget>,
 ) -> Option<AppError> {
     let (code, summary) = match (prepared.fallback?, target) {
@@ -279,21 +277,21 @@ pub(super) fn interruption_warning(interruption: CaptureInterruption) -> Option<
     }
 }
 
-pub(super) fn pipeline_error(kind: PipelineFailureKind) -> AppError {
-    match kind {
-        PipelineFailureKind::NoAudio => AppError::new(
+pub(super) fn transcript_error(failure: TranscriptFailure) -> AppError {
+    match failure {
+        TranscriptFailure::NoAudio => AppError::new(
             ErrorCategory::Audio,
             "no_microphone_audio",
             "No audio was detected; check the microphone and try again.",
         ),
-        PipelineFailureKind::NoSpeech => AppError::new(
+        TranscriptFailure::NoSpeech => AppError::new(
             ErrorCategory::Recognition,
             "no_speech",
             "No speech was detected; check the microphone and try again.",
         ),
-        PipelineFailureKind::RecognitionFailed
-        | PipelineFailureKind::EmptyTranscription
-        | PipelineFailureKind::UnknownTokens => AppError::new(
+        TranscriptFailure::RecognitionFailed
+        | TranscriptFailure::EmptyTranscript
+        | TranscriptFailure::UnknownTokens => AppError::new(
             ErrorCategory::Recognition,
             "transcription_failed",
             "Speech recognition failed",

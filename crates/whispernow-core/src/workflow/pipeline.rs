@@ -10,7 +10,7 @@ const NO_AUDIO_RMS_THRESHOLD: f32 = 0.000_1;
 
 /// Has not yet caused history or output side effects.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PreparedTranscription {
+pub struct PreparedTranscript {
     pub raw_text: String,
     /// The raw text after vocabulary replacements, which AI cleanup edits and then replaces.
     pub final_text: String,
@@ -18,7 +18,7 @@ pub struct PreparedTranscription {
     pub fallback: Option<CleanupFallback>,
 }
 
-impl PreparedTranscription {
+impl PreparedTranscript {
     pub fn apply_cleanup(&mut self, cleanup: Result<String, CleanupFallback>) {
         match cleanup {
             Ok(text) => self.final_text = text,
@@ -28,11 +28,11 @@ impl PreparedTranscription {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PipelineFailureKind {
+pub enum TranscriptFailure {
     NoAudio,
     NoSpeech,
     RecognitionFailed,
-    EmptyTranscription,
+    EmptyTranscript,
     UnknownTokens,
 }
 
@@ -41,16 +41,16 @@ pub enum PipelineFailureKind {
 pub fn prepare_segmented(
     segments: &[String],
     vocabulary: &[VocabularyReplacement],
-) -> Result<PreparedTranscription, PipelineFailureKind> {
+) -> Result<PreparedTranscript, TranscriptFailure> {
     if segments.is_empty() {
-        return Err(PipelineFailureKind::NoSpeech);
+        return Err(TranscriptFailure::NoSpeech);
     }
     let raw_text = join_segment_texts(segments.iter().map(String::as_str));
     if raw_text.is_empty() {
-        return Err(PipelineFailureKind::EmptyTranscription);
+        return Err(TranscriptFailure::EmptyTranscript);
     }
     if raw_text.contains("<unk>") {
-        return Err(PipelineFailureKind::UnknownTokens);
+        return Err(TranscriptFailure::UnknownTokens);
     }
     let deterministic_started = Instant::now();
     let deterministic_text = apply_vocabulary_replacements(&raw_text, vocabulary);
@@ -60,7 +60,7 @@ pub fn prepare_segmented(
         outcome = "completed",
         "batch pipeline stage completed"
     );
-    Ok(PreparedTranscription {
+    Ok(PreparedTranscript {
         raw_text,
         final_text: deterministic_text,
         fallback: None,

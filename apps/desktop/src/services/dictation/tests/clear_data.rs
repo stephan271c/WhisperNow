@@ -3,17 +3,17 @@ use std::process::{Child, Command};
 use whispernow_core::audio::AudioInputError;
 use whispernow_platform::SettingsStore;
 
-use super::lifecycle::{native_services, native_services_before_preload};
+use super::lifecycle::{test_backend, test_backend_before_preload};
 use super::*;
-use crate::services::{NativeServices, test_support::shut_down};
+use crate::services::{Backend, test_support::shut_down};
 use whispernow_domain::{
     ClearDataCategory, HistoryLimit, HistoryRetention, NewHistoryEntry, UtcMillis,
 };
 
 const WAIT: Duration = Duration::from_secs(10);
 
-fn retained_entry(services: &NativeServices) -> (HistoryEntry, Vec<u8>) {
-    let id = services
+fn retained_entry(backend: &Backend) -> (HistoryEntry, Vec<u8>) {
+    let id = backend
         .history
         .insert(
             NewHistoryEntry {
@@ -30,23 +30,23 @@ fn retained_entry(services: &NativeServices) -> (HistoryEntry, Vec<u8>) {
             HistoryRetention::Forever,
         )
         .expect("retained dictation");
-    let entry = services
-        .history(&HistoryPageRequest::first_page(HistoryFilter::default()))
+    let entry = backend
+        .history_page(&HistoryPageRequest::first_page(HistoryFilter::default()))
         .expect("history")
         .entries
         .into_iter()
         .find(|entry| entry.id == id)
         .expect("retained dictation");
-    let audio = services.history.audio(id).expect("retained audio");
+    let audio = backend.history.audio(id).expect("retained audio");
     (entry, audio)
 }
 
-fn assert_retained(services: &NativeServices, entry: &HistoryEntry, audio: &[u8]) {
-    let page = services
-        .history(&HistoryPageRequest::first_page(HistoryFilter::default()))
+fn assert_retained(backend: &Backend, entry: &HistoryEntry, audio: &[u8]) {
+    let page = backend
+        .history_page(&HistoryPageRequest::first_page(HistoryFilter::default()))
         .expect("history");
     assert_eq!(page.entries.as_slice(), std::slice::from_ref(entry));
-    assert_eq!(services.history.audio(entry.id).expect("audio"), audio);
+    assert_eq!(backend.history.audio(entry.id).expect("audio"), audio);
 }
 
 #[test]
@@ -54,72 +54,72 @@ fn clearing_settings_resets_memory_before_the_next_edit_even_when_the_file_is_mi
     use whispernow_domain::{SettingChange, ThemePreference, VocabularyReplacement};
 
     for missing_file in [false, true] {
-        let (services, _root) = native_services(Fixture::new());
-        services
+        let (backend, _root) = test_backend(Fixture::new());
+        backend
             .update_settings(&SettingChange::Vocabulary(vec![
                 VocabularyReplacement::new("teh", "the"),
             ]))
             .expect("save vocabulary");
         if missing_file {
-            fs::remove_file(services.paths.settings_file()).expect("external deletion");
+            fs::remove_file(backend.paths.settings_file()).expect("external deletion");
         }
 
-        services
+        backend
             .clear_data(&[ClearDataCategory::Settings])
             .expect("clear settings");
-        assert_eq!(services.settings.load(), Settings::default());
-        services
+        assert_eq!(backend.settings.snapshot(), Settings::default());
+        backend
             .update_settings(&SettingChange::Theme(ThemePreference::Dark))
             .expect("edit after clearing");
         let expected = Settings {
             theme: ThemePreference::Dark,
             ..Settings::default()
         };
-        assert_eq!(services.settings.load(), expected);
+        assert_eq!(backend.settings.snapshot(), expected);
         let persisted = SettingsStore::with_store(
-            services.paths.clone(),
+            backend.paths.clone(),
             Arc::new(MemoryCredentialStore::default()),
         );
         assert_eq!(
             persisted.load().expect("reload saved settings").settings,
             expected
         );
-        shut_down(&services);
+        shut_down(&backend);
     }
 }
 
 #[test]
 fn empty_clear_requests_preserve_history_and_audio() {
-    let (services, _root) = native_services(Fixture::new());
-    let (entry, audio) = retained_entry(&services);
-    fs::create_dir_all(services.paths.python_logs_dir()).expect("logs directory");
-    let log = services.paths.python_logs_dir().join("app.log");
+    let (backend, _root) = test_backend(Fixture::new());
+    let (entry, audio) = retained_entry(&backend);
+    fs::create_dir_all(backend.paths.python_logs_dir()).expect("logs directory");
+    let log = backend.paths.python_logs_dir().join("app.log");
     fs::write(&log, b"log").expect("log");
-    let settings = fs::read(services.paths.settings_file()).expect("saved settings");
+    let settings = fs::read(backend.paths.settings_file()).expect("saved settings");
 
-    let result = services.clear_data(&[]).expect("clear selected data");
+    let result = backend.clear_data(&[]).expect("clear selected data");
 
     assert!(result.items.is_empty());
     assert!(!result.restart_required);
     assert!(log.exists());
     assert_eq!(
-        fs::read(services.paths.settings_file()).expect("settings"),
+        fs::read(backend.paths.settings_file()).expect("settings"),
         settings
     );
-    assert!(services.paths.models_dir().exists());
-    assert_eq!(services.state.snapshot().phase, Phase::Idle);
-    assert_retained(&services, &entry, &audio);
-    shut_down(&services);
+    assert!(backend.paths.models_dir().exists());
+    assert_eq!(backend.state.snapshot().phase, Phase::Idle);
+    assert_retained(&backend, &entry, &audio);
+    shut_down(&backend);
 }
 
-fn select_another_speech_model(services: &NativeServices) -> ModelId {
+fn select_another_speech_model(backend: &Backend) -> ModelId {
     let registry = ModelRegistry::builtin();
     let model = registry
         .speech_models()
         .find(|model| model.id != ModelId::default())
         .expect("another speech model");
-    install_artifacts(&services.paths, model);
-    services
+    install_artifacts(&backend.paths, model);
+    backend
         .select_model(model.id.clone())
         .expect("select model");
     model.id.clone()
@@ -127,50 +127,50 @@ fn select_another_speech_model(services: &NativeServices) -> ModelId {
 
 #[test]
 fn clearing_only_models_keeps_history_and_the_selected_model_in_state_and_settings() {
-    let (services, _root) = native_services(Fixture::new());
-    let (entry, audio) = retained_entry(&services);
-    let selected = select_another_speech_model(&services);
+    let (backend, _root) = test_backend(Fixture::new());
+    let (entry, audio) = retained_entry(&backend);
+    let selected = select_another_speech_model(&backend);
 
-    let result = services
+    let result = backend
         .clear_data(&[ClearDataCategory::Models])
         .expect("clear models");
 
     assert!(result.restart_required);
-    assert!(!services.paths.models_dir().exists());
-    assert_eq!(services.settings.load().model_id, selected);
-    assert_eq!(services.state.snapshot().selected_model_id, selected);
-    assert_retained(&services, &entry, &audio);
-    shut_down(&services);
+    assert!(!backend.paths.models_dir().exists());
+    assert_eq!(backend.settings.snapshot().model_id, selected);
+    assert_eq!(backend.state.snapshot().selected_model_id, selected);
+    assert_retained(&backend, &entry, &audio);
+    shut_down(&backend);
 }
 
 #[test]
 fn clearing_settings_resets_the_selected_model_in_state_and_settings() {
-    let (services, _root) = native_services(Fixture::new());
-    select_another_speech_model(&services);
+    let (backend, _root) = test_backend(Fixture::new());
+    select_another_speech_model(&backend);
 
-    services
+    backend
         .clear_data(&[ClearDataCategory::Settings])
         .expect("clear settings");
 
-    assert_eq!(services.settings.load().model_id, ModelId::default());
+    assert_eq!(backend.settings.snapshot().model_id, ModelId::default());
     assert_eq!(
-        services.state.snapshot().selected_model_id,
+        backend.state.snapshot().selected_model_id,
         ModelId::default()
     );
-    shut_down(&services);
+    shut_down(&backend);
 }
 
 #[test]
 fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
-    let (services, _root) = native_services(Fixture::new());
-    let (entry, _) = retained_entry(&services);
-    fs::write(services.paths.migrated_history_file(), b"Python history").expect("migrated history");
-    let unreadable = services.paths.unreadable_history_file("20261015T120000Z");
+    let (backend, _root) = test_backend(Fixture::new());
+    let (entry, _) = retained_entry(&backend);
+    fs::write(backend.paths.migrated_history_file(), b"Python history").expect("migrated history");
+    let unreadable = backend.paths.unreadable_history_file("20261015T120000Z");
     fs::write(&unreadable, b"legacy").expect("malformed history backup");
-    fs::create_dir_all(services.paths.python_logs_dir()).expect("logs directory");
-    let settings = fs::read(services.paths.settings_file()).expect("saved settings");
+    fs::create_dir_all(backend.paths.python_logs_dir()).expect("logs directory");
+    let settings = fs::read(backend.paths.settings_file()).expect("saved settings");
 
-    let result = services
+    let result = backend
         .clear_data(&[ClearDataCategory::History])
         .expect("clear history data");
 
@@ -182,22 +182,22 @@ fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
             .all(|item| item.location.category == ClearDataCategory::History && item.deleted)
     );
     assert!(!result.restart_required);
-    assert!(services.paths.history_database_file().exists());
-    assert!(!services.paths.recordings_dir().exists());
-    assert!(!services.paths.migrated_history_file().exists());
+    assert!(backend.paths.history_database_file().exists());
+    assert!(!backend.paths.recordings_dir().exists());
+    assert!(!backend.paths.migrated_history_file().exists());
     assert!(!unreadable.exists());
-    assert!(services.paths.python_logs_dir().exists());
-    assert!(services.paths.models_dir().exists());
+    assert!(backend.paths.python_logs_dir().exists());
+    assert!(backend.paths.models_dir().exists());
     assert_eq!(
-        fs::read(services.paths.settings_file()).expect("settings"),
+        fs::read(backend.paths.settings_file()).expect("settings"),
         settings
     );
-    let page = services
-        .history(&HistoryPageRequest::first_page(HistoryFilter::default()))
+    let page = backend
+        .history_page(&HistoryPageRequest::first_page(HistoryFilter::default()))
         .expect("new history");
     assert!(page.entries.is_empty());
-    assert!(services.history.audio(entry.id).is_err());
-    let later = services
+    assert!(backend.history.audio(entry.id).is_err());
+    let later = backend
         .history
         .insert(
             NewHistoryEntry {
@@ -215,8 +215,8 @@ fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
         )
         .expect("dictation after clear");
     assert!(later > entry.id);
-    assert!(services.history.audio(later).is_ok());
-    shut_down(&services);
+    assert!(backend.history.audio(later).is_ok());
+    shut_down(&backend);
 }
 
 #[test]
@@ -226,19 +226,19 @@ fn clearing_every_category_reports_files_and_unavailable_credentials_separately(
     for available in [true, false] {
         let fixture = Fixture::new();
         let credentials = Arc::clone(&fixture.credentials);
-        let (services, _root) = native_services(fixture);
-        let (entry, _) = retained_entry(&services);
-        services
+        let (backend, _root) = test_backend(fixture);
+        let (entry, _) = retained_entry(&backend);
+        backend
             .settings
             .set_api_key(&SetApiKeyRequest {
                 provider: LlmProvider::OpenAi,
                 key: ApiKey::new("saved-key").expect("key"),
             })
             .expect("save key");
-        fs::create_dir_all(services.paths.python_logs_dir()).expect("logs directory");
+        fs::create_dir_all(backend.paths.python_logs_dir()).expect("logs directory");
         credentials.set_available(available);
 
-        let result = services
+        let result = backend
             .clear_data(&ClearDataCategory::ALL)
             .expect("clear all data");
 
@@ -255,27 +255,27 @@ fn clearing_every_category_reports_files_and_unavailable_credentials_separately(
                 .iter()
                 .any(|item| item.location == credential_store_location())
         );
-        assert!(!services.paths.settings_file().exists());
-        assert!(services.paths.history_database_file().exists());
-        assert!(!services.paths.recordings_dir().exists());
-        assert!(!services.paths.models_dir().exists());
-        assert!(!services.paths.python_logs_dir().exists());
-        let warning = services.state.snapshot().error.map(|error| error.code);
+        assert!(!backend.paths.settings_file().exists());
+        assert!(backend.paths.history_database_file().exists());
+        assert!(!backend.paths.recordings_dir().exists());
+        assert!(!backend.paths.models_dir().exists());
+        assert!(!backend.paths.python_logs_dir().exists());
+        let warning = backend.state.snapshot().error.map(|error| error.code);
         assert_eq!(
             warning.as_deref(),
             (!available).then_some("credential_store_unavailable")
         );
         credentials.set_available(true);
         assert_eq!(
-            services
+            backend
                 .settings
                 .api_key(LlmProvider::OpenAi)
                 .expect("read key")
                 .is_some(),
             !available
         );
-        assert!(services.history.audio(entry.id).is_err());
-        shut_down(&services);
+        assert!(backend.history.audio(entry.id).is_err());
+        shut_down(&backend);
     }
 }
 
@@ -284,14 +284,14 @@ fn clearing_every_category_reports_files_and_unavailable_credentials_separately(
 fn a_recordings_deletion_failure_keeps_history_recoverable() {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let (services, _root) = native_services(Fixture::new());
-    let (entry, audio) = retained_entry(&services);
-    let recordings = services.paths.recordings_dir();
+    let (backend, _root) = test_backend(Fixture::new());
+    let (entry, audio) = retained_entry(&backend);
+    let recordings = backend.paths.recordings_dir();
     let original_permissions = fs::metadata(&recordings).expect("recordings").permissions();
     fs::set_permissions(&recordings, fs::Permissions::from_mode(0o500))
         .expect("read-only recordings");
 
-    let result = services.clear_data(&[ClearDataCategory::History]);
+    let result = backend.clear_data(&[ClearDataCategory::History]);
     fs::set_permissions(&recordings, original_permissions).expect("restore recordings permissions");
     let result = result.expect("partial deletion report");
 
@@ -302,21 +302,21 @@ fn a_recordings_deletion_failure_keeps_history_recoverable() {
     );
     assert!(!result.items[0].deleted);
     assert!(recordings.exists());
-    assert!(services.paths.history_database_file().exists());
+    assert!(backend.paths.history_database_file().exists());
     assert!(!result.restart_required);
-    assert_eq!(services.state.snapshot().phase, Phase::Idle);
-    assert_retained(&services, &entry, &audio);
-    shut_down(&services);
+    assert_eq!(backend.state.snapshot().phase, Phase::Idle);
+    assert_retained(&backend, &entry, &audio);
+    shut_down(&backend);
 }
 
 #[test]
 fn inspection_failure_preserves_history_and_restores_the_previous_phase() {
-    let (services, _root) = native_services(Fixture::new());
-    let (entry, audio) = retained_entry(&services);
-    let saved_config = services.paths.config_dir().with_extension("kept");
-    fs::rename(services.paths.config_dir(), &saved_config).expect("move configuration aside");
-    fs::write(services.paths.config_dir(), b"not a directory").expect("obstruct inspection");
-    services.state.apply(|state| {
+    let (backend, _root) = test_backend(Fixture::new());
+    let (entry, audio) = retained_entry(&backend);
+    let saved_config = backend.paths.config_dir().with_extension("kept");
+    fs::rename(backend.paths.config_dir(), &saved_config).expect("move configuration aside");
+    fs::write(backend.paths.config_dir(), b"not a directory").expect("obstruct inspection");
+    backend.state.apply(|state| {
         state.phase = Phase::Error;
         state.last_error = Some(whispernow_domain::AppError::new(
             ErrorCategory::Output,
@@ -325,28 +325,28 @@ fn inspection_failure_preserves_history_and_restores_the_previous_phase() {
         ));
     });
 
-    let result = services.clear_data(&[ClearDataCategory::History]);
+    let result = backend.clear_data(&[ClearDataCategory::History]);
 
-    fs::remove_file(services.paths.config_dir()).expect("remove obstruction");
-    fs::rename(saved_config, services.paths.config_dir()).expect("restore configuration");
+    fs::remove_file(backend.paths.config_dir()).expect("remove obstruction");
+    fs::rename(saved_config, backend.paths.config_dir()).expect("restore configuration");
     assert_eq!(
         result.expect_err("inspection refused").code,
         "clear_data_inspect"
     );
-    let snapshot = services.state.snapshot();
+    let snapshot = backend.state.snapshot();
     assert_eq!(snapshot.phase, Phase::Error);
     assert_eq!(
         snapshot.error.map(|error| error.code),
         Some("paste_failed".to_owned())
     );
-    assert_retained(&services, &entry, &audio);
-    shut_down(&services);
+    assert_retained(&backend, &entry, &audio);
+    shut_down(&backend);
 }
 
 #[test]
 fn a_clear_that_resets_the_last_error_ends_the_failed_phase() {
-    let (services, _root) = native_services(Fixture::new());
-    services.state.apply(|state| {
+    let (backend, _root) = test_backend(Fixture::new());
+    backend.state.apply(|state| {
         state.phase = Phase::Error;
         state.last_error = Some(whispernow_domain::AppError::new(
             ErrorCategory::Output,
@@ -355,30 +355,30 @@ fn a_clear_that_resets_the_last_error_ends_the_failed_phase() {
         ));
     });
 
-    services.clear_data(&[]).expect("clear selected data");
+    backend.clear_data(&[]).expect("clear selected data");
 
-    let snapshot = services.state.snapshot();
+    let snapshot = backend.state.snapshot();
     assert_eq!(snapshot.phase, Phase::Idle);
     assert_eq!(snapshot.error, None);
-    shut_down(&services);
+    shut_down(&backend);
 }
 
 #[test]
 fn clear_data_refuses_paused_and_active_recordings_without_removing_history() {
     for paused in [true, false] {
-        let (services, _root) = native_services(Fixture::new());
-        let (entry, audio) = retained_entry(&services);
+        let (backend, _root) = test_backend(Fixture::new());
+        let (entry, audio) = retained_entry(&backend);
         if paused {
-            services.dictation.pause().expect("pause");
+            backend.dictation.pause().expect("pause");
         } else {
-            services
+            backend
                 .dictation
                 .start(RecordingTrigger::Toggle)
                 .expect("recording");
         }
-        let phase = services.state.snapshot().phase;
+        let phase = backend.state.snapshot().phase;
 
-        let error = services
+        let error = backend
             .clear_data(&[ClearDataCategory::History])
             .expect_err("busy desktop");
 
@@ -390,27 +390,27 @@ fn clear_data_refuses_paused_and_active_recordings_without_removing_history() {
                 "workflow_busy"
             }
         );
-        assert_eq!(services.state.snapshot().phase, phase);
-        assert_retained(&services, &entry, &audio);
-        shut_down(&services);
+        assert_eq!(backend.state.snapshot().phase, phase);
+        assert_retained(&backend, &entry, &audio);
+        shut_down(&backend);
     }
 }
 
 #[test]
 fn a_failed_worker_wait_restores_idle_and_keeps_history() {
-    let (services, _root) = native_services(Fixture::new());
-    let (entry, audio) = retained_entry(&services);
-    services.dictation.request_shutdown();
-    services.dictation.join();
+    let (backend, _root) = test_backend(Fixture::new());
+    let (entry, audio) = retained_entry(&backend);
+    backend.dictation.request_shutdown();
+    backend.dictation.join();
 
-    let error = services
+    let error = backend
         .clear_data(&[ClearDataCategory::History])
         .expect_err("stopped worker");
 
     assert_eq!(error.code, "application_shutting_down");
-    assert_eq!(services.state.snapshot().phase, Phase::Idle);
-    assert_retained(&services, &entry, &audio);
-    shut_down(&services);
+    assert_eq!(backend.state.snapshot().phase, Phase::Idle);
+    assert_retained(&backend, &entry, &audio);
+    shut_down(&backend);
 }
 
 #[test]
@@ -575,10 +575,10 @@ fn run_startup_overlap() {
     loading
         .recv_timeout(WAIT)
         .expect("startup entered model load");
-    let (services, _root) = native_services_before_preload(fixture);
-    let services = Arc::new(services);
+    let (backend, _root) = test_backend_before_preload(fixture);
+    let backend = Arc::new(backend);
     let (start_reply, start_answer) = mpsc::channel();
-    services
+    backend
         .dictation
         .sender
         .send(super::super::Message::Start {
@@ -586,14 +586,14 @@ fn run_startup_overlap() {
             reply: start_reply,
         })
         .expect("queue start before clear");
-    let clearing = Arc::clone(&services);
+    let clearing = Arc::clone(&backend);
     let (finished, cleared) = mpsc::channel();
     let worker = std::thread::spawn(move || {
         let result = clearing.clear_data(&[ClearDataCategory::Settings]);
         let _test_left = finished.send(result);
     });
     let deadline = Instant::now() + WAIT;
-    while services.state.snapshot().phase != Phase::ClearingData {
+    while backend.state.snapshot().phase != Phase::ClearingData {
         assert!(Instant::now() < deadline, "clear did not reserve admission");
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -612,7 +612,7 @@ fn run_startup_overlap() {
     assert!(result.restart_required);
     assert!(result.items.iter().all(|item| item.deleted));
     worker.join().expect("clear thread");
-    assert_eq!(services.state.snapshot().phase, Phase::Idle);
-    assert!(!services.paths.settings_file().exists());
-    shut_down(&services);
+    assert_eq!(backend.state.snapshot().phase, Phase::Idle);
+    assert!(!backend.paths.settings_file().exists());
+    shut_down(&backend);
 }

@@ -80,7 +80,7 @@ impl SileroVoiceActivity {
 }
 
 impl VoiceActivity for SileroVoiceActivity {
-    fn is_speech(&mut self, frame: &[f32]) -> bool {
+    fn poll_speech(&mut self, frame: &[f32]) -> bool {
         self.detector.accept_waveform(frame);
         let speech = self.detector.detected();
         // Native segments are unused: the core segmenter owns segment boundaries, and clearing
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn an_unavailable_model_fails_open_to_treating_every_frame_as_speech() {
         let mut activity = silero_voice_activity(Path::new("missing.onnx"));
-        assert!(activity.is_speech(&[0.0; 512]));
+        assert!(activity.poll_speech(&[0.0; 512]));
     }
 
     #[test]

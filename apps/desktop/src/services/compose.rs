@@ -14,23 +14,28 @@ use whispernow_platform::{
 };
 
 use super::{
-    Dictation, Events, NativeServices, StateCell,
+    Backend, Dictation, Events, StateCell,
     dictation::{AiCleanup, DictationParts},
     follow_cleanup_provider,
-    history::HistoryStore,
-    models::ModelCoordinator,
-    output::OutputCoordinator,
+    history::{HistoryStore, OpenedHistory},
+    models::ModelLibrary,
+    output::Output,
     permissions::MicrophoneAccess,
-    settings::SettingsCoordinator,
+    settings::SavedSettings,
     state::State,
 };
 
-impl NativeServices {
+pub(crate) struct Composition {
+    pub(crate) backend: Backend,
+    pub(crate) enable_autostart: bool,
+}
+
+impl Backend {
     pub(crate) fn compose(
         events: Events,
         native_wayland: bool,
         resource_dir: &Path,
-    ) -> Result<(Self, bool), AppError> {
+    ) -> Result<Composition, AppError> {
         let paths = AppPaths::discover()
             .inspect_err(|error| tracing::warn!(%error, "application storage could not be found"))
             .map_err(|_| {
@@ -41,7 +46,7 @@ impl NativeServices {
                 )
             })?;
         let wayland_token_path = native_wayland.then(|| paths.wayland_remote_desktop_token_file());
-        let output = Arc::new(OutputCoordinator::native(wayland_token_path));
+        let output = Arc::new(Output::native(wayland_token_path));
         let audio: Arc<dyn AudioInput> = Arc::new(CpalAudioInput::new());
         let persistence = Arc::new(SettingsStore::new(paths.clone()));
         let SettingsLoad {
@@ -49,7 +54,10 @@ impl NativeServices {
             notice: settings_notice,
             enable_autostart,
         } = persistence.load()?;
-        let (history, startup_history_warning) = HistoryStore::open(paths.clone());
+        let OpenedHistory {
+            store: history,
+            diagnostic: startup_history_warning,
+        } = HistoryStore::open(paths.clone());
         let history = Arc::new(history);
         let llama_dir = llama_dir(resource_dir);
         let vad_model = silero_vad_model_path(resource_dir);
@@ -58,7 +66,7 @@ impl NativeServices {
         if let Some(warning) = startup_history_warning {
             state.publish_error(warning);
         }
-        let settings = Arc::new(SettingsCoordinator::new(
+        let settings = Arc::new(SavedSettings::new(
             Arc::clone(&persistence),
             Arc::clone(&state),
             persisted.clone(),
@@ -72,7 +80,7 @@ impl NativeServices {
             move |device| cleanup_state.apply(|state| state.cleanup_device = device),
         ));
         follow_cleanup_provider(&local_cleanup, &persisted);
-        let models = ModelCoordinator::new(
+        let models = ModelLibrary::new(
             Arc::clone(&store),
             Arc::clone(&state),
             Arc::clone(&local_cleanup),
@@ -94,8 +102,8 @@ impl NativeServices {
             output: output.clone(),
             engine: Box::new(|| Box::new(SherpaAsrEngine::default())),
         })?;
-        Ok((
-            Self {
+        Ok(Composition {
+            backend: Self {
                 settings,
                 history,
                 audio,
@@ -108,7 +116,7 @@ impl NativeServices {
                 local_cleanup,
             },
             enable_autostart,
-        ))
+        })
     }
 }
 

@@ -3,31 +3,30 @@ mod events;
 pub(crate) mod lifecycle;
 mod permissions;
 mod settings;
+mod shutdown;
 
-use std::sync::{
-    Arc, RwLock,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, RwLock};
 use whispernow_domain::{AppError, ErrorCategory};
 
 use crate::{
     activation::ActivationGate,
     autostart::AutostartRegistration,
-    services::{NativeServices, shutting_down},
-    shortcuts::ShortcutCoordinator,
+    services::{Backend, shutting_down},
+    shortcuts::Shortcuts,
     tray::TrayController,
 };
+use shutdown::Shutdown;
 
 pub(crate) use events::forward_events;
 pub(crate) use settings::shortcut_error;
 
 pub(crate) struct Gateway {
-    pub(crate) services: Arc<NativeServices>,
-    shutdown_begun: Arc<AtomicBool>,
+    pub(crate) backend: Arc<Backend>,
+    shutdown: Arc<Shutdown>,
     /// Held for reading by every running command, so shutdown, which takes it for writing,
-    /// releases the services only after they finished.
+    /// releases the backend only after they finished.
     commands: Arc<RwLock<()>>,
-    pub(crate) shortcuts: Arc<ShortcutCoordinator>,
+    pub(crate) shortcuts: Arc<Shortcuts>,
     autostart: Arc<dyn AutostartRegistration>,
     /// Serializes persisting settings with applying their native side effects, so the settings
     /// saved last are the settings registered last, and a shortcut capture or clear-data never
@@ -36,27 +35,25 @@ pub(crate) struct Gateway {
     native_settings: tokio::sync::Mutex<()>,
     activation: Arc<ActivationGate>,
     tray: TrayController,
-    shutdown_complete: AtomicBool,
 }
 
 impl Gateway {
     pub(crate) fn new(
-        services: Arc<NativeServices>,
-        shortcuts: Arc<ShortcutCoordinator>,
+        backend: Arc<Backend>,
+        shortcuts: Arc<Shortcuts>,
         autostart: Arc<dyn AutostartRegistration>,
         activation: Arc<ActivationGate>,
         tray: TrayController,
     ) -> Self {
         Self {
-            services,
-            shutdown_begun: Arc::new(AtomicBool::new(false)),
+            backend,
+            shutdown: Arc::new(Shutdown::new()),
             commands: Arc::new(RwLock::new(())),
             shortcuts,
             autostart,
             native_settings: tokio::sync::Mutex::new(()),
             activation,
             tray,
-            shutdown_complete: AtomicBool::new(false),
         }
     }
 
@@ -64,18 +61,18 @@ impl Gateway {
         &self,
         operation: &'static str,
         failure: Failure,
-        work: impl FnOnce(Arc<NativeServices>) -> Result<R, AppError> + Send + 'static,
+        work: impl FnOnce(Arc<Backend>) -> Result<R, AppError> + Send + 'static,
     ) -> Result<R, AppError> {
-        let services = Arc::clone(&self.services);
+        let backend = Arc::clone(&self.backend);
         let commands = Arc::clone(&self.commands);
-        let shutdown_begun = Arc::clone(&self.shutdown_begun);
+        let shutdown = Arc::clone(&self.shutdown);
         tracing::info!(operation, "desktop command started");
         let result = run_blocking(move || {
             let _running = commands.read().expect("command barrier lock poisoned");
-            if shutdown_begun.load(Ordering::Acquire) {
+            if shutdown.has_begun() {
                 return Err(shutting_down());
             }
-            work(services)
+            work(backend)
         })
         .await
         .and_then(|result| result);
@@ -92,7 +89,7 @@ impl Gateway {
     }
 
     pub(crate) fn publish_error(&self, error: &AppError) {
-        self.services.state.publish_error(error.clone());
+        self.backend.state.publish_error(error.clone());
     }
 }
 

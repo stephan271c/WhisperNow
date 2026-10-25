@@ -66,8 +66,8 @@ pub(crate) async fn list_provider_models(
     state: tauri::State<'_, Gateway>,
 ) -> Result<Vec<String>, AppError> {
     let (provider, api_key) = state
-        .run_command("list_provider_models", Failure::Local, move |services| {
-            services.settings.provider_and_key(request)
+        .run_command("list_provider_models", Failure::Local, move |backend| {
+            backend.settings.provider_and_key(request)
         })
         .await?;
     whispernow_platform::list_models(&provider, api_key.as_ref())
@@ -83,8 +83,8 @@ pub(crate) async fn list_audio_devices(
     state: tauri::State<'_, Gateway>,
 ) -> Result<Vec<AudioDevice>, AppError> {
     state
-        .run_command("list_audio_devices", Failure::Published, |services| {
-            services.list_audio_devices()
+        .run_command("list_audio_devices", Failure::Published, |backend| {
+            backend.list_audio_devices()
         })
         .await
 }
@@ -94,8 +94,8 @@ pub(crate) async fn test_microphone(
     state: tauri::State<'_, Gateway>,
 ) -> Result<MicrophoneTestResponse, AppError> {
     state
-        .run_command("test_microphone", Failure::Local, |services| {
-            services.test_microphone()
+        .run_command("test_microphone", Failure::Local, |backend| {
+            backend.test_microphone()
         })
         .await
 }
@@ -105,8 +105,8 @@ pub(crate) async fn list_models(
     state: tauri::State<'_, Gateway>,
 ) -> Result<Vec<ModelSummary>, AppError> {
     state
-        .run_command("list_models", Failure::Published, |services| {
-            services.models.list()
+        .run_command("list_models", Failure::Published, |backend| {
+            backend.models.list()
         })
         .await
 }
@@ -116,8 +116,8 @@ pub(crate) async fn data_locations(
     state: tauri::State<'_, Gateway>,
 ) -> Result<Vec<DataLocation>, AppError> {
     state
-        .run_command("data_locations", Failure::Published, |services| {
-            services.data_locations()
+        .run_command("data_locations", Failure::Published, |backend| {
+            backend.data_locations()
         })
         .await
 }
@@ -126,7 +126,7 @@ pub(crate) async fn data_locations(
 pub(crate) async fn dismiss_recording_overlay(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
-    state.services.state.dismiss_error();
+    state.backend.state.dismiss_error();
     Ok(())
 }
 
@@ -136,8 +136,8 @@ pub(crate) async fn copy_text(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("copy_text", Failure::Local, move |services| {
-            services.output.copy(&request)
+        .run_command("copy_text", Failure::Local, move |backend| {
+            backend.output.copy(&request)
         })
         .await
 }
@@ -151,20 +151,20 @@ pub(crate) async fn open_main_window(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .services
+        .backend
         .state
         .events()
         .publish(EventPayload::NavigationRequested { section: request });
     crate::show_settings_window(&app);
-    state.services.state.dismiss_error();
+    state.backend.state.dismiss_error();
     Ok(())
 }
 
 #[tauri::command]
 pub(crate) async fn get_state(state: tauri::State<'_, Gateway>) -> Result<AppState, AppError> {
     state
-        .run_command("get_state", Failure::Published, |services| {
-            Ok(services.state.snapshot())
+        .run_command("get_state", Failure::Published, |backend| {
+            Ok(backend.state.snapshot())
         })
         .await
 }
@@ -175,8 +175,8 @@ pub(crate) async fn get_history(
     state: tauri::State<'_, Gateway>,
 ) -> Result<HistoryPage, AppError> {
     state
-        .run_command("get_history", Failure::Local, move |services| {
-            services.history(&request)
+        .run_command("get_history", Failure::Local, move |backend| {
+            backend.history_page(&request)
         })
         .await
 }
@@ -188,8 +188,8 @@ pub(crate) async fn get_history_audio(
     state: tauri::State<'_, Gateway>,
 ) -> Result<tauri::ipc::Response, AppError> {
     state
-        .run_command("get_history_audio", Failure::Local, move |services| {
-            services.history.audio(request)
+        .run_command("get_history_audio", Failure::Local, move |backend| {
+            backend.history.audio(request)
         })
         .await
         .map(tauri::ipc::Response::new)
@@ -200,8 +200,8 @@ pub(crate) async fn open_recordings_folder(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("open_recordings_folder", Failure::Local, |services| {
-            services.open_recordings_folder()
+        .run_command("open_recordings_folder", Failure::Local, |backend| {
+            backend.open_recordings_folder()
         })
         .await
 }
@@ -212,19 +212,17 @@ pub(crate) async fn delete_history_entry(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command(
-            "delete_history_entry",
-            Failure::Published,
-            move |services| services.delete_history_entry(request),
-        )
+        .run_command("delete_history_entry", Failure::Published, move |backend| {
+            backend.delete_history_entry(request)
+        })
         .await
 }
 
 #[tauri::command]
 pub(crate) async fn clear_history(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
-        .run_command("clear_history", Failure::Published, |services| {
-            services.clear_history()
+        .run_command("clear_history", Failure::Published, |backend| {
+            backend.clear_history()
         })
         .await
 }
@@ -242,8 +240,8 @@ pub(crate) async fn download_model(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("download_model", Failure::Local, move |services| {
-            services.models.download(&request)
+        .run_command("download_model", Failure::Local, move |backend| {
+            backend.models.download(&request)
         })
         .await
 }
@@ -254,8 +252,8 @@ pub(crate) async fn cancel_download(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("cancel_download", Failure::Local, move |services| {
-            services.models.cancel_download(&request)
+        .run_command("cancel_download", Failure::Local, move |backend| {
+            backend.models.cancel_download(&request)
         })
         .await
 }
@@ -266,8 +264,8 @@ pub(crate) async fn select_model(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("select_model", Failure::Local, move |services| {
-            services.select_model(request)
+        .run_command("select_model", Failure::Local, move |backend| {
+            backend.select_model(request)
         })
         .await
 }
@@ -278,8 +276,8 @@ pub(crate) async fn delete_model(
     state: tauri::State<'_, Gateway>,
 ) -> Result<(), AppError> {
     state
-        .run_command("delete_model", Failure::Local, move |services| {
-            services.models.delete(&request)
+        .run_command("delete_model", Failure::Local, move |backend| {
+            backend.models.delete(&request)
         })
         .await
 }
@@ -331,8 +329,8 @@ pub(crate) async fn open_permission_settings(request: PermissionKind) -> Result<
 #[tauri::command]
 pub(crate) async fn start_test_dictation(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
-        .run_command("start_test_dictation", Failure::Local, |services| {
-            services.dictation.start(RecordingTrigger::SetupTest)
+        .run_command("start_test_dictation", Failure::Local, |backend| {
+            backend.dictation.start(RecordingTrigger::SetupTest)
         })
         .await
 }
@@ -340,8 +338,8 @@ pub(crate) async fn start_test_dictation(state: tauri::State<'_, Gateway>) -> Re
 #[tauri::command]
 pub(crate) async fn stop_recording(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
-        .run_command("stop_recording", Failure::Published, |services| {
-            services.dictation.stop()
+        .run_command("stop_recording", Failure::Published, |backend| {
+            backend.dictation.stop()
         })
         .await
 }
@@ -349,8 +347,8 @@ pub(crate) async fn stop_recording(state: tauri::State<'_, Gateway>) -> Result<(
 #[tauri::command]
 pub(crate) async fn cancel_recording(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {
     state
-        .run_command("cancel_recording", Failure::Published, |services| {
-            services.dictation.cancel()
+        .run_command("cancel_recording", Failure::Published, |backend| {
+            backend.dictation.cancel()
         })
         .await
 }

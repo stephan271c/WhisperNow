@@ -1,7 +1,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel},
     },
     thread::{self, JoinHandle},
@@ -15,7 +15,9 @@ use whispernow_core::audio::{
 
 use whispernow_domain::ipc::AudioDevice;
 
-use super::{CaptureBackend, CaptureStream, CpalBackend, OpenedCapture, StreamFault, backend};
+use super::{
+    CaptureBackend, CaptureStream, CpalBackend, FaultFlag, OpenedCapture, StreamFault, backend,
+};
 
 const RAW_QUEUE_CAPACITY: usize = 8;
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -77,7 +79,7 @@ impl AudioInput for CpalAudioInput {
             "workflow stage completed"
         );
         let stop_requested = Arc::new(AtomicBool::new(false));
-        let worker = Worker {
+        let worker = CaptureWorker {
             backend: Arc::clone(&self.backend),
             stream,
             choice: device,
@@ -131,21 +133,21 @@ impl Drop for CpalCapture {
     }
 }
 
-struct Worker {
+struct CaptureWorker {
     backend: Arc<dyn CaptureBackend>,
     stream: Box<dyn CaptureStream>,
     choice: AudioDeviceChoice,
     resolved_device_id: String,
     sink: Arc<dyn AudioSink>,
     request_started: Option<Instant>,
-    fault: Arc<AtomicU8>,
+    fault: Arc<FaultFlag>,
     dropped_frames: Arc<AtomicUsize>,
     recycle: SyncSender<Vec<f32>>,
     stop_requested: Arc<AtomicBool>,
     default_device_poll: Duration,
 }
 
-impl Worker {
+impl CaptureWorker {
     fn run(
         mut self,
         chunks: &Receiver<Vec<f32>>,
@@ -164,8 +166,7 @@ impl Worker {
                 return stream_result.and(processing_result).and(finish_result);
             }
             self.poll_default_device(&mut last_default_check);
-            let fault = StreamFault::load(&self.fault);
-            if fault != StreamFault::None {
+            if let Some(fault) = self.fault.get() {
                 let _stream_was_stopped = self.stream.stop().is_ok();
                 // Audio the device delivered before the fault is still the user's speech.
                 let drained = self.drain_queued_chunks(&mut processor, chunks);
@@ -183,7 +184,7 @@ impl Worker {
             match chunks.recv_timeout(WORKER_POLL_INTERVAL) {
                 Ok(chunk) => {
                     if self.process_native_chunk(&mut processor, chunk).is_err() {
-                        StreamFault::StreamError.store(&self.fault);
+                        self.fault.raise(StreamFault::StreamError);
                         continue;
                     }
                     if last_observation.elapsed() >= LEVEL_OBSERVATION_INTERVAL {
@@ -193,7 +194,7 @@ impl Worker {
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
-                    StreamFault::StreamError.store(&self.fault);
+                    self.fault.raise(StreamFault::StreamError);
                 }
             }
         }
@@ -244,8 +245,8 @@ impl Worker {
         match self.backend.current_default_id() {
             // A changed default ends the session exactly like a lost device.
             Ok(Some(current)) if current == self.resolved_device_id => {}
-            Ok(_) => StreamFault::DeviceLost.store(&self.fault),
-            Err(_) => StreamFault::StreamError.store(&self.fault),
+            Ok(_) => self.fault.raise(StreamFault::DeviceLost),
+            Err(_) => self.fault.raise(StreamFault::StreamError),
         }
     }
 
@@ -344,9 +345,9 @@ mod tests {
                 chunks.send(samples).expect("fixture chunk");
             }
             let (recycle, recycle_rx) = sync_channel(8);
-            let fault = Arc::new(AtomicU8::new(StreamFault::None as u8));
+            let fault = Arc::new(FaultFlag::default());
             if let Some(initial) = *self.fault_on_open.lock().expect("fault lock") {
-                initial.store(&fault);
+                fault.raise(initial);
             }
             Ok(OpenedCapture {
                 stream: Box::new(FakeStream {

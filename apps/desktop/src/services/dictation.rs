@@ -20,7 +20,7 @@ use whispernow_core::{
         AudioCapture, AudioDeviceChoice, AudioInput, AudioInputError, AudioSink, TARGET_SAMPLE_RATE,
     },
     workflow::{
-        AudioSegment, PipelineFailureKind, PreparedTranscription, SpeechSegmenter, VoiceActivity,
+        AudioSegment, PreparedTranscript, SpeechSegmenter, TranscriptFailure, VoiceActivity,
         has_microphone_audio, prepare_segmented,
     },
 };
@@ -37,7 +37,7 @@ use super::{
     microphone_test::{self, MicrophoneTestError},
     models::installed,
     output::TranscriptOutput,
-    settings::SettingsCoordinator,
+    settings::SavedSettings,
     shutting_down,
     state::{CancelReason, LoadedModel, StateCell},
 };
@@ -69,7 +69,7 @@ pub(crate) struct RecordingSettings {
 
 pub(crate) struct DictationParts {
     pub(crate) state: Arc<StateCell>,
-    pub(crate) settings: Arc<SettingsCoordinator>,
+    pub(crate) settings: Arc<SavedSettings>,
     pub(crate) history: Arc<HistoryStore>,
     pub(crate) audio: Arc<dyn AudioInput>,
     pub(crate) models: Arc<ModelStore>,
@@ -243,8 +243,7 @@ impl Dictation {
 
     /// Ends the dictation in flight early, keeping its audio in history.
     pub(crate) fn cancel(&self) -> Result<(), AppError> {
-        {
-            let mut state = self.state.lock();
+        self.state.update(|state| {
             if !matches!(
                 state.phase,
                 Phase::Recording { .. } | Phase::Processing { .. }
@@ -252,7 +251,8 @@ impl Dictation {
                 return Err(not_recording());
             }
             state.request_cancel(CancelReason::User);
-        }
+            Ok(())
+        })?;
         self.send(Message::Cancel)
     }
 
@@ -347,12 +347,11 @@ impl Dictation {
     /// Ends the dictation in flight, keeping its audio, and stops the worker after it.
     pub(crate) fn request_shutdown(&self) {
         self.stopping.store(true, Ordering::Release);
-        {
-            let mut state = self.state.lock();
+        self.state.apply(|state| {
             if state.phase.is_busy() {
                 state.request_cancel(CancelReason::Shutdown);
             }
-        }
+        });
         let _worker_stopped = self.sender.send(Message::Shutdown);
     }
 
@@ -557,7 +556,7 @@ impl Worker {
     /// behind the load. A model that is not installed or fails to load is left for the first
     /// dictation to report.
     fn preload_model(&mut self) {
-        let settings = self.parts.settings.load();
+        let settings = self.parts.settings.snapshot();
         if let Ok(model) = installed(self.parts.models.as_ref(), settings.selected_model_id()) {
             let _reported_by_dictation = self.ensure_loaded(&model);
         }
@@ -623,7 +622,7 @@ impl Worker {
             return self.cancelled(recording, &samples);
         }
         if !has_microphone_audio(&samples) {
-            return self.pipeline_failure(recording, &samples, PipelineFailureKind::NoAudio);
+            return self.transcript_failure(recording, &samples, TranscriptFailure::NoAudio);
         }
         // Every segment decodes or the dictation fails: a transcript never has a silent gap.
         let decoded = match self.decode_rest(recording, &samples, &segments) {
@@ -637,10 +636,10 @@ impl Worker {
                         return self.cancelled(recording, &samples);
                     }
                     Err(DecodeFailure::Failed) => {
-                        return self.pipeline_failure(
+                        return self.transcript_failure(
                             recording,
                             &samples,
-                            PipelineFailureKind::RecognitionFailed,
+                            TranscriptFailure::RecognitionFailed,
                         );
                     }
                 }
@@ -649,7 +648,7 @@ impl Worker {
         let settings = recording.settings.clone();
         let mut prepared = match prepare_segmented(&decoded, &settings.vocabulary) {
             Ok(prepared) => prepared,
-            Err(kind) => return self.pipeline_failure(recording, &samples, kind),
+            Err(failure) => return self.transcript_failure(recording, &samples, failure),
         };
         if let Some(plan) = &settings.cleanup {
             self.parts.state.apply(|state| {
@@ -672,7 +671,7 @@ impl Worker {
         &self,
         recording: &Recording,
         samples: &[f32],
-        prepared: PreparedTranscription,
+        prepared: PreparedTranscript,
     ) -> Outcome {
         let history = self.save_entry(recording, samples, NewEntry::Transcribed(&prepared));
         let notice = self

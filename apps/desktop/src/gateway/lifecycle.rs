@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 
 use super::{Failure, Gateway, settings::shortcut_error};
 use crate::{
@@ -13,13 +13,13 @@ impl Gateway {
         self.publish_error(&shortcut_error(error));
         self.shortcuts.capability_lost(error);
         let shortcut_recording = matches!(
-            self.services.state.lock().phase,
+            self.backend.state.lock().phase,
             Phase::Recording {
                 trigger: RecordingTrigger::Hold | RecordingTrigger::Toggle,
                 ..
             }
         );
-        if shortcut_recording && let Err(error) = self.services.dictation.cancel() {
+        if shortcut_recording && let Err(error) = self.backend.dictation.cancel() {
             tracing::debug!(
                 code = error.code,
                 "the shortcut recording was not cancelled"
@@ -29,9 +29,9 @@ impl Gateway {
 
     pub(crate) fn shortcut_action(&self, action: ShortcutAction) {
         let sent = match action {
-            ShortcutAction::Pressed(trigger) => self.services.dictation.shortcut_pressed(trigger),
-            ShortcutAction::HoldReleased => self.services.dictation.hold_released(),
-            ShortcutAction::CancelDictation => self.services.dictation.cancel(),
+            ShortcutAction::Pressed(trigger) => self.backend.dictation.shortcut_pressed(trigger),
+            ShortcutAction::HoldReleased => self.backend.dictation.hold_released(),
+            ShortcutAction::CancelDictation => self.backend.dictation.cancel(),
         };
         if let Err(error) = sent {
             tracing::warn!(code = error.code, "a shortcut was ignored");
@@ -42,8 +42,8 @@ impl Gateway {
     /// only logged.
     pub(crate) async fn cancel_dictation(&self) {
         if let Err(error) = self
-            .run_command("cancel_dictation", Failure::Local, |services| {
-                services.dictation.cancel()
+            .run_command("cancel_dictation", Failure::Local, |backend| {
+                backend.dictation.cancel()
             })
             .await
         {
@@ -54,8 +54,8 @@ impl Gateway {
     /// The tray has no place to show a failure, so a failed copy is only logged.
     pub(crate) async fn copy_last_transcript_from_tray(&self) {
         if let Err(error) = self
-            .run_command("copy_last_transcript", Failure::Local, |services| {
-                services.copy_last_transcript()
+            .run_command("copy_last_transcript", Failure::Local, |backend| {
+                backend.copy_last_transcript()
             })
             .await
         {
@@ -82,28 +82,27 @@ impl Gateway {
 
     /// Returns false when shutdown had already begun.
     pub(crate) fn begin_shutdown(&self) -> bool {
-        !self.shutdown_begun.swap(true, Ordering::AcqRel)
+        self.shutdown.begin()
     }
 
     /// The caller must have received `true` from [`Self::begin_shutdown`].
     pub(crate) fn finish_shutdown(&self) {
         self.shortcuts.shutdown();
-        self.services.request_shutdown();
+        self.backend.request_shutdown();
         drop(
             self.commands
                 .write()
                 .expect("command barrier lock poisoned"),
         );
-        self.services.shutdown();
-        self.shutdown_complete.store(true, Ordering::Release);
+        self.backend.shutdown();
+        self.shutdown.complete();
     }
 
     pub(crate) fn shutdown_complete(&self) -> bool {
-        self.shutdown_complete.load(Ordering::Acquire)
+        self.shutdown.is_complete()
     }
 
     pub(crate) fn shortcuts_enabled(&self) -> bool {
-        !self.shutdown_begun.load(Ordering::Acquire)
-            && self.services.state.lock().phase.shortcuts_enabled()
+        !self.shutdown.has_begun() && self.backend.state.lock().phase.shortcuts_enabled()
     }
 }

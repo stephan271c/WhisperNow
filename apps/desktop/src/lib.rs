@@ -29,14 +29,14 @@ use gateway::{
     },
     forward_events,
 };
-use services::NativeServices;
+use services::{Backend, Composition};
 use tauri::Manager as _;
 use tauri_plugin_global_shortcut::ShortcutState;
 use whispernow_domain::WindowGeometry;
 
 use crate::shortcuts::{
-    KeyTransition, ShortcutCoordinator, ShortcutEvent, ShortcutId, ShortcutRegistrar,
-    TauriShortcutRegistrar, cancel_binding, recording_binding,
+    KeyTransition, ShortcutEvent, ShortcutId, Shortcuts, StartedRegistrar, TauriShortcutRegistrar,
+    cancel_binding, recording_binding,
 };
 use crate::{
     activation::ActivationGate,
@@ -138,7 +138,7 @@ pub fn run() {
             move |app, _args, _cwd| {
                 let activate = callback_activation.request_activation(|| {
                     app.try_state::<Gateway>()
-                        .map(|state| state.services.state.snapshot().phase)
+                        .map(|state| state.backend.state.snapshot().phase)
                 });
                 if activate {
                     show_settings_window(app);
@@ -170,17 +170,19 @@ pub fn run() {
             let overlay = RecordingOverlay::new(floating_windows);
             let (events, event_receiver) = services::Events::channel();
             let resource_dir = app.path().resource_dir()?;
-            let (services, enable_autostart) =
-                NativeServices::compose(events, native_wayland, &resource_dir).map_err(
-                    |error| io::Error::other(format!("desktop setup failed ({})", error.code)),
-                )?;
-            let tray = TrayController::new(app, services.output.can_copy())?;
-            let settings = services.settings.load();
+            let Composition {
+                backend,
+                enable_autostart,
+            } = Backend::compose(events, native_wayland, &resource_dir).map_err(|error| {
+                io::Error::other(format!("desktop setup failed ({})", error.code))
+            })?;
+            let tray = TrayController::new(app, backend.output.can_copy())?;
+            let settings = backend.settings.snapshot();
             let start_minimized = settings.start_minimized;
             let autostart: Arc<dyn AutostartRegistration> =
                 Arc::new(TauriAutostart::new(app.handle().clone()));
             if enable_autostart && let Err(error) = autostart.set_enabled(true) {
-                services.state.publish_error(error);
+                backend.state.publish_error(error);
             }
             if let Some(geometry) = settings.window_geometry {
                 restore_settings_geometry(app, geometry);
@@ -195,15 +197,15 @@ pub fn run() {
                 tracing::warn!(%error, "settings window decorations could not be removed");
             }
             let persisted_binding = recording_binding(&settings);
-            let (registrar, startup_failure) = shortcut_registrar(
+            let StartedRegistrar { registrar, failure } = shortcut_registrar(
                 app.handle().clone(),
                 native_wayland,
                 setup_shortcut_events.clone(),
             )?;
             apply_initial_window_policy(app, start_minimized);
-            let services = Arc::new(services);
+            let backend = Arc::new(backend);
             let probe_app = app.handle().clone();
-            let shortcuts = Arc::new(ShortcutCoordinator::new(
+            let shortcuts = Arc::new(Shortcuts::new(
                 registrar,
                 persisted_binding,
                 Arc::new(move || {
@@ -211,25 +213,25 @@ pub fn run() {
                         .try_state::<Gateway>()
                         .is_some_and(|state| state.shortcuts_enabled())
                 }),
-                startup_failure,
+                failure,
             ));
             if let Some(error) = shortcuts.failure() {
                 tracing::warn!("configured push-to-talk shortcut is unavailable");
-                services.state.publish_error(gateway::shortcut_error(error));
+                backend.state.publish_error(gateway::shortcut_error(error));
             }
             shortcuts.set_cancel_binding(cancel_binding(&settings));
             app.manage(Gateway::new(
-                services,
+                backend,
                 shortcuts,
                 autostart,
                 Arc::clone(&activation),
                 tray,
             ));
-            NativeServices::spawn_retention_checks(Arc::clone(&app.state::<Gateway>().services));
+            Backend::spawn_retention_checks(Arc::clone(&app.state::<Gateway>().backend));
             let updates_enabled = !cfg!(debug_assertions) && !public_key.is_empty();
             let update_controller = updater::UpdateController::new(
                 app.handle().clone(),
-                Arc::clone(&app.state::<Gateway>().services),
+                Arc::clone(&app.state::<Gateway>().backend),
                 updates_enabled,
             );
             app.manage(Arc::clone(&update_controller));
@@ -237,13 +239,13 @@ pub fn run() {
                 updater::spawn_periodic_checks(update_controller);
             }
             // A second launch during setup asked for the window before there was a state.
-            if activation.release_deferred_activation(
-                &app.state::<Gateway>().services.state.snapshot().phase,
-            ) {
+            if activation
+                .release_deferred_activation(&app.state::<Gateway>().backend.state.snapshot().phase)
+            {
                 show_settings_window(app.handle());
             }
             forward_events(app.handle().clone(), overlay, event_receiver)?;
-            app.state::<Gateway>().services.state.publish();
+            app.state::<Gateway>().backend.state.publish();
             let shortcut_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = shortcut_receiver.recv().await {
@@ -296,7 +298,7 @@ pub fn run() {
                     tauri::async_runtime::spawn_blocking(move || {
                         if let Some(state) = app.try_state::<Gateway>()
                             && let Err(error) =
-                                state.services.settings.save_window_geometry(geometry)
+                                state.backend.settings.save_window_geometry(geometry)
                         {
                             tracing::warn!(code = error.code, "window geometry could not be saved");
                         }
@@ -358,10 +360,7 @@ fn shortcut_registrar(
     app: tauri::AppHandle,
     native_wayland: bool,
     events: tokio::sync::mpsc::UnboundedSender<ShortcutEvent>,
-) -> tauri::Result<(
-    Arc<dyn ShortcutRegistrar>,
-    Option<shortcuts::ShortcutRegistrationError>,
-)> {
+) -> tauri::Result<StartedRegistrar> {
     #[cfg(target_os = "linux")]
     if native_wayland {
         let identity = portal_identity::PortalIdentity::new(
@@ -369,12 +368,15 @@ fn shortcut_registrar(
             app.package_info().name.clone(),
             &app.path().data_dir()?,
         );
-        let (registrar, failure) =
-            wayland_shortcuts::WaylandShortcutRegistrar::spawn(identity, events);
-        return Ok((registrar, failure));
+        return Ok(wayland_shortcuts::WaylandShortcutRegistrar::spawn(
+            identity, events,
+        ));
     }
     let _ = (native_wayland, events);
-    Ok((Arc::new(TauriShortcutRegistrar::new(app)), None))
+    Ok(StartedRegistrar {
+        registrar: Arc::new(TauriShortcutRegistrar::new(app)),
+        failure: None,
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -448,8 +450,8 @@ fn handle_tray_action(app: &tauri::AppHandle, action: TrayAction) {
 }
 
 fn toggle_pause(state: &Gateway) {
-    let paused = matches!(state.services.state.lock().phase, services::Phase::Paused);
-    let dictation = &state.services.dictation;
+    let paused = matches!(state.backend.state.lock().phase, services::Phase::Paused);
+    let dictation = &state.backend.dictation;
     let changed = if paused {
         dictation.resume()
     } else {

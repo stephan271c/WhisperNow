@@ -13,19 +13,18 @@ use whispernow_domain::{
     CleanupTarget, EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, SettingChange,
     Settings, SetupCheckpoint, SetupProgress, SetupStep,
 };
-use whispernow_platform::{
-    AppPaths, LocalCleanupService, open_in_file_manager, open_privacy_settings,
-};
+use whispernow_platform::{AppPaths, LocalCleanupService, open_directory, open_privacy_settings};
 
+pub(crate) use compose::Composition;
 pub(crate) use dictation::Dictation;
 #[cfg(test)]
 pub(crate) use dictation::tests::Fixture;
 use history::HistoryStore;
 use microphone_test::MicrophoneTestError;
-use models::ModelCoordinator;
-use output::OutputCoordinator;
+use models::ModelLibrary;
+use output::Output;
 use permissions::{MicrophoneAccess, SessionFacts, permission_states};
-use settings::{SettingsCoordinator, require_connected_device, settings_error};
+use settings::{SavedSettings, require_connected_device, settings_error};
 pub(crate) use state::{Events, StateCell};
 pub(crate) use whispernow_domain::ipc::{Phase, RecordingTrigger};
 
@@ -42,22 +41,22 @@ mod state;
 #[cfg(test)]
 mod test_support;
 
-/// Tauri commands call its coordinators directly, and its own methods for work that spans
-/// several coordinators.
-pub(crate) struct NativeServices {
-    pub(crate) settings: Arc<SettingsCoordinator>,
+/// Tauri commands call its components directly, and its own methods for work that spans
+/// several of them.
+pub(crate) struct Backend {
+    pub(crate) settings: Arc<SavedSettings>,
     pub(crate) history: Arc<HistoryStore>,
     audio: Arc<dyn AudioInput>,
-    pub(crate) models: ModelCoordinator,
+    pub(crate) models: ModelLibrary,
     pub(crate) state: Arc<StateCell>,
     pub(crate) dictation: Dictation,
     paths: AppPaths,
-    pub(crate) output: Arc<OutputCoordinator>,
+    pub(crate) output: Arc<Output>,
     microphone_access: MicrophoneAccess,
     local_cleanup: Arc<LocalCleanupService>,
 }
 
-impl NativeServices {
+impl Backend {
     /// A change or a failure broadcasts `HistoryChanged` so every listener re-fetches. The
     /// history store's lock orders it against dictations.
     fn run_history_mutation(
@@ -72,13 +71,13 @@ impl NativeServices {
     }
 
     /// Runs daily so entries expire while the app sits minimized for days.
-    pub(crate) fn spawn_retention_checks(services: Arc<Self>) {
+    pub(crate) fn spawn_retention_checks(backend: Arc<Self>) {
         tauri::async_runtime::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_hours(24));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
-                let pruning = Arc::clone(&services);
+                let pruning = Arc::clone(&backend);
                 if let Err(error) =
                     tauri::async_runtime::spawn_blocking(move || pruning.prune_expired_history())
                         .await
@@ -159,7 +158,7 @@ impl NativeServices {
         result
     }
 
-    /// The shortcut portal's consent is the shortcut coordinator's to report, so the caller
+    /// The shortcut portal's consent is `Shortcuts`' to report, so the caller
     /// passes it in.
     pub(crate) fn permissions(&self, global_shortcuts: PermissionStatus) -> PermissionsResponse {
         permission_states(
@@ -235,7 +234,7 @@ impl NativeServices {
                 "Review every setup step before finishing",
             ));
         }
-        let before = self.settings.load();
+        let before = self.settings.snapshot();
         {
             let state = self.state.lock();
             if before.setup.is_complete() {
@@ -262,7 +261,10 @@ impl NativeServices {
     /// Reads in any phase; only the history store's own lock orders it against changes and data
     /// clearing. A search that is too long is the search field's problem; a store that cannot be
     /// read, or a problem found while opening it, is the application's.
-    pub(crate) fn history(&self, request: &HistoryPageRequest) -> Result<HistoryPage, AppError> {
+    pub(crate) fn history_page(
+        &self,
+        request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, AppError> {
         if request.filter.query.len() > HistoryFilter::MAX_QUERY_BYTES {
             return Err(AppError::new(
                 ErrorCategory::General,
@@ -278,7 +280,7 @@ impl NativeServices {
     /// The path never crosses the webview boundary.
     pub(crate) fn open_recordings_folder(&self) -> Result<(), AppError> {
         let directory = self.history.recordings_dir()?;
-        open_in_file_manager(&directory)
+        open_directory(&directory)
             .inspect_err(
                 |error| tracing::warn!(%error, "the recordings folder could not be opened"),
             )
@@ -312,7 +314,7 @@ impl NativeServices {
         // Output admission is closed by request_shutdown; joining its producer
         // before draining also covers the helper's early keystroke response.
         self.output.shutdown();
-        self.state.lock().active_downloads.clear();
+        self.state.apply(|state| state.active_downloads.clear());
     }
 }
 

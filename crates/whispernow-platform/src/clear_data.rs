@@ -3,21 +3,30 @@
 use std::{fs, io, iter, path::PathBuf};
 
 use whispernow_domain::ClearDataCategory;
-use whispernow_domain::ipc::{ClearDataItem, DataLocation};
+use whispernow_domain::ipc::{ClearDataItem, DataLocation, DataPlace};
 
 use crate::{AppPaths, atomic_file::remove_path};
 
 #[derive(Debug)]
 struct Target {
-    location: DataLocation,
+    category: ClearDataCategory,
+    path: PathBuf,
     removable: bool,
 }
 
 impl Target {
     fn new(category: ClearDataCategory, path: PathBuf) -> Self {
         Self {
-            location: DataLocation { category, path },
+            category,
+            path,
             removable: true,
+        }
+    }
+
+    fn location(&self) -> DataLocation {
+        DataLocation {
+            category: self.category,
+            place: DataPlace::Path(self.path.clone()),
         }
     }
 
@@ -37,10 +46,7 @@ pub struct ClearPlan {
 impl ClearPlan {
     #[must_use]
     pub fn locations(&self) -> Vec<DataLocation> {
-        self.targets
-            .iter()
-            .map(|target| target.location.clone())
-            .collect()
+        self.targets.iter().map(Target::location).collect()
     }
 
     /// The history database and recordings belong to the open history repository; they are
@@ -49,14 +55,14 @@ impl ClearPlan {
     pub fn remove(&self, categories: &[ClearDataCategory]) -> Vec<ClearDataItem> {
         self.targets
             .iter()
-            .filter(|target| target.removable && categories.contains(&target.location.category))
-            .map(|Target { location, .. }| {
-                let deleted = match remove_path(&location.path) {
+            .filter(|target| target.removable && categories.contains(&target.category))
+            .map(|target| {
+                let deleted = match remove_path(&target.path) {
                     Ok(()) => true,
                     Err(error) if error.kind() == io::ErrorKind::NotFound => true,
                     Err(error) => {
                         tracing::warn!(
-                            category = ?location.category,
+                            category = ?target.category,
                             kind = ?error.kind(),
                             "application data could not be deleted"
                         );
@@ -64,7 +70,7 @@ impl ClearPlan {
                     }
                 };
                 ClearDataItem {
-                    location: location.clone(),
+                    location: target.location(),
                     deleted,
                 }
             })
@@ -80,7 +86,7 @@ impl AppPaths {
     pub fn clear_plan(&self, categories: &[ClearDataCategory]) -> io::Result<ClearPlan> {
         let mut targets = Vec::new();
         for target in self.fixed_targets(categories)? {
-            match fs::symlink_metadata(&target.location.path) {
+            match fs::symlink_metadata(&target.path) {
                 Ok(_) => targets.push(target),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
@@ -125,13 +131,16 @@ impl AppPaths {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
 
     use tempfile::TempDir;
 
     use super::ClearDataCategory;
     use crate::AppPaths;
-    use whispernow_domain::ipc::ClearDataItem;
+    use whispernow_domain::ipc::{ClearDataItem, DataLocation, DataPlace};
 
     const EVERYTHING: [ClearDataCategory; 3] = [
         ClearDataCategory::Settings,
@@ -175,6 +184,13 @@ mod tests {
             .clear_plan(categories)
             .expect("clear plan")
             .remove(categories)
+    }
+
+    fn path_of(location: DataLocation) -> PathBuf {
+        match location.place {
+            DataPlace::Path(path) => path,
+            place => panic!("{place:?} is not a path"),
+        }
     }
 
     fn create_file(path: &Path) {
@@ -227,16 +243,9 @@ mod tests {
         assert!(report.iter().all(|entry| entry.deleted));
         let remaining = paths.data_locations().expect("remaining targets");
         assert_eq!(remaining.len(), 2);
-        assert!(
-            remaining
-                .iter()
-                .any(|item| item.path == paths.history_database_file())
-        );
-        assert!(
-            remaining
-                .iter()
-                .any(|item| item.path == paths.recordings_dir())
-        );
+        let remaining: Vec<_> = remaining.into_iter().map(path_of).collect();
+        assert!(remaining.contains(&paths.history_database_file()));
+        assert!(remaining.contains(&paths.recordings_dir()));
         assert!(config_sentinel.exists());
         assert!(data_sentinel.exists());
         assert!(fixture.paths.config_dir().is_dir());
@@ -322,7 +331,7 @@ mod tests {
             .expect("locations")
             .into_iter()
             .filter(|location| location.category == ClearDataCategory::Settings)
-            .map(|location| location.path)
+            .map(path_of)
             .collect::<Vec<_>>();
         assert_eq!(
             settings_paths,
@@ -354,10 +363,7 @@ mod tests {
         }
         let locations = fixture.paths.data_locations().expect("locations");
         assert_eq!(
-            locations
-                .into_iter()
-                .map(|location| location.path)
-                .collect::<Vec<_>>(),
+            locations.into_iter().map(path_of).collect::<Vec<_>>(),
             vec![earlier.clone(), later.clone(), imported.clone()]
         );
 

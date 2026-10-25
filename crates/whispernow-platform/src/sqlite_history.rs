@@ -359,14 +359,9 @@ const fn status_text(status: EntryStatus) -> &'static str {
 }
 
 fn parse_status(text: &str) -> Option<EntryStatus> {
-    [
-        EntryStatus::Ok,
-        EntryStatus::Failed,
-        EntryStatus::Cancelled,
-        EntryStatus::NotDelivered,
-    ]
-    .into_iter()
-    .find(|status| status_text(*status) == text)
+    EntryStatus::ALL
+        .into_iter()
+        .find(|status| status_text(*status) == text)
 }
 
 /// Writes normalized mono 16-kHz samples as a 16-bit WAV, so a crash never leaves a partial

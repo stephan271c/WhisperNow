@@ -1,8 +1,8 @@
 use serde_json::to_value;
 
 use super::{
-    AppState, ClearDataItem, DataLocation, EventPayload, ModelState, Phase, RecordingTrigger,
-    UpdatePhase, UpdateProgress, UpdateState,
+    AppState, ClearDataItem, DataLocation, DataPlace, EventPayload, ModelState, Phase,
+    RecordingTrigger, UpdatePhase, UpdateProgress, UpdateState,
 };
 use crate::{AppError, ClearDataCategory, ErrorCategory, ModelId};
 
@@ -130,20 +130,36 @@ fn every_event_carries_its_variant_in_the_type_tag() {
 
 #[test]
 fn a_clear_data_item_keeps_its_location_fields_at_the_top_level() {
-    let item = ClearDataItem {
-        location: DataLocation {
-            category: ClearDataCategory::Settings,
-            path: "/data/settings.json".into(),
-        },
-        deleted: true,
-    };
-    let json = to_value(&item).expect("serialize");
-    assert_eq!(
-        json,
-        serde_json::json!({"category": "settings", "path": "/data/settings.json", "deleted": true})
-    );
-    assert_eq!(
-        serde_json::from_value::<ClearDataItem>(json).expect("deserialize"),
-        item
-    );
+    let places = [
+        (
+            DataPlace::Path("/data/settings.json".into()),
+            serde_json::json!({"path": "/data/settings.json"}),
+        ),
+        (
+            DataPlace::HistoryEntries,
+            serde_json::json!("history_entries"),
+        ),
+        (
+            DataPlace::CredentialStore,
+            serde_json::json!("credential_store"),
+        ),
+    ];
+    for (place, tag) in places {
+        let item = ClearDataItem {
+            location: DataLocation {
+                category: ClearDataCategory::Settings,
+                place,
+            },
+            deleted: true,
+        };
+        let json = to_value(&item).expect("serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({"category": "settings", "place": tag, "deleted": true})
+        );
+        assert_eq!(
+            serde_json::from_value::<ClearDataItem>(json).expect("deserialize"),
+            item
+        );
+    }
 }

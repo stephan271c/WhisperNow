@@ -12,7 +12,7 @@ use crate::audio::TARGET_SAMPLE_RATE;
 pub trait VoiceActivity: Send {
     /// Classifies one frame of normalized mono 16-kHz audio. Every frame is
     /// [`FRAME_SAMPLES`] long; a final partial frame is zero-padded.
-    fn is_speech(&mut self, frame: &[f32]) -> bool;
+    fn poll_speech(&mut self, frame: &[f32]) -> bool;
 }
 
 /// Treats every frame as speech. Used when no detector is available: segments then end only at
@@ -21,7 +21,7 @@ pub trait VoiceActivity: Send {
 pub struct AlwaysSpeech;
 
 impl VoiceActivity for AlwaysSpeech {
-    fn is_speech(&mut self, _frame: &[f32]) -> bool {
+    fn poll_speech(&mut self, _frame: &[f32]) -> bool {
         true
     }
 }
@@ -123,13 +123,13 @@ impl SpeechSegmenter {
                 return finished;
             }
             let mut frame = std::mem::take(&mut self.partial);
-            self.process_frame(&frame, FRAME_SAMPLES, &mut finished);
+            finished.extend(self.process_frame(&frame, FRAME_SAMPLES));
             frame.clear();
             self.partial = frame;
         }
         let mut frames = samples.chunks_exact(FRAME_SAMPLES);
         for frame in &mut frames {
-            self.process_frame(frame, FRAME_SAMPLES, &mut finished);
+            finished.extend(self.process_frame(frame, FRAME_SAMPLES));
         }
         self.partial.extend_from_slice(frames.remainder());
         finished
@@ -142,23 +142,21 @@ impl SpeechSegmenter {
             let len = self.partial.len();
             let mut frame = std::mem::take(&mut self.partial);
             frame.resize(FRAME_SAMPLES, 0.0);
-            self.process_frame(&frame, len, &mut finished);
+            finished.extend(self.process_frame(&frame, len));
         }
-        if let Some(open) = self.open.take() {
-            self.close(&open, &mut finished);
-        }
+        finished.extend(self.open.take().and_then(|open| self.close(&open)));
         finished
     }
 
-    fn process_frame(&mut self, frame: &[f32], len: usize, finished: &mut Vec<AudioSegment>) {
+    fn process_frame(&mut self, frame: &[f32], len: usize) -> Option<AudioSegment> {
         let start = self.position;
         let end = start + len;
         self.position = end;
-        let speech = self.activity.is_speech(frame);
+        let speech = self.activity.poll_speech(frame);
         if self.open.is_none() && !speech {
-            return;
+            return None;
         }
-        let open = self.open.get_or_insert_with(|| OpenSegment {
+        let mut open = self.open.take().unwrap_or_else(|| OpenSegment {
             start: start.saturating_sub(PADDING_SAMPLES).max(self.emitted_end),
             speech_end: start,
             speech_samples: 0,
@@ -188,38 +186,28 @@ impl SpeechSegmenter {
         let pause = end - open.speech_end;
         if !speech && !open.held && pause >= END_SILENCE_SAMPLES {
             if open.speech_samples >= MIN_SEGMENT_SPEECH_SAMPLES {
-                self.close_open(finished);
-                return;
+                return self.close(&open);
             }
             open.held = true;
         }
         if open.held && pause >= MAX_MERGE_GAP_SAMPLES {
-            self.close_open(finished);
-            return;
+            return self.close(&open);
         }
         if end - open.start >= self.max_samples {
-            self.force_cut(finished);
+            return self.force_cut(open);
         }
+        self.open = Some(open);
+        None
     }
 
-    fn close_open(&mut self, finished: &mut Vec<AudioSegment>) {
-        if let Some(open) = self.open.take() {
-            self.close(&open, finished);
-        }
-    }
-
-    fn close(&mut self, open: &OpenSegment, finished: &mut Vec<AudioSegment>) {
+    fn close(&mut self, open: &OpenSegment) -> Option<AudioSegment> {
         let end = (open.speech_end + PADDING_SAMPLES).min(self.position);
-        self.emit(open.start, end, open.speech_samples, finished);
+        self.emit(open.start, end, open.speech_samples)
     }
 
     /// Cuts the open segment in the middle of the longest pause in its second half, or without a
     /// pause there at the quietest frame, preferring the latest on ties. The remainder stays open.
-    fn force_cut(&mut self, finished: &mut Vec<AudioSegment>) {
-        let mut open = self
-            .open
-            .take()
-            .expect("forced cut requires an open segment");
+    fn force_cut(&mut self, mut open: OpenSegment) -> Option<AudioSegment> {
         let window = || open.recent.iter().filter(|frame| frame.start > open.start);
         let cut = longest_pause_middle(window()).unwrap_or_else(|| {
             window()
@@ -233,12 +221,7 @@ impl SpeechSegmenter {
             .filter(|frame| frame.speech && frame.start >= cut)
             .map(|frame| frame.len)
             .sum();
-        self.emit(
-            open.start,
-            cut,
-            open.speech_samples - remainder_speech,
-            finished,
-        );
+        let segment = self.emit(open.start, cut, open.speech_samples - remainder_speech);
         if cut < self.position {
             open.recent.retain(|frame| frame.start >= cut);
             open.start = cut;
@@ -246,23 +229,16 @@ impl SpeechSegmenter {
             open.speech_samples = remainder_speech;
             self.open = Some(open);
         }
+        segment
     }
 
-    fn emit(
-        &mut self,
-        start: usize,
-        end: usize,
-        speech_samples: usize,
-        finished: &mut Vec<AudioSegment>,
-    ) {
+    fn emit(&mut self, start: usize, end: usize, speech_samples: usize) -> Option<AudioSegment> {
         self.emitted_end = end;
-        if speech_samples >= MIN_KEPT_SPEECH_SAMPLES {
-            finished.push(AudioSegment {
-                start,
-                end,
-                speech_samples,
-            });
-        }
+        (speech_samples >= MIN_KEPT_SPEECH_SAMPLES).then_some(AudioSegment {
+            start,
+            end,
+            speech_samples,
+        })
     }
 }
 
@@ -315,7 +291,7 @@ mod tests {
     struct EnergyActivity;
 
     impl VoiceActivity for EnergyActivity {
-        fn is_speech(&mut self, frame: &[f32]) -> bool {
+        fn poll_speech(&mut self, frame: &[f32]) -> bool {
             mean_square(frame) > 0.01 * 0.01
         }
     }

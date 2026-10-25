@@ -23,7 +23,7 @@ use std::{
 #[cfg(target_os = "linux")]
 use whispernow_platform::{
     NativeClipboard,
-    wayland::{RemoteDesktopRestoreTokenStore, WaylandOutput, WaylandPortalError},
+    wayland::{PortalOutput, PortalOutputError, RemoteDesktopRestoreTokenStore},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,7 +43,7 @@ pub(crate) trait TranscriptOutput: Send + Sync {
 /// The [`PasteQueue`]s run one paste at a time, so a paste never snapshots another's
 /// transcript, and the Wayland portal runs on one joined worker that handles one command at
 /// a time.
-pub(crate) struct OutputCoordinator {
+pub(crate) struct Output {
     operation: Option<OutputOperation>,
     stopping: CancellationToken,
 }
@@ -62,7 +62,7 @@ enum OutputOperation {
     },
 }
 
-impl OutputCoordinator {
+impl Output {
     #[cfg_attr(not(target_os = "linux"), expect(clippy::needless_pass_by_value))]
     pub(crate) fn native(wayland_token_path: Option<PathBuf>) -> Self {
         let stopping = CancellationToken::default();
@@ -209,7 +209,7 @@ impl OutputCoordinator {
     }
 }
 
-impl TranscriptOutput for OutputCoordinator {
+impl TranscriptOutput for Output {
     fn output(&self, text: &str, cancellation: &CancellationToken) -> OutputNotice {
         Self::output(self, text, cancellation)
     }
@@ -262,7 +262,7 @@ where
         let (progress, reports) = std_mpsc::channel();
         {
             // Admission and worker registration share the drain lock, so a producer
-            // that passed the coordinator's earlier check cannot escape shutdown.
+            // that passed `Output`'s earlier check cannot escape shutdown.
             let mut workers = self.workers.lock().expect("paste workers lock poisoned");
             if self.stopping.is_cancelled() {
                 return OutputNotice::PasteFailed;
@@ -310,10 +310,10 @@ enum WaylandOutputCommand {
     Paste {
         text: String,
         cancellation: CancellationToken,
-        reply: std_mpsc::SyncSender<PasteOutcome<WaylandPortalError>>,
+        reply: std_mpsc::SyncSender<PasteOutcome<PortalOutputError>>,
     },
     Prepare {
-        reply: std_mpsc::SyncSender<Result<(), WaylandPortalError>>,
+        reply: std_mpsc::SyncSender<Result<(), PortalOutputError>>,
     },
     Shutdown {
         reply: std_mpsc::SyncSender<()>,
@@ -332,12 +332,12 @@ struct WaylandOutputPortal {
 }
 
 #[cfg(target_os = "linux")]
-const fn failure_consent(error: WaylandPortalError) -> Option<PermissionStatus> {
+const fn failure_consent(error: PortalOutputError) -> Option<PermissionStatus> {
     match error {
-        WaylandPortalError::PermissionDenied | WaylandPortalError::KeyboardUnavailable => {
+        PortalOutputError::PermissionDenied | PortalOutputError::KeyboardUnavailable => {
             Some(PermissionStatus::Denied)
         }
-        WaylandPortalError::PortalUnavailable | WaylandPortalError::Disconnected => {
+        PortalOutputError::PortalUnavailable | PortalOutputError::Disconnected => {
             Some(PermissionStatus::Unavailable)
         }
         _ => None,
@@ -379,7 +379,7 @@ impl WaylandOutputPortal {
         mut receiver: tokio::sync::mpsc::UnboundedReceiver<WaylandOutputCommand>,
         stopping: CancellationToken,
     ) {
-        let mut portal = WaylandOutput::new(restore_token_path);
+        let mut portal = PortalOutput::new(restore_token_path);
         while let Some(command) = receiver.recv().await {
             match command {
                 WaylandOutputCommand::Paste {
@@ -403,7 +403,7 @@ impl WaylandOutputPortal {
                         }
                     };
                     let _ = reply
-                        .send(result.unwrap_or(PasteOutcome::Failed(WaylandPortalError::Backend)));
+                        .send(result.unwrap_or(PasteOutcome::Failed(PortalOutputError::Backend)));
                 }
                 WaylandOutputCommand::Prepare { reply } => {
                     // Stopping the application drops the wait for the
@@ -412,8 +412,8 @@ impl WaylandOutputPortal {
                         result = tokio::time::timeout(
                             Self::PORTAL_TIMEOUT,
                             portal.prepare_output(),
-                        ) => result.unwrap_or(Err(WaylandPortalError::Backend)),
-                        () = stopping.cancelled() => Err(WaylandPortalError::Cancelled),
+                        ) => result.unwrap_or(Err(PortalOutputError::Backend)),
+                        () = stopping.cancelled() => Err(PortalOutputError::Cancelled),
                     };
                     let _ = reply.send(result);
                 }
@@ -462,7 +462,7 @@ impl WaylandOutputPortal {
         let consent = match receiver.recv() {
             Ok(Ok(())) => Some(PermissionStatus::Granted),
             Ok(Err(error)) => failure_consent(error),
-            Err(_) => failure_consent(WaylandPortalError::Disconnected),
+            Err(_) => failure_consent(PortalOutputError::Disconnected),
         };
         self.record_consent(consent);
         self.consent()
@@ -670,22 +670,19 @@ mod tests {
 
         use whispernow_core::{CancellationToken, text_output::PasteOutcome};
         use whispernow_domain::ipc::PermissionStatus;
-        use whispernow_platform::wayland::{RemoteDesktopRestoreTokenStore, WaylandPortalError};
+        use whispernow_platform::wayland::{PortalOutputError, RemoteDesktopRestoreTokenStore};
 
         use super::super::{
-            OutputCoordinator, OutputNotice, OutputOperation, WaylandOutputCommand,
-            WaylandOutputPortal,
+            Output, OutputNotice, OutputOperation, WaylandOutputCommand, WaylandOutputPortal,
         };
 
         enum PortalAnswer {
-            Prepare(Result<(), WaylandPortalError>),
-            Paste(PasteOutcome<WaylandPortalError>),
-            PasteAfterCancel(PasteOutcome<WaylandPortalError>),
+            Prepare(Result<(), PortalOutputError>),
+            Paste(PasteOutcome<PortalOutputError>),
+            PasteAfterCancel(PasteOutcome<PortalOutputError>),
         }
 
-        fn scripted(
-            answers: impl IntoIterator<Item = PortalAnswer>,
-        ) -> (OutputCoordinator, Arc<AtomicUsize>) {
+        fn scripted(answers: impl IntoIterator<Item = PortalAnswer>) -> (Output, Arc<AtomicUsize>) {
             let mut answers: VecDeque<_> = answers.into_iter().collect();
             let pastes = Arc::new(AtomicUsize::new(0));
             let restore_dir = tempfile::tempdir().expect("restore token directory");
@@ -728,7 +725,7 @@ mod tests {
                     }
                 })
             };
-            let coordinator = OutputCoordinator {
+            let output = Output {
                 operation: Some(OutputOperation::Wayland {
                     portal: WaylandOutputPortal {
                         commands,
@@ -741,75 +738,75 @@ mod tests {
                 }),
                 stopping: CancellationToken::default(),
             };
-            (coordinator, pastes)
+            (output, pastes)
         }
 
         #[test]
         fn only_portal_permission_failures_ask_for_permission() {
             for (reply, expected) in [
                 (
-                    PasteOutcome::Failed(WaylandPortalError::PermissionDenied),
+                    PasteOutcome::Failed(PortalOutputError::PermissionDenied),
                     OutputNotice::PermissionDenied,
                 ),
                 (
-                    PasteOutcome::Failed(WaylandPortalError::KeyboardUnavailable),
+                    PasteOutcome::Failed(PortalOutputError::KeyboardUnavailable),
                     OutputNotice::PermissionDenied,
                 ),
                 (
-                    PasteOutcome::Failed(WaylandPortalError::Backend),
+                    PasteOutcome::Failed(PortalOutputError::Backend),
                     OutputNotice::PasteFailed,
                 ),
             ] {
-                let (coordinator, pastes) = scripted([PortalAnswer::Paste(reply)]);
+                let (output, pastes) = scripted([PortalAnswer::Paste(reply)]);
                 assert_eq!(
-                    coordinator.output("transcript", &CancellationToken::default()),
+                    output.output("transcript", &CancellationToken::default()),
                     expected,
                     "{reply:?}"
                 );
                 assert_eq!(pastes.load(Ordering::SeqCst), 1);
-                coordinator.shutdown();
+                output.shutdown();
             }
         }
 
         #[test]
         fn a_paste_that_fails_after_a_cancel_reports_the_cancel() {
-            let (coordinator, _) = scripted([PortalAnswer::PasteAfterCancel(
-                PasteOutcome::Failed(WaylandPortalError::Backend),
-            )]);
+            let (output, _) = scripted([PortalAnswer::PasteAfterCancel(PasteOutcome::Failed(
+                PortalOutputError::Backend,
+            ))]);
             assert_eq!(
-                coordinator.output("transcript", &CancellationToken::default()),
+                output.output("transcript", &CancellationToken::default()),
                 OutputNotice::Cancelled
             );
-            coordinator.shutdown();
+            output.shutdown();
         }
 
         #[test]
         fn empty_stopping_and_cancelled_output_never_reach_the_portal() {
-            let (coordinator, pastes) = scripted([]);
+            let (output, pastes) = scripted([]);
             assert_eq!(
-                coordinator.output("", &CancellationToken::default()),
+                output.output("", &CancellationToken::default()),
                 OutputNotice::PasteFailed
             );
             let cancelled = CancellationToken::default();
             cancelled.cancel();
             assert_eq!(
-                coordinator.output("transcript", &cancelled),
+                output.output("transcript", &cancelled),
                 OutputNotice::Cancelled
             );
-            coordinator.request_shutdown();
+            output.request_shutdown();
             assert_eq!(
-                coordinator.output("transcript", &CancellationToken::default()),
+                output.output("transcript", &CancellationToken::default()),
                 OutputNotice::PasteFailed
             );
             assert_eq!(pastes.load(Ordering::SeqCst), 0);
-            coordinator.shutdown();
+            output.shutdown();
         }
 
         #[test]
         fn a_portal_without_a_worker_reports_the_capability_unavailable() {
             let restore_dir = tempfile::tempdir().expect("restore token directory");
             let (commands, _receiver) = tokio::sync::mpsc::unbounded_channel();
-            let coordinator = OutputCoordinator {
+            let output = Output {
                 operation: Some(OutputOperation::Wayland {
                     portal: WaylandOutputPortal {
                         commands,
@@ -825,45 +822,42 @@ mod tests {
                 stopping: CancellationToken::default(),
             };
             assert_eq!(
-                coordinator.output("transcript", &CancellationToken::default()),
+                output.output("transcript", &CancellationToken::default()),
                 OutputNotice::CapabilityUnavailable
             );
             assert_eq!(
-                coordinator.remote_desktop_consent(),
+                output.remote_desktop_consent(),
                 Some(PermissionStatus::Unavailable)
             );
             assert_eq!(
-                coordinator.request_remote_desktop_consent(),
+                output.request_remote_desktop_consent(),
                 Some(PermissionStatus::Unavailable)
             );
-            assert!(!coordinator.can_copy());
+            assert!(!output.can_copy());
             assert_eq!(
-                coordinator
-                    .copy("transcript")
-                    .expect_err("no clipboard")
-                    .code,
+                output.copy("transcript").expect_err("no clipboard").code,
                 "copy_unavailable"
             );
         }
 
         #[test]
         fn the_last_portal_answer_decides_the_paste_consent() {
-            let (coordinator, pastes) = scripted([
+            let (output, pastes) = scripted([
                 PortalAnswer::Prepare(Ok(())),
-                PortalAnswer::Paste(PasteOutcome::Failed(WaylandPortalError::PermissionDenied)),
-                PortalAnswer::Paste(PasteOutcome::Failed(WaylandPortalError::Backend)),
-                PortalAnswer::Paste(PasteOutcome::Failed(WaylandPortalError::PortalUnavailable)),
+                PortalAnswer::Paste(PasteOutcome::Failed(PortalOutputError::PermissionDenied)),
+                PortalAnswer::Paste(PasteOutcome::Failed(PortalOutputError::Backend)),
+                PortalAnswer::Paste(PasteOutcome::Failed(PortalOutputError::PortalUnavailable)),
             ]);
-            let initial = coordinator.remote_desktop_consent();
-            let prepared = coordinator.request_remote_desktop_consent();
+            let initial = output.remote_desktop_consent();
+            let prepared = output.request_remote_desktop_consent();
             let pastes_after_preparation = pastes.load(Ordering::SeqCst);
-            let denied = coordinator.output("transcript", &CancellationToken::default());
-            let consent_after_denial = coordinator.remote_desktop_consent();
-            let backend_failed = coordinator.output("transcript", &CancellationToken::default());
-            let consent_after_backend = coordinator.remote_desktop_consent();
-            let unavailable = coordinator.output("transcript", &CancellationToken::default());
-            let consent_after_unavailable = coordinator.remote_desktop_consent();
-            coordinator.shutdown();
+            let denied = output.output("transcript", &CancellationToken::default());
+            let consent_after_denial = output.remote_desktop_consent();
+            let backend_failed = output.output("transcript", &CancellationToken::default());
+            let consent_after_backend = output.remote_desktop_consent();
+            let unavailable = output.output("transcript", &CancellationToken::default());
+            let consent_after_unavailable = output.remote_desktop_consent();
+            output.shutdown();
 
             assert_eq!(initial, Some(PermissionStatus::NotDetermined));
             assert_eq!(prepared, Some(PermissionStatus::Granted));
@@ -884,22 +878,22 @@ mod tests {
 
         #[test]
         fn answers_that_show_no_consent_leave_it_unchanged() {
-            let (coordinator, _) = scripted([
-                PortalAnswer::Prepare(Err(WaylandPortalError::PermissionDenied)),
-                PortalAnswer::Prepare(Err(WaylandPortalError::Backend)),
+            let (output, _) = scripted([
+                PortalAnswer::Prepare(Err(PortalOutputError::PermissionDenied)),
+                PortalAnswer::Prepare(Err(PortalOutputError::Backend)),
                 PortalAnswer::Paste(PasteOutcome::Cancelled),
-                PortalAnswer::Paste(PasteOutcome::Failed(WaylandPortalError::Disconnected)),
+                PortalAnswer::Paste(PasteOutcome::Failed(PortalOutputError::Disconnected)),
                 PortalAnswer::Paste(PasteOutcome::PastedAndRestored),
             ]);
-            let denied = coordinator.request_remote_desktop_consent();
-            let after_backend_failure = coordinator.request_remote_desktop_consent();
-            let cancelled = coordinator.output("transcript", &CancellationToken::default());
-            let after_cancel = coordinator.remote_desktop_consent();
-            let disconnected = coordinator.output("transcript", &CancellationToken::default());
-            let after_disconnect = coordinator.remote_desktop_consent();
-            let pasted = coordinator.output("transcript", &CancellationToken::default());
-            let after_paste = coordinator.remote_desktop_consent();
-            coordinator.shutdown();
+            let denied = output.request_remote_desktop_consent();
+            let after_backend_failure = output.request_remote_desktop_consent();
+            let cancelled = output.output("transcript", &CancellationToken::default());
+            let after_cancel = output.remote_desktop_consent();
+            let disconnected = output.output("transcript", &CancellationToken::default());
+            let after_disconnect = output.remote_desktop_consent();
+            let pasted = output.output("transcript", &CancellationToken::default());
+            let after_paste = output.remote_desktop_consent();
+            output.shutdown();
 
             assert_eq!(denied, Some(PermissionStatus::Denied));
             assert_eq!(after_backend_failure, Some(PermissionStatus::Denied));

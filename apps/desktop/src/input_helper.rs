@@ -12,6 +12,7 @@ use std::{
     ffi::OsStr,
     fs, io,
     io::{BufRead as _, BufReader, Read, Write as _},
+    ops::ControlFlow,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{Arc, mpsc},
@@ -32,11 +33,11 @@ const READY_TIMEOUT: Duration = Duration::from_secs(2);
 /// The helper waits up to a second for held modifiers before it answers.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// `None` reports stdout closing; returning false stops reading it.
+/// `None` reports stdout closing; `ControlFlow::Break` stops reading it.
 fn spawn(
     path: &Path,
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
-    mut on_line: impl FnMut(Option<String>) -> bool + Send + 'static,
+    mut on_line: impl FnMut(Option<String>) -> ControlFlow<()> + Send + 'static,
 ) -> io::Result<Child> {
     let mut child = Command::new(path)
         .args(args)
@@ -47,11 +48,11 @@ fn spawn(
     if let Some(stdout) = child.stdout.take() {
         thread::spawn(move || {
             for line in lines(stdout) {
-                if !on_line(Some(line)) {
+                if on_line(Some(line)).is_break() {
                     return;
                 }
             }
-            on_line(None);
+            let _ = on_line(None);
         });
     }
     if let Some(stderr) = child.stderr.take() {
@@ -138,19 +139,17 @@ impl ReleaseWatcher {
         let on_event = Arc::new(on_event);
         let reader_event = Arc::clone(&on_event);
         let spawned = spawn(&helper, [chord], move |line| {
-            let event = match line.as_deref() {
-                None => ReleaseEvent::Unavailable,
-                Some(line) => {
-                    let Some(event) = ReleaseEvent::parse(line) else {
-                        tracing::warn!("the release helper returned an invalid response");
-                        reader_event(ReleaseEvent::Unavailable);
-                        return false;
-                    };
-                    event
-                }
+            let Some(line) = line else {
+                reader_event(ReleaseEvent::Unavailable);
+                return ControlFlow::Break(());
+            };
+            let Some(event) = ReleaseEvent::parse(&line) else {
+                tracing::warn!("the release helper returned an invalid response");
+                reader_event(ReleaseEvent::Unavailable);
+                return ControlFlow::Break(());
             };
             reader_event(event);
-            line.is_some()
+            ControlFlow::Continue(())
         });
         match spawned {
             Ok(child) => self.child = Some(child),
@@ -185,7 +184,10 @@ impl HelperPastePlatform {
             .ok()?;
         let (sender, answers) = mpsc::channel();
         let mut helper = spawn(&path, ["--paste"], move |line| {
-            line.is_some_and(|line| sender.send(line).is_ok())
+            match line.map(|line| sender.send(line)) {
+                Some(Ok(())) => ControlFlow::Continue(()),
+                _ => ControlFlow::Break(()),
+            }
         })
         .inspect_err(|error| tracing::warn!(%error, "the paste helper did not start"))
         .ok()?;
@@ -354,7 +356,13 @@ mod tests {
         let mut helper = spawn(
             Path::new("/bin/sh"),
             ["-c", "printf 'ready\\n123456\\n'"],
-            move |line| sender.send(line).is_ok(),
+            move |line| {
+                if sender.send(line).is_ok() {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(())
+                }
+            },
         )
         .expect("helper");
         for expected in [Some("ready"), Some("123456"), None] {

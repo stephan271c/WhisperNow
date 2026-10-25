@@ -10,16 +10,18 @@ use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::ipc::{ActiveDownload, ModelSummary};
 use whispernow_domain::{DownloadPhase, ModelAvailability};
 use whispernow_domain::{ModelFamily, ModelId};
-use whispernow_platform::{DownloadProgress, LocalCleanupService, ModelStore, ModelStoreError};
+use whispernow_platform::{
+    DownloadProgress, HeldUnloaded, LocalCleanupService, ModelStore, ModelStoreError,
+};
 
 use super::{
-    NativeServices, lock,
+    Backend, lock,
     state::{DownloadTask, StateCell},
     unknown_model,
 };
 
 /// The dictation worker owns the recognizer; selecting a model asks it to load the model.
-pub(crate) struct ModelCoordinator {
+pub(crate) struct ModelLibrary {
     store: Arc<ModelStore>,
     state: Arc<StateCell>,
     /// Freed before its model file is deleted.
@@ -32,7 +34,7 @@ pub(crate) struct ModelCoordinator {
     workers: Mutex<Vec<JoinHandle<()>>>,
 }
 
-impl ModelCoordinator {
+impl ModelLibrary {
     pub(super) fn new(
         store: Arc<ModelStore>,
         state: Arc<StateCell>,
@@ -233,7 +235,7 @@ impl ModelCoordinator {
     }
 }
 
-impl NativeServices {
+impl Backend {
     /// Loads the model and then saves it as the selected one. A model that cannot load leaves
     /// the saved selection as it was.
     pub(crate) fn select_model(&self, model_id: ModelId) -> Result<(), AppError> {
@@ -345,7 +347,7 @@ fn transfer_rate(bytes: u64, elapsed: Duration) -> Option<u64> {
 
 pub(super) fn hold_cleanup_unloaded(
     cleanup: &LocalCleanupService,
-) -> Result<impl Drop + '_, AppError> {
+) -> Result<HeldUnloaded<'_>, AppError> {
     cleanup
         .hold_unloaded(Duration::from_secs(10))
         .ok_or_else(|| {
@@ -377,10 +379,10 @@ mod tests {
         state::{DownloadTask, Events, State, StateCell},
     };
 
-    use super::{ModelCoordinator, run_model_download, transfer_rate};
+    use super::{ModelLibrary, run_model_download, transfer_rate};
 
     struct DownloadFixture {
-        models: Arc<ModelCoordinator>,
+        models: Arc<ModelLibrary>,
         listener: TcpListener,
         model_id: ModelId,
         _root: tempfile::TempDir,
@@ -422,11 +424,7 @@ mod tests {
                 |_| {},
             ));
             Self {
-                models: Arc::new(ModelCoordinator::new(
-                    store,
-                    Arc::clone(state),
-                    local_cleanup,
-                )),
+                models: Arc::new(ModelLibrary::new(store, Arc::clone(state), local_cleanup)),
                 listener,
                 model_id,
                 _root: root,
@@ -462,7 +460,9 @@ mod tests {
         let fixture = Fixture::new();
         fixture.flush();
         let download = DownloadFixture::new(&fixture.state);
-        fixture.state.lock().failed_download = Some(download.model_id.clone());
+        fixture
+            .state
+            .apply(|state| state.failed_download = Some(download.model_id.clone()));
         let transition = download.models.transition();
         let (started, starting) = mpsc::channel();
 
@@ -498,7 +498,9 @@ mod tests {
         let fixture = Fixture::new();
         fixture.flush();
         let download = DownloadFixture::new(&fixture.state);
-        fixture.state.lock().failed_download = Some(download.model_id.clone());
+        fixture
+            .state
+            .apply(|state| state.failed_download = Some(download.model_id.clone()));
         download
             .models
             .download(&download.model_id)
@@ -609,19 +611,21 @@ mod tests {
         let model_id = ModelId::default();
         let (events, published) = Events::channel();
         let state = StateCell::new(State::new(model_id.clone()), events);
-        state.lock().active_downloads.insert(
-            model_id.clone(),
-            DownloadTask {
-                progress: ActiveDownload {
-                    model_id: model_id.clone(),
-                    phase: DownloadPhase::Downloading,
-                    downloaded_bytes: 0,
-                    total_bytes: 1_024,
-                    bytes_per_second: None,
+        state.apply(|state| {
+            state.active_downloads.insert(
+                model_id.clone(),
+                DownloadTask {
+                    progress: ActiveDownload {
+                        model_id: model_id.clone(),
+                        phase: DownloadPhase::Downloading,
+                        downloaded_bytes: 0,
+                        total_bytes: 1_024,
+                        bytes_per_second: None,
+                    },
+                    cancellation: CancellationToken::default(),
                 },
-                cancellation: CancellationToken::default(),
-            },
-        );
+            );
+        });
 
         run_model_download(&state, &model_id, |_| panic!("the download panicked"));
 

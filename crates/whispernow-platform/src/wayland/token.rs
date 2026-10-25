@@ -6,7 +6,7 @@ use std::{
 
 use crate::atomic_file::write_atomically;
 
-use super::portal::WaylandPortalError;
+use super::portal::PortalOutputError;
 
 const MAX_TOKEN_BYTES: usize = 4 * 1024;
 
@@ -55,12 +55,12 @@ impl RemoteDesktopRestoreTokenStore {
         Ok(Some(token))
     }
 
-    pub(crate) fn replace(&self, token: &str) -> Result<(), WaylandPortalError> {
+    pub(crate) fn replace(&self, token: &str) -> Result<(), PortalOutputError> {
         write_atomically(&self.path, token.as_bytes())
             .inspect_err(|error| {
                 tracing::warn!(kind = ?error.kind(), "the restore token could not be saved");
             })
-            .map_err(|_| WaylandPortalError::TokenStore)
+            .map_err(|_| PortalOutputError::TokenStore)
     }
 }
 

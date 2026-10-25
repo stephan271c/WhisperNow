@@ -35,7 +35,7 @@ pub(super) fn ClearDataCard() -> Element {
                                 for location in locations.iter() {
                                     li {
                                         strong { "{labels::clear_category(location.category)}: " }
-                                        code { "{location.path.display()}" }
+                                        code { "{labels::data_place(&location.place)}" }
                                     }
                                 }
                             }
@@ -58,7 +58,7 @@ pub(super) fn ClearDataCard() -> Element {
                             li {
                                 "{labels::clear_category(item.location.category)}: "
                                 if item.deleted { "Removed" } else { "Could not be removed" }
-                                " — {item.location.path.display()}"
+                                " — {labels::data_place(&item.location.place)}"
                             }
                         }
                     }

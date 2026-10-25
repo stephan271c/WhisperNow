@@ -13,8 +13,8 @@ use whispernow_domain::{ModelDefinition, ModelId, Settings};
 use whispernow_platform::{AppPaths, MemoryCredentialStore, SettingsStore};
 
 use super::{
-    Events, NativeServices,
-    settings::SettingsCoordinator,
+    Backend, Events,
+    settings::SavedSettings,
     state::{State, StateCell},
 };
 
@@ -114,7 +114,7 @@ pub(crate) struct SettingsHarness {
     pub(crate) credentials: Arc<MemoryCredentialStore>,
     pub(crate) persistence: Arc<SettingsStore>,
     pub(crate) state: Arc<StateCell>,
-    pub(crate) settings: Arc<SettingsCoordinator>,
+    pub(crate) settings: Arc<SavedSettings>,
 }
 
 impl SettingsHarness {
@@ -131,7 +131,7 @@ impl SettingsHarness {
             State::new(ModelId::default()),
             Events::channel().0,
         ));
-        let settings = Arc::new(SettingsCoordinator::new(
+        let settings = Arc::new(SavedSettings::new(
             Arc::clone(&persistence),
             Arc::clone(&state),
             saved,
@@ -155,7 +155,7 @@ pub(crate) fn install_artifacts(paths: &AppPaths, model: &ModelDefinition) {
     }
 }
 
-pub(crate) fn shut_down(services: &NativeServices) {
-    services.request_shutdown();
-    services.shutdown();
+pub(crate) fn shut_down(backend: &Backend) {
+    backend.request_shutdown();
+    backend.shutdown();
 }

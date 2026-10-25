@@ -148,6 +148,10 @@ pub enum EntryStatus {
     NotDelivered,
 }
 
+impl EntryStatus {
+    pub const ALL: [Self; 4] = [Self::Ok, Self::Failed, Self::Cancelled, Self::NotDelivered];
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HistoryEntry {
     pub id: EntryId,

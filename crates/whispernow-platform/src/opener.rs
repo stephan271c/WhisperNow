@@ -17,7 +17,7 @@ const OPENER: &str = if cfg!(target_os = "macos") {
     "xdg-open"
 };
 
-pub fn open_in_file_manager(directory: &Path) -> io::Result<()> {
+pub fn open_directory(directory: &Path) -> io::Result<()> {
     spawn_opener(directory.as_os_str())
 }
 

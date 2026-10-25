@@ -1,10 +1,10 @@
 use whispernow_domain::ClearDataCategory;
-use whispernow_domain::ipc::{ClearDataItem, ClearDataResult, DataLocation};
+use whispernow_domain::ipc::{ClearDataItem, ClearDataResult, DataLocation, DataPlace};
 use whispernow_domain::{AppError, ErrorCategory};
 
-use super::{NativeServices, models::hold_cleanup_unloaded};
+use super::{Backend, models::hold_cleanup_unloaded};
 
-impl NativeServices {
+impl Backend {
     /// The existing data each category would remove, including the credential store entry.
     pub(crate) fn data_locations(&self) -> Result<Vec<DataLocation>, AppError> {
         let locations = self
@@ -50,7 +50,7 @@ impl NativeServices {
         if let Some(saved) = &mut settings_lock
             && entries
                 .iter()
-                .filter(|entry| entry.location.path == self.paths.settings_file())
+                .filter(|entry| entry.location.place == DataPlace::Path(self.paths.settings_file()))
                 .all(|entry| entry.deleted)
         {
             **saved = whispernow_domain::Settings::default();
@@ -99,7 +99,7 @@ impl NativeServices {
 pub(super) fn credential_store_location() -> DataLocation {
     DataLocation {
         category: ClearDataCategory::Settings,
-        path: "OS credential store: saved LLM API keys".into(),
+        place: DataPlace::CredentialStore,
     }
 }
 

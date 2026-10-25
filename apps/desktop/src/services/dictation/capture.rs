@@ -178,7 +178,7 @@ mod tests {
     struct Silence;
 
     impl VoiceActivity for Silence {
-        fn is_speech(&mut self, _frame: &[f32]) -> bool {
+        fn poll_speech(&mut self, _frame: &[f32]) -> bool {
             false
         }
     }

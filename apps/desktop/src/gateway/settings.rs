@@ -17,8 +17,8 @@ use crate::shortcuts::{
 impl Gateway {
     pub(crate) async fn settings_view(&self) -> Result<SettingsView, AppError> {
         let view = self
-            .run_command("get_settings", Failure::Published, |services| {
-                Ok(services.settings.get())
+            .run_command("get_settings", Failure::Published, |backend| {
+                Ok(backend.settings.view())
             })
             .await?;
         Ok(self.finish_view(view).await)
@@ -65,8 +65,8 @@ impl Gateway {
         request: SetApiKeyRequest,
     ) -> Result<SettingsView, AppError> {
         let view = self
-            .run_command("set_api_key", Failure::Local, move |services| {
-                services.settings.set_api_key(&request)
+            .run_command("set_api_key", Failure::Local, move |backend| {
+                backend.settings.set_api_key(&request)
             })
             .await?;
         Ok(self.finish_view(view).await)
@@ -77,8 +77,8 @@ impl Gateway {
         provider: LlmProvider,
     ) -> Result<SettingsView, AppError> {
         let view = self
-            .run_command("clear_api_key", Failure::Local, move |services| {
-                services.settings.clear_api_key(provider)
+            .run_command("clear_api_key", Failure::Local, move |backend| {
+                backend.settings.clear_api_key(provider)
             })
             .await?;
         Ok(self.finish_view(view).await)
@@ -92,7 +92,7 @@ impl Gateway {
             .run_command(
                 "save_setup_checkpoint",
                 Failure::Published,
-                move |services| services.save_setup_checkpoint(request),
+                move |backend| backend.save_setup_checkpoint(request),
             )
             .await?;
         Ok(self.finish_view(view).await)
@@ -100,15 +100,15 @@ impl Gateway {
 
     pub(crate) async fn restart_setup(&self) -> Result<SettingsView, AppError> {
         let view = self
-            .run_command("restart_setup", Failure::Local, |services| {
-                services.settings.restart_setup()
+            .run_command("restart_setup", Failure::Local, |backend| {
+                backend.settings.restart_setup()
             })
             .await?;
         Ok(self.finish_view(view).await)
     }
 
     /// Registers a new recording shortcut before it is saved and swaps the cancel shortcut
-    /// after; the services run the change's other side effects.
+    /// after; the backend runs the change's other side effects.
     pub(crate) async fn update_settings(
         &self,
         mut change: SettingChange,
@@ -125,8 +125,8 @@ impl Gateway {
         };
         let swaps_cancel = matches!(change, SettingChange::CancelShortcut(_));
         let saving = self
-            .run_command("update_settings", Failure::Local, move |services| {
-                services.update_settings(&change)
+            .run_command("update_settings", Failure::Local, move |backend| {
+                backend.update_settings(&change)
             })
             .await;
         let mut response = match saving {
@@ -167,8 +167,8 @@ impl Gateway {
             )
             .await?;
         let completing = self
-            .run_command("complete_setup", Failure::Published, move |services| {
-                services.complete_setup(&checkpoint)
+            .run_command("complete_setup", Failure::Published, move |backend| {
+                backend.complete_setup(&checkpoint)
             })
             .await;
         let settings = match completing {
@@ -195,8 +195,10 @@ impl Gateway {
         operation: &'static str,
         failure: Failure,
     ) -> Result<Settings, AppError> {
-        self.run_command(operation, failure, |services| Ok(services.settings.load()))
-            .await
+        self.run_command(operation, failure, |backend| {
+            Ok(backend.settings.snapshot())
+        })
+        .await
     }
 
     /// Registers the chosen recording `shortcut` and `mode` in place of `saved`'s, before they
@@ -314,8 +316,8 @@ impl Gateway {
     pub(super) async fn clear_data(&self) -> Result<ClearDataResult, AppError> {
         let _native_settings = self.native_settings.lock().await;
         let result = self
-            .run_command("clear_data", Failure::Published, |services| {
-                services.clear_data(&ClearDataCategory::ALL)
+            .run_command("clear_data", Failure::Published, |backend| {
+                backend.clear_data(&ClearDataCategory::ALL)
             })
             .await?;
         if let Err(warning) = self.apply_autostart(false).await {

@@ -72,6 +72,11 @@ pub(crate) enum ShortcutAction {
     CancelDictation,
 }
 
+pub(crate) struct StartedRegistrar {
+    pub(crate) registrar: Arc<dyn ShortcutRegistrar>,
+    pub(crate) failure: Option<ShortcutRegistrationError>,
+}
+
 pub(crate) trait ShortcutRegistrar: Send + Sync {
     fn register(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError>;
     fn unregister(&self, binding: &ShortcutBinding) -> Result<(), ShortcutRegistrationError>;
@@ -189,7 +194,7 @@ struct Published {
 /// not taken from other applications the rest of the time. Published snapshots report whether
 /// one runs ([`Self::observe_dictation`]); the registration then follows on a worker
 /// ([`Self::sync_cancel_shortcut`]).
-pub(crate) struct ShortcutCoordinator {
+pub(crate) struct Shortcuts {
     native: Mutex<Native>,
     /// The shortcuts held down, so the platform's key repeat is not taken as new presses.
     pressed: Mutex<HashSet<ShortcutId>>,
@@ -199,7 +204,7 @@ pub(crate) struct ShortcutCoordinator {
     enabled: LifecycleProbe,
 }
 
-impl ShortcutCoordinator {
+impl Shortcuts {
     /// Registers the configured shortcuts at once; the application state the probe reads does
     /// not exist yet. Without a recording shortcut (the saved shortcuts break a rule, which the
     /// settings report), nothing is registered and no registration failure is recorded.
@@ -209,7 +214,7 @@ impl ShortcutCoordinator {
         enabled: LifecycleProbe,
         startup_failure: Option<ShortcutRegistrationError>,
     ) -> Self {
-        let coordinator = Self {
+        let shortcuts = Self {
             native: Mutex::new(Native::default()),
             pressed: Mutex::new(HashSet::new()),
             published: Mutex::new(Published {
@@ -221,16 +226,16 @@ impl ShortcutCoordinator {
             enabled,
         };
         if let Some(recording) = recording {
-            let mut native = coordinator.native();
+            let mut native = shortcuts.native();
             native.recording = Some(recording);
-            if coordinator.sync_locked(&mut native, true)
+            if shortcuts.sync_locked(&mut native, true)
                 == Err(ShortcutRegistrationError::PortalUnavailable)
                 && let Some(error) = startup_failure
             {
-                coordinator.published().failure = Some(error);
+                shortcuts.published().failure = Some(error);
             }
         }
-        coordinator
+        shortcuts
     }
 
     fn native(&self) -> MutexGuard<'_, Native> {
