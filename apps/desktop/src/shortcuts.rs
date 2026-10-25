@@ -184,6 +184,8 @@ struct Published {
     active: bool,
     failure: Option<ShortcutRegistrationError>,
     cancel_failure: Option<ShortcutRegistrationError>,
+    /// The persisted recording shortcut has not been registered yet, which is not a failure.
+    pending: bool,
 }
 
 /// Lock order is `native -> pressed -> published`. `native` is the only lock held while the
@@ -202,40 +204,53 @@ pub(crate) struct Shortcuts {
     dictation_active: AtomicBool,
     registrar: Arc<dyn ShortcutRegistrar>,
     enabled: LifecycleProbe,
+    startup_failure: Option<ShortcutRegistrationError>,
 }
 
 impl Shortcuts {
-    /// Registers the configured shortcuts at once; the application state the probe reads does
-    /// not exist yet. Without a recording shortcut (the saved shortcuts break a rule, which the
-    /// settings report), nothing is registered and no registration failure is recorded.
+    /// Holds the configured recording shortcut without registering it: the application state the
+    /// probe reads does not exist yet, and a desktop portal may hold the registration for the
+    /// user's approval. [`Self::register_persisted`] registers it. Without a recording shortcut
+    /// (the saved shortcuts break a rule, which the settings report), nothing is registered and
+    /// no registration failure is recorded.
     pub(crate) fn new(
         registrar: Arc<dyn ShortcutRegistrar>,
         recording: Option<RecordingBinding>,
         enabled: LifecycleProbe,
         startup_failure: Option<ShortcutRegistrationError>,
     ) -> Self {
-        let shortcuts = Self {
-            native: Mutex::new(Native::default()),
-            pressed: Mutex::new(HashSet::new()),
+        Self {
             published: Mutex::new(Published {
                 failure: startup_failure,
+                pending: recording.is_some(),
                 ..Published::default()
             }),
+            native: Mutex::new(Native {
+                recording,
+                ..Native::default()
+            }),
+            pressed: Mutex::new(HashSet::new()),
             dictation_active: AtomicBool::new(false),
             registrar,
             enabled,
-        };
-        if let Some(recording) = recording {
-            let mut native = shortcuts.native();
-            native.recording = Some(recording);
-            if shortcuts.sync_locked(&mut native, true)
-                == Err(ShortcutRegistrationError::PortalUnavailable)
-                && let Some(error) = startup_failure
-            {
-                shortcuts.published().failure = Some(error);
-            }
+            startup_failure,
         }
-        shortcuts
+    }
+
+    /// Registers the recording shortcut [`Self::new`] holds. Runs on a worker once the
+    /// application state exists, never on the event-loop thread: a portal's approval dialog can
+    /// hold it for minutes.
+    pub(crate) fn register_persisted(&self) {
+        let mut native = self.native();
+        if native.recording.is_none() {
+            return;
+        }
+        if self.sync_locked(&mut native, (self.enabled)())
+            == Err(ShortcutRegistrationError::PortalUnavailable)
+            && let Some(error) = self.startup_failure
+        {
+            self.published().failure = Some(error);
+        }
     }
 
     fn native(&self) -> MutexGuard<'_, Native> {
@@ -255,6 +270,10 @@ impl Shortcuts {
     pub(crate) fn registration_active(&self) -> bool {
         let published = self.published();
         published.active && published.failure.is_none()
+    }
+
+    pub(crate) fn registration_pending(&self) -> bool {
+        self.published().pending
     }
 
     pub(crate) fn failure(&self) -> Option<ShortcutRegistrationError> {
@@ -351,6 +370,7 @@ impl Shortcuts {
         published.route = None;
         published.cancel = None;
         published.active = false;
+        published.pending = false;
         published.failure = Some(error);
     }
 
@@ -434,6 +454,7 @@ impl Shortcuts {
                 pressed.clear();
             }
             published.route = route;
+            published.pending = false;
             published.active = native.capturing || registered || native.recording.is_none();
             // A failure stays reported until registration is tried again.
             if enabled && !native.capturing {

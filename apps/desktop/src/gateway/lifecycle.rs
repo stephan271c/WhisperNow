@@ -72,6 +72,16 @@ impl Gateway {
         }
     }
 
+    /// Registers the saved recording shortcut on a worker after setup and publishes the failure,
+    /// if any, when it ends.
+    pub(crate) fn register_persisted_shortcuts(&self) {
+        self.shortcuts.register_persisted();
+        if let Some(error) = self.shortcuts.failure() {
+            tracing::warn!("configured push-to-talk shortcut is unavailable");
+            self.publish_error(&shortcut_error(error));
+        }
+    }
+
     /// A registrar failure is a warning; the phase has already changed and is not rolled back.
     pub(super) fn sync_shortcuts(&self) {
         if let Err(error) = self.shortcuts.sync_lifecycle() {

@@ -907,6 +907,7 @@ mod tests {
             Arc::new(|| true),
             Some(ShortcutRegistrationError::PermissionDenied),
         );
+        shortcuts.register_persisted();
         assert!(!shortcuts.registration_active());
         assert_eq!(
             shortcuts.failure(),

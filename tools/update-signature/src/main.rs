@@ -82,7 +82,7 @@ fn verify_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_arguments, verify_bytes};
+    use super::verify_bytes;
 
     const PUBLIC_KEY: &str = include_str!("../../../release/fixtures/disposable-updater.key.pub");
     const ALPHA: &[u8] = include_bytes!("../../../release/fixtures/signatures/alpha.bin");
@@ -100,10 +100,13 @@ mod tests {
         assert!(verify_bytes(b"changed", ALPHA_SIGNATURE, PUBLIC_KEY).is_err());
         assert!(verify_bytes(ALPHA, BETA_SIGNATURE, PUBLIC_KEY).is_err());
     }
+
     #[cfg(unix)]
     #[test]
     fn a_path_that_is_not_unicode_is_kept() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt as _, path::PathBuf};
+
+        use super::parse_arguments;
 
         let payload = OsString::from_vec(vec![b'a', 0xff]);
         let arguments = parse_arguments(

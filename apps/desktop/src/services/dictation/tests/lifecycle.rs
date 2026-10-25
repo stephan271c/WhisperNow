@@ -210,6 +210,7 @@ fn a_settings_save_keeps_registers_or_refuses_the_recording_shortcut() {
         Arc::new(ActivationGate::default()),
         TrayController::headless(true),
     );
+    gateway.register_persisted_shortcuts();
     let shortcut = |key| Shortcut {
         key,
         ..Shortcut::default()
@@ -422,6 +423,58 @@ fn saved_shortcuts_that_break_a_rule_leave_the_settings_warning_published() {
         "{published:?}"
     );
     fixture.flush();
+}
+
+#[test]
+fn the_persisted_shortcut_registration_publishes_its_failure_when_it_ends() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (backend, _root) = test_backend(Fixture::new());
+    let saved = backend.settings.view().settings;
+    let recording = recording_binding(&saved).expect("the default recording shortcut");
+    let registrar = Arc::new(MemoryRegistrar::default());
+    *registrar.fail_register.lock().expect("fail register") = Some(recording.binding.id.0);
+    let gateway = Gateway::new(
+        Arc::new(backend),
+        Arc::new(Shortcuts::new(
+            registrar,
+            Some(recording),
+            Arc::new(|| true),
+            None,
+        )),
+        Arc::new(Autostart::default()),
+        Arc::new(ActivationGate::default()),
+        TrayController::headless(true),
+    );
+
+    let pending = runtime
+        .block_on(gateway.settings_view())
+        .expect("settings view while the shortcut registers");
+    assert!(pending.warnings.is_empty(), "{:?}", pending.warnings);
+    assert!(gateway.backend.state.snapshot().error.is_none());
+
+    gateway.register_persisted_shortcuts();
+    let failed = runtime
+        .block_on(gateway.settings_view())
+        .expect("settings view after the registration failed");
+    assert!(
+        failed
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("A configured recording shortcut is unavailable")),
+        "{:?}",
+        failed.warnings
+    );
+    let published = gateway
+        .backend
+        .state
+        .snapshot()
+        .error
+        .expect("the registration failure is published");
+    assert_eq!(published.code, "shortcut_registration_failed");
+    shut_down(&gateway.backend);
 }
 
 #[test]

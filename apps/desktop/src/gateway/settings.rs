@@ -27,7 +27,10 @@ impl Gateway {
     /// The UI replaces its whole view with each one it receives, so every view sent to it passes
     /// through here.
     pub(super) async fn finish_view(&self, mut view: SettingsView) -> SettingsView {
-        if self.shortcuts_enabled() && !self.shortcuts.registration_active() {
+        if self.shortcuts_enabled()
+            && !self.shortcuts.registration_active()
+            && !self.shortcuts.registration_pending()
+        {
             let summary = match self.shortcuts.failure() {
                 Some(ShortcutRegistrationError::PermissionDenied) => {
                     "The compositor did not grant one of the configured recording shortcuts"

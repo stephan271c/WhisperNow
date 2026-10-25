@@ -99,6 +99,7 @@ struct OutputSession {
     cleanup: CloseOnDrop,
     clipboard_state: Arc<Mutex<PortalClipboardState>>,
     advertised_mime_types: Option<Vec<String>>,
+    abandoned: bool,
 }
 
 impl OutputSession {
@@ -114,9 +115,12 @@ impl OutputSession {
         }
     }
 
-    /// Takes in the signals queued so far; true when the session closed or the
-    /// listener is gone.
+    /// Takes in the signals queued so far; true when the session closed, we
+    /// closed it ourselves, or the listener is gone.
     fn poll_closed(&mut self) -> bool {
+        if self.abandoned {
+            return true;
+        }
         loop {
             match self.signals.try_recv() {
                 Ok(signal) => {
@@ -225,6 +229,7 @@ impl PortalOutput {
             }),
             clipboard_state,
             advertised_mime_types: None,
+            abandoned: false,
         };
         output.start(&self.token_store).await?;
         Ok(output)
@@ -533,8 +538,16 @@ async fn write_selection(mut pipe: pipe::Sender, bytes: &[u8]) -> bool {
     )
 }
 
+/// Closing the session is the only safe recovery after a partial key release;
+/// it prevents a virtual modifier remaining logically held. The portal sends no
+/// `Closed` for it, so the output is marked for `ensure_output` to replace.
+async fn abandon(output: &mut OutputSession) {
+    let _ = output.session.close().await;
+    output.abandoned = true;
+}
+
 async fn inject_balanced_paste(
-    output: &OutputSession,
+    output: &mut OutputSession,
     keys: PasteKeys,
 ) -> Result<(), PortalOutputError> {
     let keysyms: &[i32] = match keys {
@@ -555,7 +568,7 @@ async fn inject_balanced_paste(
             .is_err()
         {
             if !release_pressed(output, &keysyms[..index]).await {
-                let _ = output.session.close().await;
+                abandon(output).await;
             }
             return Err(PortalOutputError::Backend);
         }
@@ -563,9 +576,7 @@ async fn inject_balanced_paste(
     if release_pressed(output, keysyms).await {
         Ok(())
     } else {
-        // Closing the session is the only safe recovery after a partial key
-        // release; it prevents a virtual modifier remaining logically held.
-        let _ = output.session.close().await;
+        abandon(output).await;
         Err(PortalOutputError::Backend)
     }
 }

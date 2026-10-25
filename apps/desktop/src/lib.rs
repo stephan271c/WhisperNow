@@ -226,10 +226,6 @@ fn setup(app: &mut tauri::App, startup: Startup) -> Result<(), Box<dyn std::erro
         }),
         failure,
     ));
-    if let Some(error) = shortcuts.failure() {
-        tracing::warn!("configured push-to-talk shortcut is unavailable");
-        backend.state.publish_error(gateway::shortcut_error(error));
-    }
     shortcuts.set_cancel_binding(cancel_binding(&settings));
     app.manage(Gateway::new(
         backend,
@@ -256,8 +252,21 @@ fn setup(app: &mut tauri::App, startup: Startup) -> Result<(), Box<dyn std::erro
     }
     forward_events(app.handle().clone(), overlay, event_receiver)?;
     app.state::<Gateway>().backend.state.publish();
+    spawn_persisted_shortcut_registration(app.handle().clone());
     spawn_shortcut_dispatch(app.handle().clone(), shortcut_receiver);
     Ok(())
+}
+
+fn spawn_persisted_shortcut_registration(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = tauri::async_runtime::spawn_blocking(move || {
+            app.state::<Gateway>().register_persisted_shortcuts();
+        })
+        .await
+        {
+            tracing::error!(%error, "the saved shortcut was not registered");
+        }
+    });
 }
 
 fn spawn_shortcut_dispatch(

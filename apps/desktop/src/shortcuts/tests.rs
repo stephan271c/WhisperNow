@@ -46,6 +46,7 @@ fn switchable_memory_shortcuts(key: &str) -> (Arc<MemoryRegistrar>, Arc<AtomicBo
     let registrar = Arc::new(MemoryRegistrar::default());
     let (running, probe) = lifecycle_switch();
     let shortcuts = Shortcuts::new(registrar.clone(), Some(hold(key)), probe, None);
+    shortcuts.register_persisted();
     (registrar, running, shortcuts)
 }
 
@@ -251,6 +252,7 @@ fn unavailable_shortcuts_are_reported_and_retried_without_restarting() {
     let registrar = Arc::new(MemoryRegistrar::default());
     *registrar.fail_register.lock().expect("fail register") = Some(binding_id("F1").0);
     let shortcuts = Shortcuts::new(registrar.clone(), Some(hold("F1")), always_running(), None);
+    shortcuts.register_persisted();
     assert!(!shortcuts.registration_active());
     assert_eq!(
         shortcuts.failure(),
@@ -268,6 +270,7 @@ fn unavailable_shortcuts_are_reported_and_retried_without_restarting() {
 
     let registered = registrar.registered();
     let invalid = Shortcuts::new(registrar.clone(), None, always_running(), None);
+    invalid.register_persisted();
     assert_eq!(
         invalid.failure(),
         None,
@@ -290,6 +293,7 @@ fn registration_after_a_backend_startup_timeout_reports_its_actual_result() {
         always_running(),
         Some(ShortcutRegistrationError::PortalUnavailable),
     );
+    shortcuts.register_persisted();
     assert!(shortcuts.registration_active());
     assert_eq!(shortcuts.failure(), None);
     assert!(registrar.holds(&binding(&control("F1"))));
@@ -301,11 +305,87 @@ fn registration_after_a_backend_startup_timeout_reports_its_actual_result() {
         always_running(),
         Some(ShortcutRegistrationError::PortalUnavailable),
     );
+    conflict.register_persisted();
     assert!(!conflict.registration_active());
     assert_eq!(
         conflict.failure(),
         Some(ShortcutRegistrationError::ConflictOrUnsupported)
     );
+}
+
+#[test]
+fn the_persisted_shortcut_is_pending_until_it_is_registered() {
+    let registrar = Arc::new(MemoryRegistrar::default());
+    let shortcuts = Shortcuts::new(registrar.clone(), Some(hold("F1")), always_running(), None);
+    assert!(registrar.registered().is_empty());
+    assert!(shortcuts.registration_pending());
+    assert!(!shortcuts.registration_active());
+    assert_eq!(shortcuts.failure(), None, "pending is not a failure");
+    assert_eq!(
+        shortcuts.input(binding_id("F1"), KeyTransition::Pressed),
+        None
+    );
+
+    shortcuts.register_persisted();
+    assert!(registrar.holds(&binding(&control("F1"))));
+    assert!(!shortcuts.registration_pending());
+    assert!(shortcuts.registration_active());
+    assert_eq!(
+        shortcuts.input(binding_id("F1"), KeyTransition::Pressed),
+        Some(ShortcutAction::Pressed(RecordingTrigger::Hold))
+    );
+}
+
+#[test]
+fn a_registration_waiting_for_approval_does_not_hold_up_readers() {
+    let registrar = Arc::new(MemoryRegistrar::default());
+    let (entered, registering) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    *registrar.gate.lock().expect("registration gate") = Some((entered, released));
+    let shortcuts = Arc::new(Shortcuts::new(
+        registrar.clone(),
+        Some(hold("F1")),
+        always_running(),
+        None,
+    ));
+    let worker = std::thread::spawn({
+        let shortcuts = Arc::clone(&shortcuts);
+        move || shortcuts.register_persisted()
+    });
+    registering
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("registration started");
+
+    assert!(shortcuts.registration_pending());
+    assert!(!shortcuts.registration_active());
+    assert_eq!(shortcuts.failure(), None);
+    assert_eq!(
+        shortcuts.input(binding_id("F1"), KeyTransition::Pressed),
+        None
+    );
+
+    release.send(()).expect("release the registration");
+    worker.join().expect("registration worker");
+    assert!(!shortcuts.registration_pending());
+    assert!(shortcuts.registration_active());
+}
+
+#[test]
+fn a_persisted_registration_while_dictation_is_disabled_waits_for_it_to_resume() {
+    let registrar = Arc::new(MemoryRegistrar::default());
+    let (running, probe) = lifecycle_switch();
+    running.store(false, Ordering::SeqCst);
+    let shortcuts = Shortcuts::new(registrar.clone(), Some(hold("F1")), probe, None);
+
+    shortcuts.register_persisted();
+    assert!(registrar.registered().is_empty());
+    assert!(!shortcuts.registration_pending());
+    assert_eq!(shortcuts.failure(), None);
+
+    running.store(true, Ordering::SeqCst);
+    shortcuts.sync_lifecycle().expect("resume");
+    assert!(registrar.holds(&binding(&control("F1"))));
+    assert!(shortcuts.registration_active());
 }
 
 #[test]
@@ -489,7 +569,6 @@ fn native_registration_never_runs_under_the_input_locks() {
             }))
             .is_ok()
     );
-    shortcuts.set_cancel_binding(Some(escape()));
     let calls = || native_calls.load(Ordering::SeqCst);
     let observed = std::cell::Cell::new(calls());
     let native_step = |step: &str| {
@@ -497,6 +576,10 @@ fn native_registration_never_runs_under_the_input_locks() {
         observed.set(calls());
     };
 
+    shortcuts.register_persisted();
+    native_step("persisted registration");
+    shortcuts.set_cancel_binding(Some(escape()));
+    observed.set(calls());
     shortcuts.apply_update(hold("F2")).expect("apply update");
     native_step("apply update");
     shortcuts.observe_dictation(true);

@@ -18,7 +18,6 @@ use crate::{
 use shutdown::Shutdown;
 
 pub(crate) use events::forward_events;
-pub(crate) use settings::shortcut_error;
 
 pub(crate) struct Gateway {
     pub(crate) backend: Arc<Backend>,
