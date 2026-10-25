@@ -1,11 +1,12 @@
-use dioxus::core::Task;
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{Phase, RecordingTrigger};
 
 use super::ui::{Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
-use crate::management::replace_task;
-use crate::overlay::{LEVEL_BARS, format_elapsed};
-use crate::{Fix, FixTarget, Notice, OverlayView, UiContext, UiOperation, client};
+use crate::home_status::{Fix, FixTarget};
+use crate::notice::Notice;
+use crate::operations::UiOperation;
+use crate::overlay::{LEVEL_BARS, OverlayView, format_elapsed};
+use crate::{UiContext, client};
 
 /// A failure with a button stays longer than one without, so the button can be reached.
 const FAILURE_WITH_ACTION_MS: u32 = 5_000;
@@ -14,7 +15,7 @@ const FAILURE_WITH_ACTION_MS: u32 = 5_000;
 const BAR_WIDTH: f32 = 4.0;
 const BAR_GAP: f32 = 3.0;
 const METER_HEIGHT: f32 = 20.0;
-#[allow(clippy::cast_precision_loss, reason = "LEVEL_BARS is small")]
+#[expect(clippy::cast_precision_loss, reason = "LEVEL_BARS is small")]
 const METER_WIDTH: f32 = LEVEL_BARS as f32 * BAR_WIDTH + (LEVEL_BARS - 1) as f32 * BAR_GAP;
 const MIN_BAR_HEIGHT: f32 = 3.0;
 
@@ -32,7 +33,7 @@ fn meter_bars(view: &OverlayView) -> Vec<MeterBar> {
         .map(|(index, level)| {
             let level = if view.levels_seen { *level } else { 0.0 };
             let height = MIN_BAR_HEIGHT + (METER_HEIGHT - MIN_BAR_HEIGHT) * level;
-            #[allow(clippy::cast_precision_loss, reason = "the index is below LEVEL_BARS")]
+            #[expect(clippy::cast_precision_loss, reason = "the index is below LEVEL_BARS")]
             let x = index as f32 * (BAR_WIDTH + BAR_GAP);
             MeterBar {
                 x,
@@ -44,7 +45,7 @@ fn meter_bars(view: &OverlayView) -> Vec<MeterBar> {
 }
 
 #[component]
-pub fn RecordingBar() -> Element {
+pub(crate) fn RecordingBar() -> Element {
     let context = use_context::<UiContext>();
     let state = context.state.read();
     let view = &state.overlay;
@@ -102,15 +103,11 @@ pub fn RecordingBar() -> Element {
     } else {
         Notice::AUTO_DISMISS_MS
     };
-    let mut closing = use_signal(|| None::<Task>);
-    use_effect(use_reactive!(|failed, close_after| {
-        let close = failed.then(|| {
-            spawn(async move {
-                client::delay(close_after).await;
-                context.dismiss_overlay();
-            })
-        });
-        replace_task(&mut closing.write(), close);
+    use_resource(use_reactive!(|failed, close_after| async move {
+        if failed {
+            client::delay(close_after).await;
+            context.dismiss_overlay();
+        }
     }));
 
     let blocked = |operation| context.blocked(operation).is_some();

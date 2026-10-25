@@ -5,6 +5,7 @@ import {
   applyTheme,
   audioBlob,
   closeWindow,
+  documentHidden,
   hostPlatform,
   listenMaximized,
   invokeTyped,
@@ -12,6 +13,7 @@ import {
   revokeObjectUrl,
   trackScrollActivity,
   unlistenTyped,
+  viewportHeight,
   windowFrame,
 } from "../public/tauri_bridge.js";
 
@@ -128,6 +130,18 @@ test("a chosen theme sets data-theme and the system theme removes it", () => {
   assert.equal(root.dataset.theme, "light");
   applyTheme(undefined);
   assert.equal("theme" in root.dataset, false);
+});
+
+test("the page reports whether its document is hidden and how tall its window is", () => {
+  globalThis.document = { hidden: false };
+  globalThis.window = { innerHeight: 480 };
+  assert.equal(documentHidden(), false);
+  assert.equal(viewportHeight(), 480);
+
+  globalThis.document = { hidden: true };
+  globalThis.window = { innerHeight: 120 };
+  assert.equal(documentHidden(), true);
+  assert.equal(viewportHeight(), 120);
 });
 
 function installWindow(calls, state, userAgent = "") {

@@ -12,8 +12,8 @@ use whispernow_domain::{
 
 use super::super::actions::PERMISSION_POLLS;
 use super::super::tests::{model, shell, unfinished_setup};
-use crate::ManagementState;
 use crate::client::fake;
+use crate::management::ManagementState;
 use crate::test_support::{
     Page, editable_settings, element, focused, snapshot, state_event, tag, text,
 };
@@ -35,8 +35,7 @@ fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState
         },
         recording_mode: RecordingMode::Toggle,
     });
-    management.models = vec![model("base", "Base", availability)];
-    management.models_loaded = true;
+    management.models = Some(vec![model("base", "Base", availability)]);
     management
 }
 
@@ -407,7 +406,7 @@ fn the_sidebar_names_no_model_until_setup_reaches_its_model_step() {
 #[test]
 fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cancellation() {
     let mut management = setup_at(SetupStep::Model, ModelAvailability::Downloaded);
-    management.models.extend([
+    management.models.as_mut().expect("models loaded").extend([
         model("small", "Small", ModelAvailability::Downloaded),
         model("large", "Large", ModelAvailability::NotInstalled),
         model("stream", "Stream", ModelAvailability::NotInstalled),
@@ -487,6 +486,8 @@ fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
     let mut management = setup_at(SetupStep::Model, ModelAvailability::Downloaded);
     management
         .models
+        .as_mut()
+        .expect("models loaded")
         .push(model("small", "Small", ModelAvailability::NotInstalled));
     let mut setup = opened(management);
     setup.click("setup-show-all-models");
@@ -779,6 +780,23 @@ fn try_it_shows_the_test_result_and_can_run_again() {
             "the test can run again"
         );
     }
+}
+
+#[test]
+fn an_audio_level_renders_only_the_live_meter() {
+    let mut setup = at(SetupStep::TryIt);
+    start_test(&mut setup);
+    setup.answer("start_test_dictation", Ok(()));
+    setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
+    let before = setup.render_counts();
+
+    setup.publish(EventPayload::AudioLevel {
+        rms: 0.25,
+        peak: 0.8,
+        elapsed_ms: 1_000,
+    });
+
+    assert_eq!(setup.rendered_since(&before), ["LiveLevel"]);
 }
 
 #[test]

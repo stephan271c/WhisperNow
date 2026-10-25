@@ -4,42 +4,50 @@ use dioxus::prelude::*;
 use whispernow_domain::SetupStep;
 use whispernow_domain::ipc::{ModelState, UpdatePhase};
 
-use crate::{Notice, NoticeScope, Route, SettingsRoute, TopLevel, UiContext, nav_keyboard_target};
+use crate::UiContext;
+use crate::notice::{Notice, NoticeScope, Tone};
+use crate::route::{Route, SettingsRoute, TopLevel, nav_keyboard_target};
 
 mod actions;
 mod ai_cleanup;
-mod configuration;
+mod audio;
+mod copy_button;
 mod data;
+mod general;
 mod history;
 mod home;
 mod labels;
 mod microphone_test;
 mod models;
 mod overlay;
+mod paste_helper_notice;
+mod privacy;
+mod settings;
 mod setup;
-mod shared;
+mod shortcut;
 mod titlebar;
 pub(crate) mod ui;
 mod updates;
 mod vocabulary;
 
 use ai_cleanup::AiCleanupPage;
-use configuration::{AudioPage, GeneralPage, PrivacyPage};
+use audio::AudioPage;
 use data::ClearDataCard;
+use general::GeneralPage;
 use history::HistoryScreen;
 use home::HomePage;
 use models::ModelsPage;
-pub use overlay::RecordingBar;
+pub(crate) use overlay::RecordingBar;
+use privacy::PrivacyPage;
 use setup::SetupScreen;
-use shared::{CopyButton, PasteHelperNotice, ShortcutCapture, ShortcutSummary};
 use titlebar::{TitleBar, use_window_chrome};
 use ui::focus::{focus, take_focus};
-use ui::{Banner, BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName, Tone};
+use ui::{Banner, BrandMark, Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
 use updates::AboutPage;
 use vocabulary::VocabularyPage;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) use configuration::cleanup_destination;
+pub(crate) use privacy::cleanup_destination;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
@@ -140,7 +148,7 @@ fn nav_class(entry: &NavEntry, current: Route) -> &'static str {
 }
 
 #[component]
-pub fn AppShell() -> Element {
+pub(crate) fn AppShell() -> Element {
     let context = use_context::<UiContext>();
     let navigator = context.navigator;
     let mut heading = use_signal(|| None::<Rc<MountedData>>);
@@ -374,11 +382,9 @@ fn NoticeView(notice: Notice, inline: bool) -> Element {
     let context = use_context::<UiContext>();
     let mut management = context.management;
     let id = notice.id;
-    use_effect(use_reactive!(|id| {
-        spawn(async move {
-            crate::client::delay(Notice::AUTO_DISMISS_MS).await;
-            management.write().dismiss_notice(id);
-        });
+    use_resource(use_reactive!(|id| async move {
+        crate::client::delay(Notice::AUTO_DISMISS_MS).await;
+        management.write().dismiss_notice(id);
     }));
     let placement = if inline {
         "notice-inline"

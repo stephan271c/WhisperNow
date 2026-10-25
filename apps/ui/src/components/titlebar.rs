@@ -116,8 +116,10 @@ mod tests {
 
     use super::{TitleBar, TitleBarProps};
     use crate::client::{Platform, WindowFrame, fake};
+    use crate::components::AppShell;
+    use crate::management::ManagementState;
+    use crate::state::UiState;
     use crate::test_support::{Page, snapshot};
-    use crate::{ManagementState, UiState};
 
     fn render(frame: WindowFrame, maximized: bool) -> String {
         let mut dom = VirtualDom::new_with_props(TitleBar, TitleBarProps { frame, maximized });
@@ -128,7 +130,7 @@ mod tests {
     fn shell_on(frame: WindowFrame, platform: Platform) -> String {
         let mut state = UiState::default();
         state.hydrate(snapshot(Phase::Idle));
-        let mut page = Page::host(state, ManagementState::default(), crate::AppShell);
+        let mut page = Page::host(state, ManagementState::default(), AppShell);
         fake::set_frame(frame, platform);
         page.settle();
         page.html()

@@ -2,8 +2,9 @@ use dioxus::prelude::*;
 use whispernow_domain::ipc::MicrophoneTestResponse;
 
 use super::ui::{Icon, IconName};
+use crate::UiContext;
 use crate::blocked_reason::BlockedButton;
-use crate::{UiContext, UiOperation};
+use crate::operations::UiOperation;
 
 #[component]
 pub(super) fn MicrophoneTest(id_prefix: String) -> Element {
@@ -75,7 +76,7 @@ pub(super) fn level_fraction(rms: f32) -> f32 {
 }
 
 pub(super) fn percent(level: f32) -> u8 {
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "the value is clamped to 0..=100 first"

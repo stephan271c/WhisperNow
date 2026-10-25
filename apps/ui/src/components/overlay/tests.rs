@@ -7,9 +7,10 @@ use serde_json::Value;
 
 use super::RecordingBar;
 use crate::client::fake;
+use crate::management::ManagementState;
 use crate::overlay::format_elapsed;
+use crate::state::UiState;
 use crate::test_support::{Page, snapshot, tag};
-use crate::{ManagementState, UiState};
 
 fn state_changed(state: AppState) -> EventPayload {
     EventPayload::StateChanged { state }
@@ -609,4 +610,26 @@ fn a_failure_closes_on_its_own_unless_a_newer_phase_came_first() {
     show(&mut bar, state_changed(failed(ErrorCategory::General)));
     bar.wait();
     assert_eq!(fake::commands(), ["dismiss_recording_overlay"]);
+}
+
+#[test]
+fn a_failure_keeps_one_close_timer_until_it_ends() {
+    let mut bar = mount_bar(state_in(listening(RecordingMode::Hold)));
+    bar.settle();
+    let idle = fake::live_delays();
+
+    show(&mut bar, state_changed(failed(ErrorCategory::Audio)));
+    assert_eq!(fake::live_delays(), idle + 1);
+    // Losing its button shortens the wait, which starts again.
+    show(&mut bar, state_changed(failed(ErrorCategory::General)));
+    assert_eq!(fake::live_delays(), idle + 1);
+    bar.wait();
+    assert_eq!(fake::commands(), ["dismiss_recording_overlay"]);
+    assert_eq!(fake::live_delays(), idle);
+
+    show(&mut bar, state_changed(listening(RecordingMode::Hold)));
+    show(&mut bar, state_changed(failed(ErrorCategory::General)));
+    assert_eq!(fake::live_delays(), idle + 1);
+    show(&mut bar, state_changed(listening(RecordingMode::Hold)));
+    assert_eq!(fake::live_delays(), idle, "a newer phase cancels the timer");
 }

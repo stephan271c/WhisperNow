@@ -6,11 +6,10 @@ use whispernow_domain::ipc::{
 use whispernow_domain::{ModelAvailability, SetupCheckpoint, SetupStep};
 
 use super::{ManagementState, replace_task};
-use crate::NoticeScope;
-use crate::components::ui::Tone;
+use crate::notice::{NoticeScope, Tone};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SetupTest {
+pub(crate) enum SetupTest {
     /// Asked for or listening; `active` once a snapshot showed the dictation running.
     Running {
         active: bool,
@@ -34,7 +33,7 @@ fn permissions_settled(permissions: &PermissionsResponse) -> bool {
 impl ManagementState {
     /// Applies `edit` to the checkpoint setup shows and returns it; `None` while a settings save
     /// is pending, which leaves the checkpoint as it was.
-    pub fn edit_setup(
+    pub(crate) fn edit_setup(
         &mut self,
         edit: impl FnOnce(&mut SetupCheckpoint),
     ) -> Option<SetupCheckpoint> {
@@ -50,14 +49,14 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn checkpoint(&self) -> SetupCheckpoint {
+    pub(crate) fn checkpoint(&self) -> SetupCheckpoint {
         self.setup
             .clone()
             .expect("setup controls render after loading")
     }
 
     #[must_use]
-    pub fn setup_move(&self, step: SetupStep) -> SetupCheckpoint {
+    pub(crate) fn setup_move(&self, step: SetupStep) -> SetupCheckpoint {
         SetupCheckpoint {
             step,
             ..self.checkpoint()
@@ -65,14 +64,14 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn setup_complete(&self) -> bool {
+    pub(crate) fn setup_complete(&self) -> bool {
         self.settings
             .as_ref()
             .is_some_and(|view| view.settings.setup.is_complete())
     }
 
     #[must_use]
-    pub fn unfinished_setup_step(&self) -> Option<SetupStep> {
+    pub(crate) fn unfinished_setup_step(&self) -> Option<SetupStep> {
         self.setup
             .as_ref()
             .filter(|_| !self.setup_complete())
@@ -82,7 +81,7 @@ impl ManagementState {
     /// Whether microphones may be listed: listing can ask for microphone access, so setup waits
     /// until it has moved past its permission step.
     #[must_use]
-    pub fn may_list_devices(&self) -> bool {
+    pub(crate) fn may_list_devices(&self) -> bool {
         self.setup.is_some()
             && !matches!(
                 self.unfinished_setup_step(),
@@ -91,7 +90,7 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn setup_step_ready(&self, model_downloading: bool) -> bool {
+    pub(crate) fn setup_step_ready(&self, model_downloading: bool) -> bool {
         let Some(setup) = self.setup.as_ref() else {
             return false;
         };
@@ -109,15 +108,15 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn setup_model_ready(&self) -> bool {
+    pub(crate) fn setup_model_ready(&self) -> bool {
         self.setup.as_ref().is_some_and(|setup| {
-            self.models.iter().any(|model| {
+            self.models.iter().flatten().any(|model| {
                 model.id == setup.model_id && model.availability != ModelAvailability::NotInstalled
             })
         })
     }
 
-    pub fn install_setup(&mut self, view: SettingsView) {
+    pub(crate) fn install_setup(&mut self, view: SettingsView) {
         self.setup = Some(
             view.settings
                 .setup
@@ -128,7 +127,7 @@ impl ManagementState {
         self.install_settings(view);
     }
 
-    pub fn finish_setup_later(&mut self, view: SettingsView) {
+    pub(crate) fn finish_setup_later(&mut self, view: SettingsView) {
         self.install_setup(view);
         self.notify(
             Tone::Info,
@@ -137,14 +136,14 @@ impl ManagementState {
         );
     }
 
-    pub fn restart_setup(&mut self, view: SettingsView) {
+    pub(crate) fn restart_setup(&mut self, view: SettingsView) {
         self.permissions = None;
         self.end_permission_watch();
         self.setup_test = None;
         self.install_setup(view);
     }
 
-    pub fn finish_setup(&mut self, saved: SaveSettingsResponse) {
+    pub(crate) fn finish_setup(&mut self, saved: SaveSettingsResponse) {
         let SaveSettingsResponse { settings, warnings } = saved;
         if !warnings.is_empty() {
             self.notify_saved(NoticeScope::Setup, "Setup finished", &warnings);
@@ -154,7 +153,7 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn permission_status(&self, kind: PermissionKind) -> Option<PermissionStatus> {
+    pub(crate) fn permission_status(&self, kind: PermissionKind) -> Option<PermissionStatus> {
         self.permissions
             .as_ref()
             .and_then(|permissions| permissions.get(kind))
@@ -164,7 +163,7 @@ impl ManagementState {
     /// A watch ends once no card can change any more; when the microphone is then granted, the
     /// returned checkpoint moves setup on to the model step. A card this session cannot provide
     /// does not hold setup back: dictation works without it.
-    pub fn install_permissions(
+    pub(crate) fn install_permissions(
         &mut self,
         permissions: PermissionsResponse,
     ) -> Option<SetupCheckpoint> {
@@ -192,7 +191,7 @@ impl ManagementState {
 
     /// The test could not start, or its stop failed: the failure is its result, unless a
     /// snapshot already reported how the test ended.
-    pub fn fail_setup_test(&mut self, error: &AppError) {
+    pub(crate) fn fail_setup_test(&mut self, error: &AppError) {
         if !matches!(self.setup_test, Some(SetupTest::Running { .. })) {
             return;
         }

@@ -17,13 +17,15 @@ use whispernow_domain::AppError;
 
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use whispernow_domain::ipc::EventPayload;
+use whispernow_domain::ipc::{EventPayload, Phase};
 
-use super::ui::Tone;
 use crate::client;
 
+use crate::UiContext;
 use crate::management::replace_task;
-use crate::{NoticeScope, Route, UiContext, UiOperation};
+use crate::notice::{NoticeScope, Tone};
+use crate::operations::UiOperation;
+use crate::route::Route;
 
 const METER_MS: u32 = 20_000;
 
@@ -92,6 +94,13 @@ impl UiContext {
             .notify(Tone::Error, scope, error.summary.clone());
     }
 
+    pub(crate) async fn hydrate_state(mut self) {
+        match client::call("get_state").await {
+            Ok(snapshot) => self.state.write().hydrate(snapshot),
+            Err(_) => self.state.write().report_state_read_failure(),
+        }
+    }
+
     /// Reads everything this window shows: the state snapshot, settings and the setup they
     /// hold, models and history. Used at startup and after clearing data.
     pub(crate) fn refresh_all(self) {
@@ -119,23 +128,31 @@ impl UiContext {
         self.management.write().notify(
             Tone::Error,
             NoticeScope::Global,
-            format!("{what} could not be loaded: {}", error.summary.clone()),
+            format!("{what} could not be loaded: {}", error.summary),
         );
     }
 
     pub(crate) fn apply_event(mut self, event: EventPayload) {
-        match &event {
+        match event {
             EventPayload::StateChanged { state } => {
-                self.management.write().observe_setup_test(state);
+                self.management.write().observe_setup_test(&state);
+                if !matches!(state.phase, Phase::Recording { .. }) {
+                    self.audio_rms.set(0.0);
+                }
+                self.state.write().apply_state(state);
             }
+            EventPayload::AudioLevel { rms, .. } => {
+                if self.state.peek().is_recording() {
+                    self.audio_rms.set(rms);
+                }
+            }
+            EventPayload::UpdateChanged { state } => self.state.write().apply_update_state(state),
             EventPayload::HistoryChanged => self.refresh_history(),
             EventPayload::ModelsChanged => self.reload_models(),
             EventPayload::NavigationRequested { section } => {
-                self.navigator.go(Route::from_section(*section));
+                self.navigator.go(Route::from(section));
             }
-            _ => {}
         }
-        self.state.write().apply_event(event);
     }
 
     pub(crate) fn test_microphone(self) {

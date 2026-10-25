@@ -4,7 +4,7 @@ use whispernow_domain::ipc::MainWindowSection;
 use crate::notice::NoticeScope;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum Route {
+pub(crate) enum Route {
     #[default]
     Home,
     History,
@@ -13,7 +13,7 @@ pub enum Route {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum SettingsRoute {
+pub(crate) enum SettingsRoute {
     #[default]
     General,
     Audio,
@@ -25,7 +25,7 @@ pub enum SettingsRoute {
 }
 
 impl SettingsRoute {
-    pub const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::General,
         Self::Audio,
         Self::SpeechModels,
@@ -36,7 +36,7 @@ impl SettingsRoute {
     ];
 
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::General => "General & Shortcuts",
             Self::Audio => "Audio",
@@ -49,7 +49,7 @@ impl SettingsRoute {
     }
 
     #[must_use]
-    pub const fn nav_id(self) -> &'static str {
+    pub(crate) const fn nav_id(self) -> &'static str {
         match self {
             Self::General => "nav-settings-general",
             Self::Audio => "nav-settings-audio",
@@ -63,17 +63,17 @@ impl SettingsRoute {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TopLevel {
+pub(crate) enum TopLevel {
     Home,
     History,
     Settings,
 }
 
 impl TopLevel {
-    pub const ALL: [Self; 3] = [Self::Home, Self::History, Self::Settings];
+    pub(crate) const ALL: [Self; 3] = [Self::Home, Self::History, Self::Settings];
 
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Home => "Home",
             Self::History => "History",
@@ -82,7 +82,7 @@ impl TopLevel {
     }
 
     #[must_use]
-    pub const fn nav_id(self) -> &'static str {
+    pub(crate) const fn nav_id(self) -> &'static str {
         match self {
             Self::Home => "nav-home",
             Self::History => "nav-history",
@@ -91,7 +91,7 @@ impl TopLevel {
     }
 
     #[must_use]
-    pub const fn route(self) -> Route {
+    pub(crate) const fn route(self) -> Route {
         match self {
             Self::Home => Route::Home,
             Self::History => Route::History,
@@ -100,9 +100,8 @@ impl TopLevel {
     }
 }
 
-impl Route {
-    #[must_use]
-    pub const fn from_section(section: MainWindowSection) -> Self {
+impl From<MainWindowSection> for Route {
+    fn from(section: MainWindowSection) -> Self {
         match section {
             MainWindowSection::History => Self::History,
             MainWindowSection::Settings => Self::Settings(SettingsRoute::General),
@@ -111,10 +110,12 @@ impl Route {
             MainWindowSection::AiCleanup => Self::Settings(SettingsRoute::AiCleanup),
         }
     }
+}
 
+impl Route {
     /// The page's one `h1`.
     #[must_use]
-    pub const fn title(self) -> &'static str {
+    pub(crate) const fn title(self) -> &'static str {
         match self {
             Self::Home => "Home",
             Self::History => "History",
@@ -124,7 +125,7 @@ impl Route {
     }
 
     #[must_use]
-    pub const fn top_level(self) -> TopLevel {
+    pub(crate) const fn top_level(self) -> TopLevel {
         match self {
             Self::Home | Self::Setup => TopLevel::Home,
             Self::History => TopLevel::History,
@@ -133,7 +134,7 @@ impl Route {
     }
 
     #[must_use]
-    pub const fn hosts(self, scope: NoticeScope) -> bool {
+    pub(crate) const fn hosts(self, scope: NoticeScope) -> bool {
         match scope {
             NoticeScope::Global => false,
             NoticeScope::Home => matches!(self, Self::Home),
@@ -150,7 +151,7 @@ impl Route {
 }
 
 #[must_use]
-pub fn nav_keyboard_target(key: &Key, current: usize, count: usize) -> Option<usize> {
+pub(crate) fn nav_keyboard_target(key: &Key, current: usize, count: usize) -> Option<usize> {
     if count == 0 {
         return None;
     }
@@ -168,7 +169,7 @@ pub fn nav_keyboard_target(key: &Key, current: usize, count: usize) -> Option<us
 mod tests {
 
     use super::{Key, Route, SettingsRoute, nav_keyboard_target};
-    use crate::NoticeScope;
+    use crate::notice::NoticeScope;
 
     #[test]
     fn arrow_home_and_end_keys_move_through_the_sidebar_and_wrap() {

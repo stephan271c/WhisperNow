@@ -13,9 +13,11 @@ use row::HistoryRow;
 use super::ui::{
     Button, ButtonSize, ConfirmButton, EmptyState, Icon, IconName, ShortcutLabel, TextInput,
 };
+use crate::UiContext;
 use crate::blocked_reason::DisabledReason;
 use crate::management::{HistoryRows, replace_task};
-use crate::{Route, SettingsRoute, UiContext, UiOperation};
+use crate::operations::UiOperation;
+use crate::route::{Route, SettingsRoute};
 
 // Page-level control ids; as expressions they render as attributes tests can locate.
 const SEARCH_ID: &str = "history-search";
@@ -35,34 +37,27 @@ const SEARCH_PAUSE_MS: u32 = 300;
 pub(super) fn HistoryScreen() -> Element {
     let context = use_context::<UiContext>();
     let navigator = context.navigator;
-    let mut management = context.management;
+    let management = context.management;
     let clock = use_clock();
-    // The search waiting for typing to pause; a key press restarts it.
-    let mut search_task = use_signal(|| None::<Task>);
+    let mut typed = use_signal(|| management.peek().history_filter.query.clone());
     let blocked = |operation| context.blocked(operation);
-    let settings = management.read().shown_settings().cloned();
     let change_blocked = blocked(UiOperation::ChangeHistory);
-    let rows = management.read().history.clone();
-    let unavailable = match &rows {
-        HistoryRows::Unavailable(summary) => Some(summary.clone()),
-        _ => None,
-    };
-    let search_error = match &rows {
-        HistoryRows::SearchFailed(problem) => Some(problem.clone()),
-        _ => None,
-    };
-    let loading = rows == HistoryRows::Loading;
-    let entries = rows.entries().to_vec();
-    let has_more = rows.has_more();
-    let filter = management.read().history_filter.clone();
-    let search_text = management.read().history_search.clone();
-    let filtered = filter != HistoryFilter::default();
-    let groups = group_by_day(clock, &entries);
     let folder_blocked = blocked(UiOperation::OpenRecordingsFolder).is_some();
+    let shown = management.read();
+    let settings = shown.shown_settings();
+    let rows = &shown.history;
+    let entries = rows.entries();
+    let search_error = match rows {
+        HistoryRows::SearchFailed(problem) => Some(problem.as_str()),
+        _ => None,
+    };
+    let failed_only = shown.history_filter.failed_only;
+    let filtered = shown.history_filter != HistoryFilter::default();
+    let groups = group_by_day(clock, entries);
     rsx! { div { class: "history-page",
         header { class: "history-header",
             p { class: "history-retention",
-                if let Some(settings) = &settings {
+                if let Some(settings) = settings {
                     span {
                         "{retention_summary(settings.history_limit, settings.history_retention, settings.keep_audio)}. "
                     }
@@ -79,7 +74,7 @@ pub(super) fn HistoryScreen() -> Element {
                     Icon { name: IconName::Folder }
                     "Open recordings folder"
                 }
-                if unavailable.is_none() && !entries.is_empty() {
+                if !entries.is_empty() {
                     ConfirmButton { id: CLEAR_ID, size: ButtonSize::Sm,
                         label: "Clear history", confirm_label: "Delete every transcript",
                         disabled: change_blocked.is_some(),
@@ -90,7 +85,7 @@ pub(super) fn HistoryScreen() -> Element {
             }
         }
         DisabledReason { id: CHANGE_REASON_ID, reason: change_blocked.clone().filter(|_| !entries.is_empty()) }
-        if let Some(summary) = &unavailable {
+        if let HistoryRows::Unavailable(summary) = rows {
             div { class: "history-unavailable", role: "alert",
                 p { "{summary}" }
                 Button { id: RELOAD_ID, onclick: move |_| context.refresh_history(),
@@ -99,47 +94,35 @@ pub(super) fn HistoryScreen() -> Element {
             }
         } else {
             div { class: "history-filters", role: "search",
-                label { class: "visually-hidden", r#for: SEARCH_ID, "Search transcripts" }
-                TextInput { id: SEARCH_ID, r#type: "search", value: "{search_text}",
-                    placeholder: "Search transcripts",
-                    maxlength: "{HistoryFilter::MAX_QUERY_BYTES}",
-                    aria_describedby: search_error.as_ref().map(|_| SEARCH_ERROR_ID),
-                    aria_invalid: search_error.as_ref().map(|_| "true"),
-                    oninput: move |event: FormEvent| {
-                        management.write().history_search = event.value();
-                        let waiting = spawn(async move {
-                            crate::client::delay(SEARCH_PAUSE_MS).await;
-                            search_task.set(None);
-                            context.search_history();
-                        });
-                        replace_task(&mut search_task.write(), Some(waiting));
-                    },
-                }
+                SearchBox { typed, failed: search_error.is_some() }
                 button { r#type: "button", id: FAILED_FILTER_ID,
-                    class: if filter.failed_only { "filter-chip selected" } else { "filter-chip" },
-                    aria_pressed: if filter.failed_only { "true" } else { "false" },
-                    onclick: move |_| context.show_failed_history_only(!filter.failed_only),
+                    class: if failed_only { "filter-chip selected" } else { "filter-chip" },
+                    aria_pressed: if failed_only { "true" } else { "false" },
+                    onclick: move |_| context.show_failed_history_only(!failed_only),
                     Icon { name: IconName::AlertCircle }
                     "Failed only"
                 }
             }
-            if loading {
+            if matches!(rows, HistoryRows::Loading) {
                 p { class: "history-status", role: "status", "Loading transcripts…" }
-            } else if let Some(problem) = &search_error {
+            } else if let Some(problem) = search_error {
                 p { class: "history-status", id: SEARCH_ERROR_ID, role: "alert", "{problem}" }
             } else if entries.is_empty() && filtered {
                 EmptyState { icon: IconName::History, title: "No matching transcripts",
-                    if filter.search_text().is_some() {
+                    if shown.history_filter.search_text().is_some() {
                         p { "Try other words, or show every transcript." }
                     }
                     Button { id: CLEAR_FILTER_ID, size: ButtonSize::Sm,
-                        onclick: move |_| context.clear_history_filter(),
+                        onclick: move |_| {
+                            typed.set(String::new());
+                            context.clear_history_filter();
+                        },
                         "Show all transcripts"
                     }
                 }
             } else if entries.is_empty() {
                 EmptyState { icon: IconName::History, title: "No transcripts yet",
-                    if let Some(settings) = settings.as_ref() {
+                    if let Some(settings) = settings {
                         p {
                             match settings.recording_mode {
                                 RecordingMode::Hold => "Hold ",
@@ -158,14 +141,14 @@ pub(super) fn HistoryScreen() -> Element {
                         for entry in members {
                             HistoryRow { key: "{entry.id.0}",
                                 delete_blocked: change_blocked.is_some(),
-                                entry,
+                                entry: entry.clone(),
                                 clock,
                             }
                         }
                     }
                 }
             }
-            if has_more && !loading {
+            if rows.has_more() {
                 div { class: "history-more",
                     Button { id: LOAD_MORE_ID, onclick: move |_| context.load_older_history(),
                         "Load more"
@@ -174,6 +157,32 @@ pub(super) fn HistoryScreen() -> Element {
             }
         }
     } }
+}
+
+/// The search field. Typing re-renders only this field; the filter follows once typing pauses.
+#[component]
+fn SearchBox(mut typed: Signal<String>, failed: bool) -> Element {
+    let context = use_context::<UiContext>();
+    // The search waiting for typing to pause; a key press restarts it.
+    let mut search_task = use_signal(|| None::<Task>);
+    rsx! {
+        label { class: "visually-hidden", r#for: SEARCH_ID, "Search transcripts" }
+        TextInput { id: SEARCH_ID, r#type: "search", value: "{typed}",
+            placeholder: "Search transcripts",
+            maxlength: "{HistoryFilter::MAX_QUERY_BYTES}",
+            aria_describedby: failed.then_some(SEARCH_ERROR_ID),
+            aria_invalid: failed.then_some("true"),
+            oninput: move |event: FormEvent| {
+                typed.set(event.value());
+                let waiting = spawn(async move {
+                    crate::client::delay(SEARCH_PAUSE_MS).await;
+                    search_task.set(None);
+                    context.search_history(&typed.peek());
+                });
+                replace_task(&mut search_task.write(), Some(waiting));
+            },
+        }
+    }
 }
 
 /// The page's clock: a provided one in tests, otherwise the system's, read again each minute

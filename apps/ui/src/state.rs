@@ -1,17 +1,16 @@
 use whispernow_domain::ipc::{AppState, EventPayload, Phase, UpdateState};
 
-use crate::OverlayView;
+use crate::overlay::OverlayView;
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct UiState {
-    pub snapshot: Option<AppState>,
-    pub update_snapshot: Option<UpdateState>,
-    pub audio_rms: f32,
-    pub update_command_error: Option<String>,
-    pub connection_failed: bool,
-    pub event_stream_failed: bool,
-    pub overlay: OverlayView,
-    pub recording_bar: bool,
+pub(crate) struct UiState {
+    pub(crate) snapshot: Option<AppState>,
+    pub(crate) update_snapshot: Option<UpdateState>,
+    pub(crate) update_command_error: Option<String>,
+    pub(crate) connection_failed: bool,
+    pub(crate) event_stream_failed: bool,
+    pub(crate) overlay: OverlayView,
+    pub(crate) recording_bar: bool,
 }
 
 impl UiState {
@@ -23,21 +22,21 @@ impl UiState {
         self.connection_failed = false;
     }
 
-    pub fn apply_event(&mut self, event: EventPayload) {
+    #[must_use]
+    pub(crate) fn is_recording(&self) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_some_and(|state| matches!(state.phase, Phase::Recording { .. }))
+    }
+
+    pub(crate) fn apply_event(&mut self, event: EventPayload) {
         match event {
             EventPayload::StateChanged { state } => self.apply_state(state),
             EventPayload::AudioLevel {
                 rms, elapsed_ms, ..
             } => {
-                if self
-                    .snapshot
-                    .as_ref()
-                    .is_some_and(|state| matches!(state.phase, Phase::Recording { .. }))
-                {
-                    self.audio_rms = rms;
-                    if self.recording_bar {
-                        self.overlay.apply_level(rms, elapsed_ms);
-                    }
+                if self.recording_bar && self.is_recording() {
+                    self.overlay.apply_level(rms, elapsed_ms);
                 }
             }
             EventPayload::UpdateChanged { state } => self.apply_update_state(state),
@@ -48,12 +47,12 @@ impl UiState {
         }
     }
 
-    pub fn apply_update_state(&mut self, state: UpdateState) {
+    pub(crate) fn apply_update_state(&mut self, state: UpdateState) {
         self.update_command_error = None;
         self.update_snapshot = Some(state);
     }
 
-    fn apply_state(&mut self, state: AppState) {
+    pub(crate) fn apply_state(&mut self, state: AppState) {
         if self.recording_bar {
             if self
                 .snapshot
@@ -66,20 +65,17 @@ impl UiState {
                 self.overlay.start_recording(session);
             }
         }
-        if !matches!(state.phase, Phase::Recording { .. }) {
-            self.audio_rms = 0.0;
-        }
         self.snapshot = Some(state);
     }
 
     /// A state read that fails before any snapshot arrived means the desktop is out of reach.
-    pub fn report_state_read_failure(&mut self) {
+    pub(crate) fn report_state_read_failure(&mut self) {
         if self.snapshot.is_none() {
             self.connection_failed = true;
         }
     }
 
-    pub fn report_update_command_failure(&mut self, summary: String) {
+    pub(crate) fn report_update_command_failure(&mut self, summary: String) {
         self.update_command_error = Some(summary);
     }
 }

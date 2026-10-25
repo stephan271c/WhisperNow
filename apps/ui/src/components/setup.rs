@@ -11,15 +11,22 @@ use whispernow_domain::{
     ShortcutKey, ShortcutModifier,
 };
 
-use super::configuration::{RECORDING_MODES, device_options};
+use super::NoticeRegion;
+use super::audio::device_options;
+use super::general::RECORDING_MODES;
 use super::labels;
 use super::microphone_test::{level_fraction, percent};
 use super::models::{DownloadProgress, ModelFacts, model_slug};
+use super::paste_helper_notice::PasteHelperNotice;
+use super::shortcut::{ShortcutCapture, ShortcutSummary};
 use super::ui::focus::take_focus;
-use super::ui::{Banner, Button, ButtonVariant, Field, Icon, IconName, Segmented, Select, Tone};
-use super::{NoticeRegion, PasteHelperNotice, ShortcutCapture, ShortcutSummary};
-use crate::blocked_reason::{BlockedButton, DisabledReason};
-use crate::{BlockedReason, NoticeScope, Route, SettingsRoute, SetupTest, UiContext, UiOperation};
+use super::ui::{Banner, Button, ButtonVariant, Field, Icon, IconName, Segmented, Select};
+use crate::UiContext;
+use crate::blocked_reason::{BlockedButton, BlockedReason, DisabledReason};
+use crate::management::SetupTest;
+use crate::notice::{NoticeScope, Tone};
+use crate::operations::UiOperation;
+use crate::route::{Route, SettingsRoute};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
@@ -368,7 +375,7 @@ fn ModelStep(selected: ModelId) -> Element {
         .speech_models()
         .cloned()
         .collect::<Vec<_>>();
-    let loaded = management.read().models_loaded;
+    let loaded = management.read().models.is_some();
     // The recommended model and the saved choice; the others wait behind "Show all".
     let (featured, others): (Vec<_>, Vec<_>) = models
         .into_iter()
@@ -514,10 +521,9 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
     let model_name = management.read().model_display_name(&checkpoint.model_id);
     let model_ready = management.read().setup_model_ready();
     let download = context.active_download(&checkpoint.model_id);
-    let devices = management.read().devices.clone();
+    let devices = device_options(management.read().devices.as_deref().unwrap_or_default());
     let test = management.read().setup_test.clone();
     let running = matches!(test, Some(SetupTest::Running { .. }));
-    let level = percent(level_fraction(context.state.read().audio_rms));
     let start_blocked = context
         .blocked(UiOperation::StartSetupTest)
         .or(context.phase_blocked());
@@ -531,7 +537,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
         Field { id: "setup-microphone", label: "Microphone",
             Select { value: checkpoint.input_device.clone(),
                 placeholder: checkpoint.input_device.as_ref().map(|id| id.as_str().to_owned()),
-                options: device_options(&devices),
+                options: devices,
                 disabled: running || settings_pending,
                 onchange: move |device| { context.save_setup_edit(|setup| setup.input_device = device); },
             }
@@ -540,13 +546,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
             h3 { id: "setup-test-title", "Test dictation" }
             if model_ready {
                 if running {
-                    div { id: "setup-test-level", class: "progress level-live", role: "meter",
-                        aria_label: "Microphone level", aria_valuemin: "0", aria_valuemax: "100", aria_valuenow: "{level}",
-                        svg { class: "progress-track", view_box: "0 0 100 4", preserve_aspect_ratio: "none",
-                            "aria-hidden": "true", "focusable": "false",
-                            rect { class: "progress-fill", x: "0", y: "0", width: "{level}", height: "4" }
-                        }
-                    }
+                    LiveLevel {}
                     p { class: "field-help", role: "status", "Listening… speak now, then press Stop." }
                     Button { id: "setup-test-stop", variant: ButtonVariant::Primary,
                         disabled: stop_blocked.is_some(),
@@ -575,6 +575,21 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
             }
         }
     } }
+}
+
+#[component]
+fn LiveLevel() -> Element {
+    let audio_rms = use_context::<UiContext>().audio_rms;
+    let level = percent(level_fraction(audio_rms()));
+    rsx! {
+        div { id: "setup-test-level", class: "progress level-live", role: "meter",
+            aria_label: "Microphone level", aria_valuemin: "0", aria_valuemax: "100", aria_valuenow: "{level}",
+            svg { class: "progress-track", view_box: "0 0 100 4", preserve_aspect_ratio: "none",
+                "aria-hidden": "true", "focusable": "false",
+                rect { class: "progress-fill", x: "0", y: "0", width: "{level}", height: "4" }
+            }
+        }
+    }
 }
 
 #[component]

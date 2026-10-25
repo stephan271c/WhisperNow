@@ -93,6 +93,14 @@ export function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export function documentHidden() {
+  return document.hidden;
+}
+
+export function viewportHeight() {
+  return window.innerHeight;
+}
+
 export function applyTheme(theme) {
   const root = document.documentElement;
   if (theme === "light" || theme === "dark") {

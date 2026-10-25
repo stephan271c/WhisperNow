@@ -1,16 +1,21 @@
+use dioxus::prelude::VirtualDom;
+use whispernow_domain::ipc::ModelSummary;
 use whispernow_domain::ipc::{
     EventPayload, ManualUpdatePackage, ModelState, Phase, SettingsView, UpdateError, UpdatePhase,
     UpdateProgress, UpdateState,
 };
-use whispernow_domain::{AppError, ErrorCategory};
+use whispernow_domain::{AppError, ErrorCategory, HistoryPage, ThemePreference};
 use whispernow_domain::{LlmProvider, Settings, Shortcut, ShortcutKey, ShortcutModifier};
 
-use crate::components::cleanup_destination;
+use crate::client::fake;
+use crate::components::{AppShell, cleanup_destination};
+use crate::home_status::{HomeStatus, HomeStatusKind};
+use crate::management::{ManagementState, SettingKey};
+use crate::state::UiState;
 use crate::test_support::{
-    editable_settings, history_entry, management_with, settings_view, show_history, snapshot,
+    Page, editable_settings, history_entry, management_with, settings_view, show_history, snapshot,
     state_event,
 };
-use crate::{HomeStatus, HomeStatusKind, ManagementState, SettingKey, UiState};
 
 fn ui_state(phase: Phase) -> UiState {
     let mut state = UiState::default();
@@ -29,7 +34,7 @@ fn update_state(phase: UpdatePhase) -> UpdateState {
 fn settings_html(update: UpdateState) -> String {
     let mut state = ui_state(Phase::Idle);
     state.apply_update_state(update);
-    crate::test_support::Page::host(state, ManagementState::default(), crate::AppShell).html()
+    crate::test_support::Page::host(state, ManagementState::default(), AppShell).html()
 }
 
 /// Editable settings whose AI cleanup goes to `provider`, at `api_base` when given.
@@ -117,23 +122,56 @@ fn nothing_is_disclosed_when_cleanup_is_off_or_runs_on_this_computer() {
 
 #[test]
 fn audio_level_is_scoped_by_the_single_recording_phase() {
-    let mut state = ui_state(Phase::Idle);
-    state.apply_event(EventPayload::AudioLevel {
-        rms: 0.4,
+    let mut page =
+        crate::test_support::Page::host(UiState::default(), ManagementState::default(), AppShell);
+    let level = |rms| EventPayload::AudioLevel {
+        rms,
         peak: 0.8,
         elapsed_ms: 0,
-    });
-    assert!(state.audio_rms.abs() < f32::EPSILON);
+    };
+    let shown = |page: &crate::test_support::Page| (page.context().audio_rms)();
 
-    state.apply_event(state_event(crate::test_support::RECORDING, |_| {}));
-    state.apply_event(EventPayload::AudioLevel {
-        rms: 0.4,
-        peak: 0.8,
-        elapsed_ms: 0,
-    });
-    assert!((state.audio_rms - 0.4).abs() < f32::EPSILON);
-    state.apply_event(state_event(crate::test_support::PROCESSING, |_| {}));
-    assert!(state.audio_rms.abs() < f32::EPSILON);
+    page.publish(state_event(Phase::Idle, |_| {}));
+    page.publish(level(0.4));
+    assert!(shown(&page).abs() < f32::EPSILON);
+
+    page.publish(state_event(crate::test_support::RECORDING, |_| {}));
+    page.publish(level(0.4));
+    assert!((shown(&page) - 0.4).abs() < f32::EPSILON);
+    page.publish(state_event(crate::test_support::PROCESSING, |_| {}));
+    assert!(shown(&page).abs() < f32::EPSILON);
+}
+
+#[test]
+fn the_theme_is_applied_when_it_changes_and_not_when_other_state_does() {
+    let mut page = Page::new(|_| VirtualDom::new(crate::app));
+    page.settle();
+    assert_eq!(
+        fake::themes(),
+        [None],
+        "the system theme before settings arrive"
+    );
+
+    page.answer("get_update_state", Ok(update_state(UpdatePhase::Idle)));
+    let mut settings = editable_settings();
+    settings.theme = ThemePreference::Dark;
+    page.answer("get_settings", Ok(settings_view(settings)));
+    assert_eq!(fake::themes(), [None, Some("dark".to_owned())]);
+
+    page.answer(
+        "list_models",
+        Err::<Vec<ModelSummary>, _>(AppError::new(
+            ErrorCategory::General,
+            "models_unavailable",
+            "The models could not be listed",
+        )),
+    );
+    page.answer("get_history", Ok(HistoryPage::default()));
+    assert_eq!(
+        fake::themes().len(),
+        2,
+        "unrelated changes leave the theme alone"
+    );
 }
 
 #[test]

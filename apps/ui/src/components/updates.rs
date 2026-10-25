@@ -1,9 +1,11 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{ManualUpdatePackage, UpdateError, UpdatePhase};
 
-use super::ui::{Banner, Button, ButtonVariant, ProgressBar, Tone};
+use super::ui::{Banner, Button, ButtonVariant, ProgressBar};
+use crate::UiContext;
 use crate::blocked_reason::{BlockedButton, DisabledReason};
-use crate::{UiContext, UiOperation};
+use crate::notice::Tone;
+use crate::operations::UiOperation;
 
 #[component]
 pub(super) fn AboutPage() -> Element {

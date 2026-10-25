@@ -4,11 +4,11 @@ use whispernow_domain::AppError;
 use whispernow_domain::ipc::{PermissionKind, PermissionStatus, PermissionsResponse, SettingsView};
 use whispernow_domain::{SetupCheckpoint, SetupStep};
 
+use crate::UiContext;
 use crate::client;
-use crate::management::replace_task;
-use crate::{ManagementState, UiContext};
-
-use crate::{NoticeScope, SetupTest, UiOperation};
+use crate::management::{ManagementState, SetupTest, replace_task};
+use crate::notice::NoticeScope;
+use crate::operations::UiOperation;
 
 const PERMISSION_POLL_MS: u32 = 1_000;
 
@@ -80,7 +80,7 @@ impl UiContext {
         let allowed = {
             let management = self.management;
             let management = management.peek();
-            management.may_list_devices() && !management.devices_listed
+            management.may_list_devices() && management.devices.is_none()
         };
         if allowed {
             self.list_devices();
@@ -94,9 +94,7 @@ impl UiContext {
             move |actions, answer| match answer {
                 Ok(devices) => {
                     let mut management = actions.management;
-                    let mut management = management.write();
-                    management.devices = devices;
-                    management.devices_listed = true;
+                    management.write().devices = Some(devices);
                 }
                 Err(error) => actions.report(NoticeScope::Global, &error),
             },

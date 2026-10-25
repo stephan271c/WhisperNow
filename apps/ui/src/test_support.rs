@@ -1,7 +1,9 @@
 use std::{any::Any, cell::RefCell, future::Future, pin::Pin, rc::Rc, sync::Once};
 
 pub(crate) use crate::test_fixtures::{history_entry, management_with, settings_view, snapshot};
-use dioxus::dioxus_core::{AttributeValue, DynamicNode, Mutation, Mutations, VComponent};
+use dioxus::dioxus_core::{
+    AttributeValue, DynamicNode, Mutation, Mutations, ScopeState, VComponent, VNode, generation,
+};
 use dioxus::prelude::*;
 use dioxus_html::{
     HtmlEventConverter, MountedResult, RenderedElementBacking, SerializedFormData,
@@ -14,7 +16,10 @@ use whispernow_domain::{
     HistoryLimit, HistoryPage, LlmProvider, ProviderSettings, Settings, SetupProgress,
 };
 
-use crate::{UiContext, client::fake};
+use crate::UiContext;
+use crate::client::fake;
+use crate::management::ManagementState;
+use crate::state::UiState;
 
 #[derive(Clone, Default)]
 pub(crate) struct Probe(Rc<RefCell<Option<UiContext>>>);
@@ -22,15 +27,10 @@ pub(crate) struct Probe(Rc<RefCell<Option<UiContext>>>);
 impl Probe {
     pub(crate) fn provide(
         &self,
-        state: Signal<crate::UiState>,
-        management: Signal<crate::ManagementState>,
+        state: Signal<UiState>,
+        management: Signal<ManagementState>,
     ) -> UiContext {
-        let navigator = crate::Navigator::new(use_signal(|| crate::Route::Home), use_signal(|| 0));
-        let context = use_context_provider(|| crate::UiContext {
-            state,
-            management,
-            navigator,
-        });
+        let context = UiContext::provide(state, management);
         *self.0.borrow_mut() = Some(context);
         context
     }
@@ -50,11 +50,7 @@ pub(crate) struct Page {
 }
 
 impl Page {
-    pub(crate) fn host(
-        state: crate::UiState,
-        management: crate::ManagementState,
-        root: fn() -> Element,
-    ) -> Self {
+    pub(crate) fn host(state: UiState, management: ManagementState, root: fn() -> Element) -> Self {
         Self::new(|probe| {
             VirtualDom::new_with_props(
                 move |()| {
@@ -87,6 +83,25 @@ impl Page {
 
     pub(crate) fn context(&self) -> UiContext {
         self.probe.context()
+    }
+
+    /// Each mounted component's name, without its module path, and how many times it has rendered, in tree order.
+    pub(crate) fn render_counts(&self) -> Vec<(&'static str, usize)> {
+        let mut counts = Vec::new();
+        count_scope(&self.dom, self.dom.base_scope(), &mut counts);
+        counts
+    }
+
+    /// The components that rendered since `before`, which `render_counts` returned.
+    pub(crate) fn rendered_since(&self, before: &[(&'static str, usize)]) -> Vec<&'static str> {
+        let now = self.render_counts();
+        assert_eq!(now.len(), before.len(), "the mounted components changed");
+        before
+            .iter()
+            .zip(&now)
+            .filter(|(before, now)| before != now)
+            .map(|((name, _), _)| *name)
+            .collect()
     }
 
     fn keep(&mut self, mutations: Mutations) {
@@ -203,6 +218,33 @@ impl Page {
 
     pub(crate) fn publish(&mut self, event: EventPayload) -> &mut Self {
         self.act(|actions| actions.apply_event(event))
+    }
+}
+
+fn count_scope(dom: &VirtualDom, scope: &ScopeState, counts: &mut Vec<(&'static str, usize)>) {
+    if let Some(root) = scope.try_root_node() {
+        count_node(dom, root, counts);
+    }
+}
+
+fn count_node(dom: &VirtualDom, node: &VNode, counts: &mut Vec<(&'static str, usize)>) {
+    for (index, child) in node.dynamic_nodes.iter().enumerate() {
+        match child {
+            DynamicNode::Component(component) => {
+                if let Some(scope) = component.mounted_scope(index, node, dom) {
+                    let name = component.name.split('<').next().unwrap_or_default();
+                    let name = name.rsplit("::").next().unwrap_or(name);
+                    counts.push((name, dom.in_scope(scope.id(), generation)));
+                    count_scope(dom, scope, counts);
+                }
+            }
+            DynamicNode::Fragment(nodes) => {
+                for node in nodes {
+                    count_node(dom, node, counts);
+                }
+            }
+            DynamicNode::Text(_) | DynamicNode::Placeholder(_) => {}
+        }
     }
 }
 
@@ -330,7 +372,7 @@ pub(crate) const RECORDING: Phase = Phase::Recording {
 
 pub(crate) const PROCESSING: Phase = Phase::Processing { cleaning_up: false };
 
-pub(crate) fn show_history(management: &mut crate::ManagementState, entries: Vec<HistoryEntry>) {
+pub(crate) fn show_history(management: &mut ManagementState, entries: Vec<HistoryEntry>) {
     management.finish_history_refresh(HistoryPage {
         entries,
         has_more: false,

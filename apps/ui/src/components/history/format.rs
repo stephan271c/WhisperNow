@@ -121,14 +121,18 @@ pub(crate) fn machine_time(at: UtcMillis) -> String {
 pub(crate) fn group_by_day(
     clock: LocalClock,
     entries: &[HistoryEntry],
-) -> Vec<(i64, Vec<HistoryEntry>)> {
-    let mut groups: Vec<(i64, Vec<HistoryEntry>)> = Vec::new();
-    for entry in entries {
-        let day = clock.local_day(entry.created_at);
-        match groups.last_mut() {
-            Some((group_day, members)) if *group_day == day => members.push(entry.clone()),
-            _ => groups.push((day, vec![entry.clone()])),
-        }
+) -> Vec<(i64, &[HistoryEntry])> {
+    let mut groups = Vec::new();
+    let mut rest = entries;
+    while let Some(first) = rest.first() {
+        let day = clock.local_day(first.created_at);
+        let len = 1 + rest[1..]
+            .iter()
+            .take_while(|entry| clock.local_day(entry.created_at) == day)
+            .count();
+        let (members, later) = rest.split_at(len);
+        groups.push((day, members));
+        rest = later;
     }
     groups
 }

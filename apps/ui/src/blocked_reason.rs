@@ -1,10 +1,11 @@
 use dioxus::prelude::*;
 
+use crate::UiContext;
 use crate::components::ui::{Button, ButtonVariant};
-use crate::{UiContext, UiOperation};
+use crate::operations::UiOperation;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum BlockedReason {
+pub(crate) enum BlockedReason {
     Connecting,
     Phase(String),
     CommandPending,
@@ -12,7 +13,7 @@ pub enum BlockedReason {
 
 impl BlockedReason {
     #[must_use]
-    pub fn message(&self) -> &str {
+    pub(crate) fn message(&self) -> &str {
         match self {
             Self::Connecting => "WhisperNow is still connecting",
             Self::Phase(summary) => summary,

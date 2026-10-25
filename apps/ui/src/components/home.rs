@@ -2,14 +2,17 @@ use dioxus::prelude::*;
 use whispernow_domain::ipc::CleanupDevice;
 use whispernow_domain::{RecordingMode, SetupStep, Shortcut};
 
+use super::NoticeRegion;
+use super::copy_button::CopyButton;
 use super::labels;
 use super::microphone_test::MicrophoneTest;
-use super::ui::{Banner, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconName, Tone};
+use super::shortcut::ShortcutSummary;
+use super::ui::{Banner, Button, ButtonSize, ButtonVariant, EmptyState, Icon, IconName};
 use super::updates::UpdateStatus;
-use super::{CopyButton, NoticeRegion, ShortcutSummary};
-use crate::{
-    Fix, FixTarget, HomeStatus, HomeStatusKind, NoticeScope, Route, SettingsRoute, UiContext,
-};
+use crate::UiContext;
+use crate::home_status::{Fix, FixTarget, HomeStatus, HomeStatusKind};
+use crate::notice::{NoticeScope, Tone};
+use crate::route::{Route, SettingsRoute};
 
 /// The steps the setup checklist lists, each done once setup has moved past it.
 const CHECKLIST: [(&str, SetupStep); 4] = [
@@ -124,7 +127,7 @@ fn StatusCard(status: HomeStatus, cleanup_device: Option<CleanupDevice>) -> Elem
                     id: "home-status-fix",
                     size: ButtonSize::Sm,
                     onclick: move |_| match target {
-                        FixTarget::Page(section) => navigator.go(Route::from_section(section)),
+                        FixTarget::Page(section) => navigator.go(Route::from(section)),
                         FixTarget::SystemSettings(kind) => context.open_permission_settings(kind),
                     },
                     "{label}"

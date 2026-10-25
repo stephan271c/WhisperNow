@@ -2,17 +2,21 @@ use whispernow_domain::ModelId;
 use whispernow_domain::ipc::ModelSummary;
 
 use super::ManagementState;
-use crate::components::ui::Tone;
+use crate::notice::{NoticeScope, Tone};
 
 impl ManagementState {
-    pub fn speech_models(&self) -> impl Iterator<Item = &ModelSummary> {
-        self.models.iter().filter(|model| model.family.is_speech())
+    pub(crate) fn speech_models(&self) -> impl Iterator<Item = &ModelSummary> {
+        self.models
+            .iter()
+            .flatten()
+            .filter(|model| model.family.is_speech())
     }
 
     #[must_use]
-    pub fn model_display_name(&self, model_id: &ModelId) -> String {
+    pub(crate) fn model_display_name(&self, model_id: &ModelId) -> String {
         self.models
             .iter()
+            .flatten()
             .find(|model| model.id == *model_id)
             .map_or_else(
                 || "the speech model".to_owned(),
@@ -20,7 +24,7 @@ impl ManagementState {
             )
     }
 
-    pub fn finish_microphone_test(
+    pub(crate) fn finish_microphone_test(
         &mut self,
         result: whispernow_domain::ipc::MicrophoneTestResponse,
     ) {
@@ -28,13 +32,13 @@ impl ManagementState {
         if result.peak < SILENT_PEAK {
             self.notify(
                 Tone::Warning,
-                crate::NoticeScope::Home,
+                NoticeScope::Home,
                 "No sound reached the microphone. Check that it is connected and not muted.",
             );
         } else {
             self.notify(
                 Tone::Success,
-                crate::NoticeScope::Home,
+                NoticeScope::Home,
                 "Your microphone is working",
             );
         }

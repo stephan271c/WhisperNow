@@ -5,7 +5,9 @@ use whispernow_domain::{ApiKey, AppError, LlmProvider, SettingChange, Vocabulary
 use crate::UiContext;
 use crate::client;
 
-use crate::{NoticeScope, SettingKey, UiOperation};
+use crate::management::SettingKey;
+use crate::notice::NoticeScope;
+use crate::operations::UiOperation;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 
@@ -15,7 +17,7 @@ impl UiContext {
         let begun = self
             .management
             .write()
-            .begin_settings_update(SettingKey::of(&change), |settings| shown.apply(settings));
+            .begin_settings_update(SettingKey::from(&change), |settings| shown.apply(settings));
         if begun {
             self.save_setting("update_settings", change);
         }

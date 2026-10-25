@@ -127,7 +127,9 @@ pub(crate) fn current_window_label() -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn apply_theme(_theme: Option<&str>) {}
+pub(crate) fn apply_theme(theme: Option<&str>) {
+    fake::apply_theme(theme);
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const fn reset_settings_scroll() {}
@@ -201,7 +203,7 @@ mod wasm {
         fn object_url(blob: &JsValue) -> String;
 
         #[wasm_bindgen(js_name = revokeObjectUrl)]
-        pub fn revoke_object_url(url: &str);
+        pub(crate) fn revoke_object_url(url: &str);
 
         #[wasm_bindgen(catch, js_name = listenTyped)]
         async fn listen_typed(name: &str, callback: &Function) -> Result<u32, JsValue>;
@@ -213,16 +215,22 @@ mod wasm {
         fn current_window_label_js() -> String;
 
         #[wasm_bindgen(js_name = resetSettingsScroll)]
-        pub fn reset_settings_scroll();
+        pub(crate) fn reset_settings_scroll();
 
         #[wasm_bindgen(js_name = delay)]
         async fn delay_js(ms: u32) -> JsValue;
 
         #[wasm_bindgen(js_name = trackScrollActivity)]
-        pub fn track_scroll_activity();
+        pub(crate) fn track_scroll_activity();
+
+        #[wasm_bindgen(js_name = documentHidden)]
+        pub(crate) fn document_hidden() -> bool;
+
+        #[wasm_bindgen(js_name = viewportHeight)]
+        pub(crate) fn viewport_height() -> Option<f64>;
 
         #[wasm_bindgen(js_name = applyTheme)]
-        pub fn apply_theme(theme: Option<&str>);
+        pub(crate) fn apply_theme(theme: Option<&str>);
 
         #[wasm_bindgen(catch, js_name = windowFrame)]
         async fn window_frame_js() -> Result<JsValue, JsValue>;
@@ -290,16 +298,16 @@ mod wasm {
         Ok(object_url(&audio))
     }
 
-    pub async fn listen_events(
+    pub(crate) async fn listen_events(
         callback: impl FnMut(EventPayload) + 'static,
     ) -> Result<ListenerOwner, AppError> {
         let mut callback = callback;
-        let closure = Closure::wrap(Box::new(move |value: JsValue| {
+        let closure: Closure<dyn FnMut(JsValue)> = Closure::new(move |value: JsValue| {
             match serde_wasm_bindgen::from_value::<EventPayload>(value) {
                 Ok(event) => callback(event),
                 Err(error) => console_error(&format!("Desktop event contract failed: {error}")),
             }
-        }) as Box<dyn FnMut(JsValue)>);
+        });
         let listener_id = listen_typed(
             whispernow_domain::ipc::EVENT,
             closure.as_ref().unchecked_ref::<Function>(),
@@ -338,11 +346,11 @@ mod wasm {
         callback: impl FnMut(bool) + 'static,
     ) -> Result<ListenerOwner, AppError> {
         let mut callback = callback;
-        let closure = Closure::wrap(Box::new(move |value: JsValue| {
+        let closure: Closure<dyn FnMut(JsValue)> = Closure::new(move |value: JsValue| {
             if let Some(maximized) = value.as_bool() {
                 callback(maximized);
             }
-        }) as Box<dyn FnMut(JsValue)>);
+        });
         let listener_id = listen_maximized_js(closure.as_ref().unchecked_ref::<Function>())
             .await
             .map_err(|error| from_js(&error))?;
@@ -353,7 +361,7 @@ mod wasm {
     }
 
     /// A desktop listener and its callback; dropping it unregisters the listener.
-    pub struct ListenerOwner {
+    pub(crate) struct ListenerOwner {
         listener_id: u32,
         _callback: Closure<dyn FnMut(JsValue)>,
     }
@@ -368,23 +376,8 @@ mod wasm {
         let _ = delay_js(ms).await;
     }
 
-    pub(crate) fn document_hidden() -> bool {
-        let global = js_sys::global();
-        js_sys::Reflect::get(&global, &JsValue::from_str("document"))
-            .and_then(|document| js_sys::Reflect::get(&document, &JsValue::from_str("hidden")))
-            .ok()
-            .and_then(|hidden| hidden.as_bool())
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn viewport_height() -> Option<f64> {
-        js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("innerHeight"))
-            .ok()
-            .and_then(|height| height.as_f64())
-    }
-
     #[must_use]
-    pub fn current_window_label() -> String {
+    pub(crate) fn current_window_label() -> String {
         current_window_label_js()
     }
 
@@ -436,4 +429,4 @@ mod wasm {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use wasm::*;
+pub(crate) use wasm::*;

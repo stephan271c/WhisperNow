@@ -7,11 +7,11 @@ use whispernow_domain::{
 
 use super::NoticeRegion;
 use super::labels::{self, format_bytes};
-use super::ui::{
-    Banner, Button, ButtonSize, ButtonVariant, ConfirmButton, ProgressBar, Section, Tone,
-};
-use crate::blocked_reason::DisabledReason;
-use crate::{BlockedReason, NoticeScope, UiContext, UiOperation};
+use super::ui::{Banner, Button, ButtonSize, ButtonVariant, ConfirmButton, ProgressBar, Section};
+use crate::UiContext;
+use crate::blocked_reason::{BlockedReason, DisabledReason};
+use crate::notice::{NoticeScope, Tone};
+use crate::operations::UiOperation;
 
 #[component]
 pub(super) fn ModelsPage() -> Element {
@@ -30,7 +30,7 @@ pub(super) fn ModelsPage() -> Element {
         .cloned()
         .collect::<Vec<_>>();
     models.sort_by_key(|model| active_id.as_ref() != Some(&model.id));
-    let loaded = management.read().models_loaded;
+    let loaded = management.read().models.is_some();
     let switch_blocked = context
         .blocked(UiOperation::ModelSwitch)
         .or(context.settings_blocked());
@@ -113,7 +113,7 @@ pub(super) fn ModelRow(
     };
     let active = active_state.is_some();
     let describe =
-        |blocked: &Option<crate::BlockedReason>| blocked.as_ref().map(|_| "models-disabled-reason");
+        |blocked: &Option<BlockedReason>| blocked.as_ref().map(|_| "models-disabled-reason");
     let ratings = match model.benchmark {
         Some(ModelBenchmark::Speech(benchmark)) => rsx! {
             div { class: "model-ratings",

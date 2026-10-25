@@ -1,7 +1,7 @@
 use whispernow_domain::ipc::{AppState, ModelState, Phase, SettingsView};
 use whispernow_domain::{EntryId, EntryStatus, HistoryEntry, ModelId, Settings, UtcMillis};
 
-use crate::ManagementState;
+use crate::management::ManagementState;
 
 /// A pasted dictation `id` saying `text`, made `id` milliseconds after the epoch.
 pub(crate) fn history_entry(id: i64, text: &str) -> HistoryEntry {

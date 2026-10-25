@@ -4,8 +4,9 @@ use dioxus::prelude::*;
 
 use super::{
     Banner, Combobox, ConfirmButton, Field, IconButton, IconName, ProgressBar, Select, SettingRow,
-    TextInput, Toggle, Tone,
+    TextInput, Toggle,
 };
+use crate::notice::Tone;
 use crate::test_support::{Page, click_rendered, element, focused, mount_rendered, tag, text};
 
 /// Renders `app` inside a runtime so its event handlers can be created.

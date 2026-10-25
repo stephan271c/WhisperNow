@@ -9,34 +9,32 @@ mod overlay;
 mod route;
 mod state;
 
-use blocked_reason::BlockedReason;
-use components::Navigator;
-pub use components::{AppShell, RecordingBar};
-use home_status::{Fix, FixTarget, HomeStatus, HomeStatusKind};
-use management::{ManagementState, SettingKey, SetupTest};
-use notice::{Notice, NoticeScope};
-use operations::UiOperation;
-use overlay::OverlayView;
-use route::{Route, SettingsRoute, TopLevel, nav_keyboard_target};
-use state::UiState;
-
 use client::{ListenerOwner, current_window_label};
-
+use components::{AppShell, Navigator, RecordingBar};
 use dioxus::prelude::*;
+use management::ManagementState;
+use route::Route;
+use state::UiState;
 
 #[derive(Clone, Copy, PartialEq)]
 struct UiContext {
     state: Signal<UiState>,
     management: Signal<ManagementState>,
     navigator: Navigator,
+    /// Apart from `state` so a level reading every 50 ms re-renders only the meter that shows it.
+    audio_rms: Signal<f32>,
 }
 
 impl UiContext {
-    async fn hydrate_state(mut self) {
-        match client::call("get_state").await {
-            Ok(snapshot) => self.state.write().hydrate(snapshot),
-            Err(_) => self.state.write().report_state_read_failure(),
-        }
+    pub(crate) fn provide(state: Signal<UiState>, management: Signal<ManagementState>) -> Self {
+        let navigator = Navigator::new(use_signal(|| Route::Home), use_signal(|| 0));
+        let audio_rms = use_signal(|| 0.0);
+        use_context_provider(|| Self {
+            state,
+            management,
+            navigator,
+            audio_rms,
+        })
     }
 }
 
@@ -47,14 +45,10 @@ pub fn app() -> Element {
     });
     let recording_bar = state.peek().recording_bar;
     let management = use_signal(ManagementState::default);
-    let navigator = Navigator::new(use_signal(|| Route::Home), use_signal(|| 0));
-    let context = use_context_provider(|| UiContext {
-        state,
-        management,
-        navigator,
-    });
+    let context = UiContext::provide(state, management);
     // Follows a theme change at once; the recording bar uses theme-independent inverse colours.
-    use_effect(move || client::apply_theme(management.read().theme_attribute()));
+    let theme = use_memo(move || management.read().theme_attribute());
+    use_effect(move || client::apply_theme(theme()));
     use_effect(client::track_scroll_activity);
     let mut listeners = use_signal(|| None::<ListenerOwner>);
     use_future(move || async move {

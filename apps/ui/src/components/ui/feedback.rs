@@ -2,15 +2,7 @@ use dioxus::prelude::*;
 
 use super::{Icon, IconName};
 use crate::components::labels::format_bytes;
-
-/// Severity of a banner or toast. Warnings and errors are announced assertively.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Tone {
-    Info,
-    Success,
-    Warning,
-    Error,
-}
+use crate::notice::Tone;
 
 impl Tone {
     pub(crate) const fn class(self) -> &'static str {

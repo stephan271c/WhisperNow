@@ -14,18 +14,18 @@ const ATTACK: f32 = 0.8;
 const RELEASE: f32 = 0.6;
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct OverlayView {
-    pub levels: [f32; LEVEL_BARS],
+pub(crate) struct OverlayView {
+    pub(crate) levels: [f32; LEVEL_BARS],
     /// Whether real samples arrived for this recording; until then the bars are arming.
-    pub levels_seen: bool,
-    pub elapsed_ms: u64,
+    pub(crate) levels_seen: bool,
+    pub(crate) elapsed_ms: u64,
     session: Option<u64>,
     /// Why the last overlay action failed; cleared by the next phase.
-    pub action_error: Option<String>,
+    pub(crate) action_error: Option<String>,
 }
 
 impl OverlayView {
-    pub fn start_recording(&mut self, session: u64) {
+    pub(crate) fn start_recording(&mut self, session: u64) {
         if self.session != Some(session) {
             self.session = Some(session);
             self.levels = [0.0; LEVEL_BARS];
@@ -34,7 +34,7 @@ impl OverlayView {
         }
     }
 
-    pub fn apply_level(&mut self, rms: f32, elapsed_ms: u64) {
+    pub(crate) fn apply_level(&mut self, rms: f32, elapsed_ms: u64) {
         let decibels = 20.0 * rms.clamp(1e-6, 1.0).log10();
         let activity = ((decibels - FLOOR_DB) / (CEILING_DB - FLOOR_DB)).clamp(0.0, 1.0);
         let previous = self.levels[LEVEL_BARS - 1];

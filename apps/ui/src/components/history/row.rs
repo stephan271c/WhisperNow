@@ -4,7 +4,7 @@ use whispernow_domain::{EntryStatus, HistoryEntry};
 
 use super::audio::AudioPlayer;
 use super::format::{LocalClock, duration_label, machine_time};
-use crate::components::CopyButton;
+use crate::components::copy_button::CopyButton;
 use crate::components::ui::{ButtonSize, ConfirmButton, Icon, IconName};
 
 struct Badge {

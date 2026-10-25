@@ -12,8 +12,8 @@ use whispernow_domain::ipc::{
 };
 use whispernow_domain::{HistoryFilter, SetupCheckpoint};
 
-use crate::components::ui::Tone;
-use crate::{Notice, NoticeScope, UiOperation};
+use crate::notice::{Notice, NoticeScope, Tone};
+use crate::operations::UiOperation;
 
 pub(crate) use history::HistoryRows;
 pub(crate) use settings::SettingKey;
@@ -27,37 +27,34 @@ pub(crate) fn replace_task(slot: &mut Option<Task>, next: Option<Task>) {
 
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct ManagementState {
-    pub settings: Option<SettingsView>,
+    pub(crate) settings: Option<SettingsView>,
     pending_save: Option<settings::PendingSave>,
     setting_errors: BTreeMap<SettingKey, String>,
     /// The checkpoint setup shows, including choices not saved yet.
-    pub setup: Option<SetupCheckpoint>,
-    pub devices: Vec<AudioDevice>,
-    pub devices_listed: bool,
-    pub models: Vec<ModelSummary>,
-    pub models_loaded: bool,
-    pub history: HistoryRows,
-    pub history_filter: HistoryFilter,
-    pub history_search: String,
+    pub(crate) setup: Option<SetupCheckpoint>,
+    pub(crate) devices: Option<Vec<AudioDevice>>,
+    pub(crate) models: Option<Vec<ModelSummary>>,
+    pub(crate) history: HistoryRows,
+    pub(crate) history_filter: HistoryFilter,
     history_extra_pages: u32,
     /// The window read in flight; a newer read cancels it, so an older answer never lands.
     pub(crate) history_read: Option<Task>,
     /// The application data a clear would remove, once the user asked to review it.
-    pub data_locations: Option<Vec<DataLocation>>,
-    pub clear_result: Option<ClearDataResult>,
+    pub(crate) data_locations: Option<Vec<DataLocation>>,
+    pub(crate) clear_result: Option<ClearDataResult>,
     /// Controls whose call is in flight, once per call.
     pub(crate) busy: Vec<UiOperation>,
-    pub notice: Option<Notice>,
+    pub(crate) notice: Option<Notice>,
     next_notice: u64,
-    pub microphone_test: Option<MicrophoneTestResponse>,
+    pub(crate) microphone_test: Option<MicrophoneTestResponse>,
     pub(crate) microphone_test_task: Option<Task>,
-    pub permissions: Option<PermissionsResponse>,
+    pub(crate) permissions: Option<PermissionsResponse>,
     pub(crate) permission_watch: Option<Task>,
-    pub setup_test: Option<SetupTest>,
+    pub(crate) setup_test: Option<SetupTest>,
 }
 
 impl ManagementState {
-    pub fn notify(&mut self, tone: Tone, scope: NoticeScope, message: impl Into<String>) {
+    pub(crate) fn notify(&mut self, tone: Tone, scope: NoticeScope, message: impl Into<String>) {
         self.next_notice = self.next_notice.saturating_add(1);
         self.notice = Some(Notice {
             id: self.next_notice,
@@ -79,13 +76,13 @@ impl ManagementState {
     }
 
     /// Dismisses the notice with `id`; a newer notice stays.
-    pub fn dismiss_notice(&mut self, id: u64) {
+    pub(crate) fn dismiss_notice(&mut self, id: u64) {
         if self.notice.as_ref().is_some_and(|notice| notice.id == id) {
             self.notice = None;
         }
     }
 
-    pub fn clear_notice_scope(&mut self, scope: NoticeScope) {
+    pub(crate) fn clear_notice_scope(&mut self, scope: NoticeScope) {
         if self
             .notice
             .as_ref()
@@ -110,11 +107,11 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn is_busy(&self, operation: UiOperation) -> bool {
+    pub(crate) fn is_busy(&self, operation: UiOperation) -> bool {
         self.busy.contains(&operation)
     }
 
-    pub fn apply_clear_result(&mut self, result: ClearDataResult) {
+    pub(crate) fn apply_clear_result(&mut self, result: ClearDataResult) {
         self.data_locations = None;
         let failed = result.items.iter().any(|item| !item.deleted);
         let restart = result.restart_required;

@@ -4,8 +4,8 @@ use whispernow_domain::AppError;
 use whispernow_domain::ipc::{MainWindowSection, PermissionKind, Phase};
 
 use crate::UiContext;
-use crate::UiOperation;
 use crate::client;
+use crate::operations::UiOperation;
 
 use dioxus::prelude::*;
 

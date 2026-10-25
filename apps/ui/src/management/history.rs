@@ -2,8 +2,7 @@ use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{HistoryEntry, HistoryFilter, HistoryPage, HistoryPageRequest};
 
 use super::ManagementState;
-use crate::NoticeScope;
-use crate::components::ui::Tone;
+use crate::notice::{NoticeScope, Tone};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum HistoryRows {
@@ -22,7 +21,7 @@ pub(crate) enum HistoryRows {
 
 impl HistoryRows {
     #[must_use]
-    pub fn entries(&self) -> &[HistoryEntry] {
+    pub(crate) fn entries(&self) -> &[HistoryEntry] {
         match self {
             Self::Loaded { entries, .. } => entries,
             _ => &[],
@@ -30,7 +29,7 @@ impl HistoryRows {
     }
 
     #[must_use]
-    pub const fn has_more(&self) -> bool {
+    pub(crate) const fn has_more(&self) -> bool {
         matches!(self, Self::Loaded { has_more: true, .. })
     }
 }
@@ -52,11 +51,11 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub const fn history_window_pages(&self) -> u32 {
+    pub(crate) const fn history_window_pages(&self) -> u32 {
         self.history_extra_pages.saturating_add(1)
     }
 
-    pub fn finish_history_refresh(&mut self, page: HistoryPage) {
+    pub(crate) fn finish_history_refresh(&mut self, page: HistoryPage) {
         self.history = HistoryRows::Loaded {
             filter: self.history_filter.clone(),
             entries: page.entries,
@@ -64,7 +63,7 @@ impl ManagementState {
         };
     }
 
-    pub fn fail_history_refresh(&mut self, error: &AppError) {
+    pub(crate) fn fail_history_refresh(&mut self, error: &AppError) {
         let summary = error.summary.clone();
         self.history = match &self.history {
             // Rows that can no longer be confirmed give way to the reason.
@@ -85,17 +84,17 @@ impl ManagementState {
 
     /// Applies the typed search text; returns whether the window must be read again from its
     /// first page.
-    pub fn apply_history_search(&mut self) -> bool {
-        if self.history_search == self.history_filter.query {
+    pub(crate) fn apply_history_search(&mut self, text: &str) -> bool {
+        if text == self.history_filter.query {
             return false;
         }
-        self.history_filter.query.clone_from(&self.history_search);
+        text.clone_into(&mut self.history_filter.query);
         self.history_extra_pages = 0;
         true
     }
 
     /// Shows only failed entries, or all of them; returns whether the filter changed.
-    pub fn show_failed_history_only(&mut self, failed_only: bool) -> bool {
+    pub(crate) fn show_failed_history_only(&mut self, failed_only: bool) -> bool {
         if self.history_filter.failed_only == failed_only {
             return false;
         }
@@ -105,8 +104,7 @@ impl ManagementState {
     }
 
     /// Removes the search text and the failed filter; returns whether anything changed.
-    pub fn clear_history_filter(&mut self) -> bool {
-        self.history_search.clear();
+    pub(crate) fn clear_history_filter(&mut self) -> bool {
         if self.history_filter == HistoryFilter::default() {
             return false;
         }

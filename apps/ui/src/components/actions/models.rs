@@ -2,8 +2,8 @@ use whispernow_domain::ModelId;
 
 use crate::UiContext;
 use crate::client;
-use crate::components::ui::Tone;
-use crate::{NoticeScope, UiOperation};
+use crate::notice::{NoticeScope, Tone};
+use crate::operations::UiOperation;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 
@@ -53,9 +53,7 @@ impl UiContext {
         spawn_forever(async move {
             match client::call("list_models").await {
                 Ok(models) => {
-                    let mut management = self.management.write();
-                    management.models = models;
-                    management.models_loaded = true;
+                    self.management.write().models = Some(models);
                 }
                 Err(error) => self.load_failed("Speech models", &error),
             }

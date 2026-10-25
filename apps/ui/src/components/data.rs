@@ -1,9 +1,11 @@
 use dioxus::prelude::*;
 
-use super::ui::{Banner, ConfirmButton, Section, Tone};
+use super::ui::{Banner, ConfirmButton, Section};
 use super::{NoticeRegion, labels};
+use crate::UiContext;
 use crate::blocked_reason::{BlockedButton, DisabledReason};
-use crate::{NoticeScope, UiContext, UiOperation};
+use crate::notice::{NoticeScope, Tone};
+use crate::operations::UiOperation;
 
 #[component]
 pub(super) fn ClearDataCard() -> Element {

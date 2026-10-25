@@ -3,14 +3,15 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 use whispernow_domain::VocabularyReplacement;
 
-use super::CopyButton;
-use super::configuration::SettingsLoading;
+use super::copy_button::CopyButton;
+use super::settings::SettingsLoading;
 use super::ui::focus::take_focus;
 use super::ui::{
     Button, ButtonVariant, DraftText, Field, IconButton, IconName, Section, TextInput,
 };
+use crate::UiContext;
 use crate::blocked_reason::DisabledReason;
-use crate::{SettingKey, UiContext};
+use crate::management::SettingKey;
 
 /// The add form's id; tests submit it as Enter does.
 const ADD_FORM: &str = "vocabulary-add-form";
@@ -57,9 +58,9 @@ pub(super) fn VocabularyPage() -> Element {
     let shown = settings
         .vocabulary_replacements
         .iter()
-        .cloned()
         .enumerate()
         .filter(|(_, entry)| matches(entry, &query))
+        .map(|(index, entry)| (index, entry.clone()))
         .collect::<Vec<_>>();
     let shown_indices = shown.iter().map(|(index, _)| *index).collect::<Vec<_>>();
     // The shown rule after the deleted one, which has moved up, else the one before it.

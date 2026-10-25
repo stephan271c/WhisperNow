@@ -4,10 +4,10 @@ use whispernow_domain::ipc::{SaveSettingsResponse, SettingsView};
 use whispernow_domain::{AppError, SettingChange, Settings, ThemePreference};
 
 use super::ManagementState;
-use crate::NoticeScope;
+use crate::notice::NoticeScope;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum SettingKey {
+pub(crate) enum SettingKey {
     InputDevice,
     RecordingShortcut,
     CancelShortcut,
@@ -26,9 +26,8 @@ pub enum SettingKey {
     Vocabulary,
 }
 
-impl SettingKey {
-    #[must_use]
-    pub const fn of(change: &SettingChange) -> Self {
+impl From<&SettingChange> for SettingKey {
+    fn from(change: &SettingChange) -> Self {
         match change {
             SettingChange::InputDevice(_) => Self::InputDevice,
             SettingChange::RecordingShortcut { .. } => Self::RecordingShortcut,
@@ -58,12 +57,12 @@ pub(super) struct PendingSave {
 }
 
 impl ManagementState {
-    pub fn install_settings(&mut self, settings: SettingsView) {
+    pub(crate) fn install_settings(&mut self, settings: SettingsView) {
         self.settings = Some(settings);
     }
 
     #[must_use]
-    pub fn shown_settings(&self) -> Option<&Settings> {
+    pub(crate) fn shown_settings(&self) -> Option<&Settings> {
         self.pending_save
             .as_ref()
             .map(|pending| &pending.settings)
@@ -73,7 +72,7 @@ impl ManagementState {
     /// The document `data-theme` for the chosen theme, following a theme change at once;
     /// `None` follows the system colour scheme.
     #[must_use]
-    pub fn theme_attribute(&self) -> Option<&'static str> {
+    pub(crate) fn theme_attribute(&self) -> Option<&'static str> {
         let theme = self
             .shown_settings()
             .map_or(ThemePreference::System, |settings| settings.theme);
@@ -85,7 +84,7 @@ impl ManagementState {
     }
 
     #[must_use]
-    pub fn settings_pending(&self) -> bool {
+    pub(crate) fn settings_pending(&self) -> bool {
         self.pending_save.is_some()
             || self
                 .busy
@@ -95,7 +94,7 @@ impl ManagementState {
 
     /// Shows `edit` applied to the shown settings until the desktop answers; `false`, with nothing
     /// changed, while another save is pending.
-    pub fn begin_settings_update(
+    pub(crate) fn begin_settings_update(
         &mut self,
         key: SettingKey,
         edit: impl FnOnce(&mut Settings),
@@ -113,17 +112,20 @@ impl ManagementState {
         true
     }
 
-    pub fn reject_setting(&mut self, key: SettingKey, message: impl Into<String>) {
+    pub(crate) fn reject_setting(&mut self, key: SettingKey, message: impl Into<String>) {
         self.setting_errors.insert(key, message.into());
     }
 
     /// Why the last change to `key` was not saved; the control shows the saved value again.
     #[must_use]
-    pub fn setting_error(&self, key: SettingKey) -> Option<String> {
+    pub(crate) fn setting_error(&self, key: SettingKey) -> Option<String> {
         self.setting_errors.get(&key).cloned()
     }
 
-    pub fn finish_settings_update(&mut self, answer: Result<SaveSettingsResponse, AppError>) {
+    pub(crate) fn finish_settings_update(
+        &mut self,
+        answer: Result<SaveSettingsResponse, AppError>,
+    ) {
         let PendingSave { key, .. } = self
             .pending_save
             .take()

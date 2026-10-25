@@ -33,16 +33,31 @@ struct Call {
 struct Timers {
     runs: u64,
     waiting: Vec<Waker>,
+    live: usize,
+}
+
+/// Counts a delay as live until it finishes or its task is cancelled.
+struct LiveDelay;
+
+impl Drop for LiveDelay {
+    fn drop(&mut self) {
+        TIMERS.with_borrow_mut(|timers| timers.live = timers.live.saturating_sub(1));
+    }
 }
 
 thread_local! {
     static FRAME: Cell<(WindowFrame, Platform)> = const { Cell::new((WindowFrame::Native, Platform::Other)) };
     static CALLS: RefCell<Vec<Call>> = const { RefCell::new(Vec::new()) };
     static TIMERS: RefCell<Timers> = RefCell::new(Timers::default());
+    static THEMES: RefCell<Vec<Option<String>>> = const { RefCell::new(Vec::new()) };
 }
 
 pub(super) async fn delay() {
-    let started = TIMERS.with_borrow(|timers| timers.runs);
+    let started = TIMERS.with_borrow_mut(|timers| {
+        timers.live += 1;
+        timers.runs
+    });
+    let _live = LiveDelay;
     poll_fn(|context| {
         TIMERS.with_borrow_mut(|timers| {
             if timers.runs > started {
@@ -64,6 +79,11 @@ pub(crate) fn run_timers() {
     for waker in waiting {
         waker.wake();
     }
+}
+
+/// How many delays have started and neither finished nor been cancelled.
+pub(crate) fn live_delays() -> usize {
+    TIMERS.with_borrow(|timers| timers.live)
 }
 
 pub(super) async fn invoke(command: &'static str, request: Value) -> Reply {
@@ -102,8 +122,18 @@ pub(super) fn frame() -> (WindowFrame, Platform) {
     FRAME.get()
 }
 
+pub(super) fn apply_theme(theme: Option<&str>) {
+    THEMES.with_borrow_mut(|themes| themes.push(theme.map(str::to_owned)));
+}
+
+/// Every theme the document was given, in order.
+pub(crate) fn themes() -> Vec<Option<String>> {
+    THEMES.with_borrow(Clone::clone)
+}
+
 pub(crate) fn reset() {
     FRAME.set((WindowFrame::Native, Platform::Other));
+    THEMES.with_borrow_mut(Vec::clear);
     CALLS.with_borrow_mut(Vec::clear);
     TIMERS.with_borrow_mut(|timers| *timers = Timers::default());
 }

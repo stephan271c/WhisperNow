@@ -12,18 +12,20 @@ use whispernow_domain::{
     VocabularyReplacement, WerSource,
 };
 
+use super::AppShell;
 use crate::client::fake;
-use crate::components::ui::Tone;
+use crate::management::ManagementState;
+use crate::notice::{NoticeScope, Tone};
+use crate::state::UiState;
 use crate::test_support::{
     Page, editable_settings, focused, label_in_name_violations, management_with, settings_view,
-    snapshot, tag, text,
+    snapshot, state_event, tag, text,
 };
-use crate::{ManagementState, NoticeScope, UiState};
 
 pub(super) fn shell(snapshot: AppState, management: ManagementState) -> Page {
     let mut state = UiState::default();
     state.hydrate(snapshot);
-    Page::host(state, management, crate::AppShell)
+    Page::host(state, management, AppShell)
 }
 
 pub(super) fn shortcut() -> Shortcut {
@@ -217,6 +219,76 @@ fn error_toasts_and_notices_beside_controls_leave_on_their_own() {
         page.wait();
         assert!(tag(&page.html(), "notice").is_none(), "{scope:?}");
     }
+}
+
+#[test]
+fn a_newer_notice_takes_over_the_timer_of_the_one_it_replaces() {
+    let mut page = shell(snapshot(Phase::Idle), loaded());
+    let idle = fake::live_delays();
+    let notify = |page: &mut Page, message: &str| {
+        page.context()
+            .management
+            .write()
+            .notify(Tone::Error, NoticeScope::Global, message);
+        page.settle();
+    };
+
+    notify(&mut page, "First");
+    assert_eq!(fake::live_delays(), idle + 1);
+    notify(&mut page, "Second");
+    assert_eq!(text(&page.html(), "notice"), "Second");
+    assert_eq!(
+        fake::live_delays(),
+        idle + 1,
+        "the replaced notice's timer is cancelled"
+    );
+
+    page.wait();
+    assert!(tag(&page.html(), "notice").is_none());
+    assert_eq!(fake::live_delays(), idle);
+
+    notify(&mut page, "Third");
+    page.click("notice-dismiss");
+    assert_eq!(
+        fake::live_delays(),
+        idle,
+        "a dismissed notice leaves no timer"
+    );
+}
+
+#[test]
+fn audio_levels_do_not_render_the_sidebar_or_the_pages() {
+    let footer = |counts: &[(&str, usize)]| {
+        counts
+            .iter()
+            .find_map(|(name, renders)| (*name == "SidebarFooter").then_some(*renders))
+            .expect("the sidebar footer is mounted")
+    };
+    let mut page = shell(snapshot(Phase::Idle), configured());
+    open(&mut page, &["nav-settings", "nav-settings-models"]);
+    page.publish(state_event(crate::test_support::RECORDING, |_| {}));
+    let before = page.render_counts();
+    assert!(
+        before.iter().any(|(name, _)| *name == "ModelRow"),
+        "{before:?}"
+    );
+
+    for step in 1..=20_u16 {
+        page.publish(EventPayload::AudioLevel {
+            rms: f32::from(step) / 100.0,
+            peak: 0.5,
+            elapsed_ms: u64::from(step) * 50,
+        });
+    }
+    assert_eq!(page.render_counts(), before);
+
+    page.publish(state_event(crate::test_support::RECORDING, |state| {
+        state.model_state = ModelState::Failed;
+    }));
+    assert!(
+        footer(&page.render_counts()) > footer(&before),
+        "a change the sidebar shows does render it"
+    );
 }
 
 #[test]
@@ -452,7 +524,7 @@ fn configured() -> ManagementState {
     settings.keep_audio = true;
     settings.api_keys = [LlmProvider::OpenAi].into();
     let mut management = management_with(settings);
-    management.models = vec![
+    management.models = Some(vec![
         model(
             "sherpa-onnx-whisper-tiny",
             "Tiny",
@@ -468,8 +540,7 @@ fn configured() -> ManagementState {
             "Small",
             ModelAvailability::NotInstalled,
         ),
-    ];
-    management.models_loaded = true;
+    ]);
     management
 }
 
@@ -1231,6 +1302,10 @@ fn cleanup_model(id: &str, name: &str, availability: ModelAvailability) -> Model
     }
 }
 
+fn models_of(management: &mut ManagementState) -> &mut Vec<ModelSummary> {
+    management.models.as_mut().expect("models loaded")
+}
+
 /// Configured settings that clean up with the app's own `chosen` model, `other` also downloaded.
 fn local_cleanup(chosen: &str, other: &str) -> ManagementState {
     let mut management = configured();
@@ -1238,7 +1313,7 @@ fn local_cleanup(chosen: &str, other: &str) -> ManagementState {
     settings.llm_provider = LlmProvider::LocalCleanup;
     settings.cleanup_model = ModelId::new(chosen).expect("cleanup model id");
     management.install_settings(settings_view(settings));
-    management.models = vec![
+    management.models = Some(vec![
         model(
             "sherpa-onnx-whisper-base",
             "Base",
@@ -1254,8 +1329,7 @@ fn local_cleanup(chosen: &str, other: &str) -> ManagementState {
             "Local cleanup model (LFM2.5 2.6B)",
             ModelAvailability::Downloaded,
         ),
-    ];
-    management.models_loaded = true;
+    ]);
     management
 }
 
@@ -1330,12 +1404,12 @@ fn speech_model_controls_use_download_cancel_and_refresh_the_finished_download()
 #[test]
 fn speed_and_accuracy_bars_explain_themselves_on_hover() {
     let mut management = configured();
-    management.models[0].benchmark = Some(ModelBenchmark::Speech(SpeechBenchmark {
+    models_of(&mut management)[0].benchmark = Some(ModelBenchmark::Speech(SpeechBenchmark {
         english_wer: 5.39,
         wer_source: WerSource::Leaderboard,
         speed: 20.9,
     }));
-    management.models[1].benchmark = Some(ModelBenchmark::Speech(SpeechBenchmark {
+    models_of(&mut management)[1].benchmark = Some(ModelBenchmark::Speech(SpeechBenchmark {
         english_wer: 11.0,
         wer_source: WerSource::Estimated,
         speed: 55.6,
@@ -1367,7 +1441,7 @@ fn cleanup_models_show_memory_and_latency_beside_accuracy_bars() {
         "whispernow-lfm2.5-1.2b-v1-q8_0",
         "whispernow-lfm2.5-2.6b-v1-q8_0",
     );
-    management.models[1].benchmark = Some(ModelBenchmark::Cleanup(CleanupBenchmark {
+    models_of(&mut management)[1].benchmark = Some(ModelBenchmark::Cleanup(CleanupBenchmark {
         memory_bytes: 1_619_001_344,
         facts_lost_per_1000_words: 5.88,
         gpu_latency: std::time::Duration::from_millis(178),
@@ -1388,9 +1462,10 @@ fn cleanup_models_show_memory_and_latency_beside_accuracy_bars() {
 #[test]
 fn one_language_is_named_and_several_open_as_a_list_by_name() {
     let mut management = configured();
-    management.models.truncate(2);
-    management.models[0].languages = vec!["en".to_owned()];
-    management.models[1].languages = ["uk", "de", "en", "xx"].map(str::to_owned).to_vec();
+    let models = models_of(&mut management);
+    models.truncate(2);
+    models[0].languages = vec!["en".to_owned()];
+    models[1].languages = ["uk", "de", "en", "xx"].map(str::to_owned).to_vec();
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
@@ -1471,7 +1546,7 @@ fn a_cleanup_model_is_marked_selected_only_once_downloaded() {
         ModelAvailability::Downloaded,
     ] {
         let mut management = local_cleanup(CHOSEN, OTHER);
-        management.models[1].availability = availability;
+        models_of(&mut management)[1].availability = availability;
         let mut page = shell(snapshot(Phase::Idle), management);
         open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
         assert_eq!(

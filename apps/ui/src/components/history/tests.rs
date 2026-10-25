@@ -8,11 +8,12 @@ use whispernow_domain::{
 use super::format::{group_by_day, retention_summary};
 use super::{HistoryScreen, LocalClock};
 use crate::client::fake;
-use crate::management::HistoryRows;
+use crate::management::{HistoryRows, ManagementState};
+use crate::route::{Route, SettingsRoute};
+use crate::state::UiState;
 use crate::test_support::{
     Page, editable_settings, management_with, show_history, snapshot, tag, text,
 };
-use crate::{ManagementState, Route, SettingsRoute, UiState};
 
 /// 2026-09-27 10:30 UTC.
 const NOW: UtcMillis = UtcMillis(1_790_505_000_000);
@@ -203,6 +204,28 @@ fn search_is_debounced_and_paged_within_the_search() {
                 ..first
             },
         ]
+    );
+}
+
+#[test]
+fn typing_in_the_search_renders_the_search_not_the_rest_of_the_window() {
+    let mut page = super::super::tests::shell(snapshot(Phase::Idle), one_entry());
+    page.click("nav-history");
+    let before = page.render_counts();
+
+    page.input("history-search", "inv")
+        .input("history-search", "invoice");
+
+    assert_eq!(page.rendered_since(&before), ["SearchBox", "TextInput"]);
+    assert_eq!(
+        page.context().management.read().history_filter.query,
+        "",
+        "the filter changes once typing pauses"
+    );
+    page.wait();
+    assert_eq!(
+        page.context().management.read().history_filter.query,
+        "invoice"
     );
 }
 
@@ -510,8 +533,7 @@ fn storage_unavailability_replaces_the_list_with_a_reload() {
 #[test]
 fn a_search_that_cannot_run_explains_itself_in_place_of_stale_rows() {
     let mut management = one_entry();
-    management.history_search = "x".repeat(300);
-    assert!(management.apply_history_search());
+    assert!(management.apply_history_search(&"x".repeat(300)));
     management.fail_history_refresh(&whispernow_domain::AppError {
         category: whispernow_domain::ErrorCategory::General,
         code: "text_too_large".to_owned(),

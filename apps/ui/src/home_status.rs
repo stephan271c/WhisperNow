@@ -1,11 +1,11 @@
 use whispernow_domain::ipc::{MainWindowSection, ModelState, PermissionKind, Phase};
 use whispernow_domain::{AppError, TEXT_OUTPUT_PERMISSION_DENIED};
 
-use crate::UiState;
 use crate::client::{Platform, host_platform};
+use crate::state::UiState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HomeStatusKind {
+pub(crate) enum HomeStatusKind {
     Ready,
     Paused,
     Recording,
@@ -15,28 +15,28 @@ pub enum HomeStatusKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Fix {
-    pub label: &'static str,
-    pub target: FixTarget,
+pub(crate) struct Fix {
+    pub(crate) label: &'static str,
+    pub(crate) target: FixTarget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FixTarget {
+pub(crate) enum FixTarget {
     Page(MainWindowSection),
     SystemSettings(PermissionKind),
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct HomeStatus {
-    pub kind: HomeStatusKind,
-    pub title: String,
-    pub detail: Option<String>,
-    pub fix: Option<Fix>,
+pub(crate) struct HomeStatus {
+    pub(crate) kind: HomeStatusKind,
+    pub(crate) title: String,
+    pub(crate) detail: Option<String>,
+    pub(crate) fix: Option<Fix>,
 }
 
 impl HomeStatus {
     #[must_use]
-    pub fn from_state(state: &UiState) -> Self {
+    pub(crate) fn from_state(state: &UiState) -> Self {
         let status = |kind, title: &str, detail: Option<&str>, fix| Self {
             kind,
             title: title.to_owned(),

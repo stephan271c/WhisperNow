@@ -5,15 +5,18 @@ use whispernow_domain::{
 };
 
 use super::NoticeRegion;
-use super::configuration::{AutosaveRow, SettingsLoading};
 use super::models::{ModelRow, ModelRowKind};
+use super::settings::{AutosaveRow, SettingsLoading};
 use super::ui::{
     Button, ButtonVariant, Combobox, ConfirmButton, DraftText, Section, Segmented, SegmentedOption,
     Select, SettingRow, TextInput, Toggle,
 };
+use crate::UiContext;
 use crate::blocked_reason::DisabledReason;
 use crate::client;
-use crate::{NoticeScope, SettingKey, UiContext, UiOperation};
+use crate::management::SettingKey;
+use crate::notice::NoticeScope;
+use crate::operations::UiOperation;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CleanupSource {
@@ -22,8 +25,8 @@ enum CleanupSource {
     Api,
 }
 
-impl CleanupSource {
-    const fn of(provider: LlmProvider) -> Self {
+impl From<LlmProvider> for CleanupSource {
+    fn from(provider: LlmProvider) -> Self {
         match provider {
             LlmProvider::LocalCleanup => Self::WhisperNow,
             LlmProvider::Ollama | LlmProvider::Custom => Self::LocalLlm,
@@ -33,7 +36,9 @@ impl CleanupSource {
             | LlmProvider::OpenRouter => Self::Api,
         }
     }
+}
 
+impl CleanupSource {
     /// The first is chosen when the user switches to this source.
     const fn providers(self) -> &'static [LlmProvider] {
         match self {
@@ -77,7 +82,7 @@ pub(super) fn AiCleanupPage() -> Element {
         return rsx! { SettingsLoading {} };
     };
     let provider = settings.llm_provider;
-    let source = CleanupSource::of(provider);
+    let source = CleanupSource::from(provider);
     let pick = move |provider: LlmProvider| {
         context.change_setting(SettingChange::ActiveProvider(provider));
     };
@@ -270,10 +275,11 @@ fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
         .read()
         .models
         .iter()
+        .flatten()
         .filter(|model| model.family == ModelFamily::Cleanup)
         .cloned()
         .collect::<Vec<_>>();
-    let loaded = management.read().models_loaded;
+    let loaded = management.read().models.is_some();
     let error = management.read().setting_error(SettingKey::CleanupModel);
     let reason = context
         .model_download_blocked()

@@ -1,17 +1,11 @@
-use crate::client;
-use crate::management::replace_task;
 use std::collections::BTreeSet;
 
-use dioxus::core::Task;
 use dioxus::prelude::*;
-use whispernow_domain::ipc::PasteHelperSetup;
 use whispernow_domain::{RecordingMode, Shortcut, ShortcutKey, ShortcutModifier};
 
 use super::labels;
 use super::ui::focus::take_focus;
-use super::ui::{
-    Banner, Button, ButtonSize, Icon, IconName, Kbd, ShortcutLabel, Tone, shortcut_parts,
-};
+use super::ui::{Kbd, ShortcutLabel, shortcut_parts};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CaptureStatus {
@@ -30,82 +24,6 @@ impl CaptureStatus {
             Self::Listening | Self::ModifierOnly | Self::MissingModifier | Self::Unsupported
         )
     }
-}
-
-const COPIED_MS: u32 = 2_000;
-
-/// Copies `text` and shows the outcome in its label for a moment; without `text` it is
-/// disabled. In a repeated row, `names` says what it copies; it follows the label in the
-/// accessible name.
-#[component]
-pub(super) fn CopyButton(
-    id: String,
-    text: Option<String>,
-    label: String,
-    names: Option<String>,
-    #[props(default)] size: ButtonSize,
-    #[props(default)] icon: bool,
-) -> Element {
-    let mut outcome = use_signal(|| None::<bool>);
-    // The latest copy, which clears its outcome after a moment; a newer copy replaces it.
-    let mut copy_task = use_signal(|| None::<Task>);
-    let succeeded = outcome();
-    let shown = match succeeded {
-        Some(true) => "Copied",
-        Some(false) => "Copy failed",
-        None => label.as_str(),
-    };
-    rsx! {
-        Button { id: "{id}", size, disabled: text.is_none(),
-            aria_label: names.as_ref().map(|names| format!("{shown} {names}")),
-            onclick: move |_| {
-                if let Some(text) = text.clone() {
-                    outcome.set(None);
-                    let copying = spawn(async move {
-                        let copied = client::invoke::<_, ()>("copy_text", text).await.is_ok();
-                        outcome.set(Some(copied));
-                        client::delay(COPIED_MS).await;
-                        outcome.set(None);
-                        copy_task.set(None);
-                    });
-                    replace_task(&mut copy_task.write(), Some(copying));
-                }
-            },
-            if icon {
-                Icon { name: if succeeded == Some(true) { IconName::CheckCircle } else { IconName::Copy } }
-            }
-            "{shown}"
-        }
-        span { class: "visually-hidden", role: "status",
-            if succeeded.is_some() { "{shown}" }
-        }
-    }
-}
-
-/// Shown while Wayland paste goes through the `RemoteDesktop` portal because the
-/// paste helper is not set up: why the desktop shows its indicator, and how to
-/// set the helper up.
-#[component]
-pub(super) fn PasteHelperNotice(setup: PasteHelperSetup) -> Element {
-    rsx! { div { id: "paste-helper-notice",
-        Banner { tone: Tone::Warning, title: "Your desktop shows a remote control indicator",
-            p { "WhisperNow's paste helper is not set up, so your desktop presses the paste keys for it and shows its remote control indicator while WhisperNow runs." }
-            match setup.command {
-                Some(command) => rsx! {
-                    p { "To paste without it, run this command in a terminal, then restart WhisperNow:" }
-                    code { id: "paste-helper-command", class: "command", "{command}" }
-                    div { class: "card-actions",
-                        CopyButton { id: "paste-helper-copy",
-                            text: command, label: "Copy command",
-                        }
-                    }
-                },
-                None => rsx! {
-                    p { "Install WhisperNow from its .deb or .rpm package, which sets the helper up, then restart WhisperNow." }
-                },
-            }
-        }
-    } }
 }
 
 /// The button's accessible name is its visible text followed by `label`; the current keys
@@ -197,8 +115,8 @@ pub(super) fn ShortcutCapture(
                         return;
                     }
                     let modifiers = event.modifiers();
-                    let code = event.code().to_string();
-                    if code == "Tab" && modifiers.is_empty() {
+                    let code = event.code();
+                    if code == Code::Tab && modifiers.is_empty() {
                         status.set(CaptureStatus::Idle);
                         return;
                     }
@@ -206,11 +124,11 @@ pub(super) fn ShortcutCapture(
                     if event.is_auto_repeating() || event.is_composing() {
                         return;
                     }
-                    if code == "Escape" && modifiers.is_empty() && !lone_keys {
+                    if code == Code::Escape && modifiers.is_empty() && !lone_keys {
                         status.set(CaptureStatus::Idle);
                         return;
                     }
-                    let captured = captured_shortcut(&code, modifiers, lone_keys);
+                    let captured = captured_shortcut(code, modifiers, lone_keys);
                     status.set(captured.clone());
                     if let CaptureStatus::Captured(shortcut) = captured {
                         oncapture.call(shortcut);
@@ -233,15 +151,11 @@ pub(super) fn ShortcutCapture(
     }
 }
 
-fn captured_shortcut(
-    code: &str,
-    modifiers: dioxus::prelude::keyboard_types::Modifiers,
-    lone_keys: bool,
-) -> CaptureStatus {
+fn captured_shortcut(code: Code, modifiers: Modifiers, lone_keys: bool) -> CaptureStatus {
     if is_modifier_code(code) {
         return CaptureStatus::ModifierOnly;
     }
-    let Some(key) = ShortcutKey::from_code(code) else {
+    let Some(key) = ShortcutKey::from_code(&code.to_string()) else {
         return CaptureStatus::Unsupported;
     };
     let shortcut = Shortcut {
@@ -259,9 +173,7 @@ fn captured_shortcut(
     CaptureStatus::Captured(shortcut)
 }
 
-fn captured_modifiers(
-    modifiers: dioxus::prelude::keyboard_types::Modifiers,
-) -> BTreeSet<ShortcutModifier> {
+fn captured_modifiers(modifiers: Modifiers) -> BTreeSet<ShortcutModifier> {
     [
         (modifiers.ctrl(), ShortcutModifier::Control),
         (modifiers.alt(), ShortcutModifier::Alt),
@@ -273,19 +185,17 @@ fn captured_modifiers(
     .collect()
 }
 
-fn is_modifier_code(code: &str) -> bool {
+fn is_modifier_code(code: Code) -> bool {
     matches!(
         code,
-        "ControlLeft"
-            | "ControlRight"
-            | "AltLeft"
-            | "AltRight"
-            | "ShiftLeft"
-            | "ShiftRight"
-            | "MetaLeft"
-            | "MetaRight"
-            | "OSLeft"
-            | "OSRight"
+        Code::ControlLeft
+            | Code::ControlRight
+            | Code::AltLeft
+            | Code::AltRight
+            | Code::ShiftLeft
+            | Code::ShiftRight
+            | Code::MetaLeft
+            | Code::MetaRight
     )
 }
 
@@ -297,12 +207,11 @@ pub(super) fn ShortcutSummary(mode: RecordingMode, shortcut: Shortcut) -> Elemen
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dioxus::prelude::keyboard_types::Modifiers;
 
     #[test]
     fn capture_records_the_complete_modifier_chord_in_canonical_order() {
         let captured = captured_shortcut(
-            "Space",
+            Code::Space,
             Modifiers::META | Modifiers::SHIFT | Modifiers::CONTROL,
             false,
         );
@@ -322,27 +231,42 @@ mod tests {
 
     #[test]
     fn capture_waits_for_a_primary_key_and_requires_a_modifier() {
+        for code in [
+            Code::ControlLeft,
+            Code::ControlRight,
+            Code::AltLeft,
+            Code::AltRight,
+            Code::ShiftLeft,
+            Code::ShiftRight,
+            Code::MetaLeft,
+            Code::MetaRight,
+        ] {
+            assert_eq!(
+                captured_shortcut(code, Modifiers::CONTROL, false),
+                CaptureStatus::ModifierOnly,
+                "{code}"
+            );
+        }
         assert_eq!(
-            captured_shortcut("ControlLeft", Modifiers::CONTROL, false),
-            CaptureStatus::ModifierOnly
-        );
-        assert_eq!(
-            captured_shortcut("KeyR", Modifiers::empty(), false),
+            captured_shortcut(Code::KeyR, Modifiers::empty(), false),
             CaptureStatus::MissingModifier
         );
         assert_eq!(
-            captured_shortcut("Escape", Modifiers::empty(), false),
+            captured_shortcut(Code::Escape, Modifiers::empty(), false),
             CaptureStatus::MissingModifier
         );
         assert_eq!(
-            captured_shortcut("Semicolon", Modifiers::CONTROL, false),
+            captured_shortcut(Code::Semicolon, Modifiers::CONTROL, false),
             CaptureStatus::Unsupported
         );
     }
 
     #[test]
     fn lone_key_capture_accepts_only_non_typing_keys_without_a_modifier() {
-        for (code, key) in [("Escape", ShortcutKey::Escape), ("F13", ShortcutKey::F13)] {
+        for (code, key) in [
+            (Code::Escape, ShortcutKey::Escape),
+            (Code::F13, ShortcutKey::F13),
+        ] {
             assert_eq!(
                 captured_shortcut(code, Modifiers::empty(), true),
                 CaptureStatus::Captured(Shortcut {
@@ -351,7 +275,7 @@ mod tests {
                 })
             );
         }
-        for code in ["KeyR", "Space", "Enter"] {
+        for code in [Code::KeyR, Code::Space, Code::Enter] {
             assert_eq!(
                 captured_shortcut(code, Modifiers::empty(), true),
                 CaptureStatus::MissingModifier,
@@ -359,7 +283,7 @@ mod tests {
             );
         }
         assert_eq!(
-            captured_shortcut("KeyR", Modifiers::CONTROL, true),
+            captured_shortcut(Code::KeyR, Modifiers::CONTROL, true),
             CaptureStatus::Captured(Shortcut {
                 modifiers: [ShortcutModifier::Control].into(),
                 key: ShortcutKey::R,

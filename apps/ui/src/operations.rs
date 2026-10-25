@@ -1,7 +1,7 @@
 use whispernow_domain::ipc::PermissionKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum UiOperation {
+pub(crate) enum UiOperation {
     LoadSettings,
     CredentialMutation,
     DownloadModel,

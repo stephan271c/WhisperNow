@@ -10,9 +10,12 @@ use whispernow_domain::{
     ShortcutModifier, VocabularyReplacement,
 };
 
+use crate::components::AppShell;
 use crate::components::ui::{Field, Select};
+use crate::management::ManagementState;
+use crate::state::UiState;
 use crate::test_fixtures::{management_with, snapshot};
-use crate::{AppShell, ManagementState, Navigator, Route, UiContext, UiState, client};
+use crate::{UiContext, client};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -30,12 +33,7 @@ fn browser_surface(management: fn() -> ManagementState) -> Element {
         state
     });
     let management = use_signal(management);
-    let navigator = Navigator::new(use_signal(|| Route::Home), use_signal(|| 0));
-    use_context_provider(|| UiContext {
-        state,
-        management,
-        navigator,
-    });
+    UiContext::provide(state, management);
     rsx! { AppShell {} }
 }
 
@@ -210,6 +208,25 @@ async fn an_open_list_fits_the_room_left_without_writing_a_style_attribute() {
         .unwrap_or_else(|| panic!("a limit of the room left: {limit:?}"));
     let height = height.parse::<f64>().expect("list height");
     assert!(height <= room + 0.5, "{height}px list in {room}px");
+}
+
+#[wasm_bindgen_test]
+fn the_bridge_reads_whether_the_document_is_hidden_and_how_tall_the_window_is() {
+    let set_hidden = |hidden: bool| {
+        js_sys::eval(&format!(
+            r#"Object.defineProperty(document, "hidden", {{ value: {hidden}, configurable: true }});"#
+        ))
+        .expect("set document.hidden");
+    };
+    set_hidden(true);
+    let hidden = client::document_hidden();
+    set_hidden(false);
+    let shown = client::document_hidden();
+    js_sys::eval("delete document.hidden;").expect("restore document.hidden");
+
+    assert!(hidden);
+    assert!(!shown);
+    assert!(client::viewport_height().is_some_and(|height| height > 0.0));
 }
 
 #[wasm_bindgen_test(async)]
@@ -476,7 +493,7 @@ fn management_with_history() -> ManagementState {
         entries: vec![entry],
         has_more: false,
     });
-    management.models = vec![ModelSummary {
+    management.models = Some(vec![ModelSummary {
         id: model_id(),
         display_name: "Current model".to_owned(),
         family: whispernow_domain::ModelFamily::Whisper,
@@ -485,7 +502,6 @@ fn management_with_history() -> ManagementState {
         size_bytes: 116_204_861,
         benchmark: None,
         recommended: false,
-    }];
-    management.models_loaded = true;
+    }]);
     management
 }

@@ -5,9 +5,11 @@ use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use whispernow_domain::{EntryId, HistoryPageRequest};
 
+use crate::UiContext;
 use crate::client;
 use crate::management::replace_task;
-use crate::{NoticeScope, UiContext, UiOperation};
+use crate::notice::NoticeScope;
+use crate::operations::UiOperation;
 
 impl UiContext {
     pub(crate) fn refresh_history(self) {
@@ -36,8 +38,8 @@ impl UiContext {
         replace_task(&mut management.write().history_read, Some(read));
     }
 
-    pub(crate) fn search_history(mut self) {
-        if self.management.write().apply_history_search() {
+    pub(crate) fn search_history(mut self, text: &str) {
+        if self.management.write().apply_history_search(text) {
             self.refresh_history();
         }
     }

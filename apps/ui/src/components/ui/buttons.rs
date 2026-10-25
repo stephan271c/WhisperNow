@@ -78,6 +78,13 @@ pub(crate) fn IconButton(
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ConfirmStage {
+    Idle,
+    Armed,
+    Disarmed,
+}
+
 /// The first press reveals `confirm_label` (id `{id}-confirm`) and a cancel button
 /// (id `{id}-cancel`); focus moves to the confirmation and returns to the trigger once the
 /// choice is made, so keyboard users keep their place. In a repeated row, `target` names what
@@ -93,14 +100,10 @@ pub(crate) fn ConfirmButton(
     #[props(default)] disabled: bool,
     #[props(default)] size: ButtonSize,
 ) -> Element {
-    let mut armed = use_signal(|| false);
-    let mut refocus_trigger = use_signal(|| false);
-    let mut disarm = move || {
-        armed.set(false);
-        refocus_trigger.set(true);
-    };
+    let mut stage = use_signal(|| ConfirmStage::Idle);
+    let mut disarm = move || stage.set(ConfirmStage::Disarmed);
     let named = |visible: &str| target.as_ref().map(|target| format!("{visible} {target}"));
-    if !armed() {
+    if stage() != ConfirmStage::Armed {
         return rsx! {
             button {
                 r#type: "button",
@@ -110,12 +113,11 @@ pub(crate) fn ConfirmButton(
                 aria_describedby: aria_describedby.clone(),
                 disabled,
                 onmounted: move |element| async move {
-                    if refocus_trigger() {
-                        refocus_trigger.set(false);
+                    if stage() == ConfirmStage::Disarmed {
                         let _ = element.set_focus(true).await;
                     }
                 },
-                onclick: move |_| armed.set(true),
+                onclick: move |_| stage.set(ConfirmStage::Armed),
                 "{label}"
             }
         };
