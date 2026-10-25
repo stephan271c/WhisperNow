@@ -32,6 +32,8 @@ mod codes;
 #[cfg(target_os = "linux")]
 mod devices;
 #[cfg(target_os = "linux")]
+mod event;
+#[cfg(target_os = "linux")]
 mod virtual_keyboard;
 
 use std::process::ExitCode;

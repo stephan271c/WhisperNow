@@ -75,7 +75,7 @@ impl NativePastePlatform {
 /// Never prompts.
 #[cfg(target_os = "macos")]
 #[must_use]
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "AXIsProcessTrusted is FFI")]
 pub fn accessibility_trusted() -> bool {
     // SAFETY: this query has no pointer preconditions and does not prompt.
     unsafe { objc2_application_services::AXIsProcessTrusted() }
@@ -84,7 +84,7 @@ pub fn accessibility_trusted() -> bool {
 /// Shows macOS's Accessibility prompt unless the process is already trusted. The prompt
 /// appears asynchronously and its answer shows in [`accessibility_trusted`] later.
 #[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "AXIsProcessTrustedWithOptions is FFI")]
 pub fn request_accessibility_trust() {
     use objc2_application_services::{AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt};
     use objc2_core_foundation::{CFBoolean, CFDictionary, CFString, kCFBooleanTrue};

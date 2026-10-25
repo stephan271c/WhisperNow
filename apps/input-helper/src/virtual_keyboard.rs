@@ -8,7 +8,10 @@ use std::{
     time::Duration,
 };
 
-use crate::codes::{EV_KEY, EV_SYN, KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_V};
+use crate::{
+    codes::{EV_KEY, KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_V},
+    event::{InputEvent, KeyValue},
+};
 
 /// The device name, which the key readers skip so its own keys are not mistaken
 /// for the user's.
@@ -79,7 +82,7 @@ impl VirtualKeyboard {
         for (slot, byte) in setup.name.iter_mut().zip(NAME.bytes()) {
             *slot = libc::c_char::from_ne_bytes([byte]);
         }
-        keyboard.request(UI_DEV_SETUP, std::ptr::from_ref(&setup) as libc::c_ulong)?;
+        keyboard.setup(&setup)?;
         keyboard.request(UI_DEV_CREATE, 0)?;
         thread::sleep(SETTLE);
         Ok(keyboard)
@@ -90,7 +93,7 @@ impl VirtualKeyboard {
         let mut pressed_count = 0;
         let mut result = Ok(());
         for key in keys {
-            result = self.key(*key, 1);
+            result = self.key(*key, KeyValue::Press);
             if result.is_err() {
                 break;
             }
@@ -99,42 +102,51 @@ impl VirtualKeyboard {
         // Every pressed key is released, even after a failure, so no modifier
         // stays held.
         for key in keys[..pressed_count].iter().rev() {
-            let released = self.key(*key, 0);
+            let released = self.key(*key, KeyValue::Release);
             result = result.and(released);
         }
         result
     }
 
-    fn key(&mut self, code: u16, value: i32) -> io::Result<()> {
-        self.event(EV_KEY, code, value)?;
-        self.event(EV_SYN, 0, 0)?;
+    fn key(&mut self, code: u16, value: KeyValue) -> io::Result<()> {
+        self.write(InputEvent::key(code, value))?;
+        self.write(InputEvent::report())?;
         thread::sleep(KEY_GAP);
         Ok(())
     }
 
-    /// Writes one `struct input_event`; the kernel stamps its time.
-    fn event(&mut self, kind: u16, code: u16, value: i32) -> io::Result<()> {
-        let event = [
-            &0_i64.to_ne_bytes()[..],
-            &0_i64.to_ne_bytes(),
-            &kind.to_ne_bytes(),
-            &code.to_ne_bytes(),
-            &value.to_ne_bytes(),
-        ]
-        .concat();
-        self.file.write_all(&event)
+    fn write(&mut self, event: InputEvent) -> io::Result<()> {
+        self.file.write_all(&event.to_bytes())
     }
 
+    /// For the requests that take an integer or nothing.
     fn request(&self, request: libc::Ioctl, argument: libc::c_ulong) -> io::Result<()> {
-        // SAFETY: each request takes an integer or, for UI_DEV_SETUP, a
-        // pointer to a live `uinput_setup` the caller keeps for the call.
+        // SAFETY: the requests passed here read no memory.
         #[allow(unsafe_code, reason = "uinput is configured only by ioctl")]
         let result = unsafe { libc::ioctl(self.file.as_raw_fd(), request, argument) };
-        if result < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+        checked(result)
+    }
+
+    fn setup(&self, setup: &libc::uinput_setup) -> io::Result<()> {
+        // SAFETY: UI_DEV_SETUP reads one `uinput_setup` through the pointer,
+        // which is valid for the call.
+        #[allow(unsafe_code, reason = "uinput is configured only by ioctl")]
+        let result = unsafe {
+            libc::ioctl(
+                self.file.as_raw_fd(),
+                UI_DEV_SETUP,
+                std::ptr::from_ref(setup),
+            )
+        };
+        checked(result)
+    }
+}
+
+fn checked(result: libc::c_int) -> io::Result<()> {
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 

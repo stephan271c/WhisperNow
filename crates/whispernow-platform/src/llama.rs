@@ -2,7 +2,7 @@
 //!
 //! Only its public C API is used. The libraries are loaded from one directory, once per
 //! process, and stay loaded: ggml's backends do not support being unloaded.
-#![allow(unsafe_code)]
+#![allow(unsafe_code, reason = "llama.cpp is called through FFI")]
 
 mod ffi;
 
@@ -18,8 +18,6 @@ use libloading::Library;
 use thiserror::Error;
 use whispernow_core::llm::local::{DecodeContext, LocalDecodeError, Outputs, Token};
 use whispernow_domain::ipc::CleanupDevice;
-
-use crate::models::ModelStoreError;
 
 /// The release's libraries, in load order: each needs the ones before it.
 #[cfg(target_os = "linux")]
@@ -53,12 +51,8 @@ pub(crate) enum LoadError {
         #[source]
         source: libloading::Error,
     },
-    #[error("the model is held unloaded")]
-    Held,
-    #[error("the model is not installed")]
-    NotInstalled,
-    #[error("the model store could not be read: {0}")]
-    Store(#[from] ModelStoreError),
+    #[error("a path contains a NUL byte")]
+    NulInPath,
     #[error("the model could not be loaded")]
     Model,
     #[error("the model's context could not be created")]
@@ -72,11 +66,10 @@ pub(crate) struct Libraries {
     _libraries: Vec<Library>,
 }
 
-// SAFETY: the function table holds plain function pointers into libraries that are never
-// unloaded; llama.cpp's global state is initialized once, under `LOADED`'s lock.
-unsafe impl Send for Libraries {}
-// SAFETY: as above; the functions used without a model or context are thread-safe.
-unsafe impl Sync for Libraries {}
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Libraries>();
+};
 
 impl Libraries {
     /// Loads llama.cpp from `directory`, or returns the copy already loaded.
@@ -85,6 +78,7 @@ impl Libraries {
         if let Some(libraries) = *loaded {
             return Ok(libraries);
         }
+        let search_path = c_path(directory)?;
         let failed = |source| LoadError::Library {
             directory: directory.to_owned(),
             source,
@@ -109,9 +103,7 @@ impl Libraries {
             (api.ggml_log_set)(Some(log), std::ptr::null_mut());
             (api.llama_log_set)(Some(log), std::ptr::null_mut());
             if (api.ggml_backend_reg_count)() == 0 {
-                let directory = CString::new(directory.as_os_str().as_encoded_bytes())
-                    .expect("an OS path has no NUL byte");
-                (api.ggml_backend_load_all_from_path)(directory.as_ptr());
+                (api.ggml_backend_load_all_from_path)(search_path.as_ptr());
             }
             (api.llama_backend_init)();
         }
@@ -162,6 +154,10 @@ impl Libraries {
             .map(|(_, _, device, placed)| (device, placed))
             .collect()
     }
+}
+
+fn c_path(path: &Path) -> Result<CString, LoadError> {
+    CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| LoadError::NulInPath)
 }
 
 fn open(path: &Path) -> Result<Library, libloading::Error> {
@@ -221,8 +217,7 @@ impl Model {
         path: &Path,
         use_gpu: bool,
     ) -> Result<Self, LoadError> {
-        let path =
-            CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| LoadError::Model)?;
+        let path = c_path(path)?;
         let gpus = if use_gpu {
             libraries.gpus()
         } else {

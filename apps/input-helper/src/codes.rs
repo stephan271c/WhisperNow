@@ -2,6 +2,7 @@
 
 pub const EV_SYN: u16 = 0;
 pub const EV_KEY: u16 = 1;
+pub const SYN_REPORT: u16 = 0;
 pub const SYN_DROPPED: u16 = 3;
 pub const KEY_LEFTCTRL: u16 = 29;
 pub const KEY_LEFTSHIFT: u16 = 42;

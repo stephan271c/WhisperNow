@@ -389,13 +389,13 @@ mod taskbar_theme {
 
     /// The taskbar and tray flyout theme, which `AppsUseLightTheme` does not describe.
     /// A missing value counts as dark, the Windows default before the setting existed.
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, reason = "RegGetValueW is FFI")]
     pub(super) fn uses_light_theme() -> bool {
         let key = personalize_key();
         let value = wide("SystemUsesLightTheme");
         let mut data = 0_u32;
-        let mut size = u32::try_from(size_of::<u32>()).unwrap_or(4);
-        // SAFETY: both names are NUL-terminated and outlive the call, and `data`/`size`
+        let mut size_bytes = u32::BITS / u8::BITS;
+        // SAFETY: both names are NUL-terminated and outlive the call, and `data`/`size_bytes`
         // describe a writable u32.
         let status = unsafe {
             RegGetValueW(
@@ -405,13 +405,13 @@ mod taskbar_theme {
                 RRF_RT_REG_DWORD,
                 ptr::null_mut(),
                 ptr::addr_of_mut!(data).cast(),
-                &raw mut size,
+                &raw mut size_bytes,
             )
         };
         status == 0 && data != 0
     }
 
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, reason = "the registry change notification is FFI")]
     pub(super) fn watch(on_change: impl Fn() + Send + 'static) {
         thread::spawn(move || {
             let subkey = personalize_key();

@@ -8,6 +8,7 @@ use whispernow_core::llm::{
 };
 use whispernow_domain::ipc::CleanupDevice;
 
+use super::ModelLoadError;
 use crate::llama;
 
 /// The server's context per slot; contexts are never smaller, so the app decodes in the
@@ -109,7 +110,7 @@ impl LocalCleanupEngine {
             |context| context.context_size() >= context_size as usize,
             || {
                 llama::Context::new(Rc::clone(&self.model), context_size, self.threads)
-                    .map_err(EngineError::Load)
+                    .map_err(|error| EngineError::Load(error.into()))
             },
         )
     }
@@ -133,7 +134,7 @@ fn keep_or_replace<T, E>(
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EngineError {
     #[error(transparent)]
-    Load(llama::LoadError),
+    Load(ModelLoadError),
     #[error(transparent)]
     Decode(LocalDecodeError),
 }

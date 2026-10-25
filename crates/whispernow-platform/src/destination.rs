@@ -70,7 +70,7 @@ pub(crate) fn still_focused(expected: NativeDestination) -> Result<(), NativePas
 }
 
 #[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "the Accessibility API is FFI")]
 fn capture_system_destination() -> Result<Option<NativeDestination>, NativePasteError> {
     use objc2_app_kit::NSWorkspace;
     use objc2_application_services::AXUIElement;
@@ -100,13 +100,14 @@ fn capture_system_destination() -> Result<Option<NativeDestination>, NativePaste
 }
 
 #[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "AXUIElementCopyAttributeValue is FFI")]
 fn copy_ax_identity(
     element: &objc2_application_services::AXUIElement,
     attribute: &'static str,
 ) -> Result<u64, NativePasteError> {
     use core::ptr::{NonNull, null};
 
+    use objc2_application_services::AXError;
     use objc2_core_foundation::{CFHash, CFRetained, CFString, CFType};
 
     let attribute = CFString::from_static_str(attribute);
@@ -115,7 +116,7 @@ fn copy_ax_identity(
     // SAFETY: `output` points to a writable CFTypeRef slot. A successful Copy
     // call returns a +1 object owned by the CFRetained wrapper below.
     let result = unsafe { element.copy_attribute_value(&attribute, output) };
-    if result.0 != 0 {
+    if result != AXError::Success {
         return Err(NativePasteError::Unavailable);
     }
     let raw = NonNull::new(raw.cast_mut()).ok_or(NativePasteError::Unavailable)?;
@@ -131,7 +132,7 @@ fn copy_ax_identity(
 }
 
 #[cfg(target_os = "windows")]
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "User32 window queries are FFI")]
 fn capture_system_destination() -> Result<Option<NativeDestination>, NativePasteError> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GUITHREADINFO, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo,
@@ -171,7 +172,7 @@ fn capture_system_destination() -> Result<Option<NativeDestination>, NativePaste
         )
     };
     let keys = if class_length > 0 {
-        windows_paste_keys(&class_name[..usize::try_from(class_length).unwrap_or(0)])
+        PasteKeys::for_window_class(&class_name[..usize::try_from(class_length).unwrap_or(0)])
     } else {
         PasteKeys::ControlV
     };
@@ -181,21 +182,6 @@ fn capture_system_destination() -> Result<Option<NativeDestination>, NativePaste
         focused_element: gui.hwndFocus as usize as u64,
         keys,
     }))
-}
-
-#[cfg(target_os = "windows")]
-fn windows_paste_keys(class_name: &[u16]) -> PasteKeys {
-    if class_name
-        == "CASCADIA_HOSTING_WINDOW_CLASS"
-            .encode_utf16()
-            .collect::<Vec<_>>()
-    {
-        PasteKeys::ControlShiftV
-    } else if class_name == "ConsoleWindowClass".encode_utf16().collect::<Vec<_>>() {
-        PasteKeys::ShiftInsert
-    } else {
-        PasteKeys::ControlV
-    }
 }
 
 #[cfg(target_os = "linux")]

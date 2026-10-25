@@ -6,22 +6,43 @@
 //! taken from the headers with `offsetof` and `sizeof`. Bumping the pinned release means
 //! re-checking every field against its headers.
 
-use std::ffi::{c_char, c_int, c_void};
+use std::{
+    ffi::{c_char, c_int, c_void},
+    marker::{PhantomData, PhantomPinned},
+};
 
 use libloading::Library;
 
 pub(super) type Token = i32;
 
-#[repr(C)]
-pub(super) struct Opaque {
-    _private: [u8; 0],
+/// C structs only ever seen through a pointer. Each is its own type, so passing a model where
+/// a context is wanted does not compile.
+macro_rules! opaque {
+    ($($(#[$meta:meta])* $name:ident),*) => {$(
+        $(#[$meta])*
+        #[repr(C)]
+        pub(super) struct $name {
+            _private: [u8; 0],
+            _marker: PhantomData<(*mut u8, PhantomPinned)>,
+        }
+    )*};
 }
 
-pub(super) type RawModel = Opaque;
-pub(super) type RawContext = Opaque;
-pub(super) type Vocab = Opaque;
-pub(super) type Memory = Opaque;
-pub(super) type Device = *mut Opaque;
+opaque!(
+    /// `struct llama_model`.
+    RawModel,
+    /// `struct llama_context`.
+    RawContext,
+    /// `struct llama_vocab`.
+    Vocab,
+    /// `struct llama_memory_i`.
+    Memory,
+    /// `struct ggml_backend_device`.
+    RawDevice
+);
+
+/// `ggml_backend_dev_t`.
+pub(super) type Device = *mut RawDevice;
 
 pub(super) type LogCallback =
     unsafe extern "C" fn(level: c_int, text: *const c_char, data: *mut c_void);

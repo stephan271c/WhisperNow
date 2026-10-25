@@ -1,15 +1,18 @@
 //! Windows paste: one fixed, balanced `SendInput` batch, sent only after the
 //! target's integrity level is no higher than ours, the physical modifiers are
 //! released, and the capture-time window, process and focused child match.
-#![allow(unsafe_code)]
+#![allow(unsafe_code, reason = "SendInput and token queries are Win32 FFI")]
 
-use std::{mem::size_of, ptr};
+use std::{
+    io,
+    mem::size_of,
+    os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle},
+    ptr,
+};
 
 use super::{NativePasteError, NativePasteInjection, wait_until_modifiers_released};
 use windows_sys::Win32::{
-    Foundation::{
-        CloseHandle, ERROR_ACCESS_DENIED, ERROR_INSUFFICIENT_BUFFER, GetLastError, HANDLE,
-    },
+    Foundation::{ERROR_ACCESS_DENIED, ERROR_INSUFFICIENT_BUFFER, HANDLE},
     Security::{
         GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, IsValidSid,
         TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel,
@@ -28,6 +31,9 @@ use crate::{
     PasteKeys,
     destination::{NativeDestination, still_focused},
 };
+
+const ACCESS_DENIED: Option<i32> = Some(ERROR_ACCESS_DENIED.cast_signed());
+const INSUFFICIENT_BUFFER: Option<i32> = Some(ERROR_INSUFFICIENT_BUFFER.cast_signed());
 
 const MODIFIER_KEYS: [VIRTUAL_KEY; 8] = [
     VK_LCONTROL,
@@ -73,30 +79,21 @@ pub(super) fn inject_if_current(destination: NativeDestination) -> NativePasteIn
     }
 }
 
-struct OwnedHandle(HANDLE);
-
-impl Drop for OwnedHandle {
-    fn drop(&mut self) {
-        // SAFETY: this wrapper is created only for real handles returned by
-        // `OpenProcess` or `OpenProcessToken` and owns each handle exactly once.
-        let _ = unsafe { CloseHandle(self.0) };
-    }
-}
-
-pub(super) fn ensure_target_integrity(process_id: u32) -> Result<(), NativePasteError> {
+fn ensure_target_integrity(process_id: u32) -> Result<(), NativePasteError> {
     // SAFETY: the process identifier came from the foreground HWND. The handle
-    // is opened query-only and immediately wrapped for deterministic closure.
+    // is opened query-only.
     let target_process =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false.into(), process_id) };
     if target_process.is_null() {
         return Err(last_query_failure());
     }
-    let target_process = OwnedHandle(target_process);
+    // SAFETY: `OpenProcess` returned a new open handle that nothing else owns.
+    let target_process = unsafe { OwnedHandle::from_raw_handle(target_process) };
 
     // SAFETY: `GetCurrentProcess` returns a process pseudo-handle that must not
     // be closed and remains valid for this query.
     let current_integrity = token_integrity_level(unsafe { GetCurrentProcess() })?;
-    let target_integrity = token_integrity_level(target_process.0)?;
+    let target_integrity = token_integrity_level(target_process.as_raw_handle())?;
     classify_integrity_levels(current_integrity, target_integrity)
 }
 
@@ -107,30 +104,30 @@ fn token_integrity_level(process: HANDLE) -> Result<u32, NativePasteError> {
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut token) } == 0 {
         return Err(last_query_failure());
     }
-    let token = OwnedHandle(token);
+    // SAFETY: `OpenProcessToken` succeeded, so `token` is a new open handle that nothing
+    // else owns.
+    let token = unsafe { OwnedHandle::from_raw_handle(token) };
 
     let mut required_bytes = 0_u32;
     // SAFETY: the first call intentionally supplies no buffer to obtain the
     // required byte count documented for `GetTokenInformation`.
     let first_result = unsafe {
         GetTokenInformation(
-            token.0,
+            token.as_raw_handle(),
             TokenIntegrityLevel,
             ptr::null_mut(),
             0,
             &raw mut required_bytes,
         )
     };
-    // SAFETY: `GetLastError` reads thread-local error state immediately after
-    // the failed size query.
-    let size_error = unsafe { GetLastError() };
+    let size_error = io::Error::last_os_error().raw_os_error();
     let required = usize::try_from(required_bytes).map_err(|_| NativePasteError::Unavailable)?;
     if first_result != 0
-        || size_error != ERROR_INSUFFICIENT_BUFFER
+        || size_error != INSUFFICIENT_BUFFER
         || required < size_of::<TOKEN_MANDATORY_LABEL>()
         || required > 64 * 1024
     {
-        return Err(if size_error == ERROR_ACCESS_DENIED {
+        return Err(if size_error == ACCESS_DENIED {
             NativePasteError::PermissionDenied
         } else {
             NativePasteError::Unavailable
@@ -143,7 +140,7 @@ fn token_integrity_level(process: HANDLE) -> Result<u32, NativePasteError> {
     // pointer-containing label structure, and remains writable for the call.
     if unsafe {
         GetTokenInformation(
-            token.0,
+            token.as_raw_handle(),
             TokenIntegrityLevel,
             buffer.as_mut_ptr().cast(),
             required_bytes,
@@ -195,22 +192,23 @@ const fn classify_integrity_levels(
     }
 }
 
+/// Callers invoke this immediately after a failing Win32 query, before any other call
+/// overwrites the thread's last error.
 fn last_query_failure() -> NativePasteError {
-    // SAFETY: callers invoke this immediately after a failing Win32 query.
-    if unsafe { GetLastError() } == ERROR_ACCESS_DENIED {
+    if io::Error::last_os_error().raw_os_error() == ACCESS_DENIED {
         NativePasteError::PermissionDenied
     } else {
         NativePasteError::Unavailable
     }
 }
 
-pub(super) fn physical_modifier_is_down() -> bool {
+fn physical_modifier_is_down() -> bool {
     MODIFIER_KEYS.into_iter().any(|virtual_key| {
         // SAFETY: every value is a documented virtual-key constant. Only the
         // high bit is inspected because it represents the current physical
         // key state; the unreliable transition bit is deliberately ignored.
         let state = unsafe { GetAsyncKeyState(i32::from(virtual_key)) };
-        (u16::from_ne_bytes(state.to_ne_bytes()) & 0x8000) != 0
+        state < 0
     })
 }
 

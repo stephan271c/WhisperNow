@@ -37,32 +37,45 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(3);
 fn spawn(
     path: &Path,
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
-    mut on_line: impl FnMut(Option<String>) -> ControlFlow<()> + Send + 'static,
+    on_line: impl FnMut(Option<String>) -> ControlFlow<()> + Send + 'static,
 ) -> io::Result<Child> {
     let mut child = Command::new(path)
         .args(args)
+        // The helper exits when its stdin closes, so the pipe stays open as long as the child.
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    start_readers(&mut child, on_line).inspect_err(|_| stop(&mut child))?;
+    Ok(child)
+}
+
+fn start_readers(
+    child: &mut Child,
+    mut on_line: impl FnMut(Option<String>) -> ControlFlow<()> + Send + 'static,
+) -> io::Result<()> {
     if let Some(stdout) = child.stdout.take() {
-        thread::spawn(move || {
-            for line in lines(stdout) {
-                if on_line(Some(line)).is_break() {
-                    return;
+        thread::Builder::new()
+            .name("whispernow-helper-stdout".to_owned())
+            .spawn(move || {
+                for line in lines(stdout) {
+                    if on_line(Some(line)).is_break() {
+                        return;
+                    }
                 }
-            }
-            let _ = on_line(None);
-        });
+                let _ = on_line(None);
+            })?;
     }
     if let Some(stderr) = child.stderr.take() {
-        thread::spawn(move || {
-            for line in lines(stderr) {
-                tracing::warn!(message = %line, "input helper");
-            }
-        });
+        thread::Builder::new()
+            .name("whispernow-helper-stderr".to_owned())
+            .spawn(move || {
+                for line in lines(stderr) {
+                    tracing::warn!(message = %line, "input helper");
+                }
+            })?;
     }
-    Ok(child)
+    Ok(())
 }
 
 fn lines(reader: impl Read) -> impl Iterator<Item = String> {

@@ -39,12 +39,23 @@ impl PasteKeys {
             Self::ControlV
         }
     }
+
+    /// The keys for a Windows application, named by its top-level window class.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn for_window_class(class_name: &[u16]) -> Self {
+        match String::from_utf16_lossy(class_name).as_str() {
+            "CASCADIA_HOSTING_WINDOW_CLASS" => Self::ControlShiftV,
+            "ConsoleWindowClass" => Self::ShiftInsert,
+            _ => Self::ControlV,
+        }
+    }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
 mod tests {
     use super::PasteKeys;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn terminals_are_recognized_by_application_name() {
         for (application, expected) in [
@@ -56,6 +67,23 @@ mod tests {
                 PasteKeys::for_application(application),
                 expected,
                 "{application}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn terminals_are_recognized_by_window_class() {
+        for (class, expected) in [
+            ("CASCADIA_HOSTING_WINDOW_CLASS", PasteKeys::ControlShiftV),
+            ("ConsoleWindowClass", PasteKeys::ShiftInsert),
+            ("Notepad", PasteKeys::ControlV),
+        ] {
+            let class_name: Vec<u16> = class.encode_utf16().collect();
+            assert_eq!(
+                PasteKeys::for_window_class(&class_name),
+                expected,
+                "{class}"
             );
         }
     }

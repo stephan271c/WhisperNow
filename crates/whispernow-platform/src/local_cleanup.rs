@@ -23,7 +23,10 @@ use whispernow_core::llm::{
 };
 
 use self::engine::{EngineError, LocalCleanupEngine, default_threads};
-use crate::{llama, models::ModelStore};
+use crate::{
+    llama,
+    models::{ModelStore, ModelStoreError},
+};
 use whispernow_domain::{ModelId, ipc::CleanupDevice};
 
 enum Command {
@@ -39,6 +42,18 @@ struct Job {
     draft: DraftText,
     /// Closed when the caller stops waiting, as on cancellation or timeout.
     reply: oneshot::Sender<Result<LocalDecodeOutput, EngineError>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ModelLoadError {
+    #[error("the model is held unloaded")]
+    Held,
+    #[error("the model is not installed")]
+    NotInstalled,
+    #[error("the model store could not be read: {0}")]
+    Store(#[from] ModelStoreError),
+    #[error(transparent)]
+    Engine(#[from] llama::LoadError),
 }
 
 struct CleanupWorker {
@@ -206,7 +221,7 @@ fn load<'engine>(
     shared: &Shared,
     engine: &'engine mut Option<(ModelId, LocalCleanupEngine)>,
     model_id: &ModelId,
-) -> Result<&'engine mut LocalCleanupEngine, llama::LoadError> {
+) -> Result<&'engine mut LocalCleanupEngine, ModelLoadError> {
     let (_, loaded) = match engine.take().filter(|(loaded, _)| loaded == model_id) {
         Some(kept) => engine.insert(kept),
         None => engine.insert((model_id.to_owned(), load_engine(shared, model_id)?)),
@@ -214,17 +229,14 @@ fn load<'engine>(
     Ok(loaded)
 }
 
-fn load_engine(
-    shared: &Shared,
-    model_id: &ModelId,
-) -> Result<LocalCleanupEngine, llama::LoadError> {
+fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine, ModelLoadError> {
     if shared.held.load(Ordering::Acquire) {
-        return Err(llama::LoadError::Held);
+        return Err(ModelLoadError::Held);
     }
     let path = shared
         .store
         .cleanup_model_path(model_id)?
-        .ok_or(llama::LoadError::NotInstalled)?;
+        .ok_or(ModelLoadError::NotInstalled)?;
     let threads = default_threads();
     let loaded = LocalCleanupEngine::load(
         &shared.library_directory,
@@ -319,7 +331,7 @@ mod tests {
     use whispernow_domain::{ModelDefinition, ModelLayout, ModelRegistry, ModelSource};
 
     use super::*;
-    use crate::{AppPaths, DownloadTimeouts, ModelStoreError};
+    use crate::{AppPaths, DownloadTimeouts};
 
     const MODEL_FILE: &str = "model.gguf";
 
@@ -390,12 +402,15 @@ mod tests {
             .hold_unloaded(Duration::from_secs(5))
             .expect("an idle model is freed at once");
         let load = || load_engine(&service.shared, &model_id("small")).err();
-        assert!(matches!(load(), Some(llama::LoadError::Held)));
+        assert!(matches!(load(), Some(ModelLoadError::Held)));
         let result = complete(&service, "small");
         assert!(matches!(result, Err(LlmError::InvalidRequest)));
         drop(held);
         // Past the model lookup; llama.cpp is not at the library directory.
-        assert!(matches!(load(), Some(llama::LoadError::Library { .. })));
+        assert!(matches!(
+            load(),
+            Some(ModelLoadError::Engine(llama::LoadError::Library { .. }))
+        ));
     }
 
     #[test]
@@ -404,15 +419,12 @@ mod tests {
         let load = |model| load_engine(&service.shared, &model_id(model)).err();
         assert!(matches!(
             load("small"),
-            Some(llama::LoadError::Library { .. })
+            Some(ModelLoadError::Engine(llama::LoadError::Library { .. }))
         ));
-        assert!(matches!(
-            load("large"),
-            Some(llama::LoadError::NotInstalled)
-        ));
+        assert!(matches!(load("large"), Some(ModelLoadError::NotInstalled)));
         assert!(matches!(
             load("unknown"),
-            Some(llama::LoadError::Store(ModelStoreError::UnknownModel))
+            Some(ModelLoadError::Store(ModelStoreError::UnknownModel))
         ));
     }
 }
