@@ -3,13 +3,14 @@ last writes `paths.BUILD`, the train, val and test splits the cleanup models tra
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 
 from .. import paths
-from ..schema import read_examples, write_examples
+from ..schema import Example, read_examples
 from . import round1_base, round2_targeted, round3_weak_spots, round4_cutoffs_cues
 
 ROUNDS: dict[str, tuple[Callable[[], dict], Path]] = {
@@ -35,14 +36,45 @@ def review_sample(layout: str, n: int, seed: int, out_dir: Path = paths.BUILD) -
     return "\n".join(blocks)
 
 
+# The dataset card's categories, named for what the cleanup has to do. The build keeps the finer categories:
+# generation prompts, generated-file names and evaluation reports are keyed by them.
+PUBLISHED_CATEGORY = {
+    category: published
+    for published, categories in {
+        "self_correction": "self_correction self_corrections_heavy revised_choice email_late_correction dictated_question",
+        "list": "shopping_lists list_corrections list_edits technical_list technical_steps recipe_quantities"
+        " mixed_message command_question_list ambiguous_intent",
+        "meeting_notes": "meeting_notes meeting_actions",
+        "prose": "academic_research medical_clinical financial_business legal_contract creative_writing"
+        " casual_conversation email_professional recipe_cooking dictation prose_mentions short_dictation"
+        " multi_topic long_ramble dense_professional real_meeting_turn",
+        "code_and_symbols": "technical_code spoken_symbols",
+        "dictated_command": "dictated_command",
+        "literal_cue": "literal_cue",
+        "fillers": "filler_injection",
+        "no_edit": "no_edit",
+        "empty": "empty",
+    }.items()
+    for category in categories.split()
+}
+PUBLISHED_FIELDS = ("id", "input", "output", "category", "source", "license", "layout")
+
+
+def published_row(example: Example) -> dict:
+    row = {name: getattr(example, name) for name in PUBLISHED_FIELDS}
+    row["category"] = PUBLISHED_CATEGORY[example.category]
+    return row
+
+
 def publish(repo_id: str, out_dir: Path = paths.BUILD) -> None:
-    """Pushes the splits to a private Hugging Face dataset repo. Every row is written out again with every schema
-    field, since val and test lines predate some of them and `datasets` takes a split's columns from its rows."""
+    """Pushes the splits to a private Hugging Face dataset repo, with the card's fields and categories."""
     from datasets import DatasetDict, load_dataset
 
     staged = out_dir / "hf"
-    for split in ("train", "val", "test"):
-        write_examples(staged / f"{split}.jsonl", read_examples(out_dir / f"{split}.jsonl"))
+    staged.mkdir(exist_ok=True)
     files = {split: str(staged / f"{split}.jsonl") for split in ("train", "val", "test")}
+    for split, path in files.items():
+        rows = [json.dumps(published_row(e), ensure_ascii=False) for e in read_examples(out_dir / f"{split}.jsonl")]
+        Path(path).write_text("".join(row + "\n" for row in rows), encoding="utf-8")
     dataset: DatasetDict = load_dataset("json", data_files=files)
     dataset.push_to_hub(repo_id, private=True)

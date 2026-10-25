@@ -88,7 +88,7 @@ Run them in this order. The model each step uses comes from `.env`; the steps th
 | Filler and correction-cue rates of the dataset, the injection or any file | `datagen profile [--injection] [FILE …]` | stdout |
 | Speed and WER of the app's speech models on the probe audio | `datagen asr-speed` | `data/probe/asr_speed.json` |
 | Real dictations from the local history, to read by hand (never uploaded) | `datagen export-real` | `data/real/real.jsonl` |
-| Push the dataset to a private Hugging Face repo | `datagen publish category271/whispernow-cleanup` | Hugging Face |
+| Push the dataset to a private Hugging Face repo, with the card's 7 fields and 10 categories (`build.PUBLISHED_CATEGORY`) | `datagen publish category271/whispernow-cleanup` | Hugging Face |
 
 Every LLM step resumes. Judges append verdicts as batches finish, generators log each batch, and every reply is cached by its exact request in `.cache/llm/`, so a rerun repeats no finished call. `generate --scale 0.05` runs a pilot at 5% of each target, and `--category NAME` runs one category. `weak-spots report`, `literal-cue report`, `heard report` and `cutoff report` summarize their records.
 
@@ -121,7 +121,7 @@ Each model is a full fine-tune of a base checkpoint on `data/build/`. It takes o
 | Export to GGUF | `cleanup export NAME [--quant Q8_0 Q4_K_M]` | `runs/NAME/gguf/` |
 | Serve a GGUF with the committed template (`--cpu`, `--parallel 4`, `--no-draft`) | `cleanup serve NAME --quant Q8_0` | llama-server on `127.0.0.1:8080` |
 | Evaluate what the server returns, on a split or a benchmark | `cleanup eval NAME --server http://127.0.0.1:8080/v1 --label gpu-q8 --split bench-long --judge` | `runs/NAME/eval-gpu-q8/` |
-| Evaluate a hosted model with the app's prompt (`LLM_MODEL`) | `cleanup eval --teacher --label NAME --split test --judge` | `runs/teacher/eval-NAME/` |
+| Evaluate a cloud model with the app's prompt (`LLM_MODEL`) | `cleanup eval --teacher --label NAME --split test --judge` | `runs/teacher/eval-NAME/` |
 | Latency on a short dictation and test rows of 100 to 1,000 words | `cleanup bench http://127.0.0.1:8080/v1 --save runs/NAME/bench.json` | the JSON |
 | Compare evaluations | `cleanup compare a=NAME/eval-gpu-q8 b=teacher/eval-x --stem test.r112.faults [--group length]` | stdout |
 | Score saved outputs again with the current checks, or judge chosen rows again | `cleanup rescore RUN/EVAL …`, `cleanup rejudge RUN/EVAL … --ids IDS.txt` | `<stem>.metrics2.scores.json` |
@@ -140,7 +140,7 @@ Each model is a full fine-tune of a base checkpoint on `data/build/`. It takes o
 - **Mechanical checks** (`model/metrics.py`): chrF and exact match, layout, formatting added or missed, markdown and list markers, protected tokens kept, fillers left, `EMPTY` handling, loops, assistant openers, large deletions, em dashes, spelled-out counts and correction cues kept.
 - **Judge** (`--judge`, `prompts/judge/eval.md`): whether the output answered the transcript instead of editing it, and every fault, one per fact: `dropped`, `changed`, `wrong_side` (an abandoned value kept), `unresolved` (both sides of a correction kept) and `invented`. `facts_lost` counts the first three per judged row and per 1,000 reference words; the model cards report the latter. Rows over 300 words get a judge request each.
 
-When every reference of a split was written by `gpt-6.1-sol` at high reasoning, the judge and score files are named `<split>.r112.faults.*`, and the judge must be the same model. Hosted teachers score high on chrF against their own kind of reference by construction, so compare on the judge's counts.
+When every reference of a split was written by `gpt-6.1-sol` at high reasoning, the judge and score files are named `<split>.r112.faults.*`, and the judge must be the same model. Cloud teachers score high on chrF against their own kind of reference by construction, so compare on the judge's counts.
 
 ### Using it in the app
 

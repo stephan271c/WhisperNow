@@ -1,0 +1,12 @@
+{#- chat_template.jinja's turns in Gemma 4's markers, which its vocabulary has instead of ChatML's. -#}
+{#- The base model's own template renders the same text for one user turn with thinking off. -#}
+{{- bos_token -}}
+{%- for message in messages -%}
+    {%- if message.role not in ["user", "assistant"] -%}
+        {{- raise_exception("The cleanup model takes one user turn, not a " + message.role + " turn") -}}
+    {%- endif -%}
+    {{- "<|turn>" + ("model" if message.role == "assistant" else "user") + "\n" + message.content + "<turn|>\n" -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    {{- "<|turn>model\n" -}}
+{%- endif -%}

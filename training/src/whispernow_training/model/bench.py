@@ -2,7 +2,7 @@
 
 The short dictation is one sentence; the others are the test rows nearest 100, 200, 300, 500 and
 1,000 words (the long one is the 300-word row). Prompt caching is off so every request pays for its
-prompt, as a new dictation does. `bench_teacher` times the hosted teacher on the same dictations,
+prompt, as a new dictation does. `bench_teacher` times the cloud teacher on the same dictations,
 whole replies only.
 """
 
@@ -75,7 +75,7 @@ def bench(url: str, repeats: int = 5) -> dict:
 
 
 def bench_teacher(repeats: int = 5) -> dict:
-    """`LLM_MODEL` with the app's hosted prompt, through the datagen client with its cache skipped."""
+    """`LLM_MODEL` with the app's prompt, through the datagen client with its cache skipped."""
     from ..datagen.llm import LlmClient, LlmSettings
     from ..datagen.teacher import clean_teacher_output, teacher_messages
 

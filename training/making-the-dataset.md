@@ -17,7 +17,7 @@ Sections 1–7 describe the parts every round shares. Sections 8–11 go through
 
 The cleanup step returns the words the speaker meant, edited for the page: fillers, stutters and false starts removed, only the corrected version of a self-correction kept, punctuation and casing fixed, and a list laid out when the speaker dictates one. It never answers or carries out what it hears, and it should lose no fact.
 
-**One prompt for the app and the teacher.** The references follow the prompt WhisperNow sends to hosted cleanup models, a system message and a cleanup prompt (both printed in the [dataset card](https://huggingface.co/datasets/category271/whispernow-cleanup#the-cleanup-rules)). The teacher gets exactly that request, and a test fails if the training copy of the prompt drifts from the app's source. A fix to the references is therefore a fix to the app's prompt, and the hosted and local models aim at the same output. Under that prompt, a reference:
+**One prompt for the app and the teacher.** The references follow the prompt WhisperNow sends to cloud cleanup models, a system message and a cleanup prompt (both printed in the [dataset card](https://huggingface.co/datasets/category271/whispernow-cleanup#the-cleanup-rules)). The teacher gets exactly that request, and a test fails if the training copy of the prompt drifts from the app's source. A fix to the references is therefore a fix to the app's prompt, and the cloud and local models aim at the same output. Under that prompt, a reference:
 
 - drops fillers, verbal tics, stutters and false starts, and the cue of a clear self-correction ("no wait", "scratch that") together with the abandoned words, but keeps words when it is not clear they are a correction;
 - keeps every item, quantity, name, deadline and constraint, every hedge ("maybe", "I think", with whoever the speaker attributes it to) and every reason ("because …");
@@ -157,7 +157,7 @@ bench-cutoff reports three numbers: the share of cut-off pieces left in the outp
 - The benchmark audit (section 6) added rules for what is not a fault: a recognizer "?" after a statement, a name spelled to sound like the transcript's, a correction of something said before this dictation, the speaker on an "Attendees:" line, and remarks about the dictation itself.
 - It is not deterministic: on 5,207 output pairs judged twice with byte-identical requests, 2.7% got different verdicts.
 
-**Comparisons.** Two models are compared on the rows both have a verdict for, by the ratio of their facts lost, with a 90% paired bootstrap interval over rows. "Pooled" means test, bench-long and bench-noise together (about 4,170 rows). Two hosted models give reference points: `glm-5.3` at max reasoning and `glm-5.3-flash`, each sent WhisperNow's full prompt.
+**Comparisons.** Two models are compared on the rows both have a verdict for, by the ratio of their facts lost, with a 90% paired bootstrap interval over rows. "Pooled" means test, bench-long and bench-noise together (about 4,170 rows). Two cloud models give reference points: `glm-5.3` at max reasoning and `glm-5.3-flash`, each sent WhisperNow's full prompt.
 
 **Code checks.** Beside bench-cutoff, a word-level check reads test and bench-noise rows whose transcript says a correction word ("scratch", "never mind", "hold on", "wait" and others). It counts how often an output keeps the word where the reference keeps it (the word was meant) and drops it where the reference drops it (the speaker was correcting themselves).
 
@@ -209,7 +209,7 @@ They draw names and settings from pools of their own (66 names, 97 settings) tha
 - It was not overfitting from the third epoch: the epoch-2 checkpoint lost 1.11 times the final's facts on rows of up to 25 words.
 - Reading Disfl-QA references against their source questions found label noise present since round 1: 9% of train references (263 of 2,789) and 8% of test (24 of 291) keep a content word from the abandoned part of the question.
 - Two short categories still trailed glm-5.3 max: `list_edits` and `mixed_message`.
-- On bench-noise's 325 text-only rows, the 2.6B and 4B lost 23–28 facts, level with the hosted models' 25–26. On its 136 recognizer transcripts they lost 32 each, against 7 for glm-5.3 max, and 26–27 of the 32 were `changed`: the models copied misheard words ("tie place" for "Thai place") that the hosted model repairs. Training had no example of such a repair, since the heard rows had restored every mishearing.
+- On bench-noise's 325 text-only rows, the 2.6B and 4B lost 23–28 facts, level with the cloud models' 25–26. On its 136 recognizer transcripts they lost 32 each, against 7 for glm-5.3 max, and 26–27 of the 32 were `changed`: the models copied misheard words ("tie place" for "Thai place") that the cloud model repairs. Training had no example of such a repair, since the heard rows had restored every mishearing.
 
 ## 10. Round 3: weak spots
 

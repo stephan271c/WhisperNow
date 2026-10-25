@@ -126,7 +126,7 @@ def test_local_and_server_model_revisions_include_file_content(tmp_path, monkeyp
     model.mkdir()
     weights = model / "model.safetensors"
     weights.write_bytes(b"first weights")
-    (model / "config.json").write_text('{"fixture": true}')
+    (model / "config.json").write_text('{"model_type": "lfm2"}')
     first = evaluate.hf_generation(model)
     stat = weights.stat()
     weights.write_bytes(b"other weights")

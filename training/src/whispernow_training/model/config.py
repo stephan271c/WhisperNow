@@ -29,6 +29,8 @@ class TrainConfig:
     build: str = "data/build"
     # Recompute activations in the backward pass; TRL's default.
     gradient_checkpointing: bool = True
+    # Gemma 4's per-layer embedding tables, frozen in bf16.
+    freeze_per_layer_embeddings: bool = False
     # TRL's chunked cross-entropy (`loss_type="chunked_nll"`): skips the output layer on prompt and
     # padding tokens and never builds the whole vocabulary's logits.
     chunked_loss: bool = False

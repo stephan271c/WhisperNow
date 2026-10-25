@@ -1,0 +1,19 @@
+# NVIDIA Nemotron 3.5 Bolt E4B (Gemma 4 E4B post-trained by NVIDIA), full fine-tune on a Modal H200
+# (modal_train.py --gpu H200) with the Qwen3.5-4B's recipe. train.py loads the text model only. Of its
+# 7.5B text weights, 2.8B are per-layer embedding tables, frozen in bf16: training them too would put
+# fp32 weights, gradients and Adam state alone at about 120 GB. The other 4.7B train.
+base_model = "nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-BF16"
+learning_rate = 1e-5
+epochs = 3
+batch_size = 32
+grad_accum = 1
+warmup = 0.03
+weight_decay = 0.0
+lr_scheduler = "cosine"
+# The longest rendered training row is 2,862 tokens with this tokenizer.
+max_length = 3072
+seed = 109
+gradient_checkpointing = true
+chunked_loss = true
+freeze_per_layer_embeddings = true
+checkpoint_minutes = 60

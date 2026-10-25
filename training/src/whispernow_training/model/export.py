@@ -106,7 +106,9 @@ def export(run_dir: Path, quants: list[str]) -> list[Path]:
     return made
 
 
-def server_command(model: Path, port: int = 8080, cpu: bool = False, parallel: int = 1, draft: bool = False) -> list[str]:
+def server_command(
+    model: Path, port: int = 8080, cpu: bool = False, parallel: int = 1, draft: bool = False, chat: prompt.ChatFormat = prompt.CHATML
+) -> list[str]:
     """`llama-server` with the committed chat template, so the GGUF's own template is never used.
 
     `draft` serves the patched build, which drafts from each request's `draft_text`.
@@ -117,7 +119,7 @@ def server_command(model: Path, port: int = 8080, cpu: bool = False, parallel: i
         str(model),
         "--jinja",
         "--chat-template-file",
-        str(prompt.TEMPLATE_FILE),
+        str(chat.template_file),
         "--host",
         "127.0.0.1",
         "--port",

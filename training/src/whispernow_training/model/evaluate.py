@@ -1,7 +1,7 @@
 """Generate outputs for a split, check them, judge them, and summarize per group.
 
 Three sources produce outputs: a trained checkpoint through transformers (`hf`), a GGUF behind
-`llama-server` (`server`), and the hosted teacher with the app's current prompt (`teacher`).
+`llama-server` (`server`), and the cloud teacher with the app's current prompt (`teacher`).
 Each appends completed requests to `<dir>/<split>.outputs.jsonl`; matching requests resume.
 `rescore` scores saved outputs and verdicts again with the current checks, and `rejudge` judges
 chosen rows again with the current judge.
@@ -110,9 +110,10 @@ def model_revision(path: Path) -> str:
 def hf_generation(model_dir: Path, repeat_penalty: float = prompt.REPEAT_PENALTY) -> dict:
     from importlib.metadata import version
 
-    return {"source": "hf", "revision": model_revision(model_dir), "chat_template": prompt.chat_template(),
+    chat = prompt.model_chat_format(model_dir)
+    return {"source": "hf", "revision": model_revision(model_dir), "chat_template": chat.template(),
             "repeat_penalty": repeat_penalty, "do_sample": False, "dtype": "bfloat16",
-            "end_of_turn": prompt.END_OF_TURN, "transformers": version("transformers"), "torch": version("torch")}
+            "end_of_turn": chat.end_of_turn, "transformers": version("transformers"), "torch": version("torch")}
 
 
 def server_generation(
@@ -146,19 +147,21 @@ def generate_hf(
 ) -> list[dict]:
     """Greedy batched generation with the served decoding settings, longest inputs first."""
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
+
+    from .train import load_model
 
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    tokenizer.chat_template = prompt.chat_template()
+    chat = prompt.model_chat_format(model_dir)
     tokenizer.padding_side = "left"
-    end_token_id = tokenizer.convert_tokens_to_ids(prompt.END_OF_TURN)
-    model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16).cuda().eval()
+    end_token_id = tokenizer.convert_tokens_to_ids(chat.end_of_turn)
+    model = load_model(str(model_dir), torch.bfloat16).cuda().eval()
     order = sorted(range(len(rows)), key=lambda index: -len(rows[index].input.split()))
     results: dict[int, dict] = {}
     started = time.monotonic()
     for start in range(0, len(order), batch_size):
         batch = order[start : start + batch_size]
-        texts = [prompt.render(prompt.messages(rows[index].input), bos_token=tokenizer.bos_token) for index in batch]
+        texts = [prompt.render(prompt.messages(rows[index].input), bos_token=tokenizer.bos_token, chat=chat) for index in batch]
         budgets = [prompt.max_tokens(rows[index].input) for index in batch]
         encoded = tokenizer(texts, return_tensors="pt", padding=True, add_special_tokens=False).to("cuda")
         with torch.no_grad():
@@ -230,7 +233,7 @@ async def generate_server(
 
 
 async def generate_teacher(rows: Sequence[Example]) -> list[dict]:
-    """`LLM_MODEL` with the app's current hosted prompt, through the datagen client and cache.
+    """`LLM_MODEL` with the app's current prompt, through the datagen client and cache.
 
     An OpenRouter `:batch` model gets every row in one batch first.
     """

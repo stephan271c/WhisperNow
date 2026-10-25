@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 from datasets import Dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, Gemma4ForCausalLM, TrainerCallback
 from trl import SFTConfig, SFTTrainer
 
 from ..datagen.paths import BUILD, TRAINING_ROOT
@@ -50,14 +50,27 @@ def resolve(path_or_id: str) -> str:
 
 def load_tokenizer(base_model: str):
     tokenizer = AutoTokenizer.from_pretrained(base_model)
-    tokenizer.chat_template = prompt.chat_template()
+    chat = prompt.chat_format(AutoConfig.from_pretrained(base_model).model_type)
+    tokenizer.chat_template = chat.template()
     # Qwen3.5 has no bos token. llama.cpp then takes token 11 (",") as the bos, and the template would
     # render it when serving, so prompts start with the base model's end of document instead.
     if tokenizer.bos_token is None:
         tokenizer.bos_token = tokenizer.eos_token
     # Replies end at the end of the turn, whatever the base model's own eos is.
-    tokenizer.eos_token = prompt.END_OF_TURN
+    tokenizer.eos_token = chat.end_of_turn
     return tokenizer
+
+
+def load_model(path: str, dtype: torch.dtype):
+    # A Gemma 4 checkpoint holds audio and vision towers besides the text model, which is under
+    # `model.language_model.`; load only the text model. transformers saves it back under that prefix,
+    # so its own saves need the mapping too. Without it no text weight matches, and transformers
+    # initializes them all at random with only a load report.
+    if AutoConfig.from_pretrained(path).model_type in ("gemma4", "gemma4_text"):
+        return Gemma4ForCausalLM.from_pretrained(
+            path, dtype=dtype, attn_implementation="sdpa", key_mapping={r"^model\.language_model\.": "model."}
+        )
+    return AutoModelForCausalLM.from_pretrained(path, dtype=dtype, attn_implementation="sdpa")
 
 
 def checkpoint_dir(out: Path, epoch: int) -> Path:
@@ -161,9 +174,12 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
     # fp32 master weights under bf16 autocast. A resumed run loads its weights here: the trainer
     # reloads them with a non-strict `load_state_dict`, which matches no key when transformers saves
     # another layout (Qwen3.5's `model.language_model.*`) and silently keeps the base weights.
-    model = AutoModelForCausalLM.from_pretrained(
-        resumed_from or base_model, dtype=torch.float32, attn_implementation="sdpa"
-    )
+    model = load_model(resumed_from or base_model, torch.float32)
+    if config.freeze_per_layer_embeddings:
+        # Frozen weights need no fp32 master copy; the layers still run under bf16 autocast.
+        embeddings = model.get_per_layer_input_embeddings()
+        embeddings.requires_grad_(False)
+        embeddings.to(torch.bfloat16)
 
     train_rows = load_rows([TRAINING_ROOT / config.build / "train.jsonl"], config.train_rows or None)
     eval_rows = load_split("val", VAL_ROWS, TRAINING_ROOT / config.build)

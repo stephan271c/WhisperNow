@@ -96,9 +96,12 @@ def cmd_export(args: argparse.Namespace) -> None:
 def cmd_serve(args: argparse.Namespace) -> None:
     import os
 
-    from . import export
+    from . import export, prompt
 
-    command = export.server_command(export.gguf_path(RUNS / args.run, args.quant), args.port, args.cpu, args.parallel, not args.no_draft)
+    chat = prompt.model_chat_format(RUNS / args.run / "model")
+    command = export.server_command(
+        export.gguf_path(RUNS / args.run, args.quant), args.port, args.cpu, args.parallel, not args.no_draft, chat
+    )
     print(" ".join(command), file=sys.stderr)
     os.execv(command[0], command)
 
@@ -213,7 +216,7 @@ def main() -> None:
         "--repeat-last-n", type=int, default=None, help="with --server: the penalty's window instead of the served one; scores go to <eval dir>-last<value>"
     )
     eval_parser.add_argument("--reference", action="store_true", help="score the split's own references, as a baseline")
-    eval_parser.add_argument("--teacher", action="store_true", help="evaluate LLM_MODEL with the app's hosted prompt")
+    eval_parser.add_argument("--teacher", action="store_true", help="evaluate LLM_MODEL with the app's prompt")
     eval_parser.set_defaults(handler=cmd_eval)
 
     rescore_parser = commands.add_parser(
@@ -252,14 +255,14 @@ def main() -> None:
 
     bench_parser = commands.add_parser("bench", help="time short and long dictations against llama-server")
     bench_parser.add_argument("server", nargs="?", help="OpenAI-compatible base URL")
-    bench_parser.add_argument("--teacher", action="store_true", help="time LLM_MODEL with the app's hosted prompt instead")
+    bench_parser.add_argument("--teacher", action="store_true", help="time LLM_MODEL with the app's prompt instead")
     bench_parser.add_argument("--repeats", type=int, default=5)
     bench_parser.add_argument("--save", type=Path, help="also write the result as JSON")
     bench_parser.set_defaults(handler=cmd_bench)
 
     handcheck = commands.add_parser("handcheck", help="print outputs for the dictations in data/real/, to read by hand")
     handcheck.add_argument("server", nargs="?", help="OpenAI-compatible base URL")
-    handcheck.add_argument("--teacher", action="store_true", help="LLM_MODEL with the app's hosted prompt instead")
+    handcheck.add_argument("--teacher", action="store_true", help="LLM_MODEL with the app's prompt instead")
     handcheck.set_defaults(handler=cmd_handcheck)
 
     compare = commands.add_parser("compare", help="print scores of several evaluations side by side")

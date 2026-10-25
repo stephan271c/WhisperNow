@@ -394,3 +394,24 @@ def test_round3_swaps_a_repair_row_in_for_its_origin(tmp_path, monkeypatch):
     train = {e.id: e for e in read_examples(out_dir / "train.jsonl")}
     assert set(train) == {"heard-a", "b"} and train["heard-a"].input == repaired.input
     assert report["round3"]["repairs_swapped"] == 1 and report["round3"]["added"] == 0
+
+
+def test_published_row_has_only_the_card_fields_and_a_card_category():
+    example = Example(
+        id="teacher-1",
+        input="um buy milk",
+        output="Buy milk.",
+        source="teacher",
+        category="revised_choice",
+        license="MIT",
+        tags=["round2"],
+        generator_model="glm-5.3",
+    )
+    row = build.published_row(example)
+    assert list(row) == list(build.PUBLISHED_FIELDS)
+    assert row["category"] == "self_correction"
+
+
+def test_every_generation_prompt_category_has_a_card_category():
+    stems = {path.stem for path in (paths.PROMPTS / "categories").glob("*.md")}
+    assert stems <= build.PUBLISHED_CATEGORY.keys()
