@@ -127,19 +127,26 @@
       "license_files": ["llama.cpp-MIT.txt"],
       "source": "https://github.com/ggml-org/llama.cpp/tree/b11259"
     },
-    "cleanup-model": {
-      "name": "WhisperNow cleanup model (a fine-tune of Liquid AI's LFM2.5-350M; downloaded on demand, not bundled)",
-      "version": "r112-full-inst-1e-5-e3 Q8_0",
+    "cleanup-model-lfm2.5-1.2b": {
+      "name": "WhisperNow cleanup model LFM2.5 1.2B (a fine-tune of Liquid AI's LFM2.5-1.2B-Base; downloaded on demand, not bundled)",
+      "version": "v1 Q8_0",
       "license": "LFM Open License v1.0",
       "license_files": ["lfm-open-license-v1.0.txt"],
-      "source": "https://huggingface.co/LiquidAI/LFM2.5-350M"
+      "source": "https://huggingface.co/category271/whispernow-lfm2.5-1.2b"
     },
-    "cleanup-model-large": {
-      "name": "WhisperNow large cleanup model (a fine-tune of OpenBMB's MiniCPM5-1B; downloaded on demand, not bundled)",
-      "version": "r112-minicpm-full-inst-1e-5-e3 Q8_0",
+    "cleanup-model-lfm2.5-2.6b": {
+      "name": "WhisperNow cleanup model LFM2.5 2.6B (a fine-tune of Liquid AI's LFM2.5-2.6B-Base; downloaded on demand, not bundled)",
+      "version": "v1 Q8_0",
+      "license": "LFM Open License v1.0",
+      "license_files": ["lfm-open-license-v1.0.txt"],
+      "source": "https://huggingface.co/category271/whispernow-lfm2.5-2.6b"
+    },
+    "cleanup-model-qwen3.5-4b": {
+      "name": "WhisperNow cleanup model Qwen3.5 4B (a fine-tune of Qwen's Qwen3.5-4B-Base; downloaded on demand, not bundled)",
+      "version": "v1 Q8_0",
       "license": "Apache-2.0",
       "license_files": ["Apache-2.0.txt"],
-      "source": "https://huggingface.co/openbmb/MiniCPM5-1B"
+      "source": "https://huggingface.co/category271/whispernow-qwen3.5-4b"
     },
     "llvm-openmp": {
       "name": "LLVM OpenMP runtime (libomp.dll, Windows only)",

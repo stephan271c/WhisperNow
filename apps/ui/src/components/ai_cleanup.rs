@@ -16,7 +16,7 @@ use crate::client;
 use crate::{NoticeScope, SettingKey, UiContext, UiOperation};
 
 /// Where cleanup runs: one of the app's own cleanup models, an LLM server on this computer,
-/// or a hosted API.
+/// or a cloud API.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CleanupSource {
     WhisperNow,

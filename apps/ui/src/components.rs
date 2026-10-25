@@ -1,6 +1,7 @@
 use std::{collections::HashMap, rc::Rc};
 
 use dioxus::prelude::*;
+use whispernow_domain::SetupStep;
 use whispernow_domain::ipc::{ModelState, UpdatePhase};
 
 use crate::{Notice, NoticeScope, Route, SettingsRoute, TopLevel, UiContext, nav_keyboard_target};
@@ -254,9 +255,14 @@ fn SidebarFooter() -> Element {
     let navigator = context.navigator;
     let state = context.state.read();
     let management = context.management.read();
+    // Setup has chosen no model before its model step.
+    let unchosen = management
+        .unfinished_setup_step()
+        .is_some_and(|step| step < SetupStep::Model);
     let model_name = state
         .snapshot
         .as_ref()
+        .filter(|_| !unchosen)
         .map(|snapshot| management.model_display_name(&snapshot.selected_model_id));
     let model_state = state.snapshot.as_ref().map(|snapshot| snapshot.model_state);
     let dot = match model_state {
@@ -264,9 +270,13 @@ fn SidebarFooter() -> Element {
         Some(ModelState::Failed) => "status-dot error",
         _ => "status-dot waiting",
     };
-    let state_label = model_state.map_or("Connecting…", labels::model_state);
+    let state_label = if unchosen {
+        ""
+    } else {
+        model_state.map_or("Connecting…", labels::model_state)
+    };
     // Hidden, not removed: a live region must stay mounted to announce the change to Ready.
-    let state_class = if model_state == Some(ModelState::Ready) {
+    let state_class = if unchosen || model_state == Some(ModelState::Ready) {
         "visually-hidden"
     } else {
         "model-status-state"
@@ -275,7 +285,9 @@ fn SidebarFooter() -> Element {
     rsx! {
         footer { class: "sidebar-footer",
             div { class: "model-status",
-                span { class: dot, aria_hidden: "true" }
+                if !unchosen {
+                    span { class: dot, aria_hidden: "true" }
+                }
                 if let Some(name) = model_name {
                     span { class: "model-status-name", "{name}" }
                 }

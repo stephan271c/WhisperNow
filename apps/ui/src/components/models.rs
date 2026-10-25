@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{ActiveDownload, ModelState, ModelSummary};
 use whispernow_domain::{
-    ModelAvailability, ModelId, Rating, SettingChange, SpeechBenchmark, WerSource,
+    CleanupBenchmark, ModelAvailability, ModelBenchmark, ModelId, Rating, SettingChange,
+    SpeechBenchmark, WerSource,
 };
 
 use super::NoticeRegion;
@@ -113,6 +114,27 @@ pub(super) fn ModelRow(
     let active = active_state.is_some();
     let describe =
         |blocked: &Option<crate::BlockedReason>| blocked.as_ref().map(|_| "models-disabled-reason");
+    let ratings = match model.benchmark {
+        Some(ModelBenchmark::Speech(benchmark)) => rsx! {
+            div { class: "model-ratings",
+                RatingBars { label: "Speed", value: benchmark.speed(),
+                    detail: speed_detail(&benchmark) }
+                RatingBars { label: "Accuracy", value: benchmark.accuracy(),
+                    detail: accuracy_detail(&benchmark) }
+            }
+        },
+        Some(ModelBenchmark::Cleanup(benchmark)) => rsx! {
+            div { class: "model-ratings",
+                Measurement { label: "Memory", value: gigabytes(benchmark.memory_bytes),
+                    detail: "The most GPU or system memory the loaded model takes" }
+                RatingBars { label: "Accuracy", value: benchmark.accuracy(),
+                    detail: facts_lost_detail(&benchmark) }
+                Measurement { label: "Latency", value: latency(&benchmark),
+                    detail: "To clean up a 100-word dictation, on an RTX 5070 GPU and on a Ryzen 9 8945HS CPU" }
+            }
+        },
+        None => rsx! {},
+    };
     rsx! {
         li { class: if active { "model-row active" } else { "model-row" },
             div { class: "model-summary",
@@ -129,14 +151,7 @@ pub(super) fn ModelRow(
                     }
                 }
                 ModelFacts { model: model.clone() }
-                if let (ModelRowKind::Speech { .. }, Some(benchmark)) = (kind, model.benchmark) {
-                    div { class: "model-ratings",
-                        RatingBars { label: "Speed", value: benchmark.speed(),
-                            detail: speed_detail(&benchmark) }
-                        RatingBars { label: "Accuracy", value: benchmark.accuracy(),
-                            detail: accuracy_detail(&benchmark) }
-                    }
-                }
+                {ratings}
             }
             div { class: "model-actions",
                 if let Some(download) = download {
@@ -236,6 +251,44 @@ fn accuracy_detail(benchmark: &SpeechBenchmark) -> String {
     }
 }
 
+fn facts_lost_detail(benchmark: &CleanupBenchmark) -> String {
+    format!(
+        "About {:.1} facts lost per 1,000 words (4,170 held-out dictations)",
+        benchmark.facts_lost_per_1000_words
+    )
+}
+
+/// `bytes` in decimal gigabytes, to a tenth.
+fn gigabytes(bytes: u64) -> String {
+    let tenths = (bytes + 50_000_000) / 100_000_000;
+    format!("{}.{} GB", tenths / 10, tenths % 10)
+}
+
+fn latency(benchmark: &CleanupBenchmark) -> String {
+    let seconds = |latency: std::time::Duration| {
+        let tenths = (latency.as_millis() + 50) / 100;
+        format!("{}.{} s", tenths / 10, tenths % 10)
+    };
+    format!(
+        "{} GPU · {} CPU",
+        seconds(benchmark.gpu_latency),
+        seconds(benchmark.cpu_latency)
+    )
+}
+
+/// A measurement shown as its number. `detail` says what was measured, on hover and to
+/// screen readers.
+#[component]
+fn Measurement(label: &'static str, value: String, detail: &'static str) -> Element {
+    rsx! {
+        span { class: "rating", title: detail,
+            span { "{label}" }
+            span { class: "measurement", "{value}" }
+            span { class: "visually-hidden", ". {detail}" }
+        }
+    }
+}
+
 /// `detail` is the measurement behind the rating, shown on hover.
 #[component]
 fn RatingBars(label: &'static str, value: Rating, detail: String) -> Element {
@@ -253,7 +306,6 @@ fn RatingBars(label: &'static str, value: Rating, detail: String) -> Element {
     }
 }
 
-/// One language by name, or a count that opens the full list.
 /// A model's id as element ids spell it.
 pub(super) fn model_slug(id: &ModelId) -> String {
     id.as_str().replace('.', "-")

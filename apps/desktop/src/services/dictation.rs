@@ -549,7 +549,7 @@ impl Worker {
     /// fails to load is left for the first dictation to report.
     fn preload_model(&mut self) {
         let settings = self.parts.settings.load();
-        if let Ok(model) = installed(self.parts.models.as_ref(), &settings.model_id) {
+        if let Ok(model) = installed(self.parts.models.as_ref(), settings.selected_model_id()) {
             let _reported_by_dictation = self.ensure_loaded(&model);
         }
     }

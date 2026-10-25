@@ -246,7 +246,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_hosted_provider_without_a_key_is_not_asked() {
+    async fn a_cloud_provider_without_a_key_is_not_asked() {
         for provider in [
             RemoteProvider::OpenAi(None),
             RemoteProvider::Anthropic(None),

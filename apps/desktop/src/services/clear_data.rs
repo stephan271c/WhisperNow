@@ -48,7 +48,7 @@ impl NativeServices {
                 .all(|entry| entry.deleted)
         {
             **saved = whispernow_domain::Settings::default();
-            reset_model_id = Some(saved.model_id.clone());
+            reset_model_id = Some(saved.selected_model_id().clone());
         }
         let restart_required = entries.iter().any(|entry| {
             matches!(

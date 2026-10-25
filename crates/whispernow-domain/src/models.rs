@@ -1,7 +1,7 @@
 //! Capabilities and artifact layouts are data owned by the registry. Consumers
 //! must not infer either from a model identifier, display name, or filename.
 
-use std::fmt;
+use std::{fmt, time::Duration};
 
 use crate::ipc::ModelSummary;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
@@ -11,10 +11,7 @@ const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/downl
 const DEFAULT_SPEECH_MODEL_ID: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
 
 // Retrained cleanup models get new ids so installed weights cannot outlive their revision.
-pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-lfm2.5-350m-r112-q8_0";
-/// The larger local cleanup model (a `MiniCPM5-1B` fine-tune): slower, but keeps more facts.
-const MINICPM_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-minicpm5-1b-r112-q8_0";
-const LFM_1_2B_CLEANUP_MODEL_ID: &str = "whispernow-cleanup-lfm2.5-1.2b-v2-r112-q8_0";
+pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-lfm2.5-1.2b-v1-q8_0";
 /// Every local cleanup model, the default first.
 pub const CLEANUP_MODEL_IDS: [&str; CLEANUP_MODELS.len()] = {
     let mut ids = [""; CLEANUP_MODELS.len()];
@@ -26,43 +23,67 @@ pub const CLEANUP_MODEL_IDS: [&str; CLEANUP_MODELS.len()] = {
     ids
 };
 const CLEANUP_MODEL_FILE: &str = "model-Q8_0.gguf";
-/// Where the local cleanup models are published: pinned release assets. The URLs are
-/// placeholders until the models are uploaded.
-const CLEANUP_MODEL_RELEASE: &str =
-    "https://github.com/stephan271c/WhisperNow/releases/download/cleanup-model-r112";
 
 struct CleanupModel {
     id: &'static str,
     display_name: &'static str,
+    /// The Hugging Face repository, as `owner/name`, that publishes the GGUF and the model
+    /// card. The download URLs are placeholders until the models are uploaded.
+    repository: &'static str,
     size_bytes: u64,
     sha256: &'static str,
+    benchmark: CleanupBenchmark,
 }
 
+/// The local cleanup models in display order. Facts lost are per 1,000 reference words,
+/// pooled over 4,170 held-out dictations (the test split, bench-long and bench-noise) and
+/// judged by `gpt-6.1-sol` (`cleanup eval`, training/README.md). Latency is the median of
+/// five `cleanup bench` runs of its 100-word dictation against the patched `llama-server`
+/// the app's engine matches, on an RTX 5070 and on a Ryzen 9 8945HS. Memory is the larger
+/// of that server's VRAM and its resident memory on the CPU with its prompt cache off, as the
+/// app has none.
 const CLEANUP_MODELS: [CleanupModel; 3] = [
-    // `training/runs/r112-full-inst-1e-5-e3/gguf/model-Q8_0.gguf`: LFM2.5-350M
-    // fine-tuned for cleanup, under the
-    // LFM Open License v1.0.
+    // LFM2.5-1.2B-Base fine-tuned for cleanup, under the LFM Open License v1.0.
     CleanupModel {
         id: DEFAULT_CLEANUP_MODEL_ID,
-        display_name: "Local cleanup model (LFM2.5 350M)",
-        size_bytes: 379_215_072,
-        sha256: "a46d6f79213615cd2faa960c24e8fb2ace09c28e3c1a07ef15f6e9cad974d53b",
-    },
-    // `training/runs/r112-minicpm-full-inst-1e-5-e3/gguf/model-Q8_0.gguf`:
-    // MiniCPM5-1B fine-tuned the same way, under Apache-2.0.
-    CleanupModel {
-        id: MINICPM_CLEANUP_MODEL_ID,
-        display_name: "Local cleanup model (MiniCPM5 1B)",
-        size_bytes: 1_153_520_640,
-        sha256: "9c28d3e0c029907624ad0c2dac0adda77d485ddbcfbfebd67658aceb434e3fbb",
-    },
-    // `training/runs/r112-lfm25-1.2b-full-base-1e-5-e3-v2-no-heard/gguf/model-Q8_0.gguf`:
-    // LFM2.5-1.2B-Base fine-tuned on the v2 targeted data, under the LFM Open License v1.0.
-    CleanupModel {
-        id: LFM_1_2B_CLEANUP_MODEL_ID,
         display_name: "Local cleanup model (LFM2.5 1.2B)",
+        repository: "category271/whispernow-lfm2.5-1.2b",
         size_bytes: 1_246_252_256,
-        sha256: "0fbc2316640539df16f99f2ae4cddfb47bbc7674754ce0711a246be1c8ed507e",
+        sha256: "0e121fc886fec21ab35aa5a1cdd40872e9278c41435f1cf9d94eba193d93f186",
+        benchmark: CleanupBenchmark {
+            memory_bytes: 1_619_001_344,
+            facts_lost_per_1000_words: 5.88,
+            gpu_latency: Duration::from_millis(178),
+            cpu_latency: Duration::from_millis(2_328),
+        },
+    },
+    // LFM2.5-2.6B-Base fine-tuned for cleanup, under the LFM Open License v1.0.
+    CleanupModel {
+        id: "whispernow-lfm2.5-2.6b-v1-q8_0",
+        display_name: "Local cleanup model (LFM2.5 2.6B)",
+        repository: "category271/whispernow-lfm2.5-2.6b",
+        size_bytes: 2_874_774_112,
+        sha256: "1a3eab30c9e3cd9c8e5f3c678bdb78661306dc04803d3075c9a4ca536ff7d217",
+        benchmark: CleanupBenchmark {
+            memory_bytes: 3_290_431_488,
+            facts_lost_per_1000_words: 4.60,
+            gpu_latency: Duration::from_millis(344),
+            cpu_latency: Duration::from_millis(5_390),
+        },
+    },
+    // Qwen3.5-4B-Base fine-tuned for cleanup, under Apache-2.0.
+    CleanupModel {
+        id: "whispernow-qwen3.5-4b-v1-q8_0",
+        display_name: "Local cleanup model (Qwen3.5 4B)",
+        repository: "category271/whispernow-qwen3.5-4b",
+        size_bytes: 4_482_395_648,
+        sha256: "1abff662c684473823b5e042c2aa806fdfc5b00981fcb5cae818e2ec7d58d963",
+        benchmark: CleanupBenchmark {
+            memory_bytes: 5_302_546_432,
+            facts_lost_per_1000_words: 2.88,
+            gpu_latency: Duration::from_millis(624),
+            cpu_latency: Duration::from_millis(8_869),
+        },
     },
 ];
 
@@ -323,6 +344,39 @@ impl SpeechBenchmark {
     }
 }
 
+/// A local cleanup model's measured memory, accuracy and latency. Each latency is the time
+/// to clean up a dictation of about 100 words.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupBenchmark {
+    /// The most memory the loaded model takes, on the GPU or on the CPU.
+    pub memory_bytes: u64,
+    /// Facts the cleaned text drops or changes, per 1,000 words of the reference.
+    pub facts_lost_per_1000_words: f32,
+    pub gpu_latency: Duration,
+    pub cpu_latency: Duration,
+}
+
+impl CleanupBenchmark {
+    #[must_use]
+    pub fn accuracy(&self) -> Rating {
+        Rating::new(match self.facts_lost_per_1000_words {
+            lost if lost < 2.5 => 5,
+            lost if lost < 3.5 => 4,
+            lost if lost < 5.0 => 3,
+            lost if lost < 6.5 => 2,
+            _ => 1,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelBenchmark {
+    Speech(SpeechBenchmark),
+    Cleanup(CleanupBenchmark),
+}
+
 fn leaderboard(english_wer: f32, speed: f32) -> SpeechBenchmark {
     SpeechBenchmark {
         english_wer,
@@ -347,7 +401,7 @@ pub struct ModelDefinition {
     pub layout: ModelLayout,
     /// The BCP-47 tags of the languages a speech model transcribes; empty for other models.
     pub languages: Vec<String>,
-    pub benchmark: Option<SpeechBenchmark>,
+    pub benchmark: Option<ModelBenchmark>,
 }
 
 impl ModelDefinition {
@@ -569,7 +623,7 @@ fn transducer(
             tokens: "tokens.txt".to_owned(),
         },
         languages: tags(languages),
-        benchmark: Some(benchmark),
+        benchmark: Some(ModelBenchmark::Speech(benchmark)),
     }
 }
 
@@ -592,7 +646,7 @@ fn whisper(
             tokens: format!("{artifact_prefix}-tokens.txt"),
         },
         languages: tags(languages),
-        benchmark: Some(benchmark),
+        benchmark: Some(ModelBenchmark::Speech(benchmark)),
     }
 }
 
@@ -612,7 +666,7 @@ fn sense_voice(
             tokens: "tokens.txt".to_owned(),
         },
         languages: tags(SENSE_VOICE_LANGUAGES),
-        benchmark: Some(benchmark),
+        benchmark: Some(ModelBenchmark::Speech(benchmark)),
     }
 }
 
@@ -636,17 +690,19 @@ fn qwen3_asr(
             tokenizer_config: "tokenizer/tokenizer_config.json".to_owned(),
         },
         languages: tags(QWEN3_ASR_LANGUAGES),
-        benchmark: Some(benchmark),
+        benchmark: Some(ModelBenchmark::Speech(benchmark)),
     }
 }
 
 fn local_cleanup(model: &CleanupModel) -> ModelDefinition {
-    let id = model.id;
     ModelDefinition {
-        id: ModelId::new(id).expect("built-in identifiers are non-empty"),
+        id: ModelId::new(model.id).expect("built-in identifiers are non-empty"),
         display_name: model.display_name.to_owned(),
         source: ModelSource {
-            url: format!("{CLEANUP_MODEL_RELEASE}/{id}.gguf"),
+            url: format!(
+                "https://huggingface.co/{}/resolve/main/{CLEANUP_MODEL_FILE}",
+                model.repository
+            ),
             archive_size_bytes: model.size_bytes,
             sha256: model.sha256.to_owned(),
         },
@@ -654,6 +710,6 @@ fn local_cleanup(model: &CleanupModel) -> ModelDefinition {
             model: CLEANUP_MODEL_FILE.to_owned(),
         },
         languages: Vec::new(),
-        benchmark: None,
+        benchmark: Some(ModelBenchmark::Cleanup(model.benchmark)),
     }
 }

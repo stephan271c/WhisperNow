@@ -605,6 +605,31 @@ fn setup_loads_and_selects_the_model_then_saves_its_choices() {
         .expect("restarted setup accepts checkpoints");
 }
 
+#[test]
+fn a_saved_setup_checkpoint_selects_its_model_and_keeps_the_saved_one() {
+    use whispernow_domain::{SetupCheckpoint, SetupStep};
+
+    let (services, _root) = native_services(Fixture::new());
+    let saved = services.settings.get().settings.model_id;
+    let registry = ModelRegistry::builtin();
+    let chosen = registry
+        .speech_models()
+        .find(|model| model.id != saved)
+        .expect("another speech model");
+    let checkpoint = SetupCheckpoint {
+        step: SetupStep::Shortcuts,
+        model_id: chosen.id.clone(),
+        ..SetupCheckpoint::default()
+    };
+
+    services
+        .save_setup_checkpoint(checkpoint)
+        .expect("save checkpoint");
+
+    assert_eq!(services.state.snapshot().selected_model_id, chosen.id);
+    assert_eq!(services.settings.get().settings.model_id, saved);
+}
+
 #[cfg(unix)]
 #[test]
 fn setup_checkpoints_do_not_scan_unrelated_installed_artifacts() {

@@ -11,8 +11,8 @@ pub enum LlmProvider {
     Anthropic,
     OpenRouter,
     Ollama,
-    /// The small cleanup model trained for this app, run in process by llama.cpp once it is
-    /// installed from the model list. It gets a short prompt made for it.
+    /// The cleanup models trained for this app, run in process by llama.cpp once one is
+    /// installed from the model list. They get the transcript alone, with no instructions.
     LocalCleanup,
     Gemini,
     /// A user-supplied OpenAI-compatible endpoint.

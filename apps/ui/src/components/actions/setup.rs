@@ -43,11 +43,14 @@ impl UiContext {
         );
     }
 
-    pub(crate) fn save_setup_edit(mut self, edit: impl FnOnce(&mut SetupCheckpoint)) {
+    /// Applies `edit` and saves it; `false` while a settings save is pending, which leaves the
+    /// checkpoint as it was.
+    pub(crate) fn save_setup_edit(mut self, edit: impl FnOnce(&mut SetupCheckpoint)) -> bool {
         let Some(request) = self.management.write().edit_setup(edit) else {
-            return;
+            return false;
         };
         self.save_checkpoint(request, ManagementState::install_setup);
+        true
     }
 
     pub(crate) fn complete_setup(self) {

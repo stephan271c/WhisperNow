@@ -217,7 +217,11 @@ impl NativeServices {
             .model_store()
             .definition(&checkpoint.model_id)
             .map_err(|_| unknown_model())?;
-        self.settings.save_setup_checkpoint(checkpoint)
+        let _transition = self.models.transition();
+        let model_id = checkpoint.model_id.clone();
+        let view = self.settings.save_setup_checkpoint(checkpoint)?;
+        self.state.apply(|state| state.selected_model_id = model_id);
+        Ok(view)
     }
 
     /// Saves setup's choices and loads the chosen model. A model that cannot load leaves the

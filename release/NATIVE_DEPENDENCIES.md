@@ -78,8 +78,9 @@ OpenMP runtime shipped on Windows is Apache-2.0 WITH LLVM-exception
 `LICENSE-LLVM-OpenMP`). Both are in `native-compliance.zip`.
 
 The cleanup models' weights, like the ASR models', are not installer resources. The
-LFM2.5-350M fine-tune is under the LFM Open License v1.0 (`lfm-open-license-v1.0.txt`),
-the MiniCPM5-1B fine-tune under Apache-2.0 (`Apache-2.0.txt`).
+LFM2.5-1.2B-Base and LFM2.5-2.6B-Base fine-tunes are under the LFM Open License v1.0
+(`lfm-open-license-v1.0.txt`), the Qwen3.5-4B-Base fine-tune under Apache-2.0
+(`Apache-2.0.txt`).
 
 ## Model weights
 

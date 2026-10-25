@@ -291,4 +291,13 @@ impl Settings {
     pub fn provider_settings_mut(&mut self, provider: LlmProvider) -> &mut ProviderSettings {
         self.llm_provider_settings.entry(provider).or_default()
     }
+
+    /// Setup's model while setup is unfinished, since its test dictation records with it;
+    /// otherwise the saved model.
+    #[must_use]
+    pub fn selected_model_id(&self) -> &ModelId {
+        self.setup
+            .checkpoint()
+            .map_or(&self.model_id, |checkpoint| &checkpoint.model_id)
+    }
 }

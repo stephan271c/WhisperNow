@@ -328,8 +328,8 @@ async fn the_local_cleanup_model_gets_only_the_transcript() {
     let local = CleanupTarget::Local {
         model: ModelId::new("cleanup").expect("model ID"),
     };
-    let hosted = config();
-    for config in [&local, &hosted] {
+    let cloud = config();
+    for config in [&local, &cloud] {
         let result = clean_up(
             &service,
             " hello world ",

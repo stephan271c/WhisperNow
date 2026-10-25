@@ -53,7 +53,7 @@ impl NativeServices {
         let history = Arc::new(history);
         let llama_dir = llama_dir(resource_dir);
         let vad_model = silero_vad_model_path(resource_dir);
-        let initial = State::new(persisted.model_id.clone());
+        let initial = State::new(persisted.selected_model_id().clone());
         let state = Arc::new(StateCell::new(initial, events));
         if let Some(warning) = startup_history_warning {
             state.publish_error(warning);

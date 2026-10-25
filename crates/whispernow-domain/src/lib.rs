@@ -20,9 +20,9 @@ pub use history::{
     HistoryPageRequest, HistoryRetention, NewHistoryEntry, UtcMillis,
 };
 pub use models::{
-    CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, DownloadPhase, ModelAvailability, ModelDefinition,
-    ModelFamily, ModelId, ModelLayout, ModelRegistry, ModelSource, Rating, SpeechBenchmark,
-    WerSource,
+    CLEANUP_MODEL_IDS, CleanupBenchmark, DEFAULT_CLEANUP_MODEL_ID, DownloadPhase,
+    ModelAvailability, ModelBenchmark, ModelDefinition, ModelFamily, ModelId, ModelLayout,
+    ModelRegistry, ModelSource, Rating, SpeechBenchmark, WerSource,
 };
 pub use provider::{EndpointError, LlmProvider, ProviderEndpoint};
 pub use settings::{

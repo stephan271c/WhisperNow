@@ -6,9 +6,10 @@ use whispernow_domain::ipc::{
 };
 use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_domain::{
-    ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability, ModelId, ProviderEndpoint,
-    ProviderSettings, RecordingMode, SettingChange, Settings, SetupCheckpoint, SetupProgress,
-    SetupStep, Shortcut, ShortcutKey, SpeechBenchmark, VocabularyReplacement, WerSource,
+    CleanupBenchmark, ClearDataCategory, DownloadPhase, LlmProvider, ModelAvailability,
+    ModelBenchmark, ModelId, ProviderEndpoint, ProviderSettings, RecordingMode, SettingChange,
+    Settings, SetupCheckpoint, SetupProgress, SetupStep, Shortcut, ShortcutKey, SpeechBenchmark,
+    VocabularyReplacement, WerSource,
 };
 
 use crate::client::fake;
@@ -1230,12 +1231,12 @@ fn cleanup_model(id: &str, name: &str, availability: ModelAvailability) -> Model
     }
 }
 
-/// Configured settings that clean up with the app's own `small` model, `large` also downloaded.
-fn local_cleanup(small: &str, large: &str) -> ManagementState {
+/// Configured settings that clean up with the app's own `chosen` model, `other` also downloaded.
+fn local_cleanup(chosen: &str, other: &str) -> ManagementState {
     let mut management = configured();
     let mut settings = management.shown_settings().cloned().expect("loaded");
     settings.llm_provider = LlmProvider::LocalCleanup;
-    settings.cleanup_model = ModelId::new(small).expect("cleanup model id");
+    settings.cleanup_model = ModelId::new(chosen).expect("cleanup model id");
     management.install_settings(settings_view(settings));
     management.models = vec![
         model(
@@ -1244,13 +1245,13 @@ fn local_cleanup(small: &str, large: &str) -> ManagementState {
             ModelAvailability::Downloaded,
         ),
         cleanup_model(
-            small,
-            "Local cleanup model (LFM2.5 350M)",
+            chosen,
+            "Local cleanup model (LFM2.5 1.2B)",
             ModelAvailability::Downloaded,
         ),
         cleanup_model(
-            large,
-            "Local cleanup model (MiniCPM5 1B)",
+            other,
+            "Local cleanup model (LFM2.5 2.6B)",
             ModelAvailability::Downloaded,
         ),
     ];
@@ -1329,16 +1330,16 @@ fn speech_model_controls_use_download_cancel_and_refresh_the_finished_download()
 #[test]
 fn speed_and_accuracy_bars_explain_themselves_on_hover() {
     let mut management = configured();
-    management.models[0].benchmark = Some(SpeechBenchmark {
+    management.models[0].benchmark = Some(ModelBenchmark::Speech(SpeechBenchmark {
         english_wer: 5.39,
         wer_source: WerSource::Leaderboard,
         speed: 20.9,
-    });
-    management.models[1].benchmark = Some(SpeechBenchmark {
+    }));
+    management.models[1].benchmark = Some(ModelBenchmark::Speech(SpeechBenchmark {
         english_wer: 11.0,
         wer_source: WerSource::Estimated,
         speed: 55.6,
-    });
+    }));
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
@@ -1358,6 +1359,30 @@ fn speed_and_accuracy_bars_explain_themselves_on_hover() {
             .any(|title| title.contains("Leaderboard") && !title.contains("estimated"))
     );
     assert!(titles.iter().any(|title| title.contains("estimated")));
+}
+
+#[test]
+fn cleanup_models_show_memory_and_latency_beside_accuracy_bars() {
+    let mut management = local_cleanup(
+        "whispernow-lfm2.5-1.2b-v1-q8_0",
+        "whispernow-lfm2.5-2.6b-v1-q8_0",
+    );
+    management.models[1].benchmark = Some(ModelBenchmark::Cleanup(CleanupBenchmark {
+        memory_bytes: 1_619_001_344,
+        facts_lost_per_1000_words: 5.88,
+        gpu_latency: std::time::Duration::from_millis(178),
+        cpu_latency: std::time::Duration::from_millis(3_149),
+    }));
+    let mut page = shell(snapshot(Phase::Idle), management);
+    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+    let html = page.html();
+    let shown = text(&html, "main-content");
+    assert!(shown.contains("Memory1.6 GB"), "{shown}");
+    assert!(shown.contains("Latency0.2 s GPU · 3.1 s CPU"), "{shown}");
+    assert!(html.contains(
+        "aria-label=\"Accuracy: 2 of 5. About 5.9 facts lost per 1,000 words (4,170 held-out dictations)\""
+    ));
+    assert!(!html.contains("aria-label=\"Speed:"));
 }
 
 #[test]
@@ -1391,14 +1416,14 @@ fn one_language_is_named_and_several_open_as_a_list_by_name() {
 
 #[test]
 fn ai_cleanup_lists_the_cleanup_models_and_saves_the_choice() {
-    const SMALL: &str = "whispernow-cleanup-lfm2.5-350m-r112-q8_0";
-    const LARGE: &str = "whispernow-cleanup-minicpm5-1b-r112-q8_0";
-    let management = local_cleanup(SMALL, LARGE);
+    const CHOSEN: &str = "whispernow-lfm2.5-1.2b-v1-q8_0";
+    const OTHER: &str = "whispernow-lfm2.5-2.6b-v1-q8_0";
+    let management = local_cleanup(CHOSEN, OTHER);
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-models"]);
     let html = page.html();
     assert!(
-        tag(&html, "model-whispernow-cleanup-lfm2-5-350m-r112-q8_0-name").is_none(),
+        tag(&html, "model-whispernow-lfm2-5-1-2b-v1-q8_0-name").is_none(),
         "cleanup models are not speech models"
     );
 
@@ -1410,25 +1435,18 @@ fn ai_cleanup_lists_the_cleanup_models_and_saves_the_choice() {
             .contains("aria-pressed=\"true\"")
     );
     assert!(
-        tag(&html, "model-whispernow-cleanup-lfm2-5-350m-r112-q8_0-use").is_none(),
+        tag(&html, "model-whispernow-lfm2-5-1-2b-v1-q8_0-use").is_none(),
         "the chosen model is in use"
     );
-    assert!(
-        !html.contains("aria-label=\"Speed:") && !html.contains("aria-label=\"Accuracy:"),
-        "cleanup models are not rated"
-    );
 
-    open(
-        &mut page,
-        &["model-whispernow-cleanup-minicpm5-1b-r112-q8_0-use"],
-    );
+    open(&mut page, &["model-whispernow-lfm2-5-2-6b-v1-q8_0-use"]);
     assert_eq!(
         sent_changes(),
         [SettingChange::CleanupModel(
-            ModelId::new(LARGE).expect("fixture model id")
+            ModelId::new(OTHER).expect("fixture model id")
         )]
     );
-    let other = "model-whispernow-cleanup-lfm2-5-350m-r112-q8_0-use";
+    let other = "model-whispernow-lfm2-5-1-2b-v1-q8_0-use";
     assert!(
         tag(&page.html(), other)
             .expect("other cleanup model")
@@ -1446,13 +1464,13 @@ fn ai_cleanup_lists_the_cleanup_models_and_saves_the_choice() {
 
 #[test]
 fn a_cleanup_model_is_marked_selected_only_once_downloaded() {
-    const SMALL: &str = "whispernow-cleanup-lfm2.5-350m-r112-q8_0";
-    const LARGE: &str = "whispernow-cleanup-minicpm5-1b-r112-q8_0";
+    const CHOSEN: &str = "whispernow-lfm2.5-1.2b-v1-q8_0";
+    const OTHER: &str = "whispernow-lfm2.5-2.6b-v1-q8_0";
     for availability in [
         ModelAvailability::NotInstalled,
         ModelAvailability::Downloaded,
     ] {
-        let mut management = local_cleanup(SMALL, LARGE);
+        let mut management = local_cleanup(CHOSEN, OTHER);
         management.models[1].availability = availability;
         let mut page = shell(snapshot(Phase::Idle), management);
         open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
@@ -1471,8 +1489,8 @@ fn the_gpu_switch_shows_only_for_the_apps_own_models_and_saves() {
     assert!(tag(&page.html(), "cleanup-uses-gpu").is_none());
 
     let management = local_cleanup(
-        "whispernow-cleanup-lfm2.5-350m-r112-q8_0",
-        "whispernow-cleanup-minicpm5-1b-r112-q8_0",
+        "whispernow-lfm2.5-1.2b-v1-q8_0",
+        "whispernow-lfm2.5-2.6b-v1-q8_0",
     );
     let mut page = shell(snapshot(Phase::Idle), management);
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);

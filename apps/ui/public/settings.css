@@ -233,6 +233,11 @@ small {
   background: var(--color-text-secondary);
 }
 
+.measurement {
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
 .setup-model .model-actions {
   grid-column: 2;
   grid-row: 1 / span 2;

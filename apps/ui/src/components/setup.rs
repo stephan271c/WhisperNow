@@ -418,7 +418,6 @@ fn ModelChoice(
     download_blocked: Option<BlockedReason>,
 ) -> Element {
     let context = use_context::<UiContext>();
-    let mut management = context.management;
     let id = model.id.clone();
     let slug = model_slug(&id);
     let name = model.display_name.clone();
@@ -435,7 +434,7 @@ fn ModelChoice(
             input { id: "setup-model-{slug}", r#type: "radio", name: "setup-model", value: model.id.as_str(), checked,
                 disabled: edit_blocked.is_some(),
                 aria_describedby: describedby,
-                onchange: { let model_id = model.id.clone(); move |_| { management.write().edit_setup(|setup| setup.model_id = model_id.clone()); } }
+                onchange: { let model_id = model.id.clone(); move |_| { context.save_setup_edit(|setup| setup.model_id = model_id.clone()); } }
             }
             span { class: "model-name",
                 strong { "{name}" }
@@ -453,7 +452,7 @@ fn ModelChoice(
                     disabled: download_blocked.is_some(),
                     aria_describedby: download_blocked.as_ref().map(|_| "setup-models-disabled-reason"),
                     onclick: move |_| {
-                        if management.write().edit_setup(|setup| setup.model_id = id.clone()).is_some() {
+                        if context.save_setup_edit(|setup| setup.model_id = id.clone()) {
                             context.download_model(id.clone());
                         }
                     },
@@ -541,7 +540,7 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
                 placeholder: checkpoint.input_device.as_ref().map(|id| id.as_str().to_owned()),
                 options: device_options(&devices),
                 disabled: running || settings_pending,
-                onchange: move |device| context.save_setup_edit(|setup| setup.input_device = device),
+                onchange: move |device| { context.save_setup_edit(|setup| setup.input_device = device); },
             }
         }
         section { class: "setup-test", aria_labelledby: "setup-test-title",

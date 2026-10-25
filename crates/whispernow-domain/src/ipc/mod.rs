@@ -4,7 +4,7 @@ pub use command_names::COMMAND_NAMES;
 
 use crate::{
     ApiKey, AppError, AudioDeviceId, ClearDataCategory, DownloadPhase, ErrorCategory, LlmProvider,
-    ModelAvailability, ModelFamily, ModelId, Settings, SpeechBenchmark,
+    ModelAvailability, ModelBenchmark, ModelFamily, ModelId, Settings,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -146,8 +146,8 @@ pub struct ModelSummary {
     /// BCP-47 tags of the languages a speech model transcribes; empty for other models.
     pub languages: Vec<String>,
     pub size_bytes: u64,
-    /// A speech model's measurements; the UI rates it from them.
-    pub benchmark: Option<SpeechBenchmark>,
+    /// The model's measurements; the UI rates it from them.
+    pub benchmark: Option<ModelBenchmark>,
     /// The model new installations start with.
     pub recommended: bool,
 }

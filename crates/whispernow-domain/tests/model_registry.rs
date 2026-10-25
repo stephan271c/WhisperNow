@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
 use whispernow_domain::{
-    CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, ModelFamily, ModelId, ModelRegistry,
+    CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, ModelBenchmark, ModelFamily, ModelId,
+    ModelRegistry,
 };
 
 const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
@@ -22,7 +23,6 @@ fn every_model_has_a_unique_id_and_a_pinned_source_named_after_it() {
         assert!(source.archive_size_bytes > 0, "{id}");
         if model.family() == ModelFamily::Cleanup {
             assert!(source.url.starts_with("https://"), "{id}");
-            assert!(source.url.ends_with(&format!("/{id}.gguf")), "{id}");
         } else {
             assert_eq!(
                 source.url,
@@ -102,14 +102,12 @@ fn cleanup_models_start_with_the_default_and_name_the_published_revision() {
     let registry = ModelRegistry::builtin();
     for id in CLEANUP_MODEL_IDS {
         let model = registry.get(id).expect("registered cleanup model");
-        assert!(id.ends_with("-r112-q8_0"), "{id}");
-        assert!(
-            model
-                .source
-                .url
-                .ends_with(&format!("/cleanup-model-r112/{id}.gguf")),
-            "{}",
-            model.source.url
+        let repository = id
+            .strip_suffix("-v1-q8_0")
+            .unwrap_or_else(|| panic!("{id} names its revision"));
+        assert_eq!(
+            model.source.url,
+            format!("https://huggingface.co/category271/{repository}/resolve/main/model-Q8_0.gguf")
         );
     }
 }
@@ -145,13 +143,13 @@ fn identifiers_reject_filesystem_components() {
 }
 
 #[test]
-fn only_speech_models_are_measured() {
+fn every_model_is_measured_for_its_family() {
     for model in ModelRegistry::builtin().models() {
-        assert_eq!(
-            model.benchmark.is_some(),
-            model.family() != ModelFamily::Cleanup,
-            "{}",
-            model.id
-        );
+        let measured = match model.benchmark {
+            Some(ModelBenchmark::Speech(_)) => model.family().is_speech(),
+            Some(ModelBenchmark::Cleanup(_)) => model.family() == ModelFamily::Cleanup,
+            None => false,
+        };
+        assert!(measured, "{}", model.id);
     }
 }

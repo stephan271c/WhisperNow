@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{
-    ActiveDownload, EventPayload, PasteHelperSetup, Permission, PermissionKind, PermissionStatus,
-    PermissionsResponse, Phase, SaveSettingsResponse, SettingsView, SetupTestResult,
+    ActiveDownload, EventPayload, ModelState, PasteHelperSetup, Permission, PermissionKind,
+    PermissionStatus, PermissionsResponse, Phase, SaveSettingsResponse, SettingsView,
+    SetupTestResult,
 };
 use whispernow_domain::{AppError, AudioDeviceId, ErrorCategory};
 use whispernow_domain::{
@@ -387,6 +388,23 @@ fn a_new_step_moves_focus_to_its_heading() {
 }
 
 #[test]
+fn the_sidebar_names_no_model_until_setup_reaches_its_model_step() {
+    let sidebar = |step| {
+        let mut state = snapshot(Phase::Idle);
+        state.selected_model_id = ModelId::new("base").expect("fixture model id");
+        state.model_state = ModelState::Unloaded;
+        shell(state, setup_at(step, ModelAvailability::NotInstalled)).html()
+    };
+
+    let permissions = sidebar(SetupStep::Permissions);
+    assert!(!permissions.contains("model-status-name"));
+    assert!(!permissions.contains("Not loaded"));
+    let model = sidebar(SetupStep::Model);
+    assert!(model.contains(r#"<span class="model-status-name">Base</span>"#));
+    assert!(model.contains("Not loaded"));
+}
+
+#[test]
 fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cancellation() {
     let mut management = setup_at(SetupStep::Model, ModelAvailability::Downloaded);
     management.models.extend([
@@ -406,8 +424,16 @@ fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cance
         });
     }));
     setup.fire("setup-model-small", "change", "small");
+    let chosen = fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[0].clone();
+    assert_eq!(chosen.model_id.as_str(), "small");
+    assert_eq!(
+        chosen.step,
+        SetupStep::Model,
+        "a choice is saved before moving on"
+    );
+    setup.answer("save_setup_checkpoint", Ok(saved_with(&setup, chosen)));
     setup.click("setup-continue");
-    let submitted = fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[0].clone();
+    let submitted = fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[1].clone();
     assert_eq!(submitted.model_id.as_str(), "small");
     assert_eq!(submitted.step, SetupStep::Shortcuts);
     let html = setup.html();
@@ -508,6 +534,15 @@ fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
             .as_str(),
         "small"
     );
+    assert_eq!(
+        fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[1]
+            .model_id
+            .as_str(),
+        "small",
+        "a download saves the choice"
+    );
+    let saved = saved_at(&setup, SetupStep::Model);
+    setup.answer("save_setup_checkpoint", Ok(saved));
     setup.fire("setup-model-base", "change", "base");
     assert_eq!(
         setup
