@@ -1,5 +1,7 @@
-//! The desktop decides the phase and the window's visibility; this model only adds what
+//! The desktop decides the phase and the window's visibility; the meter only adds what
 //! arrives between snapshots: the smoothed level history and the elapsed time.
+
+use whispernow_domain::ipc::AudioLevel;
 
 pub(crate) const LEVEL_BARS: usize = 9;
 
@@ -14,35 +16,35 @@ const ATTACK: f32 = 0.8;
 const RELEASE: f32 = 0.6;
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct OverlayView {
+pub(crate) struct Meter {
     pub(crate) levels: [f32; LEVEL_BARS],
-    /// Whether real samples arrived for this recording; until then the bars are arming.
-    pub(crate) levels_seen: bool,
     pub(crate) elapsed_ms: u64,
+    /// The recording the levels were heard in.
     session: Option<u64>,
-    /// Why the last overlay action failed; cleared by the next phase.
-    pub(crate) action_error: Option<String>,
 }
 
-impl OverlayView {
-    pub(crate) fn start_recording(&mut self, session: u64) {
+impl Meter {
+    /// Adds a level heard during `session`; the first level of a new session starts from
+    /// empty bars.
+    pub(crate) fn apply_level(&mut self, session: u64, level: AudioLevel) {
         if self.session != Some(session) {
-            self.session = Some(session);
-            self.levels = [0.0; LEVEL_BARS];
-            self.levels_seen = false;
-            self.elapsed_ms = 0;
+            *self = Self {
+                session: Some(session),
+                ..Self::default()
+            };
         }
-    }
-
-    pub(crate) fn apply_level(&mut self, rms: f32, elapsed_ms: u64) {
-        let decibels = 20.0 * rms.clamp(1e-6, 1.0).log10();
+        let decibels = 20.0 * level.rms.clamp(1e-6, 1.0).log10();
         let activity = ((decibels - FLOOR_DB) / (CEILING_DB - FLOOR_DB)).clamp(0.0, 1.0);
         let previous = self.levels[LEVEL_BARS - 1];
         let weight = if activity > previous { ATTACK } else { RELEASE };
         self.levels.rotate_left(1);
         self.levels[LEVEL_BARS - 1] = previous + (activity - previous) * weight;
-        self.levels_seen = true;
-        self.elapsed_ms = elapsed_ms;
+        self.elapsed_ms = level.elapsed_ms;
+    }
+
+    /// Whether samples arrived for `session`; until then its bars are arming.
+    pub(crate) fn heard(&self, session: u64) -> bool {
+        self.session == Some(session)
     }
 }
 

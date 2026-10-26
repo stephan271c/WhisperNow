@@ -32,6 +32,7 @@
     "allow-get-permissions",
     "allow-request-permission",
     "allow-open-permission-settings",
+    "allow-set-up-paste-helper",
     "allow-start-test-dictation",
     "allow-stop-recording",
     "allow-cancel-recording",

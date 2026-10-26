@@ -22,8 +22,6 @@ struct UiContext {
     state: Signal<UiState>,
     management: Signal<ManagementState>,
     navigator: Navigator,
-    /// Apart from `state` so a level reading every 50 ms re-renders only the meter that shows it.
-    audio_rms: Signal<f32>,
     /// Many controls check these; a snapshot that changes neither re-renders none of them.
     connected: Memo<bool>,
     phase_reason: Memo<Option<BlockedReason>>,
@@ -32,14 +30,12 @@ struct UiContext {
 impl UiContext {
     pub(crate) fn provide(state: Signal<UiState>, management: Signal<ManagementState>) -> Self {
         let navigator = Navigator::new(use_signal(|| Route::Home), use_signal(|| 0));
-        let audio_rms = use_signal(|| 0.0);
         let connected = use_memo(move || state.read().snapshot.is_some());
         let phase_reason = use_memo(move || blocked_reason::phase_reason(&state.read()));
         use_context_provider(|| Self {
             state,
             management,
             navigator,
-            audio_rms,
             connected,
             phase_reason,
         })

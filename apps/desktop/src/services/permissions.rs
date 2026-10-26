@@ -39,14 +39,14 @@ pub(crate) enum WaylandPaste {
         expect(dead_code)
     )]
     Helper,
-    /// The `RemoteDesktop` portal, with the command that sets the helper up instead.
+    /// The `RemoteDesktop` portal, with how to set the helper up instead.
     #[cfg_attr(
         all(not(test), any(target_os = "macos", target_os = "windows")),
         expect(dead_code)
     )]
     Portal {
         consent: PermissionStatus,
-        setup_command: Option<String>,
+        setup: PasteHelperSetup,
     },
 }
 
@@ -105,13 +105,8 @@ pub(crate) fn permission_states(
                     can_request: false,
                     can_open_settings: false,
                 },
-                WaylandPaste::Portal {
-                    consent,
-                    setup_command,
-                } => {
-                    paste_helper_setup = Some(PasteHelperSetup {
-                        command: setup_command,
-                    });
+                WaylandPaste::Portal { consent, setup } => {
+                    paste_helper_setup = Some(setup);
                     portal_card(PermissionKind::RemoteDesktop, consent)
                 }
             });
@@ -160,7 +155,7 @@ impl SessionFacts {
                 let paste = match output.remote_desktop_consent() {
                     Some(consent) => WaylandPaste::Portal {
                         consent,
-                        setup_command: paste_helper_setup_command(paths),
+                        setup: paste_helper_setup(paths),
                     },
                     None => WaylandPaste::Helper,
                 };
@@ -183,15 +178,20 @@ impl SessionFacts {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn paste_helper_setup_command(paths: &AppPaths) -> Option<String> {
+fn paste_helper_setup(paths: &AppPaths) -> PasteHelperSetup {
     #[cfg(target_os = "linux")]
     {
-        crate::input_helper::setup_command(&paths.paste_helper_setup_dir())
+        use crate::input_helper::{find_pkexec, setup_command, setup_script};
+        let script = setup_script(&paths.paste_helper_setup_dir());
+        PasteHelperSetup {
+            can_set_up: script.is_some() && find_pkexec().is_some(),
+            command: script.as_deref().map(setup_command),
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = paths;
-        None
+        PasteHelperSetup::default()
     }
 }
 
@@ -314,7 +314,7 @@ mod tests {
                     global_shortcuts: Status::Denied,
                     paste: WaylandPaste::Portal {
                         consent: Status::NotDetermined,
-                        setup_command: None,
+                        setup: PasteHelperSetup::default(),
                     },
                 },
             ),
@@ -330,7 +330,7 @@ mod tests {
                 global_shortcuts: Status::Granted,
                 paste: WaylandPaste::Portal {
                     consent: Status::Unavailable,
-                    setup_command: None,
+                    setup: PasteHelperSetup::default(),
                 },
             },
         );
@@ -343,7 +343,10 @@ mod tests {
 
     #[test]
     fn wayland_paste_through_the_portal_offers_the_helper_setup() {
-        let command = "sudo sh /setup/install_input_helper.sh".to_owned();
+        let setup = PasteHelperSetup {
+            command: Some("sudo sh /setup/install_input_helper.sh".to_owned()),
+            can_set_up: true,
+        };
         assert_eq!(
             permission_states(
                 Status::NotDetermined,
@@ -351,14 +354,12 @@ mod tests {
                     global_shortcuts: Status::NotDetermined,
                     paste: WaylandPaste::Portal {
                         consent: Status::Granted,
-                        setup_command: Some(command.clone()),
+                        setup: setup.clone(),
                     },
                 },
             )
             .paste_helper_setup,
-            Some(PasteHelperSetup {
-                command: Some(command)
-            })
+            Some(setup)
         );
     }
 

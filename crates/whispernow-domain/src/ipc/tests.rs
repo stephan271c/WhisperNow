@@ -98,14 +98,6 @@ fn every_event_carries_its_variant_in_the_type_tag() {
     let events = [
         (EventPayload::StateChanged { state }, "state_changed"),
         (
-            EventPayload::AudioLevel {
-                rms: 0.25,
-                peak: 0.5,
-                elapsed_ms: 300,
-            },
-            "audio_level",
-        ),
-        (
             EventPayload::UpdateChanged { state: update },
             "update_changed",
         ),

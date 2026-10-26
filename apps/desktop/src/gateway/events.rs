@@ -1,25 +1,31 @@
 use std::sync::mpsc;
 
 use tauri::{Emitter as _, Manager as _};
-use whispernow_domain::ipc::{AppState, EVENT, EventPayload};
+use whispernow_domain::ipc::{AUDIO_LEVEL_EVENT, AppState, EVENT, EventPayload};
 
 use super::Gateway;
 use crate::overlay::RecordingOverlay;
+use crate::services::Published;
 
 pub(crate) fn forward_events(
     app: tauri::AppHandle,
     mut overlay: RecordingOverlay,
-    receiver: mpsc::Receiver<EventPayload>,
+    receiver: mpsc::Receiver<Published>,
 ) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("whispernow-events".to_owned())
         .spawn(move || {
             let mut shortcuts_enabled = true;
-            for event in receiver {
-                if let EventPayload::StateChanged { state } = &event {
-                    observe(&app, &mut overlay, state, &mut shortcuts_enabled);
+            for published in receiver {
+                match published {
+                    Published::Event(event) => {
+                        if let EventPayload::StateChanged { state } = &event {
+                            observe(&app, &mut overlay, state, &mut shortcuts_enabled);
+                        }
+                        emit(&app, EVENT, event);
+                    }
+                    Published::Level(level) => emit(&app, AUDIO_LEVEL_EVENT, level),
                 }
-                emit(&app, event);
             }
         })
         .map(drop)
@@ -50,8 +56,8 @@ fn observe(
     }
 }
 
-fn emit(app: &tauri::AppHandle, event: EventPayload) {
-    if let Err(error) = app.emit(EVENT, event) {
+fn emit(app: &tauri::AppHandle, name: &str, payload: impl serde::Serialize + Clone) {
+    if let Err(error) = app.emit(name, payload) {
         tracing::error!(%error, "desktop event emission failed");
     }
 }

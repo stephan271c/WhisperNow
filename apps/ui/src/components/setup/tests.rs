@@ -1,8 +1,7 @@
 use dioxus::prelude::*;
 use whispernow_domain::ipc::{
-    ActiveDownload, EventPayload, ModelState, PasteHelperSetup, Permission, PermissionKind,
-    PermissionStatus, PermissionsResponse, Phase, SaveSettingsResponse, SettingsView,
-    SetupTestResult,
+    ActiveDownload, ModelState, PasteHelperSetup, Permission, PermissionKind, PermissionStatus,
+    PermissionsResponse, Phase, SaveSettingsResponse, SettingsView, SetupTestResult,
 };
 use whispernow_domain::{AppError, AudioDeviceId, ErrorCategory};
 use whispernow_domain::{
@@ -751,11 +750,7 @@ fn try_it_shows_the_test_result_and_can_run_again() {
         start_test(&mut setup);
         setup.answer("start_test_dictation", Ok(()));
         setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
-        setup.publish(EventPayload::AudioLevel {
-            rms: 0.25,
-            peak: 0.8,
-            elapsed_ms: 1_000,
-        });
+        setup.publish_level(0.25, 1_000);
         let html = setup.html();
         let meter = tag(&html, "setup-test-level").expect("live level");
         assert!(meter.contains("role=\"meter\""), "{meter}");
@@ -790,13 +785,43 @@ fn an_audio_level_renders_only_the_live_meter() {
     setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
     let before = setup.render_counts();
 
-    setup.publish(EventPayload::AudioLevel {
-        rms: 0.25,
-        peak: 0.8,
-        elapsed_ms: 1_000,
-    });
+    setup.publish_level(0.25, 1_000);
 
     assert_eq!(setup.rendered_since(&before), ["LiveLevel"]);
+}
+
+#[test]
+fn the_live_meter_listens_for_levels_only_while_mounted_and_shows_them_only_while_recording() {
+    let shown = |setup: &Page| {
+        tag(&setup.html(), "setup-test-level")
+            .expect("live level")
+            .to_owned()
+    };
+    let mut setup = at(SetupStep::TryIt);
+    assert_eq!(fake::audio_level_listeners(), 0);
+    start_test(&mut setup);
+    setup.answer("start_test_dictation", Ok(()));
+    assert_eq!(fake::audio_level_listeners(), 1);
+
+    setup.publish_level(0.25, 0);
+    assert!(
+        shown(&setup).contains("aria-valuenow=\"0\""),
+        "not recording yet"
+    );
+    setup.publish(state_event(crate::test_support::RECORDING, |_| {}));
+    setup.publish_level(0.25, 1_000);
+    assert!(shown(&setup).contains("aria-valuenow=\"50\""));
+    setup.publish(state_event(crate::test_support::PROCESSING, |_| {}));
+    assert!(
+        shown(&setup).contains("aria-valuenow=\"0\""),
+        "recording ended"
+    );
+
+    setup.publish(state_event(Phase::Idle, |state| {
+        state.setup_test = Some(SetupTestResult::NoSpeech);
+    }));
+    assert!(tag(&setup.html(), "setup-test-level").is_none());
+    assert_eq!(fake::audio_level_listeners(), 0);
 }
 
 #[test]
@@ -1032,9 +1057,52 @@ fn settings_explain_how_to_paste_without_the_portal_indicator() {
     let mut answer = cards(PermissionStatus::Granted, PermissionStatus::Granted);
     answer.paste_helper_setup = Some(PasteHelperSetup {
         command: Some(command.to_owned()),
+        can_set_up: false,
     });
     window.answer("get_permissions", Ok(answer));
-    assert_eq!(text(&window.html(), "paste-helper-command"), command);
+    let html = window.html();
+    assert_eq!(text(&html, "paste-helper-command"), command);
+    assert!(tag(&html, "paste-helper-set-up").is_none());
     window.click("paste-helper-copy");
     assert_eq!(window.sent(), ["copy_text"]);
+}
+
+#[test]
+fn settings_set_the_paste_helper_up_and_explain_a_failure() {
+    let management = finished(setup_at(SetupStep::TryIt, ModelAvailability::Downloaded));
+    let mut window = home(management);
+    window.click("nav-settings");
+    let mut answer = cards(PermissionStatus::Granted, PermissionStatus::Granted);
+    answer.paste_helper_setup = Some(PasteHelperSetup {
+        command: Some("sudo sh /setup/install_input_helper.sh".to_owned()),
+        can_set_up: true,
+    });
+    window.answer("get_permissions", Ok(answer));
+    window.sent();
+
+    window.click("paste-helper-set-up");
+    assert_eq!(window.sent(), ["set_up_paste_helper"]);
+    assert!(
+        tag(&window.html(), "paste-helper-set-up")
+            .expect("set up button")
+            .contains(" disabled="),
+        "one password dialog at a time"
+    );
+    let summary = "The paste helper could not be set up; run its command in a terminal instead";
+    window.answer(
+        "set_up_paste_helper",
+        Err::<(), _>(AppError::new(
+            ErrorCategory::Permission,
+            "paste_helper_setup_failed",
+            summary,
+        )),
+    );
+    let html = window.html();
+    assert!(text(&html, "notice").contains(summary));
+    assert!(html.contains("notice-inline"));
+    assert!(
+        !tag(&html, "paste-helper-set-up")
+            .expect("set up button")
+            .contains(" disabled=")
+    );
 }

@@ -3,15 +3,17 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::fmt::Debug;
 use wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_test::*;
-use whispernow_domain::ipc::{ModelSummary, Phase};
+use whispernow_domain::ipc::{
+    AUDIO_LEVEL_EVENT, AudioLevel, ModelSummary, Phase, RecordingTrigger,
+};
 use whispernow_domain::{
     AppError, AudioDeviceId, EntryId, ErrorCategory, LlmProvider, ModelAvailability, ModelId,
     ProviderEndpoint, SettingChange, Settings, SetupCheckpoint, Shortcut, ShortcutKey,
     ShortcutModifier, VocabularyReplacement,
 };
 
-use crate::components::AppShell;
 use crate::components::ui::{Field, Select};
+use crate::components::{AppShell, RecordingBar};
 use crate::management::ManagementState;
 use crate::state::UiState;
 use crate::test_fixtures::{management_with, snapshot};
@@ -45,6 +47,43 @@ fn BrowserSettingsSurface() -> Element {
 #[component]
 fn BrowserVocabularySurface() -> Element {
     browser_surface(|| management_with(vocabulary_settings(&VOCABULARY)))
+}
+
+#[component]
+fn BrowserRecordingBar() -> Element {
+    let state = use_signal(|| {
+        let mut state = UiState {
+            recording_bar: true,
+            ..UiState::default()
+        };
+        state.hydrate(snapshot(Phase::Recording {
+            trigger: RecordingTrigger::Hold,
+            session: 1,
+        }));
+        state
+    });
+    UiContext::provide(state, use_signal(ManagementState::default));
+    rsx! { RecordingBar {} }
+}
+
+#[wasm_bindgen_test(async)]
+async fn a_level_from_tauri_reaches_the_overlay_meter() {
+    install_tauri("throw new Error(`unexpected command: ${command}`);");
+    install_mount_point();
+    dioxus::launch(BrowserRecordingBar);
+    let listener = format!("window.__whispernowListeners.get({AUDIO_LEVEL_EVENT:?})");
+    wait_for("the level listener", || eval_bool(&format!("!!{listener}"))).await;
+
+    let level = serde_json::to_string(&AudioLevel {
+        rms: 0.5,
+        elapsed_ms: 65_000,
+    })
+    .expect("level JSON");
+    js_sys::eval(&format!("{listener}({{ payload: {level} }})")).expect("deliver the level");
+    wait_for("the timer to show the level's elapsed time", || {
+        eval_bool("document.querySelector('.overlay-elapsed')?.textContent === '1:05'")
+    })
+    .await;
 }
 
 #[wasm_bindgen_test(async)]

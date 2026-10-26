@@ -9,8 +9,7 @@ use dioxus_html::{
     HtmlEventConverter, MountedResult, RenderedElementBacking, SerializedFormData,
     SerializedHtmlEventConverter, SerializedKeyboardData, SerializedMouseData,
 };
-use whispernow_domain::ipc::EventPayload;
-use whispernow_domain::ipc::{AppState, Phase};
+use whispernow_domain::ipc::{AppState, AudioLevel, EventPayload, Phase};
 use whispernow_domain::{HistoryEntry, ModelId};
 use whispernow_domain::{
     HistoryLimit, HistoryPage, LlmProvider, ProviderSettings, Settings, SetupProgress,
@@ -218,6 +217,12 @@ impl Page {
 
     pub(crate) fn publish(&mut self, event: EventPayload) -> &mut Self {
         self.act(|actions| actions.apply_event(event))
+    }
+
+    /// Delivers a level to the listeners of the level event, as the desktop does.
+    pub(crate) fn publish_level(&mut self, rms: f32, elapsed_ms: u64) -> &mut Self {
+        fake::send_audio_level(AudioLevel { rms, elapsed_ms });
+        self.settle()
     }
 }
 

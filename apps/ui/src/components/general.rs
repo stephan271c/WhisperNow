@@ -8,6 +8,7 @@ use super::ui::{Button, Section, Segmented, SegmentedOption, Select, SettingRow,
 use crate::UiContext;
 use crate::blocked_reason::DisabledReason;
 use crate::management::SettingKey;
+use crate::notice::NoticeScope;
 use crate::operations::UiOperation;
 use crate::route::Route;
 
@@ -126,7 +127,7 @@ pub(super) fn GeneralPage() -> Element {
         }
         if let Some(setup) = paste_helper_setup {
             Section { id: "pasting", title: "Pasting",
-                PasteHelperNotice { setup }
+                PasteHelperNotice { setup, scope: NoticeScope::Settings }
             }
         }
         if management.read().setup_complete() {

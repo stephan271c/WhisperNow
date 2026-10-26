@@ -1,7 +1,7 @@
 use std::future::Future;
 use whispernow_domain::AppError;
 
-use whispernow_domain::ipc::{MainWindowSection, PermissionKind, Phase};
+use whispernow_domain::ipc::{MainWindowSection, PermissionKind};
 
 use crate::UiContext;
 use crate::client;
@@ -22,13 +22,8 @@ impl UiContext {
             };
             let mut state = actions.state;
             let mut state = state.write();
-            if operation == UiOperation::OverlayAction
-                || state
-                    .snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| matches!(snapshot.phase, Phase::Recording { .. }))
-            {
-                state.overlay.action_error = Some(error.summary);
+            if operation == UiOperation::OverlayAction || state.recording_session().is_some() {
+                state.overlay_action_error = Some(error.summary);
             }
         });
     }

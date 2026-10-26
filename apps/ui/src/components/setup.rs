@@ -236,7 +236,7 @@ fn PermissionsStep() -> Element {
                     Banner { tone: Tone::Success, p { "Everything WhisperNow needs is allowed." } }
                 }
                 if let Some(setup) = permissions.paste_helper_setup.clone() {
-                    PasteHelperNotice { setup }
+                    PasteHelperNotice { setup, scope: NoticeScope::Setup }
                 }
             },
         }
@@ -579,8 +579,15 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
 
 #[component]
 fn LiveLevel() -> Element {
-    let audio_rms = use_context::<UiContext>().audio_rms;
-    let level = percent(level_fraction(audio_rms()));
+    let state = use_context::<UiContext>().state;
+    let mut rms = use_signal(|| 0.0);
+    crate::client::use_audio_levels(move |level| {
+        if state.peek().recording_session().is_some() {
+            rms.set(level.rms);
+        }
+    });
+    let recording = use_memo(move || state.read().recording_session().is_some());
+    let level = percent(level_fraction(if recording() { rms() } else { 0.0 }));
     rsx! {
         div { id: "setup-test-level", class: "progress level-live", role: "meter",
             aria_label: "Microphone level", aria_valuemin: "0", aria_valuemax: "100", aria_valuenow: "{level}",

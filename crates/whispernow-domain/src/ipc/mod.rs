@@ -102,12 +102,15 @@ pub struct PermissionsResponse {
 
 /// Without the paste helper, Wayland paste goes through the `RemoteDesktop`
 /// portal, and GNOME shows its remote-control indicator for as long as the app runs.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PasteHelperSetup {
     /// The command that sets the helper up, when this build carries its install
     /// script: an `AppImage` or a source build. A package installs it itself.
     pub command: Option<String>,
+    /// Whether `set_up_paste_helper` can run `command` itself, asking for the
+    /// password in the desktop's dialog.
+    pub can_set_up: bool,
 }
 
 impl PermissionsResponse {
@@ -444,8 +447,7 @@ pub enum MainWindowSection {
     AiCleanup,
 }
 
-/// State and update changes carry authoritative snapshots; audio levels are the only independently
-/// throttled realtime signal.
+/// State and update changes carry authoritative snapshots.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(
     tag = "type",
@@ -456,12 +458,6 @@ pub enum MainWindowSection {
 pub enum EventPayload {
     StateChanged {
         state: AppState,
-    },
-    AudioLevel {
-        rms: f32,
-        peak: f32,
-        /// Captured audio so far, which the overlay shows as elapsed time.
-        elapsed_ms: u64,
     },
     UpdateChanged {
         state: UpdateState,
@@ -476,6 +472,19 @@ pub enum EventPayload {
 }
 
 pub const EVENT: &str = "whispernow://event";
+
+/// The microphone's loudness, about 20 times a second while recording. It has its own event
+/// name because Tauri evaluates an event in every webview listening to its name, whatever the
+/// target; only a window showing a meter listens to this one.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioLevel {
+    pub rms: f32,
+    /// Captured audio so far, which the overlay shows as elapsed time.
+    pub elapsed_ms: u64,
+}
+
+pub const AUDIO_LEVEL_EVENT: &str = "whispernow://audio-level";
 
 #[cfg(test)]
 mod tests;

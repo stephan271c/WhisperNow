@@ -45,6 +45,14 @@ impl Gateway {
         self.permissions().await
     }
 
+    /// `true` once the helper is installed.
+    pub(crate) async fn set_up_paste_helper(&self) -> Result<bool, AppError> {
+        self.run_command("set_up_paste_helper", Failure::Local, |backend| {
+            backend.set_up_paste_helper()
+        })
+        .await
+    }
+
     fn global_shortcuts_consent(&self) -> PermissionStatus {
         shortcut_portal_consent(
             self.shortcuts.registration_active(),

@@ -393,7 +393,7 @@ mod tests {
 
     use crate::services::{
         Fixture, Phase, RecordingTrigger,
-        state::{DownloadTask, Events, State, StateCell},
+        state::{DownloadTask, Events, Published, State, StateCell},
     };
 
     use super::{ModelLibrary, run_model_download, transfer_rate};
@@ -658,7 +658,7 @@ mod tests {
         assert!(
             published
                 .try_iter()
-                .any(|event| matches!(event, EventPayload::ModelsChanged))
+                .any(|event| matches!(event, Published::Event(EventPayload::ModelsChanged)))
         );
     }
 
@@ -721,7 +721,7 @@ mod tests {
         let downloads: Vec<_> = published
             .try_iter()
             .filter_map(|event| match event {
-                EventPayload::StateChanged { state } => Some(
+                Published::Event(EventPayload::StateChanged { state }) => Some(
                     state
                         .active_downloads
                         .into_iter()

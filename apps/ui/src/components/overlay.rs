@@ -5,7 +5,7 @@ use super::ui::{Button, ButtonSize, ButtonVariant, Icon, IconButton, IconName};
 use crate::home_status::{Fix, FixTarget};
 use crate::notice::Notice;
 use crate::operations::UiOperation;
-use crate::overlay::{LEVEL_BARS, OverlayView, format_elapsed};
+use crate::overlay::{LEVEL_BARS, Meter, format_elapsed};
 use crate::{UiContext, client};
 
 /// A failure with a button stays longer than one without, so the button can be reached.
@@ -26,12 +26,13 @@ struct MeterBar {
     height: f32,
 }
 
-fn meter_bars(view: &OverlayView) -> Vec<MeterBar> {
-    view.levels
+fn meter_bars(meter: &Meter, heard: bool) -> Vec<MeterBar> {
+    meter
+        .levels
         .iter()
         .enumerate()
         .map(|(index, level)| {
-            let level = if view.levels_seen { *level } else { 0.0 };
+            let level = if heard { *level } else { 0.0 };
             let height = MIN_BAR_HEIGHT + (METER_HEIGHT - MIN_BAR_HEIGHT) * level;
             #[expect(clippy::cast_precision_loss, reason = "the index is below LEVEL_BARS")]
             let x = index as f32 * (BAR_WIDTH + BAR_GAP);
@@ -44,17 +45,54 @@ fn meter_bars(view: &OverlayView) -> Vec<MeterBar> {
         .collect()
 }
 
+/// The bars and the timer: the only part of the bar a level re-renders.
+#[component]
+fn RecordingMeter(meter: Signal<Meter>, session: u64) -> Element {
+    let meter = meter.read();
+    let heard = meter.heard(session);
+    let bars = meter_bars(&meter, heard);
+    let elapsed = format_elapsed(meter.elapsed_ms);
+    let arming = if heard { "" } else { "overlay-bars-arming" };
+    rsx! {
+        svg { class: "overlay-bars {arming}", view_box: "0 0 {METER_WIDTH} {METER_HEIGHT}",
+            "aria-hidden": "true",
+            for MeterBar { x, y, height } in bars.iter().copied() {
+                rect { class: "overlay-bar", x: "{x}", y: "{y:.2}",
+                    width: "{BAR_WIDTH}", height: "{height:.2}", rx: "1"
+                }
+            }
+        }
+        if heard {
+            span { class: "overlay-elapsed", role: "timer", aria_label: "Elapsed time",
+                "{elapsed}"
+            }
+        }
+    }
+}
+
 #[component]
 pub(crate) fn RecordingBar() -> Element {
     let context = use_context::<UiContext>();
+    let mut meter = use_signal(Meter::default);
+    client::use_audio_levels(move |level| {
+        if let Some(session) = context.state.peek().recording_session() {
+            meter.write().apply_level(session, level);
+        }
+    });
+    let heard = use_memo(move || {
+        context
+            .state
+            .read()
+            .recording_session()
+            .is_some_and(|session| meter.read().heard(session))
+    });
     let state = context.state.read();
-    let view = &state.overlay;
     let phase = state
         .snapshot
         .as_ref()
         .map_or(&Phase::Idle, |snapshot| &snapshot.phase);
     let (phase_class, label, trigger, action) = match phase {
-        Phase::Recording { trigger, .. } if view.levels_seen => {
+        Phase::Recording { trigger, .. } if heard() => {
             ("overlay-listening", "Listening", Some(*trigger), None)
         }
         Phase::Recording { .. } => ("overlay-starting", "Starting…", None, None),
@@ -81,18 +119,11 @@ pub(crate) fn RecordingBar() -> Element {
             ("overlay-idle", "", None, None)
         }
     };
-    let status = view
-        .action_error
+    let status = state
+        .overlay_action_error
         .clone()
         .unwrap_or_else(|| label.to_owned());
-    let elapsed = format_elapsed(view.elapsed_ms);
-    let bars = meter_bars(view);
-    let arming = if view.levels_seen {
-        ""
-    } else {
-        "overlay-bars-arming"
-    };
-    let recording = matches!(phase, Phase::Recording { .. });
+    let session = state.recording_session();
     let in_flight = phase.is_busy();
     let failed = *phase == Phase::Error;
     let visible = in_flight || failed;
@@ -129,7 +160,7 @@ pub(crate) fn RecordingBar() -> Element {
             section { class: "overlay-pill {phase_class}", aria_label: "Dictation",
                 div { class: "overlay-row",
                     span { class: "overlay-indicator", aria_hidden: "true",
-                        if recording {
+                        if session.is_some() {
                             span { class: "overlay-dot" }
                         } else if in_flight {
                             span { class: "overlay-spinner" }
@@ -142,20 +173,8 @@ pub(crate) fn RecordingBar() -> Element {
                     p { id: "overlay-status", class: "overlay-status", role: "status",
                         aria_live: "polite", aria_atomic: "true", "{status}"
                     }
-                    if recording {
-                        svg { class: "overlay-bars {arming}", view_box: "0 0 {METER_WIDTH} {METER_HEIGHT}",
-                            "aria-hidden": "true",
-                            for MeterBar { x, y, height } in bars.iter().copied() {
-                                rect { class: "overlay-bar", x: "{x}", y: "{y:.2}",
-                                    width: "{BAR_WIDTH}", height: "{height:.2}", rx: "1"
-                                }
-                            }
-                        }
-                    }
-                    if trigger.is_some() {
-                        span { class: "overlay-elapsed", role: "timer", aria_label: "Elapsed time",
-                            "{elapsed}"
-                        }
+                    if let Some(session) = session {
+                        RecordingMeter { meter, session }
                     }
                     if visible {
                         div { class: "overlay-actions",

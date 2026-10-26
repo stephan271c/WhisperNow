@@ -17,7 +17,7 @@ use whispernow_domain::AppError;
 
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use whispernow_domain::ipc::{EventPayload, Phase};
+use whispernow_domain::ipc::EventPayload;
 
 use crate::client;
 
@@ -140,15 +140,7 @@ impl UiContext {
                 if self.management.peek().setup_test_running() {
                     self.management.write().observe_setup_test(&state);
                 }
-                if !matches!(state.phase, Phase::Recording { .. }) {
-                    self.audio_rms.set(0.0);
-                }
                 self.state.write().apply_state(state);
-            }
-            EventPayload::AudioLevel { rms, .. } => {
-                if self.state.peek().is_recording() {
-                    self.audio_rms.set(rms);
-                }
             }
             EventPayload::UpdateChanged { state } => self.state.write().apply_update_state(state),
             EventPayload::HistoryChanged => self.refresh_history(),

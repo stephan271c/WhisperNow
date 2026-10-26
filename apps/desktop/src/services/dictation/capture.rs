@@ -8,7 +8,7 @@ use whispernow_core::{
     audio::{AudioBlock, AudioEvent, AudioLevelSummary, AudioSink, TARGET_SAMPLE_RATE},
     workflow::{AudioSegment, SpeechSegmenter},
 };
-use whispernow_domain::ipc::EventPayload;
+use whispernow_domain::ipc::AudioLevel;
 
 use super::Message;
 use crate::services::Events;
@@ -147,9 +147,8 @@ impl AudioSink for RecordingSink {
 
     fn observe(&self, summary: AudioLevelSummary) {
         let samples = self.captured_samples.load(Ordering::Relaxed) as u64;
-        self.events.publish(EventPayload::AudioLevel {
+        self.events.level(AudioLevel {
             rms: summary.rms,
-            peak: summary.peak,
             elapsed_ms: samples * 1_000 / u64::from(TARGET_SAMPLE_RATE),
         });
     }
@@ -230,9 +229,9 @@ mod tests {
 
         let levels: Vec<_> = levels
             .try_iter()
-            .map(|event| match event {
-                EventPayload::AudioLevel { elapsed_ms, .. } => elapsed_ms,
-                _ => panic!("an audio level event"),
+            .map(|published| match published {
+                crate::services::Published::Level(level) => level.elapsed_ms,
+                crate::services::Published::Event(event) => panic!("an audio level: {event:?}"),
             })
             .collect();
         assert_eq!(levels, [20, 25]);

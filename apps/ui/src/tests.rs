@@ -1,8 +1,8 @@
 use dioxus::prelude::VirtualDom;
 use whispernow_domain::ipc::ModelSummary;
 use whispernow_domain::ipc::{
-    EventPayload, ManualUpdatePackage, ModelState, Phase, SettingsView, UpdateError, UpdatePhase,
-    UpdateProgress, UpdateState,
+    ManualUpdatePackage, ModelState, Phase, SettingsView, UpdateError, UpdatePhase, UpdateProgress,
+    UpdateState,
 };
 use whispernow_domain::{AppError, ErrorCategory, HistoryPage, ThemePreference};
 use whispernow_domain::{LlmProvider, Settings, Shortcut, ShortcutKey, ShortcutModifier};
@@ -14,7 +14,6 @@ use crate::management::{ManagementState, SettingKey};
 use crate::state::UiState;
 use crate::test_support::{
     Page, editable_settings, history_entry, management_with, settings_view, show_history, snapshot,
-    state_event,
 };
 
 fn ui_state(phase: Phase) -> UiState {
@@ -118,28 +117,6 @@ fn nothing_is_disclosed_when_cleanup_is_off_or_runs_on_this_computer() {
             settings.llm_provider
         );
     }
-}
-
-#[test]
-fn audio_level_is_scoped_by_the_single_recording_phase() {
-    let mut page =
-        crate::test_support::Page::host(UiState::default(), ManagementState::default(), AppShell);
-    let level = |rms| EventPayload::AudioLevel {
-        rms,
-        peak: 0.8,
-        elapsed_ms: 0,
-    };
-    let shown = |page: &crate::test_support::Page| (page.context().audio_rms)();
-
-    page.publish(state_event(Phase::Idle, |_| {}));
-    page.publish(level(0.4));
-    assert!(shown(&page).abs() < f32::EPSILON);
-
-    page.publish(state_event(crate::test_support::RECORDING, |_| {}));
-    page.publish(level(0.4));
-    assert!((shown(&page) - 0.4).abs() < f32::EPSILON);
-    page.publish(state_event(crate::test_support::PROCESSING, |_| {}));
-    assert!(shown(&page).abs() < f32::EPSILON);
 }
 
 #[test]

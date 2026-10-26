@@ -70,6 +70,7 @@ registered_commands![
     commands::get_permissions,
     commands::request_permission,
     commands::open_permission_settings,
+    commands::set_up_paste_helper,
     commands::start_test_dictation,
     commands::stop_recording,
     commands::cancel_recording,

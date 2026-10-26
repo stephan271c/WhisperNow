@@ -12,19 +12,31 @@ use whispernow_domain::AppError;
 use whispernow_core::CancellationToken;
 use whispernow_domain::ModelId;
 use whispernow_domain::ipc::{
-    ActiveDownload, AppState, CleanupDevice, EventPayload, ModelState, Phase, SetupTestResult,
+    ActiveDownload, AppState, AudioLevel, CleanupDevice, EventPayload, ModelState, Phase,
+    SetupTestResult,
 };
+
+/// What the event pump emits, each under its own event name.
+#[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "every slot fits an event anyway; boxing would allocate per snapshot"
+)]
+pub(crate) enum Published {
+    Event(EventPayload),
+    Level(AudioLevel),
+}
 
 /// Sending never blocks, so a snapshot can be sent while the state lock is held and arrives
 /// in change order.
 #[derive(Clone)]
 pub(crate) struct Events {
-    sender: mpsc::Sender<EventPayload>,
+    sender: mpsc::Sender<Published>,
     pump_loss_logged: Arc<AtomicBool>,
 }
 
 impl Events {
-    pub(crate) fn channel() -> (Self, mpsc::Receiver<EventPayload>) {
+    pub(crate) fn channel() -> (Self, mpsc::Receiver<Published>) {
         let (sender, receiver) = mpsc::channel();
         let events = Self {
             sender,
@@ -36,7 +48,15 @@ impl Events {
     /// Logs the first event the stopped pump could not take: audio levels would repeat it
     /// many times a second.
     pub(crate) fn publish(&self, payload: EventPayload) {
-        if self.sender.send(payload).is_err()
+        self.send(Published::Event(payload));
+    }
+
+    pub(crate) fn level(&self, level: AudioLevel) {
+        self.send(Published::Level(level));
+    }
+
+    fn send(&self, published: Published) {
+        if self.sender.send(published).is_err()
             && !self.pump_loss_logged.swap(true, Ordering::Relaxed)
         {
             tracing::error!("the event pump stopped; the interface receives no more updates");
@@ -308,11 +328,11 @@ mod tests {
         );
     }
 
-    fn published_phases(published: &mpsc::Receiver<EventPayload>) -> Vec<Phase> {
+    fn published_phases(published: &mpsc::Receiver<Published>) -> Vec<Phase> {
         published
             .try_iter()
             .filter_map(|event| match event {
-                EventPayload::StateChanged { state } => Some(state.phase),
+                Published::Event(EventPayload::StateChanged { state }) => Some(state.phase),
                 _ => None,
             })
             .collect()

@@ -1,7 +1,5 @@
 use whispernow_domain::ipc::{AppState, EventPayload, Phase, UpdateState};
 
-use crate::overlay::OverlayView;
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct UiState {
     pub(crate) snapshot: Option<AppState>,
@@ -9,7 +7,8 @@ pub(crate) struct UiState {
     pub(crate) update_command_error: Option<String>,
     pub(crate) connection_failed: bool,
     pub(crate) event_stream_failed: bool,
-    pub(crate) overlay: OverlayView,
+    /// Why the last overlay action failed; cleared by the next phase.
+    pub(crate) overlay_action_error: Option<String>,
     pub(crate) recording_bar: bool,
 }
 
@@ -23,22 +22,16 @@ impl UiState {
     }
 
     #[must_use]
-    pub(crate) fn is_recording(&self) -> bool {
-        self.snapshot
-            .as_ref()
-            .is_some_and(|state| matches!(state.phase, Phase::Recording { .. }))
+    pub(crate) fn recording_session(&self) -> Option<u64> {
+        match self.snapshot.as_ref()?.phase {
+            Phase::Recording { session, .. } => Some(session),
+            _ => None,
+        }
     }
 
     pub(crate) fn apply_event(&mut self, event: EventPayload) {
         match event {
             EventPayload::StateChanged { state } => self.apply_state(state),
-            EventPayload::AudioLevel {
-                rms, elapsed_ms, ..
-            } => {
-                if self.recording_bar && self.is_recording() {
-                    self.overlay.apply_level(rms, elapsed_ms);
-                }
-            }
             EventPayload::UpdateChanged { state } => self.apply_update_state(state),
             // The main window's listener follows navigation requests.
             EventPayload::NavigationRequested { .. }
@@ -53,17 +46,13 @@ impl UiState {
     }
 
     pub(crate) fn apply_state(&mut self, state: AppState) {
-        if self.recording_bar {
-            if self
+        if self.recording_bar
+            && self
                 .snapshot
                 .as_ref()
                 .is_none_or(|old| old.phase != state.phase)
-            {
-                self.overlay.action_error = None;
-            }
-            if let Phase::Recording { session, .. } = state.phase {
-                self.overlay.start_recording(session);
-            }
+        {
+            self.overlay_action_error = None;
         }
         self.snapshot = Some(state);
     }

@@ -11,6 +11,7 @@ pub(crate) enum UiOperation {
     RestartSetup,
     OpenPermissionSettings,
     RequestPermission(PermissionKind),
+    SetUpPasteHelper,
     LoadPermissions,
     ListDevices,
     StartSetupTest,

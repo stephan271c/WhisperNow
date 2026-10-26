@@ -325,6 +325,19 @@ pub(crate) async fn open_permission_settings(request: PermissionKind) -> Result<
     run_blocking(move || crate::services::open_permission_settings(request)).await?
 }
 
+/// Pasting chooses between the helper and the portal at startup, so the app restarts once the
+/// helper is installed.
+#[tauri::command]
+pub(crate) async fn set_up_paste_helper(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Gateway>,
+) -> Result<(), AppError> {
+    if state.set_up_paste_helper().await? {
+        app.request_restart();
+    }
+    Ok(())
+}
+
 /// `stop_recording` ends it, and its transcript is neither pasted nor kept.
 #[tauri::command]
 pub(crate) async fn start_test_dictation(state: tauri::State<'_, Gateway>) -> Result<(), AppError> {

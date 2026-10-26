@@ -257,38 +257,18 @@ fn a_newer_notice_takes_over_the_timer_of_the_one_it_replaces() {
 }
 
 #[test]
-fn audio_levels_do_not_render_the_sidebar_or_the_pages() {
-    let footer = |counts: &[(&str, usize)]| {
-        counts
-            .iter()
-            .find_map(|(name, renders)| (*name == "SidebarFooter").then_some(*renders))
-            .expect("the sidebar footer is mounted")
-    };
+fn a_recording_registers_no_level_listener_outside_the_setup_test() {
     let mut page = shell(snapshot(Phase::Idle), configured());
-    open(&mut page, &["nav-settings", "nav-settings-models"]);
-    page.publish(state_event(crate::test_support::RECORDING, |_| {}));
-    let before = page.render_counts();
-    assert!(
-        before.iter().any(|(name, _)| *name == "ModelRow"),
-        "{before:?}"
-    );
-
-    for step in 1..=20_u16 {
-        page.publish(EventPayload::AudioLevel {
-            rms: f32::from(step) / 100.0,
-            peak: 0.5,
-            elapsed_ms: u64::from(step) * 50,
-        });
+    for path in [
+        &["nav-home"][..],
+        &["nav-history"],
+        &["nav-settings", "nav-settings-models"],
+    ] {
+        open(&mut page, path);
+        page.publish(state_event(crate::test_support::RECORDING, |_| {}));
+        assert_eq!(fake::audio_level_listeners(), 0, "{path:?}");
+        page.publish(state_event(Phase::Idle, |_| {}));
     }
-    assert_eq!(page.render_counts(), before);
-
-    page.publish(state_event(crate::test_support::RECORDING, |state| {
-        state.model_state = ModelState::Failed;
-    }));
-    assert!(
-        footer(&page.render_counts()) > footer(&before),
-        "a change the sidebar shows does render it"
-    );
 }
 
 #[test]

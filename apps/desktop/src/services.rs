@@ -25,7 +25,7 @@ use models::ModelLibrary;
 use output::Output;
 use permissions::{MicrophoneAccess, SessionFacts, permission_states};
 use settings::{SavedSettings, require_connected_device, settings_error};
-pub(crate) use state::{Events, StateCell};
+pub(crate) use state::{Events, Published, StateCell};
 pub(crate) use whispernow_domain::ipc::{Phase, RecordingTrigger};
 
 mod clear_data;
@@ -206,6 +206,31 @@ impl Backend {
             .ok_or_else(permission_not_requestable)
     }
 
+    /// Installs the paste helper once an administrator password is given in the desktop's
+    /// dialog. `Ok(false)` when the user closed the dialog.
+    pub(crate) fn set_up_paste_helper(&self) -> Result<bool, AppError> {
+        self.state.lock().phase.require_idle()?;
+        #[cfg(target_os = "linux")]
+        {
+            use crate::input_helper::{HelperSetupOutcome, find_pkexec, run_setup, setup_script};
+            let script = setup_script(&self.paths.paste_helper_setup_dir());
+            let (Some(script), Some(pkexec)) = (script, find_pkexec()) else {
+                return Err(paste_helper_setup_unavailable());
+            };
+            match run_setup(&pkexec, &script) {
+                HelperSetupOutcome::Installed => Ok(true),
+                HelperSetupOutcome::Dismissed => Ok(false),
+                HelperSetupOutcome::Failed => Err(AppError::new(
+                    ErrorCategory::Permission,
+                    "paste_helper_setup_failed",
+                    "The paste helper could not be set up; run its command in a terminal instead",
+                )),
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        Err(paste_helper_setup_unavailable())
+    }
+
     pub(crate) fn save_setup_checkpoint(
         &self,
         checkpoint: SetupCheckpoint,
@@ -335,6 +360,14 @@ fn permission_not_requestable() -> AppError {
         ErrorCategory::General,
         "permission_not_requestable",
         "This permission cannot be requested here",
+    )
+}
+
+fn paste_helper_setup_unavailable() -> AppError {
+    AppError::new(
+        ErrorCategory::General,
+        "paste_helper_setup_unavailable",
+        "The paste helper cannot be set up from here",
     )
 }
 

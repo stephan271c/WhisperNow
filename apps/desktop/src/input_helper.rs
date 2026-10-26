@@ -28,6 +28,8 @@ use whispernow_platform::{
 const HELPER: &str = "whispernow-input-helper";
 const INSTALLED_DIRS: [&str; 2] = ["/usr/local/libexec/whispernow", "/usr/libexec/whispernow"];
 const SETUP_SCRIPT: &str = "install_input_helper.sh";
+/// pkexec(1)'s exit status when the user dismisses its dialog.
+const PKEXEC_DISMISSED: i32 = 126;
 /// The helper creates its keyboard and lets the compositor add it first.
 const READY_TIMEOUT: Duration = Duration::from_secs(2);
 /// The helper waits up to a second for held modifiers before it answers.
@@ -284,11 +286,11 @@ fn helper_path() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// The command that installs the helper setgid `input` with its uinput rule,
-/// when this build carries the install script. Root cannot read a running
-/// `AppImage`'s files, so its helper and script are first copied to `setup_dir`;
-/// a source build uses the repository's script.
-pub(crate) fn setup_command(setup_dir: &Path) -> Option<String> {
+/// The script that installs the helper setgid `input` with its uinput rule,
+/// when this build carries it. Root cannot read a running `AppImage`'s files,
+/// so its helper and script are first copied to `setup_dir`; a source build
+/// uses the repository's script.
+pub(crate) fn setup_script(setup_dir: &Path) -> Option<PathBuf> {
     let script = match std::env::var_os("APPDIR") {
         Some(app_dir) => copy_setup(Path::new(&app_dir), setup_dir)
             .inspect_err(|error| tracing::warn!(%error, "the helper setup could not be copied"))
@@ -301,9 +303,56 @@ pub(crate) fn setup_command(setup_dir: &Path) -> Option<String> {
             .join("scripts")
             .join(SETUP_SCRIPT),
     };
-    script
-        .is_file()
-        .then(|| format!("sudo sh {}", shell_quoted(&script.to_string_lossy())))
+    script.is_file().then_some(script)
+}
+
+pub(crate) fn setup_command(script: &Path) -> String {
+    format!("sudo sh {}", shell_quoted(&script.to_string_lossy()))
+}
+
+/// polkit's `pkexec`, which asks for an administrator password in the desktop's own dialog.
+pub(crate) fn find_pkexec() -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join("pkexec"))
+        .find(|path| path.is_file())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HelperSetupOutcome {
+    Installed,
+    /// The user closed the password dialog.
+    Dismissed,
+    Failed,
+}
+
+/// Runs the setup `script` as root through `pkexec`, which waits for the password dialog.
+/// Without a desktop agent `pkexec` fails rather than prompting in a terminal the app may
+/// have been started from.
+pub(crate) fn run_setup(pkexec: &Path, script: &Path) -> HelperSetupOutcome {
+    let output = Command::new(pkexec)
+        .arg("--disable-internal-agent")
+        .arg("/bin/sh")
+        .arg(script)
+        .stdin(Stdio::null())
+        .output();
+    match output {
+        Ok(output) if output.status.success() => HelperSetupOutcome::Installed,
+        Ok(output) if output.status.code() == Some(PKEXEC_DISMISSED) => {
+            HelperSetupOutcome::Dismissed
+        }
+        Ok(output) => {
+            tracing::warn!(
+                status = %output.status,
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "the paste helper setup failed"
+            );
+            HelperSetupOutcome::Failed
+        }
+        Err(error) => {
+            tracing::warn!(%error, "the paste helper setup could not start");
+            HelperSetupOutcome::Failed
+        }
+    }
 }
 
 fn copy_setup(app_dir: &Path, setup_dir: &Path) -> io::Result<PathBuf> {
@@ -352,6 +401,28 @@ mod tests {
             "/home/a/.local/share/x/install_input_helper.sh"
         );
         assert_eq!(shell_quoted("/home/a b/it's.sh"), r"'/home/a b/it'\''s.sh'");
+    }
+
+    #[test]
+    fn the_setup_tells_an_installed_helper_from_a_dismissed_dialog() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().expect("dir");
+        let pkexec = dir.path().join("pkexec");
+        fs::write(&pkexec, "#!/bin/sh\nshift\nexec \"$@\"\n").expect("fake pkexec");
+        fs::set_permissions(&pkexec, fs::Permissions::from_mode(0o755)).expect("executable");
+        let script = dir.path().join(SETUP_SCRIPT);
+        let outcome = |status: i32| {
+            fs::write(&script, format!("exit {status}\n")).expect("script");
+            run_setup(&pkexec, &script)
+        };
+        assert_eq!(outcome(0), HelperSetupOutcome::Installed);
+        assert_eq!(outcome(PKEXEC_DISMISSED), HelperSetupOutcome::Dismissed);
+        assert_eq!(outcome(1), HelperSetupOutcome::Failed);
+        assert_eq!(
+            run_setup(&dir.path().join("missing"), &script),
+            HelperSetupOutcome::Failed
+        );
     }
 
     #[test]

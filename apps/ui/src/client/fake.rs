@@ -4,10 +4,11 @@
 use std::{
     cell::{Cell, RefCell},
     future::poll_fn,
-    rc::Rc,
+    rc::{Rc, Weak},
     task::{Poll, Waker},
 };
-use whispernow_domain::{AppError, ipc::COMMAND_NAMES};
+use whispernow_domain::AppError;
+use whispernow_domain::ipc::{AudioLevel, COMMAND_NAMES};
 
 use super::{Platform, WindowFrame};
 
@@ -45,11 +46,40 @@ impl Drop for LiveDelay {
     }
 }
 
+type LevelListener = RefCell<dyn FnMut(AudioLevel)>;
+pub(crate) type LevelCallback = Rc<LevelListener>;
+
 thread_local! {
     static FRAME: Cell<(WindowFrame, Platform)> = const { Cell::new((WindowFrame::Native, Platform::Other)) };
     static CALLS: RefCell<Vec<Call>> = const { RefCell::new(Vec::new()) };
     static TIMERS: RefCell<Timers> = RefCell::new(Timers::default());
     static THEMES: RefCell<Vec<Option<String>>> = const { RefCell::new(Vec::new()) };
+    static LEVEL_LISTENERS: RefCell<Vec<Weak<LevelListener>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Registers `callback` until the returned owner is dropped.
+pub(super) fn listen_audio_levels(callback: impl FnMut(AudioLevel) + 'static) -> LevelCallback {
+    let callback: LevelCallback = Rc::new(RefCell::new(callback));
+    LEVEL_LISTENERS.with_borrow_mut(|listeners| listeners.push(Rc::downgrade(&callback)));
+    callback
+}
+
+fn live_level_listeners() -> Vec<LevelCallback> {
+    LEVEL_LISTENERS.with_borrow_mut(|listeners| {
+        listeners.retain(|listener| listener.strong_count() > 0);
+        listeners.iter().filter_map(Weak::upgrade).collect()
+    })
+}
+
+pub(crate) fn audio_level_listeners() -> usize {
+    live_level_listeners().len()
+}
+
+/// Delivers `level` as the desktop's level event does, to every listener still registered.
+pub(crate) fn send_audio_level(level: AudioLevel) {
+    for listener in live_level_listeners() {
+        (listener.borrow_mut())(level);
+    }
 }
 
 pub(super) async fn delay() {
@@ -136,6 +166,7 @@ pub(crate) fn reset() {
     THEMES.with_borrow_mut(Vec::clear);
     CALLS.with_borrow_mut(Vec::clear);
     TIMERS.with_borrow_mut(|timers| *timers = Timers::default());
+    LEVEL_LISTENERS.with_borrow_mut(Vec::clear);
 }
 
 pub(crate) fn answer(command: &str, answer: Result<impl Serialize, AppError>) {

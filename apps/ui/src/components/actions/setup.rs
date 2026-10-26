@@ -159,6 +159,16 @@ impl UiContext {
         self.watch_permissions();
     }
 
+    /// Installs the paste helper through the desktop's password dialog; the app then restarts.
+    /// A failure is explained in `scope`.
+    pub(crate) fn set_up_paste_helper(self, scope: NoticeScope) {
+        self.run_reporting(
+            UiOperation::SetUpPasteHelper,
+            client::call("set_up_paste_helper"),
+            scope,
+        );
+    }
+
     /// Reads the cards about every [`PERMISSION_POLL_MS`] until a read finds none can change
     /// any more, for at most [`PERMISSION_POLLS`] reads; a hidden window reads nothing. A new
     /// watch replaces the last one.

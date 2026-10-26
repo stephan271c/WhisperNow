@@ -3,8 +3,13 @@
     allow(dead_code, reason = "natively only tests call the desktop")
 )]
 
+use std::{cell::RefCell, rc::Rc};
+
+use dioxus::core::spawn_forever;
+use dioxus::prelude::{use_drop, use_hook};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use whispernow_domain::AppError;
+use whispernow_domain::ipc::AudioLevel;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod fake;
@@ -111,14 +116,59 @@ pub(crate) enum WindowAction {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_window_action(_action: WindowAction) {}
 
+/// Natively only level listeners are registered, with [`fake`], so tests can deliver levels.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) struct ListenerOwner;
+pub(crate) struct ListenerOwner {
+    _level: Option<fake::LevelCallback>,
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn listen_events(
     _callback: impl FnMut(whispernow_domain::ipc::EventPayload) + 'static,
 ) -> std::future::Ready<Answer<ListenerOwner>> {
-    std::future::ready(Ok(ListenerOwner))
+    std::future::ready(Ok(ListenerOwner { _level: None }))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn listen_audio_levels(
+    callback: impl FnMut(AudioLevel) + 'static,
+) -> std::future::Ready<Answer<ListenerOwner>> {
+    std::future::ready(Ok(ListenerOwner {
+        _level: Some(fake::listen_audio_levels(callback)),
+    }))
+}
+
+enum LevelListener {
+    Registering,
+    Registered(#[expect(dead_code, reason = "held to stay registered")] ListenerOwner),
+    Unmounted,
+}
+
+/// Calls `on_level` with each audio level while the calling component is mounted. Registering
+/// outlives the component, so a listener registered after it unmounts is dropped at once
+/// instead of being left calling a dropped callback.
+pub(crate) fn use_audio_levels(on_level: impl FnMut(AudioLevel) + 'static) {
+    let listener = use_hook(|| Rc::new(RefCell::new(LevelListener::Registering)));
+    use_hook(|| {
+        let listener = Rc::clone(&listener);
+        let mut on_level = on_level;
+        // Tauri calls back from JavaScript with no Dioxus scope on the stack.
+        let runtime = dioxus::core::Runtime::current();
+        let scope = dioxus::core::current_scope_id();
+        spawn_forever(async move {
+            // Without a listener the meter stays empty; recording is unaffected.
+            let Ok(owner) =
+                listen_audio_levels(move |level| runtime.in_scope(scope, || on_level(level))).await
+            else {
+                return;
+            };
+            let mut listener = listener.borrow_mut();
+            if matches!(*listener, LevelListener::Registering) {
+                *listener = LevelListener::Registered(owner);
+            }
+        });
+    });
+    use_drop(move || *listener.borrow_mut() = LevelListener::Unmounted);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -151,7 +201,7 @@ pub(crate) fn host_platform() -> Platform {
 pub(crate) fn listen_maximized(
     _callback: impl FnMut(bool) + 'static,
 ) -> std::future::Ready<Answer<ListenerOwner>> {
-    std::future::ready(Ok(ListenerOwner))
+    std::future::ready(Ok(ListenerOwner { _level: None }))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -179,7 +229,7 @@ mod wasm {
     use serde::{Serialize, de::DeserializeOwned};
     use wasm_bindgen::{JsCast as _, closure::Closure, prelude::*};
     use whispernow_domain::EntryId;
-    use whispernow_domain::ipc::EventPayload;
+    use whispernow_domain::ipc::{AudioLevel, EventPayload};
 
     use super::{
         Answer, AppError, Platform, WindowAction, WindowFrame, connection_error, contract_failed,
@@ -298,26 +348,37 @@ mod wasm {
         Ok(object_url(&audio))
     }
 
-    pub(crate) async fn listen_events(
-        callback: impl FnMut(EventPayload) + 'static,
+    async fn listen<T: DeserializeOwned + 'static>(
+        name: &str,
+        callback: impl FnMut(T) + 'static,
     ) -> Result<ListenerOwner, AppError> {
         let mut callback = callback;
-        let closure: Closure<dyn FnMut(JsValue)> = Closure::new(move |value: JsValue| {
-            match serde_wasm_bindgen::from_value::<EventPayload>(value) {
-                Ok(event) => callback(event),
-                Err(error) => console_error(&format!("Desktop event contract failed: {error}")),
-            }
-        });
-        let listener_id = listen_typed(
-            whispernow_domain::ipc::EVENT,
-            closure.as_ref().unchecked_ref::<Function>(),
-        )
-        .await
-        .map_err(|error| from_js(&error))?;
+        let closure: Closure<dyn FnMut(JsValue)> =
+            Closure::new(
+                move |value: JsValue| match serde_wasm_bindgen::from_value::<T>(value) {
+                    Ok(payload) => callback(payload),
+                    Err(error) => console_error(&format!("Desktop event contract failed: {error}")),
+                },
+            );
+        let listener_id = listen_typed(name, closure.as_ref().unchecked_ref::<Function>())
+            .await
+            .map_err(|error| from_js(&error))?;
         Ok(ListenerOwner {
             listener_id,
             _callback: closure,
         })
+    }
+
+    pub(crate) async fn listen_events(
+        callback: impl FnMut(EventPayload) + 'static,
+    ) -> Result<ListenerOwner, AppError> {
+        listen(whispernow_domain::ipc::EVENT, callback).await
+    }
+
+    pub(crate) async fn listen_audio_levels(
+        callback: impl FnMut(AudioLevel) + 'static,
+    ) -> Result<ListenerOwner, AppError> {
+        listen(whispernow_domain::ipc::AUDIO_LEVEL_EVENT, callback).await
     }
 
     /// A window whose decoration cannot be read keeps its native frame.
