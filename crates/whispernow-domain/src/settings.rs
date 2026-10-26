@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::{
     AudioDeviceId, CLEANUP_MODEL_IDS, DEFAULT_CLEANUP_MODEL_ID, HistoryLimit, HistoryRetention,
-    LlmProvider, ModelId, ProviderEndpoint, RecordingMode, Shortcut,
+    LlmProvider, ModelId, ModelRegistry, ProviderEndpoint, RecordingMode, Shortcut,
 };
 
 mod change;
@@ -55,6 +55,7 @@ pub enum ThemePreference {
 #[serde(default)]
 pub struct SetupCheckpoint {
     pub step: SetupStep,
+    #[serde(deserialize_with = "speech_model")]
     pub model_id: ModelId,
     #[serde(deserialize_with = "input_device")]
     pub input_device: Option<AudioDeviceId>,
@@ -203,6 +204,9 @@ pub struct Settings {
     pub recording_mode: RecordingMode,
     /// Shortcut that cancels the active dictation; `None` turns it off.
     pub cancel_shortcut: Option<Shortcut>,
+    /// The speech model dictation records with; an unknown or cleanup model id loads as the
+    /// default.
+    #[serde(deserialize_with = "speech_model")]
     pub model_id: ModelId,
     pub start_minimized: bool,
     pub theme: ThemePreference,
@@ -267,6 +271,17 @@ pub(crate) fn known_cleanup_model(id: &str) -> ModelId {
 
 fn cleanup_model<'de, D: Deserializer<'de>>(deserializer: D) -> Result<ModelId, D::Error> {
     Ok(known_cleanup_model(&String::deserialize(deserializer)?))
+}
+
+pub(crate) fn known_speech_model(id: &str) -> ModelId {
+    ModelRegistry::builtin()
+        .speech_models()
+        .find(|model| model.id.as_str() == id)
+        .map_or_else(ModelId::default, |model| model.id.clone())
+}
+
+fn speech_model<'de, D: Deserializer<'de>>(deserializer: D) -> Result<ModelId, D::Error> {
+    Ok(known_speech_model(&String::deserialize(deserializer)?))
 }
 
 fn input_device<'de, D: Deserializer<'de>>(

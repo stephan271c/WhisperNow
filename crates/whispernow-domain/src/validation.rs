@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{LlmProvider, Settings, SetupCheckpoint, VocabularyReplacement};
+use crate::{Settings, SetupCheckpoint, VocabularyReplacement};
 
 /// Its message is shown beside the control that broke it.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -12,7 +12,7 @@ pub enum SettingsError {
     #[error("The cancel shortcut and the recording shortcut need different keys")]
     CancelIsRecordingShortcut,
     #[error("Model names cannot be empty or contain line breaks")]
-    ModelName { provider: LlmProvider },
+    ModelName,
     #[error("Enter the text to replace")]
     VocabularySource,
 }
@@ -23,18 +23,6 @@ impl Settings {
     pub fn problems(&self) -> Vec<SettingsError> {
         let mut problems = Vec::new();
         problems.extend(self.shortcut_problems());
-        for (&provider, settings) in &self.llm_provider_settings {
-            let bad_name = |model: &String| model.trim().is_empty() || model.contains(['\n', '\r']);
-            let mut unique_models = settings.saved_models.clone();
-            unique_models.sort_unstable();
-            unique_models.dedup();
-            if unique_models.len() != settings.saved_models.len()
-                || settings.model.as_ref().is_some_and(bad_name)
-                || settings.saved_models.iter().any(bad_name)
-            {
-                problems.push(SettingsError::ModelName { provider });
-            }
-        }
         if self
             .vocabulary_replacements
             .iter()
@@ -70,6 +58,13 @@ impl Settings {
         }
         problems
     }
+}
+
+/// A typed provider model name without its surrounding spaces, unless it is blank or spans
+/// lines.
+pub(crate) fn model_name(typed: &str) -> Option<&str> {
+    let name = typed.trim();
+    (!name.is_empty() && !name.contains(['\n', '\r'])).then_some(name)
 }
 
 impl SetupCheckpoint {

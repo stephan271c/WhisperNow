@@ -975,7 +975,7 @@ fn the_model_picker_chooses_adds_and_removes_saved_models() {
             },
             SettingChange::ChooseProviderModel {
                 provider,
-                model: "gpt-5.1".to_owned()
+                model: " gpt-5.1 ".to_owned()
             },
             SettingChange::RemoveProviderModel {
                 provider,
@@ -983,6 +983,32 @@ fn the_model_picker_chooses_adds_and_removes_saved_models() {
             },
         ]
     );
+}
+
+#[test]
+fn a_blank_model_name_is_refused_by_the_desktop_beside_the_picker() {
+    let mut page = shell(snapshot(Phase::Idle), configured());
+    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+    page.input("provider-model-name", "  ")
+        .fire("provider-model-form", "submit", "");
+    assert_eq!(
+        sent_changes(),
+        [SettingChange::ChooseProviderModel {
+            provider: LlmProvider::OpenAi,
+            model: "  ".to_owned()
+        }]
+    );
+    assert_eq!(text(&page.html(), "provider-model"), "gpt-5");
+
+    page.answer(
+        "update_settings",
+        Err::<SaveSettingsResponse, _>(AppError::new(
+            ErrorCategory::General,
+            "invalid_settings",
+            whispernow_domain::SettingsError::ModelName.to_string(),
+        )),
+    );
+    assert!(text(&page.html(), "provider-model-error").contains("cannot be empty"));
 }
 
 #[test]

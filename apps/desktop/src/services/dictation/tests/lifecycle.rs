@@ -765,17 +765,27 @@ fn setup_checkpoints_do_not_scan_unrelated_installed_artifacts() {
         backend.settings.view().settings.setup.checkpoint(),
         Some(&checkpoint)
     );
-    let unknown = SetupCheckpoint {
-        model_id: ModelId::new("unknown-model").expect("model id"),
-        ..SetupCheckpoint::default()
-    };
-    assert_eq!(
-        backend
-            .save_setup_checkpoint(unknown)
-            .expect_err("unsupported choice")
-            .code,
-        "unknown_model"
-    );
+}
+
+#[test]
+fn a_checkpoint_naming_no_speech_model_saves_the_default() {
+    use whispernow_domain::SetupCheckpoint;
+
+    let (backend, _root) = test_backend(Fixture::new());
+    for sent in ["unknown-model", whispernow_domain::DEFAULT_CLEANUP_MODEL_ID] {
+        let request: SetupCheckpoint = serde_json::from_value(serde_json::json!({
+            "step": "model",
+            "model_id": sent,
+        }))
+        .expect("checkpoint request");
+        let saved = backend.save_setup_checkpoint(request).expect("checkpoint");
+        let saved = saved.settings.setup.checkpoint().expect("unfinished setup");
+        assert_eq!(saved.model_id, ModelId::default(), "{sent}");
+        assert_eq!(
+            backend.state.snapshot().selected_model_id,
+            ModelId::default()
+        );
+    }
 }
 
 #[test]

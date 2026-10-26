@@ -5,11 +5,12 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use super::known_cleanup_model;
+use super::{known_cleanup_model, known_speech_model};
+use crate::validation::model_name;
 use crate::{
-    ApiKey, HistoryLimit, HistoryRetention, LlmProvider, ModelId, ModelRegistry, ProviderEndpoint,
-    ProviderSettings, RecordingMode, Settings, SetupProgress, Shortcut, ShortcutKey,
-    ShortcutModifier, VocabularyReplacement, WindowGeometry,
+    ApiKey, HistoryLimit, HistoryRetention, LlmProvider, ProviderEndpoint, ProviderSettings,
+    RecordingMode, Settings, SetupProgress, Shortcut, ShortcutKey, ShortcutModifier,
+    VocabularyReplacement, WindowGeometry,
 };
 
 /// Settings read from the Python release's `settings.json`, and the API keys it held in
@@ -28,12 +29,8 @@ impl PythonSettings {
     pub fn import(document: &Value) -> Self {
         let mut settings = Settings::default();
         settings.input_device = read(document, "input_device").unwrap_or(settings.input_device);
-        settings.model_id = read(document, "model_id").unwrap_or(settings.model_id);
-        if !ModelRegistry::builtin()
-            .speech_models()
-            .any(|model| model.id == settings.model_id)
-        {
-            settings.model_id = ModelId::default();
+        if let Some(model_id) = read::<String>(document, "model_id") {
+            settings.model_id = known_speech_model(&model_id);
         }
         settings.start_minimized =
             read(document, "start_minimized").unwrap_or(settings.start_minimized);
@@ -184,7 +181,7 @@ fn import_providers(document: &Value, settings: &mut Settings) -> BTreeMap<LlmPr
                 provider,
                 model,
                 read(entry, "api_base"),
-                read(entry, "saved_models").unwrap_or_default(),
+                &read::<Vec<String>>(entry, "saved_models").unwrap_or_default(),
             ),
         );
         if let Some(key) = text(entry, "api_key").and_then(|key| ApiKey::new(key).ok()) {
@@ -200,7 +197,7 @@ fn import_providers(document: &Value, settings: &mut Settings) -> BTreeMap<LlmPr
         let api_base = text(document, "llm_api_base");
         if model.is_some() || api_base.is_some() {
             let api_base = api_base.and_then(|api_base| ProviderEndpoint::parse(api_base).ok());
-            entry.insert(provider_settings(provider, model, api_base, Vec::new()));
+            entry.insert(provider_settings(provider, model, api_base, &[]));
         }
         if let Some(key) = text(document, "llm_api_key").and_then(|key| ApiKey::new(key).ok()) {
             api_keys.insert(provider, key);
@@ -209,20 +206,24 @@ fn import_providers(document: &Value, settings: &mut Settings) -> BTreeMap<LlmPr
     api_keys
 }
 
-/// Saves the active model with the others, every name without its routing prefix.
+/// Saves the active model with the others, every name once and without its routing prefix.
+/// A name that is blank or spans lines is dropped.
 fn provider_settings(
     provider: LlmProvider,
     model: Option<String>,
     api_base: Option<ProviderEndpoint>,
-    saved_models: Vec<String>,
+    saved: &[String],
 ) -> ProviderSettings {
-    let mut saved_models: Vec<String> = saved_models
-        .into_iter()
-        .map(|saved| provider_model(provider, &saved))
-        .collect();
-    let model = model
-        .map(|model| provider_model(provider, &model))
-        .filter(|model| !model.is_empty());
+    let mut saved_models = Vec::new();
+    for name in saved
+        .iter()
+        .filter_map(|saved| provider_model(provider, saved))
+    {
+        if !saved_models.contains(&name) {
+            saved_models.push(name);
+        }
+    }
+    let model = model.and_then(|model| provider_model(provider, &model));
     if let Some(model) = &model
         && !saved_models.contains(model)
     {
@@ -237,7 +238,7 @@ fn provider_settings(
 
 /// Drops the `LiteLLM` routing prefix the Python release saved with a model name
 /// (`LLMProcessor.format_model_name`), so `openrouter/auto` imports as `auto`.
-fn provider_model(provider: LlmProvider, model: &str) -> String {
+fn provider_model(provider: LlmProvider, model: &str) -> Option<String> {
     let model = model.trim();
     let prefix = match provider {
         LlmProvider::OpenAi => "openai/",
@@ -245,9 +246,9 @@ fn provider_model(provider: LlmProvider, model: &str) -> String {
         LlmProvider::Gemini => "gemini/",
         LlmProvider::Ollama => "ollama/",
         LlmProvider::OpenRouter => "openrouter/",
-        LlmProvider::LocalCleanup | LlmProvider::Custom => return model.to_owned(),
+        LlmProvider::LocalCleanup | LlmProvider::Custom => "",
     };
-    model.strip_prefix(prefix).unwrap_or(model).to_owned()
+    model_name(model.strip_prefix(prefix).unwrap_or(model)).map(str::to_owned)
 }
 
 fn read<T: DeserializeOwned>(document: &Value, name: &str) -> Option<T> {

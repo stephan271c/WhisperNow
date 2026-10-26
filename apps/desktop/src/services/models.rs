@@ -52,6 +52,7 @@ impl ModelLibrary {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn model_store(&self) -> &ModelStore {
         self.store.as_ref()
     }

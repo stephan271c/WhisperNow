@@ -193,6 +193,26 @@ fn python_model_names_lose_their_litellm_routing_prefix() {
 }
 
 #[test]
+fn python_saved_model_names_import_once_and_never_blank() {
+    let imported = PythonSettings::import(&json!({
+        "llm_provider_settings": {
+            "openai": {
+                "model": " ",
+                "saved_models": ["openai/gpt-4o", " ", "gpt-4o", "two\nlines", "openai/ gpt-5 "]
+            }
+        }
+    }));
+    assert_eq!(
+        imported.settings.provider_settings(LlmProvider::OpenAi),
+        &ProviderSettings {
+            model: None,
+            api_base: None,
+            saved_models: vec!["gpt-4o".to_owned(), "gpt-5".to_owned()],
+        }
+    );
+}
+
+#[test]
 fn python_setup_progress_and_local_cleanup_model_import() {
     let unfinished = PythonSettings::import(&json!({
         "first_run_complete": false,

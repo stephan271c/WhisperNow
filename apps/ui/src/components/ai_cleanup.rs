@@ -183,11 +183,8 @@ fn ProviderRows(
             form { id: MODEL_FORM, class: "model-picker",
                 onsubmit: move |event: FormEvent| {
                     event.prevent_default();
-                    let model = new_model().trim().to_owned();
-                    if !model.is_empty() {
-                        context.change_setting(SettingChange::ChooseProviderModel { provider, model });
-                        new_model.set(String::new());
-                    }
+                    context.change_setting(SettingChange::ChooseProviderModel { provider, model: new_model() });
+                    new_model.set(String::new());
                 },
                 if !models.is_empty() {
                     Select { value: active.clone(), placeholder: "Choose a model",

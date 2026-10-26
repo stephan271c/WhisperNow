@@ -235,10 +235,6 @@ impl Backend {
         &self,
         checkpoint: SetupCheckpoint,
     ) -> Result<SettingsView, AppError> {
-        self.models
-            .model_store()
-            .definition(&checkpoint.model_id)
-            .map_err(|_| unknown_model())?;
         let _transition = self.models.transition();
         let model_id = checkpoint.model_id.clone();
         let view = self.settings.save_setup_checkpoint(checkpoint)?;
@@ -260,12 +256,8 @@ impl Backend {
             ));
         }
         let before = self.settings.snapshot();
-        {
-            let state = self.state.lock();
-            if before.setup.is_complete() {
-                return Err(setup_already_complete());
-            }
-            state.phase.require_idle()?;
+        if before.setup.is_complete() {
+            return Err(setup_already_complete());
         }
         require_connected_device(self.audio.as_ref(), checkpoint.input_device.as_ref())?;
         let mut edited = before;

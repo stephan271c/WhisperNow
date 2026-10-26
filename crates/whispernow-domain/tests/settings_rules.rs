@@ -1,6 +1,6 @@
 use whispernow_domain::{
     ApiKey, CLEANUP_MODEL_IDS, CleanupTarget, DEFAULT_CLEANUP_MODEL_ID, InvalidApiKey, LlmProvider,
-    MissingCleanupField, ModelId, ProviderEndpoint, ProviderSettings, RecordingMode,
+    MissingCleanupField, ModelId, ModelRegistry, ProviderEndpoint, ProviderSettings, RecordingMode,
     RemoteProvider, SettingChange, Settings, SettingsError, SetupCheckpoint, Shortcut,
     ShortcutModifier, VocabularyReplacement,
 };
@@ -68,21 +68,48 @@ fn shortcuts_are_valid_unless_a_shortcut_rule_is_broken() {
 }
 
 #[test]
-fn model_names_are_checked_for_every_provider() {
+fn a_chosen_model_name_is_trimmed_and_refused_when_blank_or_multi_line() {
     let mut settings = Settings::default();
-    for saved in [
-        vec![" ".to_owned()],
-        vec!["same".to_owned(), "same".to_owned()],
+    let choose = |model: &str| SettingChange::ChooseProviderModel {
+        provider: LlmProvider::OpenRouter,
+        model: model.to_owned(),
+    };
+    for refused in [" ", "a\nb", "a\rb"] {
+        let change = choose(refused);
+        let mut edited = settings.clone();
+        change.clone().apply(&mut edited);
+        assert_eq!(edited, settings, "{refused:?} is not shown as chosen");
+        assert_eq!(change.check(&edited), Err(SettingsError::ModelName));
+    }
+
+    let change = choose("  auto ");
+    change.clone().apply(&mut settings);
+    assert_eq!(change.check(&settings), Ok(()));
+    let openrouter = settings.provider_settings(LlmProvider::OpenRouter);
+    assert_eq!(openrouter.model.as_deref(), Some("auto"));
+    assert_eq!(openrouter.saved_models, ["auto"]);
+}
+
+#[test]
+fn bad_saved_model_names_block_no_choice_or_removal() {
+    let mut saved = Settings::default();
+    saved
+        .provider_settings_mut(LlmProvider::OpenRouter)
+        .saved_models = vec![" ".to_owned(), "same".to_owned(), "same".to_owned()];
+    assert_eq!(saved.validate(), Ok(()));
+    for change in [
+        SettingChange::ChooseProviderModel {
+            provider: LlmProvider::OpenRouter,
+            model: "auto".to_owned(),
+        },
+        SettingChange::RemoveProviderModel {
+            provider: LlmProvider::OpenRouter,
+            model: "same".to_owned(),
+        },
     ] {
-        settings
-            .provider_settings_mut(LlmProvider::OpenRouter)
-            .saved_models = saved;
-        assert_eq!(
-            settings.validate(),
-            Err(SettingsError::ModelName {
-                provider: LlmProvider::OpenRouter
-            })
-        );
+        let mut edited = saved.clone();
+        change.clone().apply(&mut edited);
+        assert_eq!(change.check(&edited), Ok(()), "{change:?}");
     }
 }
 
@@ -244,6 +271,32 @@ fn an_unknown_cleanup_model_loads_as_the_default() {
 }
 
 #[test]
+fn an_unknown_or_cleanup_speech_model_loads_as_the_default() {
+    let speech = ModelRegistry::builtin()
+        .speech_models()
+        .map(|model| model.id.clone())
+        .find(|id| *id != ModelId::default())
+        .expect("another speech model");
+    let read = |id: &str| {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "model_id": id,
+            "setup": { "unfinished": { "model_id": id } },
+        }))
+        .expect("settings");
+        let checkpoint = settings.setup.checkpoint().expect("unfinished setup");
+        (settings.model_id.clone(), checkpoint.model_id.clone())
+    };
+    assert_eq!(read(speech.as_str()), (speech.clone(), speech));
+    for saved in ["", "speech-model-gone", DEFAULT_CLEANUP_MODEL_ID] {
+        assert_eq!(
+            read(saved),
+            (ModelId::default(), ModelId::default()),
+            "{saved:?}"
+        );
+    }
+}
+
+#[test]
 fn a_change_is_refused_only_for_a_rule_it_breaks() {
     let saved = Settings {
         vocabulary_replacements: vec![VocabularyReplacement::new(" ", "x")],
@@ -281,9 +334,7 @@ fn a_change_is_refused_only_for_a_rule_it_breaks() {
             provider: LlmProvider::Gemini,
             model: "a\nb".to_owned(),
         }),
-        Err(SettingsError::ModelName {
-            provider: LlmProvider::Gemini
-        })
+        Err(SettingsError::ModelName)
     );
 }
 

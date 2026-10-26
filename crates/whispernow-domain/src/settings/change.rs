@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::known_cleanup_model;
+use crate::validation::model_name;
 use crate::{
     AudioDeviceId, HistoryLimit, HistoryRetention, LlmProvider, ModelId, ProviderEndpoint,
     RecordingMode, Settings, SettingsError, Shortcut, ThemePreference, VocabularyReplacement,
@@ -57,7 +58,11 @@ impl SettingChange {
             Self::KeepAudio(keep_audio) => settings.keep_audio = keep_audio,
             Self::ActiveProvider(provider) => settings.llm_provider = provider,
             Self::ChooseProviderModel { provider, model } => {
-                settings.provider_settings_mut(provider).choose_model(model);
+                if let Some(model) = model_name(&model) {
+                    settings
+                        .provider_settings_mut(provider)
+                        .choose_model(model.to_owned());
+                }
             }
             Self::RemoveProviderModel { provider, model } => {
                 settings
@@ -76,9 +81,15 @@ impl SettingChange {
         }
     }
 
-    /// The first rule `edited`, the settings this change made, breaks in what the change
-    /// edits. A rule broken elsewhere, such as by a hand edit, does not refuse it.
+    /// The first rule this change breaks: a chosen model name as sent, and otherwise what
+    /// `edited`, the settings it made, breaks in what the change edits. A rule broken
+    /// elsewhere, such as by a hand edit, does not refuse it.
     pub fn check(&self, edited: &Settings) -> Result<(), SettingsError> {
+        if let Self::ChooseProviderModel { model, .. } = self
+            && model_name(model).is_none()
+        {
+            return Err(SettingsError::ModelName);
+        }
         edited
             .problems()
             .into_iter()
@@ -87,22 +98,15 @@ impl SettingChange {
     }
 
     fn can_break(&self, problem: &SettingsError) -> bool {
-        match (self, problem) {
+        matches!(
+            (self, problem),
             (
                 Self::RecordingShortcut { .. },
                 SettingsError::RecordingShortcut | SettingsError::CancelIsRecordingShortcut,
-            )
-            | (
+            ) | (
                 Self::CancelShortcut(_),
                 SettingsError::CancelShortcut | SettingsError::CancelIsRecordingShortcut,
-            )
-            | (Self::Vocabulary(_), SettingsError::VocabularySource) => true,
-            (
-                Self::ChooseProviderModel { provider, .. }
-                | Self::RemoveProviderModel { provider, .. },
-                SettingsError::ModelName { provider: broken },
-            ) => provider == broken,
-            _ => false,
-        }
+            ) | (Self::Vocabulary(_), SettingsError::VocabularySource)
+        )
     }
 }
