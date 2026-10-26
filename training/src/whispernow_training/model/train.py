@@ -207,6 +207,8 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
         report_to="none",
         seed=config.seed,
         dataloader_num_workers=2,
+        # modal_train.py's containers have four CPUs.
+        dataset_num_proc=4,
     )
     callbacks = [*callbacks, StopOnNonFiniteGradients(),
                  *([] if config.max_steps else [EpochCheckpoints(out, config.epochs, tokenizer)])]
@@ -235,7 +237,11 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
     if config.pause_at_step and trainer.state.global_step == config.pause_at_step < trainer.state.max_steps:
         return {"paused_at": trainer.state.global_step, "resumed_from": resumed_from, "seconds": round(seconds),
                 "peak_gpu_gb": round(torch.cuda.max_memory_allocated() / 1e9, 2)}
-    final_eval = trainer.evaluate()
+    last_eval = next((entry for entry in reversed(trainer.state.log_history) if "eval_loss" in entry), None)
+    if last_eval is not None and last_eval["step"] == trainer.state.global_step:
+        final_eval_loss = last_eval["eval_loss"]
+    else:
+        final_eval_loss = trainer.evaluate()["eval_loss"]
     trainable = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
 
     trained = trainer.model
@@ -256,7 +262,7 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
         "seconds": round(seconds),
         "peak_gpu_gb": round(torch.cuda.max_memory_allocated() / 1e9, 2),
         "trainable_parameters": trainable,
-        "final_eval_loss": final_eval["eval_loss"],
+        "final_eval_loss": final_eval_loss,
         "log_history": trainer.state.log_history,
     }
     (out / "train.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

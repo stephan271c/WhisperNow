@@ -1,4 +1,4 @@
-"""Stage 2: adapters for existing datasets that fill aawaaz's gaps.
+"""Adapters for existing datasets that fill aawaaz's gaps.
 
 - handy: short dictations, no-edit rows, dictated questions and self-corrections.
   Its real-speech rows re-record Switchboard-1 utterances (LDC-licensed text) and

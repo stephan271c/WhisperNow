@@ -1,6 +1,6 @@
 """CPU speed and English WER of each catalog speech model, decoded as the app does.
 
-The audio is the probe's Kokoro dictations (`asr_probe.py`), cut by the app's segmenter and decoded
+The audio is the probe's Kokoro dictations (`probe`), cut by the app's segmenter and decoded
 with the app's recognizer settings: CPU, four threads, greedy search, Whisper with automatic
 language. Speed is seconds of segment audio per second of decoding. The synthetic speech is
 cleaner than a person, so WER here only ranks the models; the app's accuracy ratings come from

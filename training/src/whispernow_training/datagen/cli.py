@@ -171,7 +171,7 @@ def cmd_cutoff(args: argparse.Namespace) -> None:
     if args.step == "run":
         _print_counts(f"shard {args.shard}:", cutoff.run(shard=args.shard, shards=args.shards, tts_provider=args.tts_provider))
     elif args.step == "check":
-        _print_counts("Mercury Decide:", asyncio.run(cutoff.check()))
+        _print_counts("Mercury Decide:", asyncio.run(cutoff.check())[0])
     elif args.step == "top-up":
         print(json.dumps(cutoff.top_up(args.shards, args.tts_provider), indent=1))
     elif args.step == "bench":
@@ -315,7 +315,6 @@ def main() -> None:
         run=cmd_sync_teacher
     )
 
-    # Sources
     commands.add_parser("import-aawaaz", help="import and normalize aawaaz").set_defaults(run=cmd_import_aawaaz)
     judge = commands.add_parser("judge-aawaaz", help="flag aawaaz rows below its own standard")
     judge.add_argument("--limit", type=int, default=0, help="judge only the first N rows")
@@ -339,7 +338,6 @@ def main() -> None:
     )
     add.set_defaults(run=lambda args: asyncio.run(_add_public(args)))
 
-    # Generated rows
     gen = commands.add_parser("generate", help="generate gap and hard-case rows; resumes where it stopped")
     gen.add_argument(
         "--category", action="append", choices=sorted({*generate.TARGETS, *(c for run in generate.RUN_TARGETS.values() for c in run)}),
@@ -366,7 +364,6 @@ def main() -> None:
     compose_parser.add_argument("--category", action="append", choices=compose.CATEGORIES, help="only this category (repeatable)")
     compose_parser.set_defaults(run=lambda args: asyncio.run(_compose(args)))
 
-    # References
     relabel_parser = commands.add_parser(
         "relabel",
         help="rewrite every reference with gpt-6.1-sol at high reasoning (every role; the command refuses "
@@ -393,7 +390,6 @@ def main() -> None:
     review_parser.add_argument("--limit", type=int, default=0, help="review only the first N candidates of each kind")
     review_parser.set_defaults(run=lambda args: asyncio.run(_review_refs(args)))
 
-    # Speech (needs --extra audio)
     probe = commands.add_parser("probe", help="speak sampled inputs with Kokoro and transcribe them as the app does")
     probe.add_argument(
         "--model", choices=("parakeet", "whisper", "qwen3"), default="parakeet",
@@ -437,7 +433,6 @@ def main() -> None:
     _speech_options(cutoff_parser)
     cutoff_parser.set_defaults(run=cmd_cutoff)
 
-    # Rounds
     weak_spots = commands.add_parser(
         "weak-spots", help="round 3's new train rows: disfl-qa or ami (label and gate), repair (label the heard "
         "records' raw recognizer text), check (the round's generated rows), top-up (replace the rows check drops), report"
@@ -462,7 +457,6 @@ def main() -> None:
     build_parser.add_argument("--with-sotto", action="store_true", help="base: include sotto rows if add-public added them")
     build_parser.set_defaults(run=cmd_build)
 
-    # Benchmarks and checks
     bench_parser = commands.add_parser(
         "bench",
         help="the held-out benchmarks: ami (label AMI turns), noise (generate), probe (Kokoro and Parakeet, "

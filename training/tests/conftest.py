@@ -49,7 +49,6 @@ class FakeLlm:
 
 
 def judge_items(messages):
-    """The item dicts a judge request carries."""
     lines = messages[-1]["content"].split("\n")[1:]
     return [json.loads(line) for line in lines]
 

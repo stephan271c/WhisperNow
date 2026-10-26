@@ -1,4 +1,4 @@
-"""Stage 1: import `shantanugoel/aawaaz-transcript-cleanup-dataset` and normalize its outputs."""
+"""Import `shantanugoel/aawaaz-transcript-cleanup-dataset` and normalize its outputs."""
 
 from __future__ import annotations
 

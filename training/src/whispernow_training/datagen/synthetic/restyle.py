@@ -1,4 +1,4 @@
-"""Step 7: give a share of the aawaaz inputs the punctuated style of the app's recognizers.
+"""Give a share of the aawaaz inputs the punctuated style of the app's recognizers.
 
 aawaaz inputs are lowercase and unpunctuated, but Parakeet, Whisper and Qwen3-ASR all write
 cased, punctuated text, each in its own way (see `probe` and the README). The teacher rewrites a

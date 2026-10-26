@@ -53,11 +53,8 @@ def _callbacks(timings: list | None = None, save_at: int = 0) -> list:
     from transformers import TrainerCallback
 
     class CommitOnSave(TrainerCallback):
-        """Commits the runs Volume after each checkpoint, so a restarted container sees it.
-
-        A 31 GB checkpoint took 266 s to commit on an H100 (and 98 s to write), so the commit runs
-        in the background while training goes on.
-        """
+        """A 31 GB checkpoint took 266 s to commit on an H100 (and 98 s to write), so the commit runs in the
+        background while training goes on."""
 
         def __init__(self) -> None:
             self.thread: threading.Thread | None = None
@@ -128,9 +125,7 @@ def train_run(config: str, name: str, overrides: list[str]) -> dict:
 
 @app.function(gpu="H100", timeout=3600, **CONTAINER)
 def probe(config: str, batch_sizes: list[int], steps: int, save: bool) -> list[dict]:
-    """Times `steps` optimizer steps per micro-batch size, smallest first, until one runs out of memory.
-
-    The length-grouped sampler puts the longest row in the first batch, so a short run meets the
+    """The length-grouped sampler puts the longest row in the first batch, so a short run meets the
     peak memory. With `save`, the first size also writes one checkpoint to the runs Volume, to time it.
     """
     import gc

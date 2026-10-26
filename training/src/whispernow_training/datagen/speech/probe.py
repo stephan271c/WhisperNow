@@ -221,7 +221,7 @@ def _keeps_capital(text: str) -> bool:
 
 
 def join_segment_texts(texts) -> str:
-    """`join_segment_texts`: a segment that continues a sentence starts in lower case."""
+    """Parity with `join_segment_texts` in whispernow-core `workflow/join.rs`: a segment that continues a sentence starts in lower case."""
     joined = ""
     for text in (t.strip() for t in texts):
         if not text:
@@ -349,7 +349,6 @@ class PhononSpeaker(Speaker):
 
 
 def speaker(tts: str, provider: str = "cpu") -> Speaker:
-    """A Kokoro (on `provider`) or Phonon speaker."""
     if tts == "kokoro":
         return KokoroSpeaker(provider, KOKORO_GPU_DIR if provider == "cuda" else KOKORO_DIR)
     if tts == "phonon":
@@ -618,7 +617,6 @@ def word_error_rate(spoken: str, heard: str) -> float:
 
 
 def report(records: list[dict]) -> dict:
-    """A recognizer's habits over its probe rows."""
     from collections import Counter
 
     out: dict = {"rows": len(records), "seconds": round(sum(r["seconds"] for r in records))}

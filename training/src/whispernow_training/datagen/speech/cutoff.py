@@ -35,13 +35,13 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from functools import cache
+from functools import cache, cached_property
 from pathlib import Path
 
 import httpx
 
 from ...text_rules import FILLER_TOKEN
-from . import heard
+from . import heard, probe
 from .. import mercury, paths
 from .probe import ONES, TENS
 from ..synthetic.inject import _core, _raw_token
@@ -67,6 +67,8 @@ ROWS = 3000
 SHORT_SHARE = 0.5
 SHORT = "<50"
 BENCH_ROWS = 150
+# Candidates `bench` cuts before each Mercury check.
+BENCH_CHUNK = 20
 SEED = 121
 # Words spoken on each side of a cut word.
 CONTEXT = 4
@@ -283,7 +285,10 @@ def check_state(text: str, cut: dict) -> str | None:
     return None
 
 
-def verdicts() -> dict[tuple[str, str, int, str], float]:
+Verdicts = dict[tuple[str, str, int, str], float]
+
+
+def verdicts() -> Verdicts:
     """Mercury Decide's answers, by row id, input, cut and question."""
     if not CHECK.exists():
         return {}
@@ -291,7 +296,7 @@ def verdicts() -> dict[tuple[str, str, int, str], float]:
     return {(v["id"], v["input"], v["cut"], v["question"]): v["p"] for v in rows}
 
 
-def screen(record: dict, seen: dict) -> str | None:
+def screen(record: dict, seen: Verdicts) -> str | None:
     """Why Mercury Decide failed a kept record, "unchecked" while a question is unanswered, or None when it passed.
     A cut `check_state` cannot find fails the record, since it can never be asked about."""
     key, unchecked = _input_key(record["input"]), False
@@ -307,17 +312,20 @@ def screen(record: dict, seen: dict) -> str | None:
     return "unchecked" if unchecked else None
 
 
-async def check(rows: Sequence[dict] | None = None, concurrency: int = 8) -> Counter:
-    """Asks Mercury Decide every question about every cut of the kept records it has not answered for, one call each."""
-    seen = verdicts()
+async def check(rows: Sequence[dict] | None = None, seen: Verdicts | None = None,
+                concurrency: int = 8) -> tuple[Counter, Verdicts]:
+    """Asks Mercury Decide every question about every cut of the kept records it has not answered for, one call each;
+    returns the counts and the new answers."""
+    seen = verdicts() if seen is None else seen
     questions = _check_spec()["questions"]
     todo = [
         (r, i, question) for r in (records() if rows is None else rows) if r["kept"] for i in range(len(r["cuts"]))
         for question in questions if (r["id"], _input_key(r["input"]), i, question) not in seen
     ]
     counts: Counter = Counter()
+    new: Verdicts = {}
     if not todo:
-        return counts
+        return counts, new
     key = mercury.openrouter_key()
     semaphore = asyncio.Semaphore(concurrency)
     CHECK.parent.mkdir(parents=True, exist_ok=True)
@@ -337,10 +345,11 @@ async def check(rows: Sequence[dict] | None = None, concurrency: int = 8) -> Cou
                     "model": mercury.MODEL}
             with CHECK.open("a", encoding="utf-8") as sink:
                 sink.write(json.dumps(line) + "\n")
+            new[line["id"], line["input"], i, question] = p
             counts[f"{question} {'flagged' if p >= CHECK_LIMIT else 'passed'}"] += 1
 
         await asyncio.gather(*(one(*item) for item in todo))
-    return counts
+    return counts, new
 
 
 def pool(base_dir: Path = paths.ROUND3) -> list[Example]:
@@ -388,55 +397,74 @@ def records() -> list[dict]:
 
 
 def _speakers(tts_provider: str) -> dict:
-    from .probe import speaker
+    return {"kokoro": probe.speaker("kokoro", tts_provider), "phonon": probe.speaker("phonon")}
 
-    return {"kokoro": speaker("kokoro", tts_provider), "phonon": speaker("phonon")}
+
+class Cutter:
+    """What `run` reads: the pool, the records and verdicts as of `refresh`, and the vocabulary, speakers and
+    recognizer, built for the first row a shard cuts. `top_up` keeps one for all its shards and rounds; the shards
+    cut disjoint rows, so one snapshot of the records serves every shard of a round."""
+
+    def __init__(self, tts_provider: str = "cuda") -> None:
+        self.tts_provider = tts_provider
+        self.rows = pool()
+        self.by_id = {e.id: e for e in self.rows}
+        self.bucket_targets = targets(self.rows, ROWS, SHORT_SHARE)
+        self.refresh()
+
+    def refresh(self) -> None:
+        self.tried, self.seen = records(), verdicts()
+
+    @cached_property
+    def vocab(self) -> Vocabulary:
+        return vocabulary(self.rows)
+
+    @cached_property
+    def models(self) -> tuple[dict, probe.Recognizer]:
+        return _speakers(self.tts_provider), probe.Recognizer("parakeet", "cpu")
+
+    def run(self, shard: int = 0, shards: int = 1) -> Counter:
+        """Cuts this shard's share of the pool in pool order, skipping full buckets, until each length bucket has its
+        share of its target; resumes past rows any shard's file has. A row whose cuts fail, or that `check` failed, is
+        recorded and the next one tried."""
+        mine = {e.id for i, e in enumerate(self.rows) if i % shards == shard}
+        want = {name: math.ceil(target / shards) for name, target in self.bucket_targets.items()}
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        out = OUT_DIR / f"cutoff.{shard}.jsonl"
+        done = {r["id"] for r in self.tried}
+        kept = Counter(
+            bucket(self.by_id[r["id"]]) for r in self.tried
+            if r["id"] in mine and r["kept"] and screen(r, self.seen) in (None, "unchecked")
+        )
+
+        def full() -> bool:
+            return all(kept[name] >= count for name, count in want.items())
+
+        counts: Counter = Counter()
+        if full():
+            return counts
+        with out.open("a", encoding="utf-8") as sink:
+            for e in (e for i, e in enumerate(self.rows) if i % shards == shard and e.id not in done):
+                name = bucket(e)
+                if kept[name] >= want[name]:
+                    continue
+                record = cut_row(e, *self.models, self.vocab)
+                sink.write(json.dumps(record, ensure_ascii=False) + "\n")
+                sink.flush()
+                kept[name] += record["kept"]
+                counts[f"{name} {'kept' if record['kept'] else 'short'}"] += 1
+                total = sum(min(kept[b], count) for b, count in want.items())
+                print(f"shard {shard}: {total}/{sum(want.values())} kept; {name} {kept[name]}/{want[name]}, {e.id} "
+                      f"{record['tts']}: {'kept' if record['kept'] else record['reason']}", flush=True)
+                if full():
+                    break
+        if not full():
+            print(f"shard {shard}: the pool ran out with {dict(kept)} of {want}", flush=True)
+        return counts
 
 
 def run(shard: int = 0, shards: int = 1, tts_provider: str = "cuda") -> Counter:
-    """Cuts this shard's share of the pool in pool order, skipping full buckets, until each length bucket has its
-    share of its target; resumes past rows any shard's file has. A row whose cuts fail, or that `check` failed, is
-    recorded and the next one tried."""
-    from .probe import Recognizer
-
-    rows = pool()
-    by_id = {e.id: e for e in rows}
-    mine = {e.id for i, e in enumerate(rows) if i % shards == shard}
-    want = {name: math.ceil(target / shards) for name, target in targets(rows, ROWS, SHORT_SHARE).items()}
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / f"cutoff.{shard}.jsonl"
-    tried, seen = records(), verdicts()
-    done = {r["id"] for r in tried}
-    kept = Counter(
-        bucket(by_id[r["id"]]) for r in tried if r["id"] in mine and r["kept"] and screen(r, seen) in (None, "unchecked")
-    )
-
-    def full() -> bool:
-        return all(kept[name] >= count for name, count in want.items())
-
-    counts: Counter = Counter()
-    if full():
-        return counts
-    vocab = vocabulary(rows)
-    speakers, recognizer = _speakers(tts_provider), Recognizer("parakeet", "cpu")
-    with out.open("a", encoding="utf-8") as sink:
-        for e in (e for i, e in enumerate(rows) if i % shards == shard and e.id not in done):
-            name = bucket(e)
-            if kept[name] >= want[name]:
-                continue
-            record = cut_row(e, speakers, recognizer, vocab)
-            sink.write(json.dumps(record, ensure_ascii=False) + "\n")
-            sink.flush()
-            kept[name] += record["kept"]
-            counts[f"{name} {'kept' if record['kept'] else 'short'}"] += 1
-            total = sum(min(kept[b], count) for b, count in want.items())
-            print(f"shard {shard}: {total}/{sum(want.values())} kept; {name} {kept[name]}/{want[name]}, {e.id} "
-                  f"{record['tts']}: {'kept' if record['kept'] else record['reason']}", flush=True)
-            if full():
-                break
-    if not full():
-        print(f"shard {shard}: the pool ran out with {dict(kept)} of {want}", flush=True)
-    return counts
+    return Cutter(tts_provider).run(shard, shards)
 
 
 def load() -> list[dict]:
@@ -456,17 +484,20 @@ def load() -> list[dict]:
 
 def top_up(shards: int = 2, tts_provider: str = "cuda") -> dict:
     """Checks every kept row and cuts more where the check failed some, until each bucket has its target of passed rows."""
+    cutter = Cutter(tts_provider)
     while True:
         for _ in range(3):
-            counts = asyncio.run(check())
+            counts, new = asyncio.run(check(cutter.tried, cutter.seen))
+            cutter.seen.update(new)
             print(f"check: {dict(counts)}", flush=True)
             if not counts["no answer"]:
                 break
         added: Counter = Counter()
         for shard in range(shards):
-            added += run(shard, shards, tts_provider)
+            added += cutter.run(shard, shards)
         if not added:
             return report()
+        cutter.refresh()
 
 
 def _piece_kind(cut: dict) -> str:
@@ -498,35 +529,42 @@ def report() -> dict:
 
 def bench(n: int = BENCH_ROWS, tts_provider: str = "cuda") -> int:
     """`n` test rows of 15-120 words with cuts `check` passed, each with its own id and a `cutoff_from:` tag naming
-    its test row."""
-    from .probe import Recognizer
-
+    its test row. Candidates are cut and checked `BENCH_CHUNK` at a time and taken in their shuffled order, so the
+    rows are those checking one candidate at a time would choose."""
     vocab = vocabulary(read_examples(paths.ROUND3 / "train.jsonl"))
     rows = sorted(
         (e for e in read_examples(paths.ROUND3 / "test.jsonl") if e.output != EMPTY and 15 <= len(e.input.split()) <= 120),
         key=lambda e: e.id,
     )
     random.Random(SEED + 1).shuffle(rows)
-    speakers, recognizer = _speakers(tts_provider), Recognizer("parakeet", "cpu")
+    speakers, recognizer = _speakers(tts_provider), probe.Recognizer("parakeet", "cpu")
+    seen = verdicts()
+    candidates = iter(rows)
     out, cuts = [], []
-    for e in rows:
-        record = cut_row(e, speakers, recognizer, vocab, SEED + 1)
-        if not record["kept"]:
-            continue
-        record = {**record, "id": example_id(TAG, record["input"])}
-        asyncio.run(check([record]))
-        if screen(record, verdicts()) is not None:
-            continue
-        row = Example(
-            id=record["id"], input=record["input"], output=e.output, source=e.source,
-            category=e.category, license=e.license, tags=[*e.tags, TAG, f"cutoff_from:{e.id}", f"tts:{record['tts']}"],
-            layout=e.layout, seed_group=e.seed_group, split="test",
-        )
-        out.append(row)
-        cuts.append({"id": row.id, "origin": e.id, "tts": record["tts"], "cuts": record["cuts"]})
-        print(f"{len(out)}/{n} {e.id} {record['tts']}", flush=True)
-        if len(out) == n:
+    while len(out) < n:
+        chunk = []
+        for e in candidates:
+            record = cut_row(e, speakers, recognizer, vocab, SEED + 1)
+            if record["kept"]:
+                chunk.append((e, {**record, "id": example_id(TAG, record["input"])}))
+                if len(chunk) == BENCH_CHUNK:
+                    break
+        if not chunk:
             break
+        seen.update(asyncio.run(check([record for _, record in chunk], seen))[1])
+        for e, record in chunk:
+            if screen(record, seen) is not None:
+                continue
+            row = Example(
+                id=record["id"], input=record["input"], output=e.output, source=e.source,
+                category=e.category, license=e.license, tags=[*e.tags, TAG, f"cutoff_from:{e.id}", f"tts:{record['tts']}"],
+                layout=e.layout, seed_group=e.seed_group, split="test",
+            )
+            out.append(row)
+            cuts.append({"id": row.id, "origin": e.id, "tts": record["tts"], "cuts": record["cuts"]})
+            print(f"{len(out)}/{n} {e.id} {record['tts']}", flush=True)
+            if len(out) == n:
+                break
     write_examples(BENCH, out)
     BENCH_CUTS.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cuts), encoding="utf-8")
     return len(out)

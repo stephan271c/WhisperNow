@@ -1,4 +1,4 @@
-"""Step 9: a real-dictation test set from the local history.
+"""A real-dictation test set from the local history.
 
 This is personal data. It is written under `data/real/` (gitignored), the build
 never reads it, and `publish` never uploads it. The database is opened read-only.

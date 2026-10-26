@@ -62,7 +62,7 @@ def bench(url: str, repeats: int = 5) -> dict:
     result: dict = {}
     # A fresh connection per request: llama-server closes kept-alive connections after a few requests.
     with httpx.Client(timeout=600, limits=httpx.Limits(max_keepalive_connections=0)) as client:
-        _time_one(client, url, SHORT)  # warm-up
+        _time_one(client, url, SHORT)
         for name, transcript in cases().items():
             runs = [_time_one(client, url, transcript) for _ in range(repeats)]
             result[name] = {
@@ -83,7 +83,7 @@ def bench_teacher(repeats: int = 5) -> dict:
         settings = LlmSettings.from_env()
         result: dict = {"model": settings.model, "reasoning": settings.reasoning}
         async with LlmClient(settings) as llm:
-            await llm.complete(teacher_messages(SHORT), cached=False)  # warm-up
+            await llm.complete(teacher_messages(SHORT), cached=False)
             for name, transcript in cases().items():
                 seconds, output = [], ""
                 for _ in range(repeats):

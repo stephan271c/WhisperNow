@@ -1,8 +1,8 @@
 import asyncio
 import json
+import random
 from collections import Counter
 from types import SimpleNamespace
-
 
 from whispernow_training.datagen.speech import probe, cutoff
 from whispernow_training.datagen.schema import Example
@@ -186,17 +186,19 @@ def test_check_asks_each_question_once_per_cut_and_a_flag_fails_the_row(tmp_path
            "cuts": [{"word": "night", "prefix": "ni", "piece": ["nine"]}, {"word": "stairs", "prefix": "sta", "piece": ["sta"]}]}
     good = {"id": "b", "kept": True, "input": "take the sta stairs", "cuts": [{"word": "stairs", "prefix": "sta", "piece": ["sta"]}]}
 
-    asyncio.run(cutoff.check([bad, good]))
+    _, new = asyncio.run(cutoff.check([bad, good]))
     assert len(asked) == 3 * 3
-    asyncio.run(cutoff.check([bad, good]))
-    assert len(asked) == 9
     seen = cutoff.verdicts()
+    assert new == seen
+    assert asyncio.run(cutoff.check([bad, good], seen)) == (Counter(), {})
+    assert len(asked) == 9
     assert cutoff.screen(bad, seen) == "fact: 'nine' before 'night'" and cutoff.screen(good, seen) is None
     assert cutoff.screen({**good, "input": "take the sta stairs now"}, seen) == "unchecked"
 
 
-def test_a_row_the_check_failed_is_replaced_by_the_next_in_its_bucket(tmp_path, monkeypatch):
+def test_top_up_replaces_a_row_the_check_failed_and_loads_the_models_once(tmp_path, monkeypatch):
     rows = _rows(12, 6)
+    loads = Counter()
 
     def cut_row(example, speakers, recognizer, vocab, seed=cutoff.SEED):
         kept = int(example.id[1:]) % 3 != 0
@@ -209,17 +211,23 @@ def test_a_row_the_check_failed_is_replaced_by_the_next_in_its_bucket(tmp_path, 
     monkeypatch.setattr(cutoff, "SHORT_SHARE", 1.0)
     monkeypatch.setattr(cutoff, "pool", lambda: rows)
     monkeypatch.setattr(cutoff, "cut_row", cut_row)
-    monkeypatch.setattr(cutoff, "_speakers", lambda provider: {})
-    monkeypatch.setattr(probe, "Recognizer", lambda *args: None)
+    monkeypatch.setattr(cutoff, "_speakers", lambda provider: loads.update(["speakers"]) or {})
+    monkeypatch.setattr(probe, "Recognizer", lambda *args: loads.update(["recognizer"]))
+    monkeypatch.setattr(cutoff, "vocabulary", lambda rows: loads.update(["vocabulary"]) or VOCAB)
     monkeypatch.setattr(cutoff, "screen", lambda record, seen: "fact: 'x' before 'y'" if record["id"] == "s01" else None)
 
-    async def check(rows=None, concurrency=8):
-        return Counter()
+    async def check(rows=None, seen=None, concurrency=8):
+        loads["round"] += 1
+        return Counter(), {}
 
     monkeypatch.setattr(cutoff, "check", check)
     report = cutoff.top_up(shards=2)
     assert [r["id"] for r in cutoff.load()] == ["s02", "s04", "s05", "s07", "m01", "m02"]
     assert report["by length"] == {"<50": "4/4", "50-150": "2/2"}
+    # Two rounds cut rows (the second replaces s01); the third finds every bucket full.
+    assert loads == {"round": 3, "speakers": 1, "recognizer": 1, "vocabulary": 1}
+    cutoff.top_up(shards=2)
+    assert loads == {"round": 4, "speakers": 1, "recognizer": 1, "vocabulary": 1}
 
 
 def test_one_shard_run_skips_rows_another_shard_cut_and_load_takes_each_row_once(tmp_path, monkeypatch):
@@ -247,3 +255,44 @@ def test_one_shard_run_skips_rows_another_shard_cut_and_load_takes_each_row_once
     assert first == ["s01", "s03", "m01"] and not set(tried[3:]) & set(first)
     loaded = [r["id"] for r in cutoff.load()]
     assert len(loaded) == len(set(loaded)) == 6
+
+
+def test_bench_checks_candidates_in_chunks_and_chooses_the_rows_one_at_a_time_checks_would(tmp_path, monkeypatch):
+    test_rows = [row(f"t{i:02d}", "take the sta stairs " * 4, "Take the stairs.") for i in range(40)]
+    cut, clients = [], []
+
+    def kept(id_):
+        return int(id_[1:]) % 4 != 0
+
+    def flagged(id_):
+        return int(id_[1:]) % 3 == 0
+
+    def cut_row(example, speakers, recognizer, vocab, seed=cutoff.SEED):
+        cut.append(example.id)
+        return {"id": example.id, "tts": "written", "kept": kept(example.id), "rejected": {}, "reason": "0 of 1 cuts",
+                "input": f"{example.id} take the sta stairs", "cuts": [{"word": "stairs", "prefix": "sta", "piece": ["sta"]}]}
+
+    async def decide(client, key, state, question):
+        clients.append(client)
+        return 0.9 if flagged(state.split("TRANSCRIPT:\n")[1].split()[0]) else 0.01
+
+    monkeypatch.setattr(cutoff, "read_examples", lambda path: test_rows if path.name == "test.jsonl" else [])
+    monkeypatch.setattr(cutoff, "cut_row", cut_row)
+    monkeypatch.setattr(cutoff, "_speakers", lambda provider: {})
+    monkeypatch.setattr(probe, "Recognizer", lambda *args: None)
+    monkeypatch.setattr(cutoff.mercury, "decide", decide)
+    monkeypatch.setattr(cutoff.mercury, "openrouter_key", lambda: "k")
+    for name, file in (("CHECK", "check.jsonl"), ("BENCH", "bench.jsonl"), ("BENCH_CUTS", "cuts.jsonl")):
+        monkeypatch.setattr(cutoff, name, tmp_path / file)
+    monkeypatch.setattr(cutoff, "BENCH_CHUNK", 4)
+
+    assert cutoff.bench(n=6) == 6
+    order = sorted(test_rows, key=lambda e: e.id)
+    random.Random(cutoff.SEED + 1).shuffle(order)
+    order = [e.id for e in order]
+    chosen = [json.loads(line)["origin"] for line in cutoff.BENCH_CUTS.read_text().splitlines()]
+    assert chosen == [id_ for id_ in order if kept(id_) and not flagged(id_)][:6]
+    assert cut == order[: len(cut)]
+    checked = [id_ for id_ in cut if kept(id_)]
+    assert len({id(client) for client in clients}) == len(checked) / 4
+    assert checked.index(chosen[-1]) >= len(checked) - 4
