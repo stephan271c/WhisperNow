@@ -1,93 +1,105 @@
+![WhisperNow: Write as fast as you think.](brand/banner/whispernow-banner.png)
+
 # WhisperNow
 
-WhisperNow is a private, local-first shortcut-driven dictation application for Windows, macOS, and
-Linux. The 0.2 candidate is built with Rust, Tauri v2, Dioxus, and
-the official `k2-fsa/sherpa-onnx` Rust bindings. Its design is in
-[`docs/architecture.md`](docs/architecture.md).
+WhisperNow turns your speech into text and pastes it wherever you're typing. It runs on Windows,
+macOS and Linux, and your audio never leaves your computer.
 
-## Target 0.2 packages (not yet released)
+## Demo
 
-| Platform | Architectures | Official packages |
+<!-- Demo video goes here. -->
+
+## Features
+
+- **Works in any app.** Hold <kbd>Ctrl</kbd> + <kbd>Space</kbd> (<kbd>Ctrl</kbd> +
+  <kbd>Option</kbd> + <kbd>Space</kbd> on macOS) while you speak, or switch to toggle mode:
+  press once to start and again to stop. The text is pasted into the selected text field, and
+  your clipboard is preserved.
+- **Speech recognition on your computer.** Pick from nine speech models, from a 108 MB English
+  model to Whisper Large v3 Turbo with 100 languages.
+- **Optional AI cleanup.** Removes filler words, false starts and self-corrections, and formats
+  lists. Run one of WhisperNow's own cleanup models on your computer, or use OpenAI, Anthropic,
+  Google Gemini, OpenRouter, Ollama or any other compatible service.
+- **Vocabulary.** Replacement rules fix names and terms the speech model gets wrong.
+- **History.** Search past transcripts and copy them again.
+
+## Privacy
+
+- Recording and speech recognition run on your computer. Audio is never uploaded.
+- API keys are stored in your system keychain.
+
+## Download
+
+Download WhisperNow from [GitHub Releases](https://github.com/stephan271c/WhisperNow/releases/latest).
+
+| Platform | Package | Updates |
 | --- | --- | --- |
-| Windows 11 | x86_64 | current-user NSIS installer |
-| macOS 13.3+ | Apple Silicon, Intel | self-signed application and DMG (approve the first launch in Privacy & Security) |
-| Linux | x86_64 | AppImage, `.deb`, `.rpm` |
+| Windows 11 (x86_64) | `.exe` installer | Automatic |
+| macOS 13.3 or later (Apple Silicon or Intel) | `.dmg` | Automatic |
+| Linux (x86_64) | `.AppImage` | Automatic |
+| Linux (x86_64) | `.deb`, `.rpm` | WhisperNow tells you when one is out; install it with your package manager |
 
-The capability matrix is in
-[`docs/release-checklist.md`](docs/release-checklist.md#platforms). Unofficial Flatpak, Snap, Nix,
-and distribution repackages are not update targets.
+Automatic updates download in the background and install when you restart WhisperNow.
+Speech models aren't part of the download: setup downloads the one you choose.
 
-These are intended release artifacts; no 0.2 package has shipped yet.
+**macOS:** WhisperNow isn't notarized by Apple, so macOS blocks its first launch. Open
+**System Settings › Privacy & Security** and choose **Open Anyway**.
 
-## Install
+**Upgrading from 0.1:** uninstall 0.1, then install 0.2. Your settings and history carry over.
 
-The [GitHub Releases](https://github.com/stephan271c/WhisperNow/releases) page is authoritative for
-versions and packages that are actually available. Do not treat the target table above as a 0.2
-release announcement. WhisperNow downloads the
-user-selected speech model on demand; a 0.2 installer includes only the small offline
-speech-presence model.
+## Getting started
 
-Version 0.1.x used the retired Python desktop application. Moving from 0.1.x to 0.2.0 is a
-one-time manual installer upgrade because those binaries did not contain the Tauri updater.
-Settings, history, models, vocabulary, shortcuts, and other data continue to use the established
-`WhisperNow` platform data directory. From 0.2.0, macOS, Windows and AppImage installations update
-automatically with signed updates; `.deb` and `.rpm` installations show when a signed update is
-available and link to the release page so you can install it with your package manager.
-Before a manual upgrade, quit 0.1.x and uninstall it without any data-removal option; do not delete
-the data directory.
+1. Open WhisperNow. Setup asks for microphone access, downloads a speech model and lets you
+   choose your shortcut. On macOS it also asks for Accessibility access, which WhisperNow needs
+   to paste.
+2. Click into any text field, hold your shortcut and speak.
+3. Let go. The text appears where your cursor is.
 
-## Use
+### Linux
 
-1. Launch WhisperNow and complete first-run setup.
-2. Select and download an ASR model.
-3. Use either recording mode: hold the hold-to-record shortcut while speaking and release it, or
-   press the toggle-to-record shortcut once to start and again to stop. You can enable either mode
-   or both in setup and Configuration.
-4. WhisperNow transcribes locally, optionally applies vocabulary or LLM cleanup, pastes into the
-   currently focused application, and restores common clipboard formats on a best-effort basis.
+On X11, shortcuts and pasting work without extra setup.
 
-Microphone access is required. macOS paste delivery also needs Accessibility permission. Native Wayland uses consented XDG
-portals and does not fall back to raw input devices or a privileged typing daemon.
-Both shortcut modes can be configured entirely with the keyboard: each mode has a named enable
-control and shortcut-capture control, and validation errors are announced as alerts.
+On Wayland, your desktop asks you once to allow WhisperNow's shortcut. Pasting uses a small
+helper, which the `.deb` and `.rpm` packages install. With the AppImage, WhisperNow offers to set
+it up.
 
-## Develop
+## Models
 
-Setup, native prerequisites and desktop behaviour are in
-[`docs/development.md`](docs/development.md). For a Python developer learning this
-codebase, the [Rust guide](docs/rust-guide/README.md) covers the language, Tokio,
-and Dioxus with examples from the repository.
+### Speech models
 
-The quality gates:
+| Model | Languages | Download |
+| --- | --- | --- |
+| Parakeet TDT v2 0.6B (Int8), the default | English | 482 MB |
+| Parakeet TDT v2 0.6B (FP16) | English | 1.1 GB |
+| Parakeet Unified 0.6B | English | 501 MB |
+| Parakeet TDT v3 0.6B | 25 European languages | 487 MB |
+| Parakeet TDT 110M | English | 108 MB |
+| SenseVoice Small | Chinese, Cantonese, English, Japanese, Korean | 163 MB |
+| Qwen3-ASR 0.6B | 30 languages | 879 MB |
+| Whisper Distil Large v3.5 | English | 529 MB |
+| Whisper Large v3 Turbo | 100 languages | 564 MB |
 
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-python3 -m pip install -r scripts/tests/requirements.txt
-python3 -m unittest discover -s scripts/tests -v
-```
+### Cleanup models
 
-## Version and release contract
+WhisperNow's cleanup models are trained for dictation cleanup and run on your computer. They use
+the GPU through Vulkan on Windows and Linux and Metal on Apple Silicon, and the CPU otherwise.
 
-`Cargo.toml` is the sole product-version source. Workspace crates, the desktop bundle,
-installers, updater metadata, runtime logs, and stable `vMAJOR.MINOR.PATCH` tags must agree. Check
-the contract without modifying the worktree:
+| Model | Download | Time for 100 words, GPU | Time for 100 words, CPU |
+| --- | --- | --- | --- |
+| LFM2.5 1.2B, the default | 1.2 GB | 0.2 s | 2.3 s |
+| LFM2.5 2.6B | 2.9 GB | 0.3 s | 5.4 s |
+| Qwen3.5 4B | 4.5 GB | 0.6 s | 8.9 s |
 
-```bash
-python3 scripts/release_version.py
-python3 scripts/release_version.py --release-tag v0.2.0
-```
+Times were measured on an RTX 5070 and a Ryzen 9 8945HS.
 
-Stable clients never receive drafts or prereleases, and downgrades are rejected. The release
-checklist (build, sign, manual smoke test per platform, publish) is in
-[`docs/release-checklist.md`](docs/release-checklist.md).
+## Build from source
 
-## Data and privacy
+WhisperNow is written in Rust with [Tauri](https://tauri.app) and
+[Dioxus](https://dioxuslabs.com). Speech recognition runs on
+[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and the cleanup models on
+[llama.cpp](https://github.com/ggml-org/llama.cpp). [docs/architecture.md](docs/architecture.md)
+explains how it fits together.
 
-Audio and local ASR stay on the device. Optional AI cleanup sends the transcript to a provider
-only when explicitly configured. Ordinary uninstall and updater replacement remove application
-binaries but preserve the shared data directory; only the in-app **Clear All Data** action removes
-user data.
+## License
 
-WhisperNow is licensed under the [MIT License](LICENSE).
+WhisperNow is released under the [MIT License](LICENSE).

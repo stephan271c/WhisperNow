@@ -20,6 +20,7 @@ shortcut, then you talk. It deliberately avoids the microphone used by most dict
 | `icons/whispernow-app-icon-tiny.svg` | Pixel-grid app icon for 16 and 32 px |
 | `icons/whispernow-app-icon-24.svg` | Pixel-grid app icon for 24 px |
 | `icons/whispernow.ico`, `icons/whispernow.icns`, `icons/png/` | Built icon sets; small cuts at 16/24/32, full cut above |
+| `banner/whispernow-banner.png` | README banner, 2580×720 (shown at 1290×360) |
 
 `apps/desktop/icons/icon.png`, `icon.icns` and `icon.ico` are copies of
 `icons/png/app-icon-512.png`, `icons/whispernow.icns` and `icons/whispernow.ico`. The tray icons are drawn in `apps/desktop/src/tray.rs` and are not
