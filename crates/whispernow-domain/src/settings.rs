@@ -193,6 +193,8 @@ pub struct WindowGeometry {
     pub height: u32,
 }
 
+/// Missing fields load as their defaults and unknown ones are ignored, so a file written by
+/// another version still loads.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]

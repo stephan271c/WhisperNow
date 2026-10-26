@@ -1,4 +1,5 @@
-//! `settings.json`, with every API key kept in the OS credential store instead.
+//! `settings.json`, with every API key kept in the OS credential store instead. A key the
+//! store refuses is not saved; it never falls back to plain text in this file.
 
 use std::{
     collections::BTreeSet,

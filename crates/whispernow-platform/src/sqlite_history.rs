@@ -237,6 +237,7 @@ impl SqliteHistoryRepository {
             .connection
             .execute("DELETE FROM entries", [])
             .map_err(history_error("history_clear"))?;
+        // Deleted rows leave their transcripts in free pages until the file is rewritten.
         self.connection
             .execute_batch("VACUUM")
             .map_err(history_error("history_clear"))?;
