@@ -65,14 +65,14 @@ fn settings_round_trip() {
         fixture.persistence.load().expect("load"),
         SettingsLoad::from(settings)
     );
-    assert_eq!(fixture.saved()["settings_version"], 2);
+    assert_eq!(fixture.saved()["settings_version"], 1);
 }
 
 #[test]
 fn an_unreadable_file_is_renamed_and_the_defaults_load() {
     for document in [
         "{ not json",
-        r#"{"settings_version":2,"keep_audio":"fast"}"#,
+        r#"{"settings_version":1,"keep_audio":"fast"}"#,
     ] {
         let fixture = fixture();
         fixture.write(document);

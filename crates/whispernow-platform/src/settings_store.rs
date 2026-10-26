@@ -21,7 +21,7 @@ use crate::{
 /// Written into every saved document. The Python release's documents lack it, so a
 /// document without it is imported once.
 const VERSION_FIELD: &str = "settings_version";
-const SETTINGS_VERSION: u32 = 2;
+const SETTINGS_VERSION: u32 = 1;
 
 #[derive(Serialize)]
 struct Stored<'a> {

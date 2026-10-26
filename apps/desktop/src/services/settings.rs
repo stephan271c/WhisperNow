@@ -508,7 +508,7 @@ mod tests {
         let mut fixture = fixture();
         fs::write(
             fixture.paths.settings_file(),
-            r#"{"settings_version": 2, "input_device": " ", "setup": {"unfinished": {"input_device": ""}}}"#,
+            r#"{"settings_version": 1, "input_device": " ", "setup": {"unfinished": {"input_device": ""}}}"#,
         )
         .expect("hand-edited settings");
 
@@ -593,7 +593,7 @@ mod tests {
         let mut fixture = fixture();
         fs::write(
             fixture.paths.settings_file(),
-            r#"{"settings_version": 2, "vocabulary_replacements": [[" ", "x"]]}"#,
+            r#"{"settings_version": 1, "vocabulary_replacements": [[" ", "x"]]}"#,
         )
         .expect("hand-edited settings");
 
@@ -724,7 +724,7 @@ mod tests {
     #[test]
     fn unreadable_settings_are_reported_once_with_where_they_went() {
         let mut fixture = fixture();
-        let truncated = r#"{"settings_version": 2, "vocabulary_replacements": [["teh", "#;
+        let truncated = r#"{"settings_version": 1, "vocabulary_replacements": [["teh", "#;
         fs::write(fixture.paths.settings_file(), truncated).expect("truncated settings");
 
         fixture.restart();
