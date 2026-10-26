@@ -12,7 +12,7 @@ use whispernow_platform::{SettingsNotice, SettingsStore};
 use super::{
     audio_devices_unavailable,
     dictation::{CleanupPlan, DictationSettings, RecordingSettings},
-    lock, provider_models_unavailable, setup_already_complete,
+    lock, provider_endpoint_missing, setup_already_complete,
     state::StateCell,
 };
 
@@ -68,7 +68,7 @@ impl SavedSettings {
         let settings = self.snapshot();
         let endpoint = settings.provider_settings(provider).api_base.clone();
         let remote =
-            RemoteProvider::new(provider, endpoint).ok_or_else(provider_models_unavailable)?;
+            RemoteProvider::new(provider, endpoint).ok_or_else(provider_endpoint_missing)?;
         let api_key = if settings.api_keys.contains(&provider) {
             self.api_key(provider)?
         } else {

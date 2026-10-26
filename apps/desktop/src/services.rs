@@ -5,6 +5,7 @@ use std::{
 use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_core::audio::{AudioInput, AudioInputError};
+use whispernow_core::llm::LlmError;
 use whispernow_domain::ipc::{
     AudioDevice, MicrophoneTestResponse, PermissionKind, PermissionStatus, PermissionsResponse,
     SaveSettingsResponse, SettingsView,
@@ -376,12 +377,46 @@ pub(crate) fn shutting_down() -> AppError {
     )
 }
 
-pub(crate) fn provider_models_unavailable() -> AppError {
+fn provider_endpoint_missing() -> AppError {
     AppError::new(
         ErrorCategory::Cleanup,
-        "provider_models_unavailable",
-        "The provider's models could not be listed",
+        "provider_models_need_endpoint",
+        "Enter the API endpoint to list its models.",
     )
+}
+
+/// Why the provider's models could not be listed, worded for the Model row in settings.
+pub(crate) fn provider_models_error(error: LlmError, key_sent: bool) -> AppError {
+    if error == LlmError::Authentication && !key_sent {
+        return AppError::new(
+            ErrorCategory::Cleanup,
+            "provider_models_need_key",
+            "Save an API key to list this provider's models.",
+        );
+    }
+    tracing::warn!(%error, "the provider's models could not be listed");
+    let (code, summary) = match error {
+        LlmError::Authentication => (
+            "provider_models_key_refused",
+            "The provider refused the saved API key, so its models could not be listed.",
+        ),
+        LlmError::Transport => (
+            "provider_models_unreachable",
+            "The provider could not be reached; check the API endpoint and your connection.",
+        ),
+        LlmError::RateLimited | LlmError::TemporarilyUnavailable => (
+            "provider_models_unavailable",
+            "The provider is busy or unavailable; try again later.",
+        ),
+        LlmError::InvalidRequest
+        | LlmError::InvalidResponse
+        | LlmError::ModelNotFound
+        | LlmError::Cancelled => (
+            "provider_models_invalid",
+            "The API endpoint did not return a model list; check its address.",
+        ),
+    };
+    AppError::new(ErrorCategory::Cleanup, code, summary)
 }
 
 fn audio_devices_unavailable(error: &AudioInputError) -> AppError {

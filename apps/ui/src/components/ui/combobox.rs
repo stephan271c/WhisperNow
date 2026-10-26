@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 
+use super::fields::current_wiring;
 use super::listbox::{OptionList, use_open};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -62,6 +63,7 @@ pub(crate) fn Combobox(
     let mut open = use_open(disabled);
     let mut active = use_signal(|| None::<usize>);
     let mut field = use_signal(|| None::<Rc<MountedData>>);
+    let described_by = current_wiring().and_then(|wiring| wiring.described_by);
 
     let matches = matching(&suggestions, &value);
     let count = matches.len();
@@ -121,6 +123,7 @@ pub(crate) fn Combobox(
                 aria_expanded: if expanded { "true" } else { "false" },
                 aria_controls: expanded.then(|| format!("{id}-listbox")),
                 aria_activedescendant: current.map(|index| format!("{id}-option-{index}")),
+                aria_describedby: described_by,
                 // The webview's own autofill list would cover this one.
                 autocomplete: "off",
                 spellcheck: "false",

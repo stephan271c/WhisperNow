@@ -168,48 +168,25 @@ fn ProviderRows(
             .as_ref()
             .map(|endpoint| endpoint.expose_url().to_owned())
     });
-    // The desktop asks with the saved endpoint and key, so saving either asks again.
-    let offered = use_resource(use_reactive(
-        (&provider, &saved_endpoint, &key_saved),
-        |(provider, _, _)| async move {
-            client::invoke::<_, Vec<String>>("list_provider_models", provider)
-                .await
-                .unwrap_or_default()
+    // The desktop asks with the saved endpoint and key, so saving either asks again. Replacing
+    // a key changes nothing saved, so the end of every key change asks again too.
+    let key_changing = management.read().is_busy(UiOperation::CredentialMutation);
+    let listed = use_resource(use_reactive(
+        (&provider, &saved_endpoint, &key_saved, &key_changing),
+        |(provider, _, _, key_changing)| async move {
+            if key_changing {
+                // A restarted resource keeps its last answer until the new one arrives.
+                std::future::pending::<()>().await;
+            }
+            client::invoke::<_, Vec<String>>("list_provider_models", provider).await
         },
     ));
-    let offered = offered.read().clone().unwrap_or_default();
+    let (offered, unlisted) = match listed.read().clone() {
+        Some(Ok(models)) => (models, None),
+        Some(Err(error)) => (Vec::new(), Some(error.summary)),
+        None => (Vec::new(), None),
+    };
     rsx! {
-        AutosaveRow { id: "provider-model", title: "Model", setting: SettingKey::ProviderModel,
-            form { id: MODEL_FORM, class: "model-picker",
-                onsubmit: move |event: FormEvent| {
-                    event.prevent_default();
-                    context.change_setting(SettingChange::ChooseProviderModel { provider, model: new_model() });
-                    new_model.set(String::new());
-                },
-                if !models.is_empty() {
-                    Select { value: active.clone(), placeholder: "Choose a model",
-                        options: models.iter().map(|model| (model.clone(), model.clone())).collect::<Vec<_>>(),
-                        disabled,
-                        onchange: move |model: String| {
-                            context.change_setting(SettingChange::ChooseProviderModel { provider, model });
-                        },
-                    }
-                    Button { id: "provider-model-remove", variant: ButtonVariant::Ghost,
-                        aria_label: "Remove {active}",
-                        disabled: disabled || active.is_empty(),
-                        onclick: move |_| {
-                            context.change_setting(SettingChange::RemoveProviderModel { provider, model: active.clone() });
-                        },
-                        "Remove"
-                    }
-                }
-                Combobox { id: MODEL_NAME, label: "New model name", placeholder: "Model name",
-                    value: new_model(), suggestions: offered, disabled,
-                    oninput: move |typed: String| new_model.set(typed),
-                }
-                button { r#type: "submit", id: "provider-model-add", class: "btn btn-secondary btn-md", disabled, "Add model" }
-            }
-        }
         AutosaveRow { id: "provider-endpoint", title: "API endpoint",
             description: (provider != LlmProvider::Custom).then(|| "Leave empty for the default address.".to_owned()),
             setting: SettingKey::ProviderEndpoint,
@@ -259,6 +236,37 @@ fn ProviderRows(
                     }
                     DisabledReason { id: "credential-disabled-reason", reason: credential_blocked }
                 }
+            }
+        }
+        AutosaveRow { id: "provider-model", title: "Model", description: unlisted, setting: SettingKey::ProviderModel,
+            form { id: MODEL_FORM, class: "model-picker",
+                onsubmit: move |event: FormEvent| {
+                    event.prevent_default();
+                    context.change_setting(SettingChange::ChooseProviderModel { provider, model: new_model() });
+                    new_model.set(String::new());
+                },
+                if !models.is_empty() {
+                    Select { value: active.clone(), placeholder: "Choose a model",
+                        options: models.iter().map(|model| (model.clone(), model.clone())).collect::<Vec<_>>(),
+                        disabled,
+                        onchange: move |model: String| {
+                            context.change_setting(SettingChange::ChooseProviderModel { provider, model });
+                        },
+                    }
+                    Button { id: "provider-model-remove", variant: ButtonVariant::Ghost,
+                        aria_label: "Remove {active}",
+                        disabled: disabled || active.is_empty(),
+                        onclick: move |_| {
+                            context.change_setting(SettingChange::RemoveProviderModel { provider, model: active.clone() });
+                        },
+                        "Remove"
+                    }
+                }
+                Combobox { id: MODEL_NAME, label: "New model name", placeholder: "Model name",
+                    value: new_model(), suggestions: offered, disabled,
+                    oninput: move |typed: String| new_model.set(typed),
+                }
+                button { r#type: "submit", id: "provider-model-add", class: "btn btn-secondary btn-md", disabled, "Add model" }
             }
         }
     }

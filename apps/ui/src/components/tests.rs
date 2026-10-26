@@ -1049,6 +1049,7 @@ fn the_model_name_field_suggests_the_provider_models_starting_with_the_typed_tex
     );
     page.input("provider-model-name", "gpt-6-n");
     assert_eq!(suggested(&page.html()), ["gpt-6-nano"]);
+    assert!(tag(&page.html(), "provider-model-description").is_none());
 
     page.click("provider-model-name-option-0")
         .fire("provider-model-form", "submit", "");
@@ -1074,10 +1075,26 @@ fn the_model_name_field_suggests_the_provider_models_starting_with_the_typed_tex
         "a saved endpoint is asked again"
     );
 
+    page.input("provider-credential", "sk-replaced")
+        .click("save-credential");
+    assert_eq!(
+        asked(),
+        [LlmProvider::OpenAi; 2],
+        "a key being saved is not asked with"
+    );
+    let saved = shown(&page);
+    page.answer("set_api_key", Ok(SettingsView::new(&saved)));
+    assert_eq!(
+        asked(),
+        [LlmProvider::OpenAi; 3],
+        "a replaced key is asked again"
+    );
+
     open(&mut page, &["cleanup-source-local"]);
     assert_eq!(
         asked(),
         [
+            LlmProvider::OpenAi,
             LlmProvider::OpenAi,
             LlmProvider::OpenAi,
             LlmProvider::Ollama
@@ -1086,24 +1103,28 @@ fn the_model_name_field_suggests_the_provider_models_starting_with_the_typed_tex
 }
 
 #[test]
-fn a_model_list_that_cannot_load_leaves_the_name_to_be_typed() {
+fn a_model_list_that_cannot_load_says_why_in_its_row_and_leaves_the_name_to_be_typed() {
     let mut page = shell(snapshot(Phase::Idle), configured());
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+    let why = "The provider refused the saved API key, so its models could not be listed.";
     page.answer(
         "list_provider_models",
         Err::<Vec<String>, _>(AppError::new(
             ErrorCategory::Cleanup,
-            "provider_models_unavailable",
-            "The provider's models could not be listed",
+            "provider_models_key_refused",
+            why,
         )),
     );
     page.input("provider-model-name", "gpt-typed");
     let html = page.html();
     assert!(tag(&html, "provider-model-name-listbox").is_none());
+    assert_eq!(text(&html, "provider-model-description"), why);
     assert!(
-        tag(&html, "notice").is_none(),
-        "the failure is not announced"
+        tag(&html, "provider-model-name")
+            .expect("name field")
+            .contains(r#"aria-describedby="provider-model-description""#)
     );
+    assert!(tag(&html, "notice").is_none(), "no page notice repeats it");
 
     page.fire("provider-model-form", "submit", "");
     assert_eq!(

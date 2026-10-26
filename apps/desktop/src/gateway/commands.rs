@@ -9,7 +9,7 @@ use whispernow_domain::{
 };
 
 use super::{Failure, Gateway, run_blocking};
-use crate::services::{RecordingTrigger, provider_models_unavailable};
+use crate::services::{RecordingTrigger, provider_models_error};
 
 #[tauri::command]
 pub(crate) async fn get_settings(
@@ -72,10 +72,7 @@ pub(crate) async fn list_provider_models(
         .await?;
     whispernow_platform::list_models(&provider, api_key.as_ref())
         .await
-        .map_err(|error| {
-            tracing::warn!(?error, "the provider's models could not be listed");
-            provider_models_unavailable()
-        })
+        .map_err(|error| provider_models_error(error, api_key.is_some()))
 }
 
 #[tauri::command]
