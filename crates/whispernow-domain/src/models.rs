@@ -35,13 +35,13 @@ struct CleanupModel {
     benchmark: CleanupBenchmark,
 }
 
-/// The local cleanup models in display order. Facts lost are per 1,000 reference words,
-/// pooled over 4,170 held-out dictations (the test split, bench-long and bench-noise) and
-/// judged by `gpt-6.1-sol` (`cleanup eval`, training/README.md). Latency is the median of
-/// five `cleanup bench` runs of its 100-word dictation against the patched `llama-server`
-/// the app's engine matches, on an RTX 5070 and on a Ryzen 9 8945HS. Memory is the larger
-/// of that server's VRAM and its resident memory on the CPU with its prompt cache off, as the
-/// app has none.
+/// The local cleanup models in display order. Factual errors (lost and invented facts) are per
+/// 1,000 reference words, pooled over 4,170 held-out dictations (the test split, bench-long and
+/// bench-noise) and judged by `gpt-6.1-sol` (`cleanup eval`, training/README.md). Latency is the
+/// median of five `cleanup bench` runs of its 100-word dictation against the patched
+/// `llama-server` the app's engine matches, on an RTX 5070 and on a Ryzen 9 8945HS. Memory is the
+/// larger of that server's VRAM and its resident memory on the CPU with its prompt cache off, as
+/// the app has none.
 const CLEANUP_MODELS: [CleanupModel; 3] = [
     // LFM2.5-1.2B-Base fine-tuned for cleanup, under the LFM Open License v1.0.
     CleanupModel {
@@ -52,7 +52,7 @@ const CLEANUP_MODELS: [CleanupModel; 3] = [
         sha256: "0e121fc886fec21ab35aa5a1cdd40872e9278c41435f1cf9d94eba193d93f186",
         benchmark: CleanupBenchmark {
             memory_bytes: 1_619_001_344,
-            facts_lost_per_1000_words: 5.88,
+            factual_errors_per_1000_words: 6.32,
             gpu_latency: Duration::from_millis(178),
             cpu_latency: Duration::from_millis(2_328),
         },
@@ -66,7 +66,7 @@ const CLEANUP_MODELS: [CleanupModel; 3] = [
         sha256: "1a3eab30c9e3cd9c8e5f3c678bdb78661306dc04803d3075c9a4ca536ff7d217",
         benchmark: CleanupBenchmark {
             memory_bytes: 3_290_431_488,
-            facts_lost_per_1000_words: 4.60,
+            factual_errors_per_1000_words: 4.88,
             gpu_latency: Duration::from_millis(344),
             cpu_latency: Duration::from_millis(5_390),
         },
@@ -80,7 +80,7 @@ const CLEANUP_MODELS: [CleanupModel; 3] = [
         sha256: "1abff662c684473823b5e042c2aa806fdfc5b00981fcb5cae818e2ec7d58d963",
         benchmark: CleanupBenchmark {
             memory_bytes: 5_302_546_432,
-            facts_lost_per_1000_words: 2.88,
+            factual_errors_per_1000_words: 3.01,
             gpu_latency: Duration::from_millis(624),
             cpu_latency: Duration::from_millis(8_869),
         },
@@ -354,8 +354,8 @@ impl SpeechBenchmark {
 pub struct CleanupBenchmark {
     /// The most memory the loaded model takes, on the GPU or on the CPU.
     pub memory_bytes: u64,
-    /// Facts the cleaned text drops or changes, per 1,000 words of the reference.
-    pub facts_lost_per_1000_words: f32,
+    /// Facts the cleaned text drops, changes or invents, per 1,000 words of the reference.
+    pub factual_errors_per_1000_words: f32,
     pub gpu_latency: Duration,
     pub cpu_latency: Duration,
 }
@@ -363,11 +363,11 @@ pub struct CleanupBenchmark {
 impl CleanupBenchmark {
     #[must_use]
     pub fn accuracy(&self) -> Rating {
-        Rating::new(match self.facts_lost_per_1000_words {
-            lost if lost < 2.5 => 5,
-            lost if lost < 3.5 => 4,
-            lost if lost < 5.0 => 3,
-            lost if lost < 6.5 => 2,
+        Rating::new(match self.factual_errors_per_1000_words {
+            errors if errors < 2.5 => 5,
+            errors if errors < 3.5 => 4,
+            errors if errors < 5.0 => 3,
+            errors if errors < 6.5 => 2,
             _ => 1,
         })
     }

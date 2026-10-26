@@ -138,7 +138,7 @@ pub(super) fn ModelRow(
                 Measurement { label: "Memory", value: gigabytes(benchmark.memory_bytes),
                     detail: "The most GPU or system memory the loaded model takes" }
                 RatingBars { label: "Accuracy", value: benchmark.accuracy(),
-                    detail: facts_lost_detail(&benchmark) }
+                    detail: factual_errors_detail(&benchmark) }
                 Measurement { label: "Latency", value: latency(&benchmark),
                     detail: "To clean up a 100-word dictation, on an RTX 5070 GPU and on a Ryzen 9 8945HS CPU" }
             }
@@ -261,10 +261,10 @@ fn accuracy_detail(benchmark: &SpeechBenchmark) -> String {
     }
 }
 
-fn facts_lost_detail(benchmark: &CleanupBenchmark) -> String {
+fn factual_errors_detail(benchmark: &CleanupBenchmark) -> String {
     format!(
-        "About {:.1} facts lost per 1,000 words (4,170 held-out dictations)",
-        benchmark.facts_lost_per_1000_words
+        "About {:.1} factual errors per 1,000 words (4,170 held-out dictations)",
+        benchmark.factual_errors_per_1000_words
     )
 }
 

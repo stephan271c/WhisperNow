@@ -1511,7 +1511,7 @@ fn cleanup_models_show_memory_and_latency_beside_accuracy_bars() {
     );
     models_of(&mut management)[1].benchmark = Some(ModelBenchmark::Cleanup(CleanupBenchmark {
         memory_bytes: 1_619_001_344,
-        facts_lost_per_1000_words: 5.88,
+        factual_errors_per_1000_words: 6.32,
         gpu_latency: std::time::Duration::from_millis(178),
         cpu_latency: std::time::Duration::from_millis(3_149),
     }));
@@ -1522,7 +1522,7 @@ fn cleanup_models_show_memory_and_latency_beside_accuracy_bars() {
     assert!(shown.contains("Memory1.6 GB"), "{shown}");
     assert!(shown.contains("Latency0.2 s GPU · 3.1 s CPU"), "{shown}");
     assert!(html.contains(
-        "aria-label=\"Accuracy: 2 of 5. About 5.9 facts lost per 1,000 words (4,170 held-out dictations)\""
+        "aria-label=\"Accuracy: 2 of 5. About 6.3 factual errors per 1,000 words (4,170 held-out dictations)\""
     ));
     assert!(!html.contains("aria-label=\"Speed:"));
 }
