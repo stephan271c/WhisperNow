@@ -22,13 +22,13 @@ datasets:
 
 This model cleans up an ASR transcript by removing fillers, false starts and repeats, applying the speaker's self-corrections, and adjusting formatting. It is a full fine-tune of [LiquidAI/LFM2.5-2.6B-Base](https://huggingface.co/LiquidAI/LFM2.5-2.6B-Base), made for the local cleanup step of [WhisperNow](https://github.com/stephan271c/WhisperNow), a desktop dictation app.
 
-It is the middle one of three cleanup models. Over the test split and both benchmarks it loses 0.78 times the facts of the 1.2B (90% interval 0.74–0.82) and 1.33 times those of the cloud glm-5.3-flash (1.24–1.42). On dictations of up to 25 words it loses fewer than either cloud glm-5.3 model, and up to 200 words it is level with glm-5.3-flash.
+It is the middle one of three cleanup models. Over the test split and both benchmarks it makes 0.77 times the factual errors of the 1.2B (90% interval 0.73–0.81) and 1.32 times those of the cloud glm-5.3-flash (1.23–1.41). On dictations of up to 25 words it makes fewer than either cloud glm-5.3 model, and at 26–200 words it makes 1.0–1.4 times as many as glm-5.3-flash.
 
-| model | Q8_0 file | memory in use | facts lost per 1,000 words | 100 / 1,000 words, GPU | 100 / 1,000 words, CPU |
+| model | Q8_0 file | memory in use | factual errors per 1,000 words | 100 / 1,000 words, GPU | 100 / 1,000 words, CPU |
 |---|---|---|---|---|---|
-| [LFM2.5 1.2B](https://huggingface.co/category271/whispernow-lfm2.5-1.2b) | 1.25 GB | 1.6 GB | 5.88 | 0.18 / 2.0 s | 2.3 / 27 s |
-| LFM2.5 2.6B (this model) | 2.87 GB | 3.3 GB | 4.60 | 0.34 / 3.8 s | 5.4 / 65 s |
-| [Qwen3.5 4B](https://huggingface.co/category271/whispernow-qwen3.5-4b) | 4.48 GB | 5.3 GB | 2.88 | 0.62 / 7.2 s | 8.9 / 118 s |
+| [LFM2.5 1.2B](https://huggingface.co/category271/whispernow-lfm2.5-1.2b) | 1.25 GB | 1.6 GB | 6.32 | 0.18 / 2.0 s | 2.3 / 27 s |
+| LFM2.5 2.6B (this model) | 2.87 GB | 3.3 GB | 4.88 | 0.34 / 3.8 s | 5.4 / 65 s |
+| [Qwen3.5 4B](https://huggingface.co/category271/whispernow-qwen3.5-4b) | 4.48 GB | 5.3 GB | 3.01 | 0.62 / 7.2 s | 8.9 / 118 s |
 
 ## Examples
 
@@ -144,41 +144,41 @@ print(tokenizer.decode(reply[0, inputs["input_ids"].shape[1]:], skip_special_tok
 - **bench-long:** 416 dictations of 151–946 words, 49 of them real meeting turns from the AMI corpus.
 - **bench-noise:** 461 dictations of 20–64 words, each with one kind of disfluency (restarts, repeats, filler clusters, corrections and others), plus a control set.
 
-**Scoring.** A judge model (OpenAI's `gpt-6.1-sol` at high reasoning) compares each output with the reference and lists its faults. **Facts lost** counts facts that were dropped, changed, or put on the wrong side of a correction, per 1,000 reference words. Lower is better. Our models ran at Q8_0 in llama.cpp with the settings above; the cloud glm-5.3-flash (at low reasoning) and glm-5.3 (at max reasoning) received WhisperNow's full cleanup prompt. Rates are for: 3,295 test rows, 414 bench-long rows and all 461 bench-noise rows (4,170 in all).
+**Scoring.** A judge model (OpenAI's `gpt-6.1-sol` at high reasoning) compares each output with the reference and lists its faults. **Factual errors** counts facts that were dropped, changed, put on the wrong side of a correction, or invented, per 1,000 reference words. Lower is better. Nearly all of them are lost facts: for our models and both glm-5.3 models, invented facts are 4–7% of the errors. Our models ran at Q8_0 in llama.cpp with the settings above; the cloud glm-5.3-flash (at low reasoning) and glm-5.3 (at max reasoning) received WhisperNow's full cleanup prompt. Rates are for: 3,295 test rows, 414 bench-long rows and all 461 bench-noise rows (4,170 in all).
 
-**Facts lost per 1,000 reference words:**
+**Factual errors per 1,000 reference words:**
 
 | model | test | bench-long | bench-noise | all three |
 |---|---|---|---|---|
-| glm-5.3 at max reasoning (cloud) | 1.73 | 2.14 | 2.01 | 1.88 |
-| glm-5.3-flash at low reasoning (cloud) | 2.87 | 4.68 | 2.50 | 3.46 |
-| WhisperNow LFM2.5 1.2B | 4.53 | 8.58 | 4.27 | 5.88 |
-| WhisperNow LFM2.5 2.6B (this model) | 3.54 | 6.65 | 3.90 | 4.60 |
-| WhisperNow Qwen3.5 4B | 2.10 | 4.37 | 2.62 | 2.88 |
+| glm-5.3 at max reasoning (cloud) | 1.88 | 2.30 | 2.07 | 2.03 |
+| glm-5.3-flash at low reasoning (cloud) | 3.08 | 4.98 | 2.80 | 3.71 |
+| WhisperNow LFM2.5 1.2B | 4.84 | 9.25 | 4.69 | 6.32 |
+| WhisperNow LFM2.5 2.6B (this model) | 3.73 | 7.12 | 4.09 | 4.88 |
+| WhisperNow Qwen3.5 4B | 2.21 | 4.56 | 2.62 | 3.01 |
 
-**By transcript length.** One lost fact in a 10-word dictation counts as 100 per 1,000 words, so short dictations have high rates.
+**By transcript length.** One error in a 10-word dictation counts as 100 per 1,000 words, so short dictations have high rates.
 
-![Facts lost per 1,000 reference words by transcript length, for the three WhisperNow models and the two cloud glm-5.3 models](charts/facts-by-length.png)
+![Factual errors per 1,000 reference words by transcript length, for the three WhisperNow models and the two cloud glm-5.3 models](charts/errors-by-length.png)
 
 | transcript words | rows | glm-5.3 (max) | glm-5.3-flash (low) | 1.2B | 2.6B | 4B |
 |---|---|---|---|---|---|---|
-| up to 25 | 1,443 | 7.16 | 9.34 | 6.01 | 5.50 | 4.60 |
-| 26–50 | 1,057 | 2.71 | 3.83 | 5.10 | 4.01 | 2.95 |
-| 51–100 | 465 | 1.47 | 2.26 | 3.33 | 3.05 | 1.90 |
-| 101–200 | 289 | 1.06 | 2.76 | 3.82 | 2.82 | 1.67 |
-| 201–450 | 484 | 2.34 | 3.35 | 6.30 | 5.06 | 2.98 |
-| 451 and more | 432 | 1.39 | 3.33 | 6.36 | 4.83 | 3.00 |
+| up to 25 | 1,443 | 7.67 | 10.55 | 6.14 | 5.56 | 4.67 |
+| 26–50 | 1,057 | 2.80 | 4.13 | 5.39 | 4.18 | 3.01 |
+| 51–100 | 465 | 2.04 | 2.44 | 3.69 | 3.33 | 2.12 |
+| 101–200 | 289 | 1.17 | 2.93 | 4.32 | 3.09 | 1.81 |
+| 201–450 | 484 | 2.52 | 3.63 | 6.83 | 5.42 | 3.14 |
+| 451 and more | 432 | 1.46 | 3.51 | 6.79 | 5.11 | 3.13 |
 
-**Against the cloud models.** Each point is a WhisperNow model's facts lost divided by a cloud model's, on the same rows, with a 90% paired bootstrap interval. Below 1× means our fine-tuned models are better.
+**Against the cloud models.** Each point is a WhisperNow model's factual errors divided by a cloud model's, on the same rows, with a 90% paired bootstrap interval. Below 1× means our fine-tuned models are better.
 
-![Facts lost by each WhisperNow model divided by glm-5.3-flash's and by glm-5.3 at max reasoning's, by transcript length](charts/against-cloud.png)
+![Factual errors of each WhisperNow model divided by glm-5.3-flash's and by glm-5.3 at max reasoning's, by transcript length](charts/against-cloud.png)
 
 **Other checks:**
 
 |  | 1.2B | 2.6B | 4B | glm-5.3-flash (low) | glm-5.3 (max) |
 |---|---|---|---|---|---|
-| dictations that lose at least one fact | 25.2% | 22.4% | 17.8% | 20.6% | 15.1% |
-| invented facts per 1,000 words | 0.44 | 0.28 | 0.13 | 0.25 | 0.15 |
+| dictations with at least one factual error | 25.8% | 22.9% | 18.3% | 21.8% | 15.9% |
+| invented facts per 1,000 words (counted in factual errors) | 0.44 | 0.28 | 0.13 | 0.25 | 0.15 |
 | self-corrections left in, per 1,000 words | 0.45 | 0.40 | 0.30 | 2.44 | 1.32 |
 | dictations keeping every number, URL and path exactly | 70.3% | 72.1% | 74.3% | 51.9% | 56.4% |
 | dictations with a filler left in | 1.1% | 1.1% | 1.0% | 6.7% | 1.8% |
@@ -188,15 +188,15 @@ print(tokenizer.decode(reply[0, inputs["input_ids"].shape[1]:], skip_special_tok
 | replies that answer or act on the dictation instead of cleaning it | 0 | 2 | 1 | 8 | 3 |
 | replies that loop | 9 | 5 | 3 | 2 | 2 |
 
-Every row covers the same 4,170 dictations as the facts-lost table above: the test split, bench-long and bench-noise together. The last two rows are counts. A self-correction left in is one the output keeps as spoken ("Tuesday, no wait, Wednesday"): nothing is lost, but it isn't cleaned up. Long dictations are the fine-tuned models' weak spot: on bench-long (151–946 words) this model loses 6.65 facts per 1,000 words, against 4.68 for glm-5.3-flash (low) and 2.14 for glm-5.3 (max).
+Every row covers the same 4,170 dictations as the factual-errors table above: the test split, bench-long and bench-noise together. The last two rows are counts. A self-correction left in is one the output keeps as spoken ("Tuesday, no wait, Wednesday"): nothing is lost, but it isn't cleaned up. Long dictations are the fine-tuned models' weak spot: on bench-long (151–946 words) this model makes 7.12 factual errors per 1,000 words, against 4.98 for glm-5.3-flash (low) and 2.30 for glm-5.3 (max).
 
-**Other models.** Seven more cloud models received WhisperNow's full cleanup prompt on an 800-row sample of the test split and both benchmarks (1,670 rows, judged the same way). Rates are higher than above because bench-long is a larger share of these rows.
+**Other models.** Seven more cloud models received WhisperNow's full cleanup prompt on an 800-row sample of the test split and both benchmarks (1,670 rows, judged the same way). Rates are higher than above because bench-long is a larger share of these rows. Invented facts are a larger share of the errors only for Granite 4.2 8B (16%) and Claude Haiku 5.5 (12%).
 
-![Facts lost per 1,000 reference words for every model evaluated, sorted](charts/all-models.png)
+![Factual errors per 1,000 reference words for every model evaluated, sorted](charts/all-models.png)
 
 The same rates by transcript length, sorted by the overall rate:
 
-![Facts lost per 1,000 reference words for every model evaluated, by transcript length](charts/all-models-by-length.png)
+![Factual errors per 1,000 reference words for every model evaluated, by transcript length](charts/all-models-by-length.png)
 
 **Speed.** Seconds for the whole reply, median of 5 runs. Ours ran at Q8_0 in llama.cpp on an RTX 5070 GPU and a Ryzen 9 8945HS CPU; the cloud models were called from their API providers using the cleanup prompt.
 
@@ -223,7 +223,7 @@ These times use WhisperNow's speculative decoding, which drafts tokens from a ru
 ## Limitations
 
 - **English only.**
-- **It loses more facts on long dictations.** On bench-long (151–946 words) it loses at least one fact in 79.2% of dictations, against 63.0% for glm-5.3-flash.
+- **It makes more factual errors on long dictations.** On bench-long (151–946 words) it makes at least one in 80.9% of dictations, against 64.7% for glm-5.3-flash.
 - **It was not trained on dictations over about 1,000 words.**
 
 ## License
