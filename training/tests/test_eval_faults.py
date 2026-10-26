@@ -77,6 +77,7 @@ def test_scores_count_faults_per_row_and_per_thousand_words():
     faults = evaluate.score(rows, outputs, judged)["overall"]["faults"]
     # The unreadable row counts in none; the other two hold 400 reference words.
     assert faults["facts_lost"] == {"per_row": 1.0, "per_1000_words": 5.0, "rows": 50.0, "n": 2}
+    assert faults["factual_errors"] == {"per_row": 1.5, "per_1000_words": 7.5, "rows": 50.0, "n": 2}
     assert faults["unresolved"]["rows"] == 50.0 and faults["invented"]["per_row"] == 0.5
     assert "faults" not in evaluate.score(rows, outputs)["overall"]
 

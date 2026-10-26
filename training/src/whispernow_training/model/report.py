@@ -22,6 +22,7 @@ QUALITY_COLUMNS = {
 
 # Column → (fault kind, measure) in scores.json's `faults`, shown when the judge counted faults.
 FAULT_COLUMNS = {
+    "errors /1k words": ("factual_errors", "per_1000_words"),
     "lost /row": ("facts_lost", "per_row"),
     "lost /1k words": ("facts_lost", "per_1000_words"),
     "dropped /row": ("dropped", "per_row"),

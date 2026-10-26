@@ -41,6 +41,8 @@ FAULT_KINDS: dict[str, str | None] = {
 }
 # The kinds that lose or corrupt a fact the speaker meant, counted together as `facts_lost`.
 LOST_KINDS = ("dropped", "changed", "wrong_side")
+# Lost and invented facts together, counted as `factual_errors`: the rate the model cards report.
+FACTUAL_ERROR_KINDS = (*LOST_KINDS, "invented")
 # Judge and score files carry this after the reference tag, so verdicts of the pass/fail judge
 # before fault counts (`<stem>.r112.judge.jsonl`) are never resumed or overwritten.
 JUDGE_VERSION = "faults"
@@ -341,7 +343,7 @@ def _fault_counts(entries: Sequence[tuple[RowChecks, Verdict | None]]) -> dict |
     if not judged:
         return None
     words = sum(checks.reference_words for checks, _ in judged)
-    kinds = {kind: (kind,) for kind in FAULT_KINDS} | {"facts_lost": LOST_KINDS}
+    kinds = {kind: (kind,) for kind in FAULT_KINDS} | {"facts_lost": LOST_KINDS, "factual_errors": FACTUAL_ERROR_KINDS}
     counts = {}
     for name, members in kinds.items():
         per_row = [sum(fault["kind"] in members for fault in verdict.faults) for _, verdict in judged]
