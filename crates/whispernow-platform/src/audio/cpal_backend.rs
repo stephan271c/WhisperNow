@@ -357,7 +357,13 @@ where
         .build_input_stream::<T, _, _>(
             config,
             move |data, _| callback.deliver(data),
-            move |error| fault.raise(map_stream_fault(error.kind())),
+            move |error| {
+                if let Some(kind) = map_stream_fault(error.kind()) {
+                    fault.raise(kind);
+                } else {
+                    tracing::debug!(%error, "audio input overran");
+                }
+            },
             Some(STREAM_BUILD_TIMEOUT),
         )
         .map_err(|error| map_device_error(&error, "build input stream"))
@@ -367,12 +373,15 @@ fn add_dropped(counter: &AtomicUsize, frames: usize) {
     counter.fetch_add(frames, Ordering::Relaxed);
 }
 
-fn map_stream_fault(kind: ErrorKind) -> StreamFault {
+fn map_stream_fault(kind: ErrorKind) -> Option<StreamFault> {
     match kind {
         ErrorKind::DeviceChanged | ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated => {
-            StreamFault::DeviceLost
+            Some(StreamFault::DeviceLost)
         }
-        _ => StreamFault::StreamError,
+        // cpal 0.18.2 reports capture overruns on WASAPI, PipeWire and CoreAudio through the
+        // error callback, but the stream keeps running; the recording continues past the gap.
+        ErrorKind::Xrun => None,
+        _ => Some(StreamFault::StreamError),
     }
 }
 
@@ -425,6 +434,19 @@ mod tests {
             flag.raise(fault);
             assert_eq!(flag.get(), Some(fault));
         }
+    }
+
+    #[test]
+    fn only_an_overrun_leaves_the_stream_running() {
+        assert_eq!(map_stream_fault(ErrorKind::Xrun), None);
+        assert_eq!(
+            map_stream_fault(ErrorKind::DeviceNotAvailable),
+            Some(StreamFault::DeviceLost)
+        );
+        assert_eq!(
+            map_stream_fault(ErrorKind::BackendError),
+            Some(StreamFault::StreamError)
+        );
     }
 
     #[test]
