@@ -5,18 +5,43 @@ use std::{
 
 use tempfile::TempDir;
 use whispernow_core::audio::{
-    AudioBlock, AudioCapture, AudioDeviceChoice, AudioInput, AudioInputError, AudioLevelSummary,
-    AudioSink,
+    AudioBlock, AudioCapture, AudioInput, AudioInputError, AudioLevelSummary, AudioSink,
 };
 use whispernow_domain::ipc::AudioDevice;
-use whispernow_domain::{ModelDefinition, ModelId, Settings};
+use whispernow_domain::{
+    AppError, AudioDeviceId, EntryId, EntryStatus, HistoryLimit, HistoryRetention, ModelDefinition,
+    ModelId, NewHistoryEntry, Settings, UtcMillis,
+};
 use whispernow_platform::{AppPaths, MemoryCredentialStore, SettingsStore};
 
 use super::{
     Backend, Events,
+    history::HistoryStore,
     settings::SavedSettings,
     state::{State, StateCell},
 };
+
+/// Inserts a dictation of `text` into a history that keeps everything.
+pub(crate) fn insert_entry(
+    history: &HistoryStore,
+    text: &str,
+    audio: Option<&[f32]>,
+) -> Result<EntryId, AppError> {
+    history.insert(
+        NewHistoryEntry {
+            created_at: UtcMillis::now(),
+            duration_millis: 1_000,
+            raw_text: Some(text.to_owned()),
+            cleaned_text: None,
+            status: EntryStatus::Ok,
+            error: None,
+            asr_model_id: ModelId::default(),
+        },
+        audio,
+        HistoryLimit::Unlimited,
+        HistoryRetention::Forever,
+    )
+}
 
 enum Start {
     Never,
@@ -74,7 +99,7 @@ impl AudioInput for FakeAudioInput {
 
     fn start(
         &self,
-        _device: AudioDeviceChoice,
+        _device: Option<AudioDeviceId>,
         sink: Arc<dyn AudioSink>,
     ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
         if let Some(hook) = &self.before_start {

@@ -209,7 +209,7 @@ fn response(output: &LocalDecodeOutput) -> LlmResponse {
     LlmResponse {
         text: String::from_utf8_lossy(&output.text).into_owned(),
         finish_reason: match output.finish {
-            LocalFinish::EndOfTurn => LlmFinishReason::Completed,
+            LocalFinish::EndOfTurn => LlmFinishReason::Finished,
             LocalFinish::OutputLimit | LocalFinish::ContextFull => LlmFinishReason::OutputLimit,
         },
     }

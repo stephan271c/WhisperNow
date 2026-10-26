@@ -115,6 +115,7 @@ impl Worker {
         samples: &[f32],
         failure: TranscriptFailure,
     ) -> Outcome {
+        tracing::info!(%failure, "the dictation produced no transcript");
         let error = transcript_error(failure);
         match failure {
             TranscriptFailure::NoAudio | TranscriptFailure::NoSpeech => {

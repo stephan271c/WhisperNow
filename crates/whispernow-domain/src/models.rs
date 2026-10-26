@@ -439,82 +439,86 @@ impl ModelRegistry {
     #[must_use]
     pub fn builtin() -> Self {
         let mut models = vec![
-            transducer(
+            speech(
                 "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
                 "Parakeet TDT v2 0.6B (Int8)",
-                Precision::Int8,
                 482_468_385,
                 "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad",
                 ENGLISH,
                 leaderboard(5.39, 27.5),
+                transducer(Precision::Int8),
             ),
-            transducer(
+            speech(
                 "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16",
                 "Parakeet TDT v2 0.6B (FP16)",
-                Precision::Fp16,
                 1_120_982_957,
                 "37f67a1a6c942dae27d345ee395fbd19e25ee48996faf70fca25779026054cf0",
                 ENGLISH,
                 leaderboard(5.39, 20.9),
+                transducer(Precision::Fp16),
             ),
-            transducer(
+            speech(
                 "sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
                 "Parakeet Unified 0.6B",
-                Precision::Int8,
                 501_350_460,
                 "99f63605b3a85a54c250c0869670a687b7d6598a47bf2421515e1f839a76e150",
                 ENGLISH,
                 estimated(5.5, 25.0),
+                transducer(Precision::Int8),
             ),
-            transducer(
+            speech(
                 "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
                 "Parakeet TDT v3 0.6B",
-                Precision::Int8,
                 487_170_055,
                 "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
                 PARAKEET_V3_LANGUAGES,
                 leaderboard(5.66, 25.9),
+                transducer(Precision::Int8),
             ),
-            transducer(
+            speech(
                 "sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8",
                 "Parakeet TDT 110M",
-                Precision::Int8,
                 108_035_095,
                 "f628312e9fdf8686374cb01a69425c41732529d540860311f16f37cbc32cfe9b",
                 ENGLISH,
                 leaderboard(6.61, 84.4),
+                transducer(Precision::Int8),
             ),
-            sense_voice(
+            speech(
                 "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
                 "SenseVoice Small",
                 163_002_883,
                 "7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e",
+                SENSE_VOICE_LANGUAGES,
                 estimated(11.0, 55.6),
+                sense_voice(),
             ),
-            qwen3_asr(
+            speech(
                 "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
                 "Qwen3-ASR 0.6B",
                 878_702_423,
                 "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+                QWEN3_ASR_LANGUAGES,
                 leaderboard(5.61, 5.9),
+                qwen3_asr(),
             ),
-            whisper(
+            speech(
                 "sherpa-onnx-whisper-distil-large-v3.5",
                 "Whisper Distil Large v3.5",
-                "distil-large-v3.5",
                 528_659_059,
                 "ec874c7346d24ef8063e05430ede616d66d80a410360283099d0bdf659187b1d",
                 ENGLISH,
                 leaderboard(6.10, 4.9),
+                whisper("distil-large-v3.5"),
             ),
-            whisper(
+            speech(
                 "sherpa-onnx-whisper-turbo",
                 "Whisper Large v3 Turbo",
-                "turbo",
                 563_790_207,
                 "b11acbbcd660b44a8e0df33724feb5aaa709cf65668f2823d59f656312544f22",
                 WHISPER_LANGUAGES,
                 leaderboard(7.01, 4.1),
+                whisper("turbo"),
             ),
         ];
         models.extend(CLEANUP_MODELS.iter().map(local_cleanup));
@@ -590,95 +594,59 @@ impl Precision {
     }
 }
 
-fn transducer(
-    id: &str,
-    display_name: &str,
-    precision: Precision,
-    archive_size_bytes: u64,
-    sha256: &str,
-    languages: &[&str],
-    benchmark: SpeechBenchmark,
-) -> ModelDefinition {
-    let precision = precision.as_str();
-    ModelDefinition {
-        id: ModelId::new(id).expect("built-in identifiers are non-empty"),
-        display_name: display_name.to_owned(),
-        source: source(id, archive_size_bytes, sha256),
-        layout: ModelLayout::Transducer {
-            encoder: format!("encoder.{precision}.onnx"),
-            decoder: format!("decoder.{precision}.onnx"),
-            joiner: format!("joiner.{precision}.onnx"),
-            tokens: "tokens.txt".to_owned(),
-        },
-        languages: tags(languages),
-        benchmark: Some(ModelBenchmark::Speech(benchmark)),
-    }
-}
-
-fn whisper(
-    id: &str,
-    display_name: &str,
-    artifact_prefix: &str,
-    archive_size_bytes: u64,
-    sha256: &str,
-    languages: &[&str],
-    benchmark: SpeechBenchmark,
-) -> ModelDefinition {
-    ModelDefinition {
-        id: ModelId::new(id).expect("built-in identifiers are non-empty"),
-        display_name: display_name.to_owned(),
-        source: source(id, archive_size_bytes, sha256),
-        layout: ModelLayout::Whisper {
-            encoder: format!("{artifact_prefix}-encoder.int8.onnx"),
-            decoder: format!("{artifact_prefix}-decoder.int8.onnx"),
-            tokens: format!("{artifact_prefix}-tokens.txt"),
-        },
-        languages: tags(languages),
-        benchmark: Some(ModelBenchmark::Speech(benchmark)),
-    }
-}
-
-fn sense_voice(
-    id: &str,
-    display_name: &str,
-    archive_size_bytes: u64,
-    sha256: &str,
-    benchmark: SpeechBenchmark,
-) -> ModelDefinition {
-    ModelDefinition {
-        id: ModelId::new(id).expect("built-in identifiers are non-empty"),
-        display_name: display_name.to_owned(),
-        source: source(id, archive_size_bytes, sha256),
-        layout: ModelLayout::SenseVoice {
-            model: "model.int8.onnx".to_owned(),
-            tokens: "tokens.txt".to_owned(),
-        },
-        languages: tags(SENSE_VOICE_LANGUAGES),
-        benchmark: Some(ModelBenchmark::Speech(benchmark)),
-    }
-}
-
-fn qwen3_asr(
+/// A speech model released as `archive`; its id is the archive name in lowercase.
+fn speech(
     archive: &str,
     display_name: &str,
     archive_size_bytes: u64,
     sha256: &str,
+    languages: &[&str],
     benchmark: SpeechBenchmark,
+    layout: ModelLayout,
 ) -> ModelDefinition {
     ModelDefinition {
         id: ModelId::new(archive.to_ascii_lowercase()).expect("built-in identifiers are valid"),
         display_name: display_name.to_owned(),
         source: source(archive, archive_size_bytes, sha256),
-        layout: ModelLayout::Qwen3Asr {
-            conv_frontend: "conv_frontend.onnx".to_owned(),
-            encoder: "encoder.int8.onnx".to_owned(),
-            decoder: "decoder.int8.onnx".to_owned(),
-            vocab: "tokenizer/vocab.json".to_owned(),
-            merges: "tokenizer/merges.txt".to_owned(),
-            tokenizer_config: "tokenizer/tokenizer_config.json".to_owned(),
-        },
-        languages: tags(QWEN3_ASR_LANGUAGES),
+        layout,
+        languages: tags(languages),
         benchmark: Some(ModelBenchmark::Speech(benchmark)),
+    }
+}
+
+fn transducer(precision: Precision) -> ModelLayout {
+    let precision = precision.as_str();
+    ModelLayout::Transducer {
+        encoder: format!("encoder.{precision}.onnx"),
+        decoder: format!("decoder.{precision}.onnx"),
+        joiner: format!("joiner.{precision}.onnx"),
+        tokens: "tokens.txt".to_owned(),
+    }
+}
+
+fn whisper(artifact_prefix: &str) -> ModelLayout {
+    ModelLayout::Whisper {
+        encoder: format!("{artifact_prefix}-encoder.int8.onnx"),
+        decoder: format!("{artifact_prefix}-decoder.int8.onnx"),
+        tokens: format!("{artifact_prefix}-tokens.txt"),
+    }
+}
+
+fn sense_voice() -> ModelLayout {
+    ModelLayout::SenseVoice {
+        model: "model.int8.onnx".to_owned(),
+        tokens: "tokens.txt".to_owned(),
+    }
+}
+
+fn qwen3_asr() -> ModelLayout {
+    ModelLayout::Qwen3Asr {
+        conv_frontend: "conv_frontend.onnx".to_owned(),
+        encoder: "encoder.int8.onnx".to_owned(),
+        decoder: "decoder.int8.onnx".to_owned(),
+        vocab: "tokenizer/vocab.json".to_owned(),
+        merges: "tokenizer/merges.txt".to_owned(),
+        tokenizer_config: "tokenizer/tokenizer_config.json".to_owned(),
     }
 }
 

@@ -249,6 +249,24 @@ fn history_rows_render_again_only_on_the_minute_tick() {
 }
 
 #[test]
+fn a_history_read_that_finds_nothing_new_renders_nothing() {
+    let entries = vec![entry(7, UtcMillis(NOW.0 - HOUR))];
+    let mut page = super::super::tests::shell(snapshot(Phase::Idle), management(entries.clone()));
+    page.click("nav-history");
+    let before = page.render_counts();
+
+    page.publish(EventPayload::HistoryChanged).answer(
+        "get_history",
+        Ok(HistoryPage {
+            entries,
+            has_more: false,
+        }),
+    );
+
+    assert_eq!(page.rendered_since(&before), Vec::<&str>::new());
+}
+
+#[test]
 fn typing_in_the_search_renders_the_search_not_the_rest_of_the_window() {
     let mut page = super::super::tests::shell(snapshot(Phase::Idle), one_entry());
     page.click("nav-history");
@@ -328,7 +346,12 @@ fn a_read_overlapping_deletion_cannot_restore_the_row_or_report_an_obsolete_fail
             .click("history-delete-7")
             .click("history-delete-7-confirm")
             .answer("delete_history_entry", Ok(()));
-        assert_eq!(fake::count("get_history"), 2);
+        assert_eq!(
+            fake::count("get_history"),
+            1,
+            "the desktop's HistoryChanged reads again"
+        );
+        page.publish(EventPayload::HistoryChanged);
         fake::answer_nth(
             "get_history",
             1,

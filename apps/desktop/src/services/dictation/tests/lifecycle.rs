@@ -9,9 +9,11 @@ use crate::{
         models::ModelLibrary,
         output::Output,
         permissions::MicrophoneAccess,
-        test_support::{install_artifacts, shut_down},
+        test_support::{insert_entry, install_artifacts, shut_down},
     },
-    shortcuts::{Shortcuts, memory_registrar::MemoryRegistrar, recording_binding},
+    shortcuts::{
+        RecordingBinding, Shortcuts, memory_registrar::MemoryRegistrar, recording_binding,
+    },
     tray::TrayController,
 };
 use whispernow_core::audio::AudioInputError;
@@ -32,6 +34,39 @@ impl AutostartRegistration for Autostart {
         self.enabled.store(enabled, Ordering::SeqCst);
         Ok(())
     }
+}
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+}
+
+fn test_shortcuts(
+    registrar: Arc<MemoryRegistrar>,
+    recording: Option<RecordingBinding>,
+) -> Arc<Shortcuts> {
+    Arc::new(Shortcuts::new(
+        registrar,
+        recording,
+        Arc::new(|| true),
+        None,
+    ))
+}
+
+fn test_gateway(
+    backend: Backend,
+    shortcuts: Arc<Shortcuts>,
+    autostart: Arc<dyn AutostartRegistration>,
+) -> Gateway {
+    Gateway::new(
+        Arc::new(backend),
+        shortcuts,
+        autostart,
+        Arc::new(ActivationGate::default()),
+        TrayController::headless(true),
+    )
 }
 
 pub(super) fn test_backend(fixture: Fixture) -> (Backend, tempfile::TempDir) {
@@ -82,19 +117,11 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
     let (backend, _root) = test_backend(Fixture::new());
     let saved = backend.settings.view().settings;
     let registrar = Arc::new(MemoryRegistrar::default());
-    let shortcuts = Arc::new(Shortcuts::new(
-        registrar.clone(),
-        recording_binding(&saved),
-        Arc::new(|| true),
-        None,
-    ));
     let autostart = Arc::new(Autostart::default());
-    let gateway = Arc::new(Gateway::new(
-        Arc::new(backend),
-        shortcuts,
+    let gateway = Arc::new(test_gateway(
+        backend,
+        test_shortcuts(registrar.clone(), recording_binding(&saved)),
         autostart.clone(),
-        Arc::new(ActivationGate::default()),
-        TrayController::headless(true),
     ));
     let (entered, registering) = mpsc::channel();
     let (release, released) = mpsc::channel();
@@ -190,25 +217,14 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
 fn a_settings_save_keeps_registers_or_refuses_the_recording_shortcut() {
     use whispernow_domain::{Shortcut, ShortcutKey, ThemePreference};
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime");
+    let runtime = runtime();
     let (backend, _root) = test_backend(Fixture::new());
     let saved = backend.settings.view().settings;
     let registrar = Arc::new(MemoryRegistrar::default());
-    let shortcuts = Arc::new(Shortcuts::new(
-        registrar.clone(),
-        recording_binding(&saved),
-        Arc::new(|| true),
-        None,
-    ));
-    let gateway = Gateway::new(
-        Arc::new(backend),
-        shortcuts,
+    let gateway = test_gateway(
+        backend,
+        test_shortcuts(registrar.clone(), recording_binding(&saved)),
         Arc::new(Autostart::default()),
-        Arc::new(ActivationGate::default()),
-        TrayController::headless(true),
     );
     gateway.register_persisted_shortcuts();
     let shortcut = |key| Shortcut {
@@ -279,29 +295,15 @@ fn a_cancel_shortcut_change_swaps_the_cancel_shortcut_and_other_changes_leave_it
 
     use crate::shortcuts::{binding, cancel_binding};
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime");
+    let runtime = runtime();
     let (backend, _root) = test_backend(Fixture::new());
     let saved = backend.settings.view().settings;
     let registrar = Arc::new(MemoryRegistrar::default());
-    let shortcuts = Arc::new(Shortcuts::new(
-        registrar.clone(),
-        recording_binding(&saved),
-        Arc::new(|| true),
-        None,
-    ));
+    let shortcuts = test_shortcuts(registrar.clone(), recording_binding(&saved));
     shortcuts.set_cancel_binding(cancel_binding(&saved));
     shortcuts.observe_dictation(true);
     shortcuts.sync_cancel_shortcut();
-    let gateway = Gateway::new(
-        Arc::new(backend),
-        shortcuts,
-        Arc::new(Autostart::default()),
-        Arc::new(ActivationGate::default()),
-        TrayController::headless(true),
-    );
+    let gateway = test_gateway(backend, shortcuts, Arc::new(Autostart::default()));
     let escape = binding(&Shortcut::default_cancel());
     assert!(registrar.holds(&escape));
 
@@ -324,33 +326,14 @@ fn a_cancel_shortcut_change_swaps_the_cancel_shortcut_and_other_changes_leave_it
 
 #[test]
 fn a_history_limit_change_prunes_history_and_other_changes_do_not() {
-    use whispernow_domain::{
-        EntryStatus, HistoryLimit, HistoryRetention, NewHistoryEntry, ThemePreference, UtcMillis,
-    };
+    use whispernow_domain::{HistoryLimit, ThemePreference};
 
     let (backend, _root) = test_backend(Fixture::new());
     backend
         .update_settings(&SettingChange::HistoryLimit(HistoryLimit::Unlimited))
         .expect("unlimited history");
     for _ in 0..21 {
-        let entry = NewHistoryEntry {
-            created_at: UtcMillis::now(),
-            duration_millis: 1_000,
-            raw_text: Some("kept".to_owned()),
-            cleaned_text: None,
-            status: EntryStatus::Ok,
-            error: None,
-            asr_model_id: ModelId::default(),
-        };
-        backend
-            .history
-            .insert(
-                entry,
-                None,
-                HistoryLimit::Unlimited,
-                HistoryRetention::Forever,
-            )
-            .expect("insert");
+        insert_entry(&backend.history, "kept", None).expect("insert");
     }
     let count = || {
         backend
@@ -404,11 +387,9 @@ fn saved_shortcuts_that_break_a_rule_leave_the_settings_warning_published() {
         ..Settings::default()
     };
     fixture.settings.report_loaded(&invalid, None);
-    let shortcuts = Shortcuts::new(
+    let shortcuts = test_shortcuts(
         Arc::new(MemoryRegistrar::default()),
         recording_binding(&invalid),
-        Arc::new(|| true),
-        None,
     );
     assert_eq!(
         shortcuts.failure(),
@@ -427,26 +408,16 @@ fn saved_shortcuts_that_break_a_rule_leave_the_settings_warning_published() {
 
 #[test]
 fn the_persisted_shortcut_registration_publishes_its_failure_when_it_ends() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime");
+    let runtime = runtime();
     let (backend, _root) = test_backend(Fixture::new());
     let saved = backend.settings.view().settings;
     let recording = recording_binding(&saved).expect("the default recording shortcut");
     let registrar = Arc::new(MemoryRegistrar::default());
     *registrar.fail_register.lock().expect("fail register") = Some(recording.binding.id.0);
-    let gateway = Gateway::new(
-        Arc::new(backend),
-        Arc::new(Shortcuts::new(
-            registrar,
-            Some(recording),
-            Arc::new(|| true),
-            None,
-        )),
+    let gateway = test_gateway(
+        backend,
+        test_shortcuts(registrar, Some(recording)),
         Arc::new(Autostart::default()),
-        Arc::new(ActivationGate::default()),
-        TrayController::headless(true),
     );
 
     let pending = runtime
@@ -481,23 +452,12 @@ fn the_persisted_shortcut_registration_publishes_its_failure_when_it_ends() {
 fn settings_views_after_a_change_keep_the_standing_shortcut_warning() {
     use whispernow_domain::{SetupCheckpoint, SetupStep};
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime");
+    let runtime = runtime();
     let (backend, _root) = test_backend(Fixture::new());
-    let shortcuts = Arc::new(Shortcuts::new(
-        Arc::new(MemoryRegistrar::default()),
-        None,
-        Arc::new(|| true),
-        None,
-    ));
-    let gateway = Gateway::new(
-        Arc::new(backend),
-        shortcuts,
+    let gateway = test_gateway(
+        backend,
+        test_shortcuts(Arc::new(MemoryRegistrar::default()), None),
         Arc::new(Autostart::default()),
-        Arc::new(ActivationGate::default()),
-        TrayController::headless(true),
     );
     let standing = runtime
         .block_on(gateway.settings_view())
@@ -575,23 +535,13 @@ fn a_settings_view_reads_the_autostart_registration_off_the_runtime_thread() {
         }
     }
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime");
+    let runtime = runtime();
     let (backend, _root) = test_backend(Fixture::new());
     let autostart = Arc::new(ReadingThread::default());
-    let gateway = Gateway::new(
-        Arc::new(backend),
-        Arc::new(Shortcuts::new(
-            Arc::new(MemoryRegistrar::default()),
-            None,
-            Arc::new(|| true),
-            None,
-        )),
+    let gateway = test_gateway(
+        backend,
+        test_shortcuts(Arc::new(MemoryRegistrar::default()), None),
         autostart.clone(),
-        Arc::new(ActivationGate::default()),
-        TrayController::headless(true),
     );
 
     runtime
@@ -606,8 +556,7 @@ fn a_settings_view_reads_the_autostart_registration_off_the_runtime_thread() {
 #[test]
 fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
     use crate::services::state::DownloadTask;
-    use whispernow_domain::ipc::ActiveDownload;
-    use whispernow_domain::{DEFAULT_CLEANUP_MODEL_ID, DownloadPhase, SetupCheckpoint, SetupStep};
+    use whispernow_domain::{DEFAULT_CLEANUP_MODEL_ID, SetupCheckpoint, SetupStep};
 
     for expected in ["model_transition_busy", "model_not_speech"] {
         let (backend, _root) = test_backend(Fixture::new());
@@ -619,16 +568,11 @@ fn setup_refuses_active_downloads_and_cleanup_models_before_loading() {
             backend.state.apply(|state| {
                 state.active_downloads.insert(
                     checkpoint.model_id.clone(),
-                    DownloadTask {
-                        progress: ActiveDownload {
-                            model_id: checkpoint.model_id.clone(),
-                            phase: DownloadPhase::Downloading,
-                            downloaded_bytes: 0,
-                            total_bytes: 1_024,
-                            bytes_per_second: None,
-                        },
-                        cancellation: CancellationToken::default(),
-                    },
+                    DownloadTask::new(
+                        checkpoint.model_id.clone(),
+                        1_024,
+                        CancellationToken::default(),
+                    ),
                 );
             });
         } else {

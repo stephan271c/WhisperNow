@@ -60,7 +60,6 @@ pub(crate) fn Button(
 pub(crate) fn IconButton(
     icon: IconName,
     label: String,
-    #[props(default = ButtonVariant::Ghost)] variant: ButtonVariant,
     #[props(default)] size: ButtonSize,
     onclick: EventHandler<MouseEvent>,
     #[props(extends = GlobalAttributes, extends = button)] attributes: Vec<Attribute>,
@@ -68,7 +67,7 @@ pub(crate) fn IconButton(
     rsx! {
         button {
             r#type: "button",
-            class: "btn btn-icon {variant.class()} {size.class()}",
+            class: "btn btn-icon btn-ghost {size.class()}",
             aria_label: "{label}",
             title: "{label}",
             onclick: move |event| onclick.call(event),

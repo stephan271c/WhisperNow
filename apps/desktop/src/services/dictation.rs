@@ -16,9 +16,7 @@ use whispernow_domain::{AppError, ErrorCategory};
 use whispernow_core::{
     CancellationToken, ResolvedModel,
     asr::AsrEngine,
-    audio::{
-        AudioCapture, AudioDeviceChoice, AudioInput, AudioInputError, AudioSink, TARGET_SAMPLE_RATE,
-    },
+    audio::{AudioCapture, AudioInput, AudioInputError, AudioSink},
     workflow::{
         AudioSegment, PreparedTranscript, SpeechSegmenter, TranscriptFailure, VoiceActivity,
         has_microphone_audio, prepare_segmented,
@@ -26,7 +24,7 @@ use whispernow_core::{
 };
 use whispernow_domain::ipc::MicrophoneTestResponse;
 use whispernow_domain::{
-    HistoryLimit, HistoryRetention, ModelId, UtcMillis, VocabularyReplacement,
+    AudioDeviceId, HistoryLimit, HistoryRetention, ModelId, UtcMillis, VocabularyReplacement,
 };
 use whispernow_platform::ModelStore;
 
@@ -50,8 +48,6 @@ use capture::{CapturedSpeech, RecordingSink};
 pub(crate) use cleanup::{AiCleanup, CleanupPlan};
 use outcome::{DecodeFailure, NewEntry, Outcome, cleanup_fallback_warning, interruption_warning};
 
-const MAX_RECORDING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 60 * 30;
-
 #[derive(Clone)]
 pub(crate) struct DictationSettings {
     pub(crate) model_id: ModelId,
@@ -63,7 +59,7 @@ pub(crate) struct DictationSettings {
 }
 
 pub(crate) struct RecordingSettings {
-    pub(crate) input_device: AudioDeviceChoice,
+    pub(crate) input_device: Option<AudioDeviceId>,
     pub(crate) dictation: DictationSettings,
 }
 
@@ -107,7 +103,7 @@ pub(super) enum Message {
         reply: Reply<()>,
     },
     MicTest {
-        device: AudioDeviceChoice,
+        device: Option<AudioDeviceId>,
         duration: Duration,
         reply: Reply<Result<MicrophoneTestResponse, MicrophoneTestError>>,
     },
@@ -320,7 +316,7 @@ impl Dictation {
 
     pub(crate) fn test_microphone(
         &self,
-        device: AudioDeviceChoice,
+        device: Option<AudioDeviceId>,
         duration: Duration,
     ) -> Result<MicrophoneTestResponse, MicrophoneTestError> {
         self.ask(|reply| Message::MicTest {
@@ -505,7 +501,6 @@ impl Worker {
             session,
             self.sender.clone(),
             self.parts.state.events().clone(),
-            MAX_RECORDING_SAMPLES,
             SpeechSegmenter::new(voice_activity, model.definition.family()),
         ));
         let capture = match self
@@ -875,7 +870,7 @@ impl Worker {
 
     fn test_microphone(
         &self,
-        device: AudioDeviceChoice,
+        device: Option<AudioDeviceId>,
         duration: Duration,
     ) -> Result<MicrophoneTestResponse, MicrophoneTestError> {
         self.parts

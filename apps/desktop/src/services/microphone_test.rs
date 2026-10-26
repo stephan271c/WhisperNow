@@ -6,11 +6,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use whispernow_domain::{AppError, ErrorCategory};
+use whispernow_domain::{AppError, AudioDeviceId, ErrorCategory};
 
 use whispernow_core::audio::{
-    AudioBlock, AudioDeviceChoice, AudioEvent, AudioInput, AudioInputError, AudioLevelSummary,
-    AudioSink,
+    AudioBlock, AudioEvent, AudioInput, AudioInputError, AudioLevelSummary, AudioSink,
 };
 use whispernow_domain::ipc::MicrophoneTestResponse;
 
@@ -88,7 +87,7 @@ impl AudioSink for LevelProbe {
 
 pub(super) fn run(
     audio: &dyn AudioInput,
-    device: AudioDeviceChoice,
+    device: Option<AudioDeviceId>,
     duration: Duration,
     cancelled: impl Fn() -> bool,
 ) -> Result<MicrophoneTestResponse, MicrophoneTestError> {
@@ -116,7 +115,7 @@ pub(super) fn run(
 mod tests {
     use std::time::Duration;
 
-    use whispernow_core::audio::{AudioDeviceChoice, AudioInputError};
+    use whispernow_core::audio::AudioInputError;
 
     use super::run;
     use crate::services::test_support::FakeAudioInput;
@@ -124,13 +123,7 @@ mod tests {
     #[test]
     fn a_test_is_bounded_and_always_stops_capture() {
         let input = FakeAudioInput::levels();
-        let response = run(
-            &input,
-            AudioDeviceChoice::SystemDefault,
-            Duration::from_millis(20),
-            || false,
-        )
-        .expect("test runs");
+        let response = run(&input, None, Duration::from_millis(20), || false).expect("test runs");
 
         assert_eq!(response.levels.len(), 64);
         assert!((response.peak - 1.0).abs() < f32::EPSILON);
@@ -140,23 +133,13 @@ mod tests {
     #[test]
     fn a_cancelled_test_stops_at_once_and_a_refused_start_reports_permission() {
         let input = FakeAudioInput::levels();
-        run(
-            &input,
-            AudioDeviceChoice::SystemDefault,
-            Duration::from_mins(1),
-            || true,
-        )
-        .expect("cancelled test still returns its levels");
+        run(&input, None, Duration::from_mins(1), || true)
+            .expect("cancelled test still returns its levels");
         assert_eq!(*input.calls.lock().expect("calls"), ["start", "stop"]);
 
         let refused = FakeAudioInput::refusing(AudioInputError::PermissionDenied);
-        let error = run(
-            &refused,
-            AudioDeviceChoice::SystemDefault,
-            Duration::from_mins(1),
-            || false,
-        )
-        .expect_err("permission denied");
+        let error =
+            run(&refused, None, Duration::from_mins(1), || false).expect_err("permission denied");
         assert!(error.permission_denied(), "{error:?}");
     }
 }

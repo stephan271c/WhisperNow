@@ -6,13 +6,26 @@ use whispernow_domain::{SetupCheckpoint, SetupStep};
 
 use crate::UiContext;
 use crate::client;
-use crate::management::{ManagementState, SetupTest, replace_task};
+use crate::management::{BackgroundRead, ManagementState, SetupTest, replace_task};
 use crate::notice::NoticeScope;
 use crate::operations::UiOperation;
 
 const PERMISSION_POLL_MS: u32 = 1_000;
 
 pub(crate) const PERMISSION_POLLS: u32 = 120;
+
+/// Whether no card can change any more while a watch runs: each is granted, unavailable to
+/// this session, or refused with nothing setup can do about it.
+fn permissions_settled(permissions: &PermissionsResponse) -> bool {
+    permissions
+        .permissions
+        .iter()
+        .all(|permission| match permission.status {
+            PermissionStatus::Granted | PermissionStatus::Unavailable => true,
+            PermissionStatus::Denied => !permission.can_request && !permission.can_open_settings,
+            PermissionStatus::NotDetermined => false,
+        })
+}
 
 impl UiContext {
     pub(crate) fn move_setup(self, step: SetupStep) {
@@ -59,7 +72,10 @@ impl UiContext {
             UiOperation::CompleteSetup,
             client::invoke("complete_setup", request),
             move |mut actions, answer| match answer {
-                Ok(saved) => actions.management.write().finish_setup(saved),
+                Ok(saved) => {
+                    actions.management.write().finish_setup(saved);
+                    actions.end_permission_watch();
+                }
                 Err(error) => actions.report(NoticeScope::Setup, &error),
             },
         );
@@ -70,7 +86,10 @@ impl UiContext {
             UiOperation::RestartSetup,
             client::call("restart_setup"),
             move |mut actions, answer| match answer {
-                Ok(view) => actions.management.write().restart_setup(view),
+                Ok(view) => {
+                    actions.management.write().restart_setup(view);
+                    actions.end_permission_watch();
+                }
                 Err(error) => actions.report(NoticeScope::Setup, &error),
             },
         );
@@ -88,8 +107,8 @@ impl UiContext {
     }
 
     pub(super) fn list_devices(self) {
-        self.run_unless_busy(
-            UiOperation::ListDevices,
+        self.read_once(
+            BackgroundRead::Devices,
             client::call("list_audio_devices"),
             move |actions, answer| match answer {
                 Ok(devices) => {
@@ -104,8 +123,8 @@ impl UiContext {
     /// Reads the permission cards unless a read is already waiting for its answer. A read
     /// that fails is followed by the next poll.
     pub(crate) fn load_permissions(self) {
-        self.run_unless_busy(
-            UiOperation::LoadPermissions,
+        self.read_once(
+            BackgroundRead::Permissions,
             client::call("get_permissions"),
             |actions, answer| {
                 if let Ok(permissions) = answer {
@@ -115,12 +134,29 @@ impl UiContext {
         );
     }
 
-    /// Installs the cards; every card granted after a request moves setup on by itself.
+    /// Installs the cards unless they are shown already. A watch ends once no card can change
+    /// any more, and may then move setup on.
     pub(crate) fn install_permissions(mut self, permissions: PermissionsResponse) {
-        let request = self.management.write().install_permissions(permissions);
+        let watch_settled = permissions_settled(&permissions) && self.end_permission_watch();
+        if self.management.peek().permissions.as_ref() != Some(&permissions) {
+            self.management.write().permissions = Some(permissions);
+        }
+        if !watch_settled {
+            return;
+        }
+        let request = self.management.peek().settled_permissions_move();
         if let Some(request) = request {
             self.save_checkpoint(request, ManagementState::install_setup);
         }
+    }
+
+    /// Returns whether a watch was running.
+    fn end_permission_watch(mut self) -> bool {
+        let Some(watch) = self.background.write().permission_watch.take() else {
+            return false;
+        };
+        watch.cancel();
+        true
     }
 
     /// Asks for `kind`, then watches the cards until none can change any more. macOS shows one
@@ -180,9 +216,9 @@ impl UiContext {
                     self.load_permissions();
                 }
             }
-            self.management.write().permission_watch = None;
+            self.background.write().permission_watch = None;
         });
-        replace_task(&mut self.management.write().permission_watch, Some(watch));
+        replace_task(&mut self.background.write().permission_watch, Some(watch));
     }
 
     /// Starts setup's test dictation; the overlay's stop, a shortcut or [`Self::stop_setup_test`]

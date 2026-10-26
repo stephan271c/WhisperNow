@@ -17,11 +17,20 @@ use crate::test_support::{
     Page, editable_settings, element, focused, snapshot, state_event, tag, text,
 };
 
+// Settings and checkpoints read any id but a built-in speech model's as the default model.
+const BASE: &str = "sherpa-onnx-whisper-turbo";
+const SMALL: &str = "sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8";
+const BASE_CHOICE: &str = "setup-model-sherpa-onnx-whisper-turbo";
+const SMALL_CHOICE: &str =
+    "setup-model-sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8";
+const SMALL_DOWNLOAD: &str =
+    "setup-model-sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8-download";
+
 /// Setup saved at `step`, with its model in `availability`.
 fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState {
     let mut management = unfinished_setup(SetupCheckpoint {
         step,
-        model_id: whispernow_domain::ModelId::new("base").expect("fixture model id"),
+        model_id: whispernow_domain::ModelId::new(BASE).expect("fixture model id"),
         input_device: None,
         recording_shortcut: Shortcut {
             modifiers: [
@@ -34,7 +43,7 @@ fn setup_at(step: SetupStep, availability: ModelAvailability) -> ManagementState
         },
         recording_mode: RecordingMode::Toggle,
     });
-    management.models = Some(vec![model("base", "Base", availability)]);
+    management.models = Some(vec![model(BASE, "Base", availability)]);
     management
 }
 
@@ -349,6 +358,47 @@ fn a_permission_watch_stops_reading_after_its_poll_limit() {
 }
 
 #[test]
+fn a_permission_poll_that_finds_nothing_new_renders_nothing() {
+    let pending = cards(
+        PermissionStatus::NotDetermined,
+        PermissionStatus::NotDetermined,
+    );
+    let mut setup = requested(pending.clone());
+    let before = setup.render_counts();
+
+    setup.wait();
+    assert_eq!(fake::count("get_permissions"), 2);
+    setup.answer("get_permissions", Ok(pending));
+
+    assert_eq!(setup.rendered_since(&before), Vec::<&str>::new());
+}
+
+#[test]
+fn a_watch_started_away_from_setup_ends_once_the_cards_settle() {
+    let mut page = home(finished(setup_at(
+        SetupStep::TryIt,
+        ModelAvailability::Downloaded,
+    )));
+    page.act(|actions| actions.open_permission_settings(PermissionKind::Microphone));
+    page.answer("open_permission_settings", Ok(()));
+    page.wait();
+    assert_eq!(fake::count("get_permissions"), 1);
+
+    page.answer(
+        "get_permissions",
+        Ok(cards(PermissionStatus::Granted, PermissionStatus::Granted)),
+    );
+    page.wait().wait();
+
+    assert_eq!(
+        fake::count("get_permissions"),
+        1,
+        "settled cards end the watch"
+    );
+    assert_eq!(fake::count("save_setup_checkpoint"), 0);
+}
+
+#[test]
 fn a_new_step_moves_focus_to_its_heading() {
     let mut setup = at(SetupStep::Welcome);
     let html = setup.html();
@@ -389,7 +439,7 @@ fn a_new_step_moves_focus_to_its_heading() {
 fn the_sidebar_names_no_model_until_setup_reaches_its_model_step() {
     let sidebar = |step| {
         let mut state = snapshot(Phase::Idle);
-        state.selected_model_id = ModelId::new("base").expect("fixture model id");
+        state.selected_model_id = ModelId::new(BASE).expect("fixture model id");
         state.model_state = ModelState::Unloaded;
         shell(state, setup_at(step, ModelAvailability::NotInstalled)).html()
     };
@@ -406,7 +456,7 @@ fn the_sidebar_names_no_model_until_setup_reaches_its_model_step() {
 fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cancellation() {
     let mut management = setup_at(SetupStep::Model, ModelAvailability::Downloaded);
     management.models.as_mut().expect("models loaded").extend([
-        model("small", "Small", ModelAvailability::Downloaded),
+        model(SMALL, "Small", ModelAvailability::Downloaded),
         model("large", "Large", ModelAvailability::NotInstalled),
         model("stream", "Stream", ModelAvailability::NotInstalled),
     ]);
@@ -421,9 +471,9 @@ fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cance
             bytes_per_second: None,
         });
     }));
-    setup.fire("setup-model-small", "change", "small");
+    setup.fire(SMALL_CHOICE, "change", SMALL);
     let chosen = fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[0].clone();
-    assert_eq!(chosen.model_id.as_str(), "small");
+    assert_eq!(chosen.model_id.as_str(), SMALL);
     assert_eq!(
         chosen.step,
         SetupStep::Model,
@@ -432,15 +482,11 @@ fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cance
     setup.answer("save_setup_checkpoint", Ok(saved_with(&setup, chosen)));
     setup.click("setup-continue");
     let submitted = fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[1].clone();
-    assert_eq!(submitted.model_id.as_str(), "small");
+    assert_eq!(submitted.model_id.as_str(), SMALL);
     assert_eq!(submitted.step, SetupStep::Shortcuts);
     let html = setup.html();
     assert_eq!(current_step(&html), 3, "the old step waits for the answer");
-    for id in [
-        "setup-model-base",
-        "setup-model-small",
-        "setup-model-large-download",
-    ] {
+    for id in [BASE_CHOICE, SMALL_CHOICE, "setup-model-large-download"] {
         assert!(
             tag(&html, id)
                 .expect("model control")
@@ -449,14 +495,14 @@ fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cance
         );
     }
     assert!(
-        tag(&html, "setup-model-base")
+        tag(&html, BASE_CHOICE)
             .expect("model choice")
             .contains("setup-models-disabled-reason")
     );
     assert!(text(&html, "setup-models-disabled-reason").contains("Wait for the current change"));
     assert!(html.contains("aria-valuenow=\"25\""));
 
-    setup.fire("setup-model-base", "change", "base");
+    setup.fire(BASE_CHOICE, "change", BASE);
     setup.click_named("Download Large");
     assert_eq!(fake::count("download_model"), 0);
     assert_eq!(
@@ -481,18 +527,51 @@ fn a_pending_model_checkpoint_keeps_the_selected_model_and_allows_download_cance
 }
 
 #[test]
+fn a_download_tick_renders_only_the_downloading_model() {
+    let mut management = setup_at(SetupStep::Model, ModelAvailability::Downloaded);
+    management.models.as_mut().expect("models loaded").extend([
+        model(SMALL, "Small", ModelAvailability::NotInstalled),
+        model("large", "Large", ModelAvailability::NotInstalled),
+    ]);
+    let mut setup = opened(management);
+    setup.click("setup-show-all-models");
+    let tick = |downloaded_bytes| {
+        state_event(Phase::Idle, |state| {
+            state.active_downloads.push(ActiveDownload {
+                model_id: ModelId::new(SMALL).expect("fixture model id"),
+                phase: DownloadPhase::Downloading,
+                downloaded_bytes,
+                total_bytes: 100,
+                bytes_per_second: None,
+            });
+        })
+    };
+    setup.publish(tick(25));
+    let before = setup.render_counts();
+
+    setup.publish(tick(50));
+
+    assert_eq!(
+        setup.rendered_since(&before),
+        ["ModelChoice", "DownloadProgress", "ProgressBar", "Button"],
+        "the downloading row and its progress and cancel controls"
+    );
+    assert!(setup.html().contains("aria-valuenow=\"50\""));
+}
+
+#[test]
 fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
     let mut management = setup_at(SetupStep::Model, ModelAvailability::Downloaded);
     management
         .models
         .as_mut()
         .expect("models loaded")
-        .push(model("small", "Small", ModelAvailability::NotInstalled));
+        .push(model(SMALL, "Small", ModelAvailability::NotInstalled));
     let mut setup = opened(management);
     setup.click("setup-show-all-models");
     setup.click("setup-continue");
     assert!(
-        tag(&setup.html(), "setup-model-small-download")
+        tag(&setup.html(), SMALL_DOWNLOAD)
             .expect("download")
             .contains(" disabled=")
     );
@@ -507,11 +586,7 @@ fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
     let html = setup.html();
     assert_eq!(current_step(&html), 3);
     assert!(text(&html, "setup-wizard").contains("Setup could not be saved"));
-    for id in [
-        "setup-model-base",
-        "setup-model-small",
-        "setup-model-small-download",
-    ] {
+    for id in [BASE_CHOICE, SMALL_CHOICE, SMALL_DOWNLOAD] {
         assert!(
             !tag(&html, id)
                 .expect("model control")
@@ -519,10 +594,10 @@ fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
             "{id}"
         );
     }
-    setup.click("setup-model-small-download");
+    setup.click(SMALL_DOWNLOAD);
     assert_eq!(
         fake::requests::<ModelId>("download_model"),
-        [ModelId::new("small").expect("fixture model id")]
+        [ModelId::new(SMALL).expect("fixture model id")]
     );
     assert_eq!(
         setup
@@ -532,18 +607,18 @@ fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
             .checkpoint()
             .model_id
             .as_str(),
-        "small"
+        SMALL
     );
     assert_eq!(
         fake::requests::<SetupCheckpoint>("save_setup_checkpoint")[1]
             .model_id
             .as_str(),
-        "small",
+        SMALL,
         "a download saves the choice"
     );
     let saved = saved_at(&setup, SetupStep::Model);
     setup.answer("save_setup_checkpoint", Ok(saved));
-    setup.fire("setup-model-base", "change", "base");
+    setup.fire(BASE_CHOICE, "change", BASE);
     assert_eq!(
         setup
             .context()
@@ -552,7 +627,7 @@ fn a_refused_model_checkpoint_unlocks_model_selection_and_download() {
             .checkpoint()
             .model_id
             .as_str(),
-        "base"
+        BASE
     );
 }
 

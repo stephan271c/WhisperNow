@@ -8,7 +8,7 @@ use std::{
 use whispernow_domain::{AppError, ErrorCategory};
 
 use whispernow_core::{CancellationToken, ResolvedModel};
-use whispernow_domain::ipc::{ActiveDownload, ModelSummary};
+use whispernow_domain::ipc::ModelSummary;
 use whispernow_domain::{DownloadPhase, ModelAvailability};
 use whispernow_domain::{ModelFamily, ModelId};
 use whispernow_platform::{
@@ -95,16 +95,7 @@ impl ModelLibrary {
             }
             state.active_downloads.insert(
                 model_id.clone(),
-                DownloadTask {
-                    progress: ActiveDownload {
-                        model_id: model_id.clone(),
-                        phase: DownloadPhase::Downloading,
-                        downloaded_bytes: 0,
-                        total_bytes,
-                        bytes_per_second: None,
-                    },
-                    cancellation: token.clone(),
-                },
+                DownloadTask::new(model_id.clone(), total_bytes, token.clone()),
             );
             Ok(())
         })?;
@@ -386,7 +377,7 @@ mod tests {
     };
 
     use whispernow_core::{CancellationToken, ResolvedModel};
-    use whispernow_domain::ipc::{ActiveDownload, EventPayload, ModelState};
+    use whispernow_domain::ipc::{EventPayload, ModelState};
     use whispernow_domain::{DEFAULT_CLEANUP_MODEL_ID, DownloadPhase, ModelId, ModelRegistry};
     use whispernow_platform::{
         AppPaths, DownloadProgress, DownloadTimeouts, LocalCleanupService, ModelStore,
@@ -632,16 +623,7 @@ mod tests {
         state.apply(|state| {
             state.active_downloads.insert(
                 model_id.clone(),
-                DownloadTask {
-                    progress: ActiveDownload {
-                        model_id: model_id.clone(),
-                        phase: DownloadPhase::Downloading,
-                        downloaded_bytes: 0,
-                        total_bytes: 1_024,
-                        bytes_per_second: None,
-                    },
-                    cancellation: CancellationToken::default(),
-                },
+                DownloadTask::new(model_id.clone(), 1_024, CancellationToken::default()),
             );
         });
 
@@ -675,16 +657,7 @@ mod tests {
         state.apply(|state| {
             state.active_downloads.insert(
                 model_id.clone(),
-                DownloadTask {
-                    progress: ActiveDownload {
-                        model_id: model_id.clone(),
-                        phase: DownloadPhase::Downloading,
-                        downloaded_bytes: 0,
-                        total_bytes: 0,
-                        bytes_per_second: None,
-                    },
-                    cancellation: CancellationToken::default(),
-                },
+                DownloadTask::new(model_id.clone(), 0, CancellationToken::default()),
             );
         });
         published.try_iter().for_each(drop);

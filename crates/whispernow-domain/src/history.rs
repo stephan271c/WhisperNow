@@ -54,14 +54,17 @@ impl HistoryLimit {
         }
     }
 
+    /// The smallest choice that keeps at least `entries`; `ALL` runs from smallest to largest.
     #[must_use]
-    pub const fn at_least(entries: u64) -> Self {
-        match entries {
-            0..=20 => Self::Last20,
-            21..=100 => Self::Last100,
-            101..=1_000 => Self::Last1000,
-            _ => Self::Unlimited,
-        }
+    pub fn at_least(entries: u64) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|limit| {
+                limit
+                    .max_entries()
+                    .is_none_or(|kept| entries <= u64::from(kept))
+            })
+            .expect("Unlimited keeps every entry")
     }
 
     #[must_use]
@@ -114,14 +117,11 @@ impl HistoryRetention {
     /// The shortest choice that keeps at least `days`, as [`HistoryLimit::at_least`] does for
     /// entries.
     #[must_use]
-    pub const fn at_least_days(days: u64) -> Self {
-        match days {
-            0..=7 => Self::Days7,
-            8..=14 => Self::Days14,
-            15..=30 => Self::Days30,
-            31..=90 => Self::Days90,
-            _ => Self::Forever,
-        }
+    pub fn at_least_days(days: u64) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|retention| retention.days().is_none_or(|kept| days <= kept))
+            .expect("Forever keeps every entry")
     }
 
     #[must_use]

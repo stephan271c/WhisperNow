@@ -55,6 +55,18 @@ impl ManagementState {
         self.history_extra_pages.saturating_add(1)
     }
 
+    /// Whether the rows shown are already `page`'s, read for the current filter.
+    #[must_use]
+    pub(crate) fn shows_history(&self, page: &HistoryPage) -> bool {
+        matches!(
+            &self.history,
+            HistoryRows::Loaded { filter, entries, has_more }
+                if *filter == self.history_filter
+                    && *entries == page.entries
+                    && *has_more == page.has_more
+        )
+    }
+
     pub(crate) fn finish_history_refresh(&mut self, page: HistoryPage) {
         self.history = HistoryRows::Loaded {
             filter: self.history_filter.clone(),

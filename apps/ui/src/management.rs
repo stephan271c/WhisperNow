@@ -37,8 +37,6 @@ pub(crate) struct ManagementState {
     pub(crate) history: HistoryRows,
     pub(crate) history_filter: HistoryFilter,
     history_extra_pages: u32,
-    /// The window read in flight; a newer read cancels it, so an older answer never lands.
-    pub(crate) history_read: Option<Task>,
     /// The application data a clear would remove, once the user asked to review it.
     pub(crate) data_locations: Option<Vec<DataLocation>>,
     pub(crate) clear_result: Option<ClearDataResult>,
@@ -47,10 +45,26 @@ pub(crate) struct ManagementState {
     pub(crate) notice: Option<Notice>,
     next_notice: u64,
     pub(crate) microphone_test: Option<MicrophoneTestResponse>,
-    pub(crate) microphone_test_task: Option<Task>,
     pub(crate) permissions: Option<PermissionsResponse>,
-    pub(crate) permission_watch: Option<Task>,
     pub(crate) setup_test: Option<SetupTest>,
+}
+
+/// What actions keep that no render reads. It is held apart from [`ManagementState`], whose
+/// every write re-renders the window.
+#[derive(Default)]
+pub(crate) struct Background {
+    /// The history read in flight; a newer read cancels it, so an older answer never lands.
+    pub(crate) history_read: Option<Task>,
+    pub(crate) permission_watch: Option<Task>,
+    pub(crate) meter_hide: Option<Task>,
+    /// Reads waiting for their answer; the same read is not started twice.
+    pub(crate) reads: Vec<BackgroundRead>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BackgroundRead {
+    Permissions,
+    Devices,
 }
 
 impl ManagementState {

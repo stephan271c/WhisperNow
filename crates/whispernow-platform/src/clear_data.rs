@@ -80,12 +80,12 @@ impl ClearPlan {
 
 impl AppPaths {
     pub fn data_locations(&self) -> io::Result<Vec<DataLocation>> {
-        Ok(self.clear_plan(&ClearDataCategory::ALL)?.locations())
+        Ok(self.clear_plan()?.locations())
     }
 
-    pub fn clear_plan(&self, categories: &[ClearDataCategory]) -> io::Result<ClearPlan> {
+    pub fn clear_plan(&self) -> io::Result<ClearPlan> {
         let mut targets = Vec::new();
-        for target in self.fixed_targets(categories)? {
+        for target in self.fixed_targets()? {
             match fs::symlink_metadata(&target.path) {
                 Ok(_) => targets.push(target),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -95,36 +95,24 @@ impl AppPaths {
         Ok(ClearPlan { targets })
     }
 
-    fn fixed_targets(&self, categories: &[ClearDataCategory]) -> io::Result<Vec<Target>> {
-        let mut targets = Vec::new();
-        if categories.contains(&ClearDataCategory::Settings) {
-            let backups = self.settings_backup_files()?;
-            targets.extend(
-                iter::once(self.settings_file())
-                    .chain(backups)
-                    .chain(iter::once(self.python_logs_dir()))
-                    .map(|path| Target::new(ClearDataCategory::Settings, path)),
-            );
-        }
-        if categories.contains(&ClearDataCategory::History) {
-            let backups = self.history_backup_files()?;
-            targets.extend(
+    fn fixed_targets(&self) -> io::Result<Vec<Target>> {
+        let settings_backups = self.settings_backup_files()?;
+        let history_backups = self.history_backup_files()?;
+        let mut targets: Vec<_> = iter::once(self.settings_file())
+            .chain(settings_backups)
+            .chain(iter::once(self.python_logs_dir()))
+            .map(|path| Target::new(ClearDataCategory::Settings, path))
+            .chain(
                 iter::once(self.history_file())
-                    .chain(backups)
+                    .chain(history_backups)
                     .map(|path| Target::new(ClearDataCategory::History, path)),
-            );
-            targets.push(Target::listed(
-                ClearDataCategory::History,
-                self.recordings_dir(),
-            ));
-            targets.push(Target::listed(
-                ClearDataCategory::History,
-                self.history_database_file(),
-            ));
-        }
-        if categories.contains(&ClearDataCategory::Models) {
-            targets.push(Target::new(ClearDataCategory::Models, self.models_dir()));
-        }
+            )
+            .collect();
+        targets.extend([
+            Target::listed(ClearDataCategory::History, self.recordings_dir()),
+            Target::listed(ClearDataCategory::History, self.history_database_file()),
+            Target::new(ClearDataCategory::Models, self.models_dir()),
+        ]);
         Ok(targets)
     }
 }
@@ -180,10 +168,7 @@ mod tests {
     }
 
     fn clear(paths: &AppPaths, categories: &[ClearDataCategory]) -> Vec<ClearDataItem> {
-        paths
-            .clear_plan(categories)
-            .expect("clear plan")
-            .remove(categories)
+        paths.clear_plan().expect("clear plan").remove(categories)
     }
 
     fn path_of(location: DataLocation) -> PathBuf {
@@ -253,24 +238,6 @@ mod tests {
     }
 
     #[test]
-    fn only_the_requested_categories_are_deleted() {
-        let fixture = Fixture::separate_roots();
-        fixture.create_every_target();
-        let paths = fixture.paths.clone();
-
-        let report = paths
-            .clear_plan(&EVERYTHING)
-            .expect("clear plan")
-            .remove(&[ClearDataCategory::Settings]);
-
-        assert_eq!(report.len(), 2);
-        assert!(!fixture.paths.python_logs_dir().exists());
-        assert!(!fixture.paths.settings_file().exists());
-        assert!(fixture.paths.models_dir().exists());
-        assert!(fixture.paths.history_database_file().exists());
-    }
-
-    #[test]
     fn inspection_failure_happens_before_any_target_is_deleted() {
         let fixture = Fixture::separate_roots();
         create_file(fixture.paths.config_dir());
@@ -279,10 +246,7 @@ mod tests {
         create_dir(&fixture.paths.models_dir());
         create_dir(&fixture.paths.python_logs_dir());
 
-        fixture
-            .paths
-            .clear_plan(&EVERYTHING)
-            .expect_err("inspection failure");
+        fixture.paths.clear_plan().expect_err("inspection failure");
 
         for path in [
             fixture.paths.history_database_file(),
@@ -298,7 +262,7 @@ mod tests {
     fn a_plan_removes_only_the_targets_it_inspected() {
         let fixture = Fixture::separate_roots();
         create_file(&fixture.paths.settings_file());
-        let plan = fixture.paths.clear_plan(&EVERYTHING).expect("clear plan");
+        let plan = fixture.paths.clear_plan().expect("clear plan");
         let later = fixture.paths.unreadable_settings_file("20260926T120000Z");
         create_file(&later);
 

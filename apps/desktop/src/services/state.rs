@@ -10,11 +10,11 @@ use std::{
 use whispernow_domain::AppError;
 
 use whispernow_core::CancellationToken;
-use whispernow_domain::ModelId;
 use whispernow_domain::ipc::{
     ActiveDownload, AppState, AudioLevel, CleanupDevice, EventPayload, ModelState, Phase,
     SetupTestResult,
 };
+use whispernow_domain::{DownloadPhase, ModelId};
 
 /// What the event pump emits, each under its own event name.
 #[derive(Debug)]
@@ -94,6 +94,25 @@ pub(crate) enum CancelReason {
 pub(crate) struct DownloadTask {
     pub(crate) progress: ActiveDownload,
     pub(crate) cancellation: CancellationToken,
+}
+
+impl DownloadTask {
+    pub(crate) fn new(
+        model_id: ModelId,
+        total_bytes: u64,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self {
+            progress: ActiveDownload {
+                model_id,
+                phase: DownloadPhase::Downloading,
+                downloaded_bytes: 0,
+                total_bytes,
+                bytes_per_second: None,
+            },
+            cancellation,
+        }
+    }
 }
 
 pub(crate) struct State {
@@ -308,25 +327,9 @@ impl StateCell {
 
 #[cfg(test)]
 mod tests {
-    use whispernow_domain::{DownloadPhase, ErrorCategory};
+    use whispernow_domain::ErrorCategory;
 
     use super::*;
-
-    fn downloading(state: &mut State, model_id: &ModelId) {
-        state.active_downloads.insert(
-            model_id.clone(),
-            DownloadTask {
-                progress: ActiveDownload {
-                    model_id: model_id.clone(),
-                    phase: DownloadPhase::Downloading,
-                    downloaded_bytes: 0,
-                    total_bytes: 1_024,
-                    bytes_per_second: None,
-                },
-                cancellation: CancellationToken::default(),
-            },
-        );
-    }
 
     fn published_phases(published: &mpsc::Receiver<Published>) -> Vec<Phase> {
         published
@@ -374,7 +377,10 @@ mod tests {
         let mut state = State::new(selected.clone());
         state.model = LoadedModel::Ready(selected.clone());
 
-        downloading(&mut state, &other);
+        state.active_downloads.insert(
+            other.clone(),
+            DownloadTask::new(other.clone(), 1_024, CancellationToken::default()),
+        );
         assert_eq!(state.model_state(), ModelState::Ready);
         state.active_downloads.clear();
         state.failed_download = Some(other);
@@ -382,7 +388,10 @@ mod tests {
 
         state.model = LoadedModel::Unloaded;
         assert_eq!(state.model_state(), ModelState::Unloaded);
-        downloading(&mut state, &selected);
+        state.active_downloads.insert(
+            selected.clone(),
+            DownloadTask::new(selected.clone(), 1_024, CancellationToken::default()),
+        );
         assert_eq!(state.model_state(), ModelState::Downloading);
         state.active_downloads.clear();
         state.failed_download = Some(selected);

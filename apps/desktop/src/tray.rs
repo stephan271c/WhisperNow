@@ -165,6 +165,36 @@ pub(crate) fn tray_desired(snapshot: &AppState, copy_capable: bool) -> TrayDesir
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrayProperty {
+    /// The icon, its tooltip and the status line.
+    State,
+    CopyLast,
+    Cancel,
+    Pause,
+}
+
+impl TrayProperty {
+    const ALL: [Self; 4] = [Self::State, Self::CopyLast, Self::Cancel, Self::Pause];
+}
+
+/// What moving the native tray from `previous` to `desired` must update; without a
+/// `previous`, everything.
+fn changed_properties(previous: Option<TrayDesired>, desired: TrayDesired) -> Vec<TrayProperty> {
+    let Some(previous) = previous else {
+        return TrayProperty::ALL.to_vec();
+    };
+    TrayProperty::ALL
+        .into_iter()
+        .filter(|property| match property {
+            TrayProperty::State => previous.state != desired.state,
+            TrayProperty::CopyLast => previous.copy_last != desired.copy_last,
+            TrayProperty::Cancel => previous.cancel != desired.cancel,
+            TrayProperty::Pause => previous.pause != desired.pause,
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 struct NativeTray {
     icon: TrayIcon,
@@ -175,27 +205,38 @@ struct NativeTray {
 }
 
 impl NativeTray {
-    /// Runs on the main thread.
-    fn render(&self, desired: TrayDesired) {
-        if let Err(error) = self.try_render(desired) {
-            tracing::warn!(%error, "the tray could not be updated");
+    /// Runs on the main thread. A failed update is retried the next time its property changes,
+    /// not on the next snapshot.
+    fn render(&self, previous: Option<TrayDesired>, desired: TrayDesired) {
+        for property in changed_properties(previous, desired) {
+            if let Err(error) = self.update(property, desired) {
+                tracing::warn!(%error, ?property, "the tray could not be updated");
+            }
         }
     }
 
-    fn try_render(&self, desired: TrayDesired) -> tauri::Result<()> {
-        let presentation = desired.state.presentation();
-        self.status.set_text(presentation.status_text)?;
-        self.copy_last.set_enabled(desired.copy_last)?;
-        self.cancel.set_enabled(desired.cancel)?;
-        self.pause.set_text(match desired.pause {
-            PauseItem::Pause | PauseItem::Unavailable => "Pause",
-            PauseItem::Resume => "Resume",
-        })?;
-        self.pause
-            .set_enabled(desired.pause != PauseItem::Unavailable)?;
-        self.icon.set_tooltip(Some(presentation.tooltip))?;
-        self.icon
-            .set_icon_with_as_template(Some(state_icon(desired.state, system_ink())), IS_TEMPLATE)
+    fn update(&self, property: TrayProperty, desired: TrayDesired) -> tauri::Result<()> {
+        match property {
+            TrayProperty::State => {
+                let presentation = desired.state.presentation();
+                self.status.set_text(presentation.status_text)?;
+                self.icon.set_tooltip(Some(presentation.tooltip))?;
+                self.icon.set_icon_with_as_template(
+                    Some(state_icon(desired.state, system_ink())),
+                    IS_TEMPLATE,
+                )
+            }
+            TrayProperty::CopyLast => self.copy_last.set_enabled(desired.copy_last),
+            TrayProperty::Cancel => self.cancel.set_enabled(desired.cancel),
+            TrayProperty::Pause => {
+                self.pause.set_text(match desired.pause {
+                    PauseItem::Pause | PauseItem::Unavailable => "Pause",
+                    PauseItem::Resume => "Resume",
+                })?;
+                self.pause
+                    .set_enabled(desired.pause != PauseItem::Unavailable)
+            }
+        }
     }
 }
 
@@ -274,9 +315,10 @@ impl TrayController {
         #[cfg(windows)]
         {
             let desired = Arc::clone(&controller.desired);
+            // The ink changed without a state change, so everything is drawn again.
             taskbar_theme::watch(move || {
                 let current = desired.lock().expect("tray desired lock poisoned");
-                render_later(&native, *current);
+                render_later(&native, None, *current);
             });
         }
         Ok(controller)
@@ -299,27 +341,23 @@ impl TrayController {
         self.apply(tray_desired(snapshot, self.copy_capable));
     }
 
-    /// Renders are scheduled under the `desired` lock, so they run in the order applied.
+    /// Renders are scheduled under the `desired` lock, so they run in the order applied and
+    /// each finds the native tray showing the value it replaces.
     fn apply(&self, desired: TrayDesired) {
         let mut current = self.desired.lock().expect("tray desired lock poisoned");
-        if *current == desired {
-            return;
-        }
-        *current = desired;
-        self.render(desired);
-    }
-
-    fn render(&self, desired: TrayDesired) {
-        if let Some(native) = &self.native {
-            render_later(native, desired);
+        let previous = std::mem::replace(&mut *current, desired);
+        if previous != desired
+            && let Some(native) = &self.native
+        {
+            render_later(native, Some(previous), desired);
         }
     }
 }
 
-fn render_later(native: &NativeTray, desired: TrayDesired) {
+fn render_later(native: &NativeTray, previous: Option<TrayDesired>, desired: TrayDesired) {
     let app = native.icon.app_handle().clone();
     let native = native.clone();
-    let _ = app.run_on_main_thread(move || native.render(desired));
+    let _ = app.run_on_main_thread(move || native.render(previous, desired));
 }
 
 fn menu_item(
@@ -593,6 +631,29 @@ mod tests {
             tray_desired(&snapshot(Phase::Paused), true).pause,
             PauseItem::Resume
         );
+    }
+
+    #[test]
+    fn a_render_updates_only_the_properties_that_changed() {
+        let idle = tray_desired(&snapshot(Phase::Idle), true);
+        let copyable = TrayDesired {
+            copy_last: true,
+            ..idle
+        };
+        assert_eq!(
+            changed_properties(Some(idle), copyable),
+            [TrayProperty::CopyLast]
+        );
+        assert_eq!(changed_properties(Some(idle), idle), []);
+        assert_eq!(
+            changed_properties(Some(idle), tray_desired(&snapshot(recording()), true)),
+            [TrayProperty::State, TrayProperty::Cancel]
+        );
+        assert_eq!(
+            changed_properties(Some(idle), tray_desired(&snapshot(Phase::Paused), true)),
+            [TrayProperty::State, TrayProperty::Pause]
+        );
+        assert_eq!(changed_properties(None, idle), TrayProperty::ALL);
     }
 
     #[test]

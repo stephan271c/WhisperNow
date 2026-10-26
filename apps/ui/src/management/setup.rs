@@ -1,11 +1,10 @@
 use whispernow_domain::AppError;
 use whispernow_domain::ipc::{
-    AppState, PermissionKind, PermissionStatus, PermissionsResponse, SaveSettingsResponse,
-    SettingsView, SetupTestResult,
+    AppState, PermissionKind, PermissionStatus, SaveSettingsResponse, SettingsView, SetupTestResult,
 };
 use whispernow_domain::{ModelAvailability, SetupCheckpoint, SetupStep};
 
-use super::{ManagementState, replace_task};
+use super::ManagementState;
 use crate::notice::{NoticeScope, Tone};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,19 +14,6 @@ pub(crate) enum SetupTest {
         active: bool,
     },
     Finished(SetupTestResult),
-}
-
-/// Whether no card can change any more while setup watches: each is granted, unavailable to
-/// this session, or refused with nothing setup can do about it.
-fn permissions_settled(permissions: &PermissionsResponse) -> bool {
-    permissions
-        .permissions
-        .iter()
-        .all(|permission| match permission.status {
-            PermissionStatus::Granted | PermissionStatus::Unavailable => true,
-            PermissionStatus::Denied => !permission.can_request && !permission.can_open_settings,
-            PermissionStatus::NotDetermined => false,
-        })
 }
 
 impl ManagementState {
@@ -138,7 +124,6 @@ impl ManagementState {
 
     pub(crate) fn restart_setup(&mut self, view: SettingsView) {
         self.permissions = None;
-        self.end_permission_watch();
         self.setup_test = None;
         self.install_setup(view);
     }
@@ -149,7 +134,6 @@ impl ManagementState {
             self.notify_saved(NoticeScope::Setup, "Setup finished", &warnings);
         }
         self.install_settings(settings);
-        self.end_permission_watch();
     }
 
     #[must_use]
@@ -160,33 +144,15 @@ impl ManagementState {
             .map(|permission| permission.status)
     }
 
-    /// A watch ends once no card can change any more; when the microphone is then granted, the
-    /// returned checkpoint moves setup on to the model step. A card this session cannot provide
+    /// Where a watch that found the permissions settled takes setup: on to the model step from
+    /// its permission step once the microphone is granted. A card this session cannot provide
     /// does not hold setup back: dictation works without it.
-    pub(crate) fn install_permissions(
-        &mut self,
-        permissions: PermissionsResponse,
-    ) -> Option<SetupCheckpoint> {
-        let settled = permissions_settled(&permissions)
-            && self.permission_watch.is_some()
-            && self.on_permissions_step();
-        let microphone = permissions
-            .get(PermissionKind::Microphone)
-            .map(|permission| permission.status);
-        self.permissions = Some(permissions);
-        if !settled {
-            return None;
-        }
-        self.end_permission_watch();
-        (microphone == Some(PermissionStatus::Granted)).then(|| self.setup_move(SetupStep::Model))
-    }
-
-    fn end_permission_watch(&mut self) {
-        replace_task(&mut self.permission_watch, None);
-    }
-
-    fn on_permissions_step(&self) -> bool {
-        self.unfinished_setup_step() == Some(SetupStep::Permissions)
+    #[must_use]
+    pub(crate) fn settled_permissions_move(&self) -> Option<SetupCheckpoint> {
+        (self.unfinished_setup_step() == Some(SetupStep::Permissions)
+            && self.permission_status(PermissionKind::Microphone)
+                == Some(PermissionStatus::Granted))
+        .then(|| self.setup_move(SetupStep::Model))
     }
 
     /// The test could not start, or its stop failed: the failure is its result, unless a

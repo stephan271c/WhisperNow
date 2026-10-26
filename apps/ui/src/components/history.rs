@@ -185,9 +185,10 @@ fn SearchBox(mut typed: Signal<String>, failed: bool) -> Element {
     }
 }
 
-/// The page's clock: a provided one in tests, otherwise the system's, read again each minute
-/// so relative times stay current. Between ticks it stays equal, so rows skip re-rendering.
+/// The system clock, read again each minute so relative times stay current; tests may provide
+/// a fixed one. Between ticks it stays equal, so rows skip re-rendering.
 fn use_clock() -> LocalClock {
+    #[cfg(test)]
     let provided = try_use_context::<LocalClock>();
     let mut system = use_signal(LocalClock::system);
     use_future(move || async move {
@@ -196,7 +197,11 @@ fn use_clock() -> LocalClock {
             system.set(LocalClock::system());
         }
     });
-    provided.unwrap_or_else(|| *system.read())
+    #[cfg(test)]
+    if let Some(provided) = provided {
+        return provided;
+    }
+    *system.read()
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

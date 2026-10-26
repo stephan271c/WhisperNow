@@ -139,7 +139,7 @@ impl LlmService for FakeProvider {
             reply
                 .map(|text| LlmResponse {
                     text: text.to_owned(),
-                    finish_reason: LlmFinishReason::Completed,
+                    finish_reason: LlmFinishReason::Finished,
                 })
                 .ok_or(failure)
         })

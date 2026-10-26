@@ -5,30 +5,16 @@ use whispernow_platform::SettingsStore;
 
 use super::lifecycle::{test_backend, test_backend_before_preload};
 use super::*;
-use crate::services::{Backend, test_support::shut_down};
-use whispernow_domain::{
-    ClearDataCategory, HistoryLimit, HistoryRetention, NewHistoryEntry, UtcMillis,
+use crate::services::{
+    Backend,
+    test_support::{insert_entry, shut_down},
 };
+use whispernow_domain::ClearDataCategory;
 
 const WAIT: Duration = Duration::from_secs(10);
 
 fn retained_entry(backend: &Backend) -> (HistoryEntry, Vec<u8>) {
-    let id = backend
-        .history
-        .insert(
-            NewHistoryEntry {
-                created_at: UtcMillis::now(),
-                duration_millis: 1_000,
-                raw_text: Some("keep this dictation".to_owned()),
-                cleaned_text: None,
-                status: EntryStatus::Ok,
-                error: None,
-                asr_model_id: ModelId::default(),
-            },
-            Some(&[0.25; 160]),
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
+    let id = insert_entry(&backend.history, "keep this dictation", Some(&[0.25; 160]))
         .expect("retained dictation");
     let entry = backend
         .history_page(&HistoryPageRequest::first_page(HistoryFilter::default()))
@@ -64,9 +50,7 @@ fn clearing_settings_resets_memory_before_the_next_edit_even_when_the_file_is_mi
             fs::remove_file(backend.paths.settings_file()).expect("external deletion");
         }
 
-        backend
-            .clear_data(&[ClearDataCategory::Settings])
-            .expect("clear settings");
+        backend.clear_data().expect("clear settings");
         assert_eq!(backend.settings.snapshot(), Settings::default());
         backend
             .update_settings(&SettingChange::Theme(ThemePreference::Dark))
@@ -88,30 +72,6 @@ fn clearing_settings_resets_memory_before_the_next_edit_even_when_the_file_is_mi
     }
 }
 
-#[test]
-fn empty_clear_requests_preserve_history_and_audio() {
-    let (backend, _root) = test_backend(Fixture::new());
-    let (entry, audio) = retained_entry(&backend);
-    fs::create_dir_all(backend.paths.python_logs_dir()).expect("logs directory");
-    let log = backend.paths.python_logs_dir().join("app.log");
-    fs::write(&log, b"log").expect("log");
-    let settings = fs::read(backend.paths.settings_file()).expect("saved settings");
-
-    let result = backend.clear_data(&[]).expect("clear selected data");
-
-    assert!(result.items.is_empty());
-    assert!(!result.restart_required);
-    assert!(log.exists());
-    assert_eq!(
-        fs::read(backend.paths.settings_file()).expect("settings"),
-        settings
-    );
-    assert!(backend.paths.models_dir().exists());
-    assert_eq!(backend.state.snapshot().phase, Phase::Idle);
-    assert_retained(&backend, &entry, &audio);
-    shut_down(&backend);
-}
-
 fn select_another_speech_model(backend: &Backend) -> ModelId {
     let registry = ModelRegistry::builtin();
     let model = registry
@@ -126,31 +86,11 @@ fn select_another_speech_model(backend: &Backend) -> ModelId {
 }
 
 #[test]
-fn clearing_only_models_keeps_history_and_the_selected_model_in_state_and_settings() {
-    let (backend, _root) = test_backend(Fixture::new());
-    let (entry, audio) = retained_entry(&backend);
-    let selected = select_another_speech_model(&backend);
-
-    let result = backend
-        .clear_data(&[ClearDataCategory::Models])
-        .expect("clear models");
-
-    assert!(result.restart_required);
-    assert!(!backend.paths.models_dir().exists());
-    assert_eq!(backend.settings.snapshot().model_id, selected);
-    assert_eq!(backend.state.snapshot().selected_model_id, selected);
-    assert_retained(&backend, &entry, &audio);
-    shut_down(&backend);
-}
-
-#[test]
 fn clearing_settings_resets_the_selected_model_in_state_and_settings() {
     let (backend, _root) = test_backend(Fixture::new());
     select_another_speech_model(&backend);
 
-    backend
-        .clear_data(&[ClearDataCategory::Settings])
-        .expect("clear settings");
+    backend.clear_data().expect("clear settings");
 
     assert_eq!(backend.settings.snapshot().model_id, ModelId::default());
     assert_eq!(
@@ -161,58 +101,32 @@ fn clearing_settings_resets_the_selected_model_in_state_and_settings() {
 }
 
 #[test]
-fn history_deletion_removes_rows_and_audio_and_keeps_other_categories() {
+fn history_deletion_removes_rows_and_audio() {
     let (backend, _root) = test_backend(Fixture::new());
     let (entry, _) = retained_entry(&backend);
     fs::write(backend.paths.migrated_history_file(), b"Python history").expect("migrated history");
     let unreadable = backend.paths.unreadable_history_file("20261015T120000Z");
     fs::write(&unreadable, b"legacy").expect("malformed history backup");
-    fs::create_dir_all(backend.paths.python_logs_dir()).expect("logs directory");
-    let settings = fs::read(backend.paths.settings_file()).expect("saved settings");
 
-    let result = backend
-        .clear_data(&[ClearDataCategory::History])
-        .expect("clear history data");
+    let result = backend.clear_data().expect("clear data");
 
-    assert_eq!(result.items.len(), 1);
-    assert!(
-        result
-            .items
-            .iter()
-            .all(|item| item.location.category == ClearDataCategory::History && item.deleted)
-    );
-    assert!(!result.restart_required);
+    let history: Vec<_> = result
+        .items
+        .iter()
+        .filter(|item| item.location.category == ClearDataCategory::History)
+        .collect();
+    assert_eq!(history.len(), 1);
+    assert!(history[0].deleted);
     assert!(backend.paths.history_database_file().exists());
     assert!(!backend.paths.recordings_dir().exists());
     assert!(!backend.paths.migrated_history_file().exists());
     assert!(!unreadable.exists());
-    assert!(backend.paths.python_logs_dir().exists());
-    assert!(backend.paths.models_dir().exists());
-    assert_eq!(
-        fs::read(backend.paths.settings_file()).expect("settings"),
-        settings
-    );
     let page = backend
         .history_page(&HistoryPageRequest::first_page(HistoryFilter::default()))
         .expect("new history");
     assert!(page.entries.is_empty());
     assert!(backend.history.audio(entry.id).is_err());
-    let later = backend
-        .history
-        .insert(
-            NewHistoryEntry {
-                created_at: UtcMillis::now(),
-                duration_millis: 1_000,
-                raw_text: Some("after clear".to_owned()),
-                cleaned_text: None,
-                status: EntryStatus::Ok,
-                error: None,
-                asr_model_id: ModelId::default(),
-            },
-            Some(&[0.25; 160]),
-            HistoryLimit::Unlimited,
-            HistoryRetention::Forever,
-        )
+    let later = insert_entry(&backend.history, "after clear", Some(&[0.25; 160]))
         .expect("dictation after clear");
     assert!(later > entry.id);
     assert!(backend.history.audio(later).is_ok());
@@ -238,9 +152,7 @@ fn clearing_every_category_reports_files_and_unavailable_credentials_separately(
         fs::create_dir_all(backend.paths.python_logs_dir()).expect("logs directory");
         credentials.set_available(available);
 
-        let result = backend
-            .clear_data(&ClearDataCategory::ALL)
-            .expect("clear all data");
+        let result = backend.clear_data().expect("clear all data");
 
         assert!(result.restart_required);
         for item in &result.items {
@@ -291,19 +203,19 @@ fn a_recordings_deletion_failure_keeps_history_recoverable() {
     fs::set_permissions(&recordings, fs::Permissions::from_mode(0o500))
         .expect("read-only recordings");
 
-    let result = backend.clear_data(&[ClearDataCategory::History]);
+    let result = backend.clear_data();
     fs::set_permissions(&recordings, original_permissions).expect("restore recordings permissions");
     let result = result.expect("partial deletion report");
 
-    assert_eq!(result.items.len(), 1);
-    assert_eq!(
-        result.items[0].location.category,
-        ClearDataCategory::History
-    );
-    assert!(!result.items[0].deleted);
+    let history: Vec<_> = result
+        .items
+        .iter()
+        .filter(|item| item.location.category == ClearDataCategory::History)
+        .collect();
+    assert_eq!(history.len(), 1);
+    assert!(!history[0].deleted);
     assert!(recordings.exists());
     assert!(backend.paths.history_database_file().exists());
-    assert!(!result.restart_required);
     assert_eq!(backend.state.snapshot().phase, Phase::Idle);
     assert_retained(&backend, &entry, &audio);
     shut_down(&backend);
@@ -325,7 +237,7 @@ fn inspection_failure_preserves_history_and_restores_the_previous_phase() {
         ));
     });
 
-    let result = backend.clear_data(&[ClearDataCategory::History]);
+    let result = backend.clear_data();
 
     fs::remove_file(backend.paths.config_dir()).expect("remove obstruction");
     fs::rename(saved_config, backend.paths.config_dir()).expect("restore configuration");
@@ -355,7 +267,7 @@ fn a_clear_that_resets_the_last_error_ends_the_failed_phase() {
         ));
     });
 
-    backend.clear_data(&[]).expect("clear selected data");
+    backend.clear_data().expect("clear selected data");
 
     let snapshot = backend.state.snapshot();
     assert_eq!(snapshot.phase, Phase::Idle);
@@ -378,9 +290,7 @@ fn clear_data_refuses_paused_and_active_recordings_without_removing_history() {
         }
         let phase = backend.state.snapshot().phase;
 
-        let error = backend
-            .clear_data(&[ClearDataCategory::History])
-            .expect_err("busy desktop");
+        let error = backend.clear_data().expect_err("busy desktop");
 
         assert_eq!(
             error.code,
@@ -403,9 +313,7 @@ fn a_failed_worker_wait_restores_idle_and_keeps_history() {
     backend.dictation.request_shutdown();
     backend.dictation.join();
 
-    let error = backend
-        .clear_data(&[ClearDataCategory::History])
-        .expect_err("stopped worker");
+    let error = backend.clear_data().expect_err("stopped worker");
 
     assert_eq!(error.code, "application_shutting_down");
     assert_eq!(backend.state.snapshot().phase, Phase::Idle);
@@ -589,7 +497,7 @@ fn run_startup_overlap() {
     let clearing = Arc::clone(&backend);
     let (finished, cleared) = mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let result = clearing.clear_data(&[ClearDataCategory::Settings]);
+        let result = clearing.clear_data();
         let _test_left = finished.send(result);
     });
     let deadline = Instant::now() + WAIT;

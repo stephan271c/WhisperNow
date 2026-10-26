@@ -5,22 +5,30 @@ use whispernow_domain::ipc::{
     ClearDataResult, SaveSettingsResponse, SetApiKeyRequest, SettingsView,
 };
 use whispernow_domain::{
-    ClearDataCategory, LlmProvider, RecordingMode, SettingChange, Settings, SetupCheckpoint,
-    Shortcut,
+    LlmProvider, RecordingMode, SettingChange, Settings, SetupCheckpoint, Shortcut,
 };
 
 use super::{Failure, Gateway, run_blocking};
+use crate::services::Backend;
 use crate::shortcuts::{
     RecordingBinding, ShortcutBinding, ShortcutRegistrationError, cancel_binding, recording_binding,
 };
 
 impl Gateway {
     pub(crate) async fn settings_view(&self) -> Result<SettingsView, AppError> {
-        let view = self
-            .run_command("get_settings", Failure::Published, |backend| {
-                Ok(backend.settings.view())
-            })
-            .await?;
+        self.run_view_command("get_settings", Failure::Published, |backend| {
+            Ok(backend.settings.view())
+        })
+        .await
+    }
+
+    async fn run_view_command(
+        &self,
+        operation: &'static str,
+        failure: Failure,
+        work: impl FnOnce(Arc<Backend>) -> Result<SettingsView, AppError> + Send + 'static,
+    ) -> Result<SettingsView, AppError> {
+        let view = self.run_command(operation, failure, work).await?;
         Ok(self.finish_view(view).await)
     }
 
@@ -67,47 +75,39 @@ impl Gateway {
         &self,
         request: SetApiKeyRequest,
     ) -> Result<SettingsView, AppError> {
-        let view = self
-            .run_command("set_api_key", Failure::Local, move |backend| {
-                backend.settings.set_api_key(&request)
-            })
-            .await?;
-        Ok(self.finish_view(view).await)
+        self.run_view_command("set_api_key", Failure::Local, move |backend| {
+            backend.settings.set_api_key(&request)
+        })
+        .await
     }
 
     pub(crate) async fn clear_api_key(
         &self,
         provider: LlmProvider,
     ) -> Result<SettingsView, AppError> {
-        let view = self
-            .run_command("clear_api_key", Failure::Local, move |backend| {
-                backend.settings.clear_api_key(provider)
-            })
-            .await?;
-        Ok(self.finish_view(view).await)
+        self.run_view_command("clear_api_key", Failure::Local, move |backend| {
+            backend.settings.clear_api_key(provider)
+        })
+        .await
     }
 
     pub(crate) async fn save_setup_checkpoint(
         &self,
         request: SetupCheckpoint,
     ) -> Result<SettingsView, AppError> {
-        let view = self
-            .run_command(
-                "save_setup_checkpoint",
-                Failure::Published,
-                move |backend| backend.save_setup_checkpoint(request),
-            )
-            .await?;
-        Ok(self.finish_view(view).await)
+        self.run_view_command(
+            "save_setup_checkpoint",
+            Failure::Published,
+            move |backend| backend.save_setup_checkpoint(request),
+        )
+        .await
     }
 
     pub(crate) async fn restart_setup(&self) -> Result<SettingsView, AppError> {
-        let view = self
-            .run_command("restart_setup", Failure::Local, |backend| {
-                backend.settings.restart_setup()
-            })
-            .await?;
-        Ok(self.finish_view(view).await)
+        self.run_view_command("restart_setup", Failure::Local, |backend| {
+            backend.settings.restart_setup()
+        })
+        .await
     }
 
     /// Registers a new recording shortcut before it is saved and swaps the cancel shortcut
@@ -132,18 +132,11 @@ impl Gateway {
                 backend.update_settings(&change)
             })
             .await;
-        let mut response = match saving {
-            Ok(saved) => saved,
-            Err(error) => {
-                if swap == ShortcutSwap::Registered {
-                    self.restore_shortcuts(&saved).await;
-                }
-                return Err(error);
-            }
-        };
-        if swap == ShortcutSwap::Refused {
-            response.warnings.push(SHORTCUT_REFUSED.to_owned());
+        if saving.is_err() && swap == ShortcutSwap::Registered {
+            self.restore_shortcuts(&saved).await;
         }
+        let mut response = saving?;
+        response.warnings.extend(swap.warning());
         if swaps_cancel {
             self.apply_cancel_shortcut(cancel_binding(&response.settings.settings))
                 .await;
@@ -174,22 +167,12 @@ impl Gateway {
                 backend.complete_setup(&checkpoint)
             })
             .await;
-        let settings = match completing {
-            Ok(settings) => settings,
-            Err(error) => {
-                if swap == ShortcutSwap::Registered {
-                    self.restore_shortcuts(&saved).await;
-                }
-                return Err(error);
-            }
-        };
-        let warnings = (swap == ShortcutSwap::Refused)
-            .then(|| SHORTCUT_REFUSED.to_owned())
-            .into_iter()
-            .collect();
+        if completing.is_err() && swap == ShortcutSwap::Registered {
+            self.restore_shortcuts(&saved).await;
+        }
         Ok(SaveSettingsResponse {
-            settings: self.finish_view(settings).await,
-            warnings,
+            settings: self.finish_view(completing?).await,
+            warnings: swap.warning().into_iter().collect(),
         })
     }
 
@@ -320,7 +303,7 @@ impl Gateway {
         let _native_settings = self.native_settings.lock().await;
         let result = self
             .run_command("clear_data", Failure::Published, |backend| {
-                backend.clear_data(&ClearDataCategory::ALL)
+                backend.clear_data()
             })
             .await?;
         if let Err(warning) = self.apply_autostart(false).await {
@@ -338,8 +321,14 @@ enum ShortcutSwap {
     Refused,
 }
 
-const SHORTCUT_REFUSED: &str =
-    "The recording shortcut could not be activated; the previous shortcut is still in use";
+impl ShortcutSwap {
+    fn warning(self) -> Option<String> {
+        (self == Self::Refused).then(|| {
+            "The recording shortcut could not be activated; the previous shortcut is still in use"
+                .to_owned()
+        })
+    }
+}
 
 pub(crate) fn shortcut_error(error: ShortcutRegistrationError) -> AppError {
     let code = match error {

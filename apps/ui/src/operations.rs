@@ -12,8 +12,6 @@ pub(crate) enum UiOperation {
     OpenPermissionSettings,
     RequestPermission(PermissionKind),
     SetUpPasteHelper,
-    LoadPermissions,
-    ListDevices,
     StartSetupTest,
     StopSetupTest,
     /// Deleting one history entry or clearing them all.

@@ -65,9 +65,13 @@ pub struct SettingsStore {
 impl SettingsStore {
     #[must_use]
     pub fn new(paths: AppPaths) -> Self {
-        Self::with_store(paths, Arc::new(OsCredentialStore))
+        Self {
+            paths,
+            credentials: Arc::new(OsCredentialStore),
+        }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn with_store(paths: AppPaths, credentials: Arc<dyn CredentialStore>) -> Self {
         Self { paths, credentials }

@@ -118,11 +118,13 @@ fn SetupFooter(step: SetupStep) -> Element {
     let context = use_context::<UiContext>();
     let navigator = context.navigator;
     let management = context.management;
-    let model_downloading = management
-        .read()
-        .setup
-        .as_ref()
-        .is_some_and(|checkpoint| context.active_download(&checkpoint.model_id).is_some());
+    let model_downloading = use_memo(move || {
+        management
+            .read()
+            .setup
+            .as_ref()
+            .is_some_and(|checkpoint| context.active_download(&checkpoint.model_id).is_some())
+    })();
     let ready = management.read().setup_step_ready(model_downloading);
     let save_blocked = context
         .blocked(UiOperation::SaveSetup)
@@ -422,7 +424,7 @@ fn ModelChoice(
     let id = model.id.clone();
     let slug = model_slug(&id);
     let name = model.display_name.clone();
-    let download = context.active_download(&id);
+    let download = use_memo(use_reactive!(|id| context.active_download(&id)))();
     let edit_blocked = context.settings_pending();
     let facts_id = format!("setup-model-{slug}-facts");
     let describedby = if edit_blocked.is_some() {
@@ -520,7 +522,8 @@ fn TryItStep(checkpoint: SetupCheckpoint) -> Element {
     let management = context.management;
     let model_name = management.read().model_display_name(&checkpoint.model_id);
     let model_ready = management.read().setup_model_ready();
-    let download = context.active_download(&checkpoint.model_id);
+    let model_id = checkpoint.model_id.clone();
+    let download = use_memo(use_reactive!(|model_id| context.active_download(&model_id)))();
     let devices = device_options(management.read().devices.as_deref().unwrap_or_default());
     let test = management.read().setup_test.clone();
     let running = matches!(test, Some(SetupTest::Running { .. }));

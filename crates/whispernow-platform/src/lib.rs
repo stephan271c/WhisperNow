@@ -24,11 +24,12 @@ pub use asr::SherpaAsrEngine;
 pub use audio::CpalAudioInput;
 pub use clear_data::ClearPlan;
 #[cfg(any(test, feature = "test-support"))]
-pub use credential_store::MemoryCredentialStore;
-pub use credential_store::{CredentialStore, CredentialStoreUnavailable};
+pub use credential_store::{CredentialStore, CredentialStoreUnavailable, MemoryCredentialStore};
 pub use llm::{complete, list_models};
 pub use local_cleanup::{HeldUnloaded, LocalCleanupService};
-pub use models::{DownloadProgress, DownloadTimeouts, ModelListEntry, ModelStore, ModelStoreError};
+#[cfg(any(test, feature = "test-support"))]
+pub use models::DownloadTimeouts;
+pub use models::{DownloadProgress, ModelListEntry, ModelStore, ModelStoreError};
 pub use opener::{open_directory, open_privacy_settings, open_url};
 #[cfg(target_os = "linux")]
 pub use paste_delivery::x11_paste_injection_available;

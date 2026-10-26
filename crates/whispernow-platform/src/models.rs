@@ -114,14 +114,15 @@ pub struct ModelStore {
 impl ModelStore {
     #[must_use]
     pub fn new(paths: AppPaths) -> Self {
-        Self::with_registry_and_timeouts(
-            ModelRegistry::builtin(),
+        Self {
+            registry: ModelRegistry::builtin(),
             paths,
-            DownloadTimeouts::default(),
-        )
+            timeouts: DownloadTimeouts::default(),
+            mutation: Mutex::new(()),
+        }
     }
 
-    /// Injects a registry and timeouts for fixture-server tests.
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn with_registry_and_timeouts(
         registry: ModelRegistry,

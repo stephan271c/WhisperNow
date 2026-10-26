@@ -6,20 +6,6 @@ use whispernow_domain::ipc::AudioDevice;
 
 use super::{AudioBlock, AudioLevelSummary};
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum AudioDeviceChoice {
-    /// Resolve the system default at start time. A later default change is an
-    /// observable transition, never a silent stream replacement.
-    SystemDefault,
-    Device(AudioDeviceId),
-}
-
-impl From<Option<AudioDeviceId>> for AudioDeviceChoice {
-    fn from(device: Option<AudioDeviceId>) -> Self {
-        device.map_or(Self::SystemDefault, Self::Device)
-    }
-}
-
 /// No event contains captured audio.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AudioEvent {
@@ -59,10 +45,12 @@ pub enum AudioInputError {
 pub trait AudioInput: Send + Sync {
     fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError>;
 
-    /// Dropping the returned capture stops the recording.
+    /// Records from `device`, or from the system default (`None`) resolved now: a later default
+    /// change is an observable transition, never a silent stream replacement. Dropping the
+    /// returned capture stops the recording.
     fn start(
         &self,
-        device: AudioDeviceChoice,
+        device: Option<AudioDeviceId>,
         sink: Arc<dyn AudioSink>,
     ) -> Result<Box<dyn AudioCapture>, AudioInputError>;
 }

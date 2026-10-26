@@ -13,6 +13,8 @@ use whispernow_domain::ipc::AudioLevel;
 use super::Message;
 use crate::services::Events;
 
+const MAX_RECORDING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 60 * 30;
+
 /// Why capture ended before the user stopped the recording. The samples
 /// captured up to that point are kept and transcribed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,7 +55,6 @@ impl RecordingSink {
         session: u64,
         worker: mpsc::Sender<Message>,
         events: Events,
-        max_samples: usize,
         segmenter: SpeechSegmenter,
     ) -> Self {
         Self {
@@ -63,13 +64,19 @@ impl RecordingSink {
                 segmenter: Some(segmenter),
                 segments: Vec::new(),
             }),
-            max_samples,
+            max_samples: MAX_RECORDING_SAMPLES,
             dropped_frames: AtomicUsize::new(0),
             captured_samples: AtomicUsize::new(0),
             interruption: OnceLock::new(),
             worker,
             events,
         }
+    }
+
+    #[cfg(test)]
+    fn capped(mut self, max_samples: usize) -> Self {
+        self.max_samples = max_samples;
+        self
     }
 
     /// A copy of the samples of each segment found after the first `from`.
@@ -189,7 +196,6 @@ mod tests {
             1,
             worker,
             Events::channel().0,
-            whispernow_core::audio::TARGET_SAMPLE_RATE as usize,
             SpeechSegmenter::new(Box::new(Silence), ModelFamily::Transducer),
         ));
         let busy = sink.audio.lock().expect("audio");
@@ -204,6 +210,32 @@ mod tests {
     }
 
     #[test]
+    fn a_full_buffer_ends_capture_at_the_maximum_duration_and_keeps_what_fit() {
+        let (worker, messages) = mpsc::channel();
+        let sink = RecordingSink::new(
+            7,
+            worker,
+            Events::channel().0,
+            SpeechSegmenter::new(Box::new(Silence), ModelFamily::Transducer),
+        )
+        .capped(400);
+
+        sink.samples(AudioBlock::new(vec![0.5; 320]));
+        assert_eq!(sink.interruption(), None);
+        sink.samples(AudioBlock::new(vec![0.5; 320]));
+
+        assert_eq!(
+            sink.interruption(),
+            Some(CaptureInterruption::MaximumDuration)
+        );
+        assert!(matches!(
+            messages.try_iter().last(),
+            Some(Message::Stop { session: 7 })
+        ));
+        assert_eq!(sink.take().samples.len(), 400);
+    }
+
+    #[test]
     fn a_final_level_summary_is_published_after_the_previous_level() {
         let (worker, _messages) = mpsc::channel();
         let (events, levels) = Events::channel();
@@ -211,7 +243,6 @@ mod tests {
             1,
             worker,
             events,
-            TARGET_SAMPLE_RATE as usize,
             SpeechSegmenter::new(Box::new(Silence), ModelFamily::Transducer),
         );
         sink.samples(AudioBlock::new(vec![0.5; 320]));

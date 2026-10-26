@@ -22,7 +22,7 @@ use whispernow_domain::ipc::EventPayload;
 use crate::client;
 
 use crate::UiContext;
-use crate::management::replace_task;
+use crate::management::{BackgroundRead, replace_task};
 use crate::notice::{NoticeScope, Tone};
 use crate::operations::UiOperation;
 use crate::route::Route;
@@ -77,15 +77,28 @@ impl UiContext {
         });
     }
 
-    fn run_unless_busy<R: 'static>(
-        self,
-        operation: UiOperation,
+    /// Runs `call` unless the same read is waiting for its answer, which no control shows.
+    fn read_once<R: 'static>(
+        mut self,
+        read: BackgroundRead,
         call: impl Future<Output = Result<R, AppError>> + 'static,
         finish: impl FnOnce(Self, Result<R, AppError>) + 'static,
     ) {
-        if !self.management.peek().is_busy(operation) {
-            self.run(operation, call, finish);
+        {
+            let mut background = self.background.write();
+            if background.reads.contains(&read) {
+                return;
+            }
+            background.reads.push(read);
         }
+        spawn_forever(async move {
+            let answer = call.await;
+            self.background
+                .write()
+                .reads
+                .retain(|waiting| *waiting != read);
+            finish(self, answer);
+        });
     }
 
     fn report(mut self, scope: NoticeScope, error: &AppError) {
@@ -151,14 +164,13 @@ impl UiContext {
         }
     }
 
-    pub(crate) fn test_microphone(self) {
+    pub(crate) fn test_microphone(mut self) {
         {
-            let mut management = self.management;
-            let mut management = management.write();
+            let mut management = self.management.write();
             management.microphone_test = None;
-            replace_task(&mut management.microphone_test_task, None);
             management.clear_notice_scope(NoticeScope::Home);
         }
+        replace_task(&mut self.background.write().meter_hide, None);
         self.run(
             UiOperation::TestMicrophone,
             client::call("test_microphone"),
@@ -175,17 +187,13 @@ impl UiContext {
     /// Hides the level meter a moment after the test that showed it; a newer test
     /// cancels the hide.
     fn hide_meter_later(self) {
-        let mut management = self.management;
-        let hide_task = spawn_forever(async move {
+        let (mut management, mut background) = (self.management, self.background);
+        let hide = spawn_forever(async move {
             client::delay(METER_MS).await;
-            let mut management = management.write();
-            management.microphone_test = None;
-            management.microphone_test_task = None;
+            background.write().meter_hide = None;
+            management.write().microphone_test = None;
         });
-        replace_task(
-            &mut management.write().microphone_test_task,
-            Some(hide_task),
-        );
+        replace_task(&mut background.write().meter_hide, Some(hide));
     }
 
     pub(crate) fn review_data(mut self) {

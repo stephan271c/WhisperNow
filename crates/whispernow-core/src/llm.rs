@@ -88,11 +88,10 @@ impl fmt::Debug for LlmRequest {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LlmFinishReason {
-    #[default]
-    Unknown,
-    Completed,
+    /// Stopped by itself, or for a reason the provider does not report.
+    Finished,
     OutputLimit,
     ContentFilter,
 }
@@ -180,7 +179,7 @@ fn accept_response(response: &LlmResponse) -> Result<String, CleanupFallback> {
     match response.finish_reason {
         LlmFinishReason::OutputLimit => return Err(CleanupFallback::Truncated),
         LlmFinishReason::ContentFilter => return Err(CleanupFallback::ContentFiltered),
-        LlmFinishReason::Unknown | LlmFinishReason::Completed => {}
+        LlmFinishReason::Finished => {}
     }
     let text = strip_think_blocks(&response.text).trim().to_owned();
     // The sentinel means the model found no dictated words; the deterministic

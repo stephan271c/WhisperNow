@@ -82,7 +82,7 @@ async fn anthropic(
     model
         .default_max_tokens
         .get_or_insert(ANTHROPIC_FALLBACK_MAX_TOKENS);
-    stream_model(model, prompt, |_| LlmFinishReason::Unknown).await
+    stream_model(model, prompt, |_| LlmFinishReason::Finished).await
 }
 
 async fn gemini(
@@ -117,7 +117,7 @@ async fn openai_compatible(
         .build()
         .map_err(|_| LlmError::InvalidRequest)?;
     stream_model(client.completion_model(model), prompt, |_| {
-        LlmFinishReason::Unknown
+        LlmFinishReason::Finished
     })
     .await
 }
@@ -164,7 +164,6 @@ fn optional_key(key: Option<&ApiKey>) -> String {
 
 fn gemini_finish_reason(reason: Option<&GeminiFinishReason>) -> LlmFinishReason {
     match reason {
-        Some(GeminiFinishReason::Stop) => LlmFinishReason::Completed,
         Some(GeminiFinishReason::MaxTokens) => LlmFinishReason::OutputLimit,
         Some(
             GeminiFinishReason::Safety
@@ -173,12 +172,12 @@ fn gemini_finish_reason(reason: Option<&GeminiFinishReason>) -> LlmFinishReason 
             | GeminiFinishReason::ProhibitedContent
             | GeminiFinishReason::Spii,
         ) => LlmFinishReason::ContentFilter,
-        _ => LlmFinishReason::Unknown,
+        _ => LlmFinishReason::Finished,
     }
 }
 
 /// Streams one completion. Only Gemini reports why a stream stopped in rig's final
-/// response; for the other providers the reason is unknown.
+/// response; the other providers' streams read as finished.
 async fn stream_model<M, R>(
     model: M,
     prompt: &LlmPrompt,

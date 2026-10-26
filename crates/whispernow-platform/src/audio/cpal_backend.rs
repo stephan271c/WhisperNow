@@ -14,7 +14,7 @@ use cpal::{
     StreamConfig, SupportedBufferSize, SupportedStreamConfig, SupportedStreamConfigRange,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use whispernow_core::audio::{AudioDeviceChoice, AudioInputError, TARGET_SAMPLE_RATE};
+use whispernow_core::audio::{AudioInputError, TARGET_SAMPLE_RATE};
 
 use whispernow_domain::AudioDeviceId;
 use whispernow_domain::ipc::AudioDevice;
@@ -81,7 +81,7 @@ pub(super) trait CaptureBackend: Send + Sync + 'static {
 
     fn open(
         &self,
-        choice: &AudioDeviceChoice,
+        device: Option<&AudioDeviceId>,
         chunks: SyncSender<Vec<f32>>,
     ) -> Result<OpenedCapture, AudioInputError>;
 
@@ -94,10 +94,6 @@ pub(super) struct CpalBackend;
 impl CaptureBackend for CpalBackend {
     fn list_input_devices(&self) -> Result<Vec<AudioDevice>, AudioInputError> {
         let host = cpal::default_host();
-        let default_id = host
-            .default_input_device()
-            .and_then(|device| device.id().ok())
-            .map(|id| id.to_string());
         let mut devices = Vec::new();
         let inputs = host
             .input_devices()
@@ -114,23 +110,18 @@ impl CaptureBackend for CpalBackend {
                 |_| device.to_string(),
                 |description| description.to_string(),
             );
-            let is_default = default_id.as_deref() == Some(id.as_str());
-            devices.push(AudioDevice {
-                id,
-                display_name,
-                is_default,
-            });
+            devices.push(AudioDevice { id, display_name });
         }
         Ok(devices)
     }
 
     fn open(
         &self,
-        choice: &AudioDeviceChoice,
+        device: Option<&AudioDeviceId>,
         chunks: SyncSender<Vec<f32>>,
     ) -> Result<OpenedCapture, AudioInputError> {
         let host = cpal::default_host();
-        let device = resolve_device(&host, choice)?;
+        let device = resolve_device(&host, device)?;
         let resolved_device_id = device
             .id()
             .map_err(|error| map_device_error(&error, "resolve input device ID"))?
@@ -197,13 +188,13 @@ impl CaptureBackend for CpalBackend {
 
 fn resolve_device(
     host: &cpal::Host,
-    choice: &AudioDeviceChoice,
+    device: Option<&AudioDeviceId>,
 ) -> Result<Device, AudioInputError> {
-    match choice {
-        AudioDeviceChoice::SystemDefault => host
+    match device {
+        None => host
             .default_input_device()
             .ok_or(AudioInputError::DeviceUnavailable),
-        AudioDeviceChoice::Device(id) => {
+        Some(id) => {
             let native_id =
                 DeviceId::from_str(id.as_str()).map_err(|_| AudioInputError::InvalidDevice)?;
             host.device_by_id(&native_id)

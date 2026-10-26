@@ -137,9 +137,10 @@ impl HistoryStore {
 
 #[cfg(test)]
 mod tests {
-    use whispernow_domain::{EntryStatus, HistoryFilter, ModelId, UtcMillis};
+    use whispernow_domain::HistoryFilter;
 
     use super::*;
+    use crate::services::test_support::insert_entry;
 
     fn store() -> (tempfile::TempDir, HistoryStore) {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -147,43 +148,17 @@ mod tests {
         (dir, HistoryStore::open(paths).store)
     }
 
-    fn entry(text: &str) -> NewHistoryEntry {
-        NewHistoryEntry {
-            created_at: UtcMillis::now(),
-            duration_millis: 1_000,
-            raw_text: Some(text.to_owned()),
-            cleaned_text: None,
-            status: EntryStatus::Ok,
-            error: None,
-            asr_model_id: ModelId::default(),
-        }
-    }
-
     #[test]
     fn pruning_reports_removals_and_missing_audio_reports_not_kept() {
         let (_dir, store) = store();
-        let first = store
-            .insert(
-                entry("first"),
-                None,
-                HistoryLimit::Unlimited,
-                HistoryRetention::Forever,
-            )
-            .expect("insert");
+        let first = insert_entry(&store, "first", None).expect("insert");
         assert!(
             !store
                 .prune(HistoryLimit::Last20, HistoryRetention::Forever)
                 .expect("nothing to prune")
         );
         for _ in 0..20 {
-            store
-                .insert(
-                    entry("later"),
-                    None,
-                    HistoryLimit::Unlimited,
-                    HistoryRetention::Forever,
-                )
-                .expect("insert");
+            insert_entry(&store, "later", None).expect("insert");
         }
         assert!(
             store
@@ -206,14 +181,7 @@ mod tests {
         let request = HistoryPageRequest::first_page(HistoryFilter::default());
         assert_eq!(store.list(&request).expect_err("not reopened"), error);
         assert_eq!(
-            store
-                .insert(
-                    entry("later"),
-                    None,
-                    HistoryLimit::Unlimited,
-                    HistoryRetention::Forever
-                )
-                .expect_err("not reopened"),
+            insert_entry(&store, "later", None).expect_err("not reopened"),
             error
         );
         assert!(!paths.history_database_file().exists());

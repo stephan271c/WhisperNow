@@ -4,14 +4,14 @@ use std::{
 };
 use whispernow_domain::{AppError, ErrorCategory};
 
-use whispernow_core::audio::{AudioDeviceChoice, AudioInput, AudioInputError};
+use whispernow_core::audio::{AudioInput, AudioInputError};
 use whispernow_domain::ipc::{
     AudioDevice, MicrophoneTestResponse, PermissionKind, PermissionStatus, PermissionsResponse,
     SaveSettingsResponse, SettingsView,
 };
 use whispernow_domain::{
-    CleanupTarget, EntryId, HistoryFilter, HistoryPage, HistoryPageRequest, SettingChange,
-    Settings, SetupCheckpoint, SetupProgress, SetupStep,
+    AudioDeviceId, CleanupTarget, EntryId, HistoryFilter, HistoryPage, HistoryPageRequest,
+    SettingChange, Settings, SetupCheckpoint, SetupProgress, SetupStep,
 };
 use whispernow_platform::{AppPaths, LocalCleanupService, open_directory, open_privacy_settings};
 
@@ -150,7 +150,7 @@ impl Backend {
     /// Captures on the dictation worker and records the permission answer the capture showed.
     fn listen(
         &self,
-        device: AudioDeviceChoice,
+        device: Option<AudioDeviceId>,
         duration: Duration,
     ) -> Result<MicrophoneTestResponse, MicrophoneTestError> {
         let result = self.dictation.test_microphone(device, duration);
@@ -189,10 +189,7 @@ impl Backend {
     /// Each platform asks for the microphone by listening to it. A refusal is an answer, shown
     /// on the permission card; any other failure is returned.
     fn request_microphone(&self) -> Result<(), AppError> {
-        match self.listen(
-            AudioDeviceChoice::SystemDefault,
-            microphone_test::PERMISSION_CHECK_DURATION,
-        ) {
+        match self.listen(None, microphone_test::PERMISSION_CHECK_DURATION) {
             Err(error) if !error.permission_denied() => Err(error.into()),
             Ok(_) | Err(_) => Ok(()),
         }

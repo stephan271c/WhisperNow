@@ -9,10 +9,10 @@ use std::{
 };
 
 use whispernow_core::audio::{
-    AudioBlock, AudioCapture, AudioDeviceChoice, AudioEvent, AudioInput, AudioInputError,
-    AudioProcessor, AudioSink,
+    AudioBlock, AudioCapture, AudioEvent, AudioInput, AudioInputError, AudioProcessor, AudioSink,
 };
 
+use whispernow_domain::AudioDeviceId;
 use whispernow_domain::ipc::AudioDevice;
 
 use super::cpal_backend::{
@@ -29,7 +29,6 @@ const LEVEL_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
 /// a pooled buffer and calls `try_send` on a bounded queue.
 pub struct CpalAudioInput {
     backend: Arc<dyn CaptureBackend>,
-    default_device_poll: Duration,
 }
 
 impl CpalAudioInput {
@@ -37,7 +36,6 @@ impl CpalAudioInput {
     pub fn new() -> Self {
         Self {
             backend: Arc::new(CpalBackend),
-            default_device_poll: DEFAULT_DEVICE_POLL_INTERVAL,
         }
     }
 }
@@ -55,7 +53,7 @@ impl AudioInput for CpalAudioInput {
 
     fn start(
         &self,
-        device: AudioDeviceChoice,
+        device: Option<AudioDeviceId>,
         sink: Arc<dyn AudioSink>,
     ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
         let request_started = Instant::now();
@@ -68,7 +66,7 @@ impl AudioInput for CpalAudioInput {
             recycle,
             fault,
             dropped_frames,
-        } = self.backend.open(&device, chunks_tx)?;
+        } = self.backend.open(device.as_ref(), chunks_tx)?;
         let processor = AudioProcessor::new(sample_rate_hz, channels)
             .inspect_err(|error| tracing::warn!(%error, "the audio processor could not be built"))
             .map_err(|_| AudioInputError::UnsupportedConfiguration)?;
@@ -82,7 +80,7 @@ impl AudioInput for CpalAudioInput {
         let worker = CaptureWorker {
             backend: Arc::clone(&self.backend),
             stream,
-            choice: device,
+            device,
             resolved_device_id,
             sink,
             request_started: Some(request_started),
@@ -90,7 +88,6 @@ impl AudioInput for CpalAudioInput {
             dropped_frames,
             recycle,
             stop_requested: Arc::clone(&stop_requested),
-            default_device_poll: self.default_device_poll,
         };
         let worker = thread::Builder::new()
             .name("whispernow-audio".to_owned())
@@ -138,7 +135,7 @@ impl Drop for CpalCapture {
 struct CaptureWorker {
     backend: Arc<dyn CaptureBackend>,
     stream: Box<dyn CaptureStream>,
-    choice: AudioDeviceChoice,
+    device: Option<AudioDeviceId>,
     resolved_device_id: String,
     sink: Arc<dyn AudioSink>,
     request_started: Option<Instant>,
@@ -146,7 +143,6 @@ struct CaptureWorker {
     dropped_frames: Arc<AtomicUsize>,
     recycle: SyncSender<Vec<f32>>,
     stop_requested: Arc<AtomicBool>,
-    default_device_poll: Duration,
 }
 
 impl CaptureWorker {
@@ -235,9 +231,7 @@ impl CaptureWorker {
     }
 
     fn poll_default_device(&self, last_check: &mut Instant) {
-        if self.choice != AudioDeviceChoice::SystemDefault
-            || last_check.elapsed() < self.default_device_poll
-        {
+        if self.device.is_some() || last_check.elapsed() < DEFAULT_DEVICE_POLL_INTERVAL {
             return;
         }
         *last_check = Instant::now();
@@ -334,10 +328,10 @@ mod tests {
 
         fn open(
             &self,
-            choice: &AudioDeviceChoice,
+            device: Option<&AudioDeviceId>,
             chunks: SyncSender<Vec<f32>>,
         ) -> Result<OpenedCapture, AudioInputError> {
-            if matches!(choice, AudioDeviceChoice::Device(id) if id.as_str() == "missing") {
+            if device.is_some_and(|id| id.as_str() == "missing") {
                 return Err(AudioInputError::InvalidDevice);
             }
             if let Some(samples) = self.chunks.lock().expect("chunks lock").pop_front() {
@@ -430,17 +424,14 @@ mod tests {
     }
 
     fn service(backend: Arc<FakeBackend>) -> CpalAudioInput {
-        CpalAudioInput {
-            backend,
-            default_device_poll: Duration::from_millis(10),
-        }
+        CpalAudioInput { backend }
     }
 
     fn start(
         service: &CpalAudioInput,
         sink: Arc<dyn AudioSink>,
     ) -> Result<Box<dyn AudioCapture>, AudioInputError> {
-        service.start(AudioDeviceChoice::SystemDefault, sink)
+        service.start(None, sink)
     }
 
     fn wait_until(condition: impl Fn() -> bool) -> bool {
@@ -511,7 +502,7 @@ mod tests {
         *backend.default_id.lock().expect("default lock") = Some("device-2".to_owned());
         assert_eq!(
             faulted
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(Duration::from_secs(2))
                 .expect("capture stops after the default device changes"),
             AudioEvent::DeviceLost
         );
@@ -552,13 +543,10 @@ mod tests {
     fn invalid_device_does_not_strand_the_service() {
         let backend = Arc::new(FakeBackend::new([]));
         let service = service(Arc::clone(&backend));
-        let missing = whispernow_domain::AudioDeviceId::new("missing").expect("ID");
+        let missing = AudioDeviceId::new("missing").expect("ID");
         assert_eq!(
             service
-                .start(
-                    AudioDeviceChoice::Device(missing),
-                    Arc::new(RecordingSink::default()),
-                )
+                .start(Some(missing), Arc::new(RecordingSink::default()),)
                 .err(),
             Some(AudioInputError::InvalidDevice)
         );

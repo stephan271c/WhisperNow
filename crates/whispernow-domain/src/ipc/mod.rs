@@ -50,7 +50,6 @@ pub struct SetApiKeyRequest {
 pub struct AudioDevice {
     pub id: AudioDeviceId,
     pub display_name: String,
-    pub is_default: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

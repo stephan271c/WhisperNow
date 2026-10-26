@@ -13,7 +13,7 @@ use blocked_reason::BlockedReason;
 use client::{ListenerOwner, current_window_label};
 use components::{AppShell, Navigator, RecordingBar};
 use dioxus::prelude::*;
-use management::ManagementState;
+use management::{Background, ManagementState};
 use route::Route;
 use state::UiState;
 
@@ -25,6 +25,7 @@ struct UiContext {
     /// Many controls check these; a snapshot that changes neither re-renders none of them.
     connected: Memo<bool>,
     phase_reason: Memo<Option<BlockedReason>>,
+    background: CopyValue<Background>,
 }
 
 impl UiContext {
@@ -32,12 +33,14 @@ impl UiContext {
         let navigator = Navigator::new(use_signal(|| Route::Home), use_signal(|| 0));
         let connected = use_memo(move || state.read().snapshot.is_some());
         let phase_reason = use_memo(move || blocked_reason::phase_reason(&state.read()));
+        let background = use_hook(|| CopyValue::new(Background::default()));
         use_context_provider(|| Self {
             state,
             management,
             navigator,
             connected,
             phase_reason,
+            background,
         })
     }
 }

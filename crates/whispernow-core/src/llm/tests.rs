@@ -84,7 +84,7 @@ impl LlmService for FakeService {
             .unwrap_or(Behavior::Error(LlmError::InvalidResponse));
         Box::pin(async move {
             match behavior {
-                Behavior::Text(text) => Ok(fake_response(text, LlmFinishReason::Completed)),
+                Behavior::Text(text) => Ok(fake_response(text, LlmFinishReason::Finished)),
                 Behavior::Truncated(text) => Ok(fake_response(text, LlmFinishReason::OutputLimit)),
                 Behavior::Filtered(text) => Ok(fake_response(text, LlmFinishReason::ContentFilter)),
                 Behavior::Error(error) => Err(error),
@@ -249,7 +249,7 @@ fn responses_strip_think_blocks() {
         ("<think>never closed", ""),
         ("  plain text  ", "plain text"),
     ] {
-        let result = accept_response(&fake_response(raw, LlmFinishReason::Completed));
+        let result = accept_response(&fake_response(raw, LlmFinishReason::Finished));
         let expected = if expected.is_empty() {
             Err(CleanupFallback::EmptyOutput)
         } else {

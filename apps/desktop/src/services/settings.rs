@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use whispernow_domain::{AppError, ErrorCategory};
 
-use whispernow_core::audio::{AudioDeviceChoice, AudioInput};
+use whispernow_core::audio::AudioInput;
 use whispernow_domain::ipc::{SetApiKeyRequest, SettingsView};
 use whispernow_domain::{ApiKey, AudioDeviceId, LlmProvider, RemoteProvider, SettingsError};
 use whispernow_domain::{
@@ -123,14 +123,14 @@ impl SavedSettings {
             .publish_error(AppError::new(ErrorCategory::General, code, summary));
     }
 
-    pub(super) fn input_device(&self) -> AudioDeviceChoice {
-        self.lock().input_device.clone().into()
+    pub(super) fn input_device(&self) -> Option<AudioDeviceId> {
+        self.lock().input_device.clone()
     }
 
     /// Provider configurations in the snapshot carry no API key.
     pub(super) fn recording_settings(&self) -> RecordingSettings {
         let settings = self.snapshot();
-        let input_device = settings.input_device.clone().into();
+        let input_device = settings.input_device.clone();
         let cleanup = cleanup_plan(&settings);
         let model_id = settings.model_id.clone();
         recording(settings, model_id, input_device, cleanup)
@@ -147,7 +147,7 @@ impl SavedSettings {
                 (checkpoint.model_id.clone(), checkpoint.input_device.clone())
             }
         };
-        recording(settings, model_id, input_device.into(), None)
+        recording(settings, model_id, input_device, None)
     }
 
     pub(crate) fn snapshot(&self) -> Settings {
@@ -261,7 +261,7 @@ pub(crate) fn settings_error(error: &SettingsError) -> AppError {
 fn recording(
     settings: Settings,
     model_id: ModelId,
-    input_device: AudioDeviceChoice,
+    input_device: Option<AudioDeviceId>,
     cleanup: Option<CleanupPlan>,
 ) -> RecordingSettings {
     RecordingSettings {
@@ -310,7 +310,6 @@ fn cleanup_plan(settings: &Settings) -> Option<CleanupPlan> {
 mod tests {
     use std::{fs, sync::Arc};
 
-    use whispernow_core::audio::AudioDeviceChoice;
     use whispernow_domain::ipc::{AudioDevice, SetApiKeyRequest};
     use whispernow_domain::{
         ApiKey, AppError, AudioDeviceId, ErrorCategory, LlmProvider, SettingChange,
@@ -435,7 +434,6 @@ mod tests {
         FakeAudioInput::listing(Ok(vec![AudioDevice {
             id: device("connected microphone"),
             display_name: "Connected microphone".to_owned(),
-            is_default: true,
         }]))
     }
 
@@ -478,7 +476,7 @@ mod tests {
             .expect("connected microphone");
         assert_eq!(
             fixture.settings.recording_settings().input_device,
-            AudioDeviceChoice::Device(device("connected microphone"))
+            Some(device("connected microphone"))
         );
         let before = fs::read(fixture.paths.settings_file()).expect("saved settings");
         assert_eq!(
@@ -501,14 +499,8 @@ mod tests {
             .update(&SettingChange::InputDevice(None), &connected_microphone())
             .expect("system default");
         assert_eq!(saved.settings.input_device, None);
-        assert_eq!(
-            fixture.settings.recording_settings().input_device,
-            AudioDeviceChoice::SystemDefault
-        );
-        assert_eq!(
-            fixture.settings.input_device(),
-            AudioDeviceChoice::SystemDefault
-        );
+        assert_eq!(fixture.settings.recording_settings().input_device, None);
+        assert_eq!(fixture.settings.input_device(), None);
     }
 
     #[test]
@@ -521,14 +513,8 @@ mod tests {
         .expect("hand-edited settings");
 
         fixture.restart();
-        assert_eq!(
-            fixture.settings.input_device(),
-            AudioDeviceChoice::SystemDefault
-        );
-        assert_eq!(
-            fixture.settings.setup_test_settings().input_device,
-            AudioDeviceChoice::SystemDefault
-        );
+        assert_eq!(fixture.settings.input_device(), None);
+        assert_eq!(fixture.settings.setup_test_settings().input_device, None);
     }
 
     #[test]

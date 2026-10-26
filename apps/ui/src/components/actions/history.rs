@@ -25,17 +25,17 @@ impl UiContext {
     /// Reads with the same filter can finish out of order after Load more or deletion, so a
     /// new read cancels the one in flight.
     fn read_history(self, request: HistoryPageRequest) {
-        let mut management = self.management;
+        let (mut management, mut background) = (self.management, self.background);
         let read = spawn_forever(async move {
             let answer = client::invoke("get_history", request).await;
-            let mut management = management.write();
-            management.history_read = None;
+            background.write().history_read = None;
             match answer {
-                Ok(page) => management.finish_history_refresh(page),
-                Err(error) => management.fail_history_refresh(&error),
+                Ok(page) if management.peek().shows_history(&page) => {}
+                Ok(page) => management.write().finish_history_refresh(page),
+                Err(error) => management.write().fail_history_refresh(&error),
             }
         });
-        replace_task(&mut management.write().history_read, Some(read));
+        replace_task(&mut background.write().history_read, Some(read));
     }
 
     pub(crate) fn search_history(mut self, text: &str) {
@@ -68,11 +68,10 @@ impl UiContext {
         self.change_history(client::call("clear_history"));
     }
 
-    /// Changes history, then reads it again whatever the answer: last write wins, and a row
-    /// another surface already removed is the refresh's result rather than an error.
+    /// The desktop announces every change and failure with `HistoryChanged`, which reads the
+    /// window again, so a row another surface already removed is not an error.
     fn change_history(self, call: impl Future<Output = Result<(), AppError>> + 'static) {
         self.run(UiOperation::ChangeHistory, call, move |actions, answer| {
-            actions.refresh_history();
             if let Err(error) = answer
                 && error.category != ErrorCategory::NotFound
             {
