@@ -193,8 +193,8 @@ mod tests {
         let fixture = Fixture::separate_roots();
         let paths = fixture.paths;
 
-        assert!(paths.data_locations().expect("locations").is_empty());
-        assert!(clear(&paths, &EVERYTHING).is_empty());
+        assert_eq!(paths.data_locations().expect("locations"), []);
+        assert_eq!(clear(&paths, &EVERYTHING), []);
     }
 
     #[test]

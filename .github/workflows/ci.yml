@@ -10,14 +10,14 @@ permissions:
   contents: read
 
 env:
-  RUSTUP_TOOLCHAIN: 1.96.0
+  RUSTUP_TOOLCHAIN: 1.99.1
 
 jobs:
   rust:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install native prerequisites
         run: |
@@ -39,8 +39,8 @@ jobs:
       - name: Install Dioxus and Tauri CLIs
         run: |
           cargo install dioxus-cli --version 0.7.10 --locked
-          cargo install tauri-cli --version 2.11.4 --locked
-          cargo install wasm-pack --version 0.13.1 --locked
+          cargo install tauri-cli --version 2.12.4 --locked
+          cargo install wasm-pack --version 0.15.0 --locked
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -75,7 +75,7 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pinned Rust toolchain
         run: python3 scripts/check_rust_toolchain.py

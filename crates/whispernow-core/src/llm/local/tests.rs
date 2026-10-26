@@ -300,11 +300,14 @@ fn ngram_drafts_copy_what_followed_the_latest_earlier_match() {
     assert!(ngram_draft(&cached, 7).is_empty(), "no match");
     // A match too close to the end leaves fewer than 4 tokens to copy.
     let cached = [9, 9, 9, 9, 9, 9, 1, 2, 3, 4, 1, 2, 3];
-    assert!(ngram_draft(&cached, 4).is_empty());
+    assert_eq!(ngram_draft(&cached, 4), Vec::<Token>::new());
     // Position 0 never matches, and short histories never draft.
     let cached = [2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 2, 3, 4];
-    assert!(ngram_draft(&cached, 5).is_empty());
-    assert!(ngram_draft(&[2, 3, 4, 2, 3, 4, 2, 3, 4], 2).is_empty());
+    assert_eq!(ngram_draft(&cached, 5), Vec::<Token>::new());
+    assert_eq!(
+        ngram_draft(&[2, 3, 4, 2, 3, 4, 2, 3, 4], 2),
+        Vec::<Token>::new()
+    );
 }
 
 #[test]

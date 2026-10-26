@@ -19,12 +19,12 @@ fn a_failed_legacy_rename_rolls_back_and_retries_without_duplicates() {
             diagnostic.expect("import diagnostic").code,
             "history_import_rename"
         );
-        assert!(
+        assert_eq!(
             history
                 .list(&HistoryPageRequest::first_page(HistoryFilter::default()))
                 .expect("history remains usable")
-                .entries
-                .is_empty()
+                .entries,
+            []
         );
         assert_eq!(
             fs::read(paths.history_file()).expect("source preserved"),

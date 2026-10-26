@@ -127,11 +127,11 @@ impl SpeechSegmenter {
             frame.clear();
             self.partial = frame;
         }
-        let mut frames = samples.chunks_exact(FRAME_SAMPLES);
-        for frame in &mut frames {
+        let (frames, rest) = samples.as_chunks::<FRAME_SAMPLES>();
+        for frame in frames {
             finished.extend(self.process_frame(frame, FRAME_SAMPLES));
         }
-        self.partial.extend_from_slice(frames.remainder());
+        self.partial.extend_from_slice(rest);
         finished
     }
 
@@ -335,8 +335,8 @@ mod tests {
 
     #[test]
     fn silence_and_isolated_noise_produce_zero_segments() {
-        assert!(segment(&silence(5.0)).is_empty());
-        assert!(segment(&[]).is_empty());
+        assert_eq!(segment(&silence(5.0)), []);
+        assert_eq!(segment(&[]), []);
 
         let mut click = silence(2.0);
         click[SECOND..SECOND + 512].copy_from_slice(&speech(0.032));

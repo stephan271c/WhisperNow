@@ -45,7 +45,7 @@ static LOADED: Mutex<Option<&'static Libraries>> = Mutex::new(None);
 
 #[derive(Debug, Error)]
 pub(crate) enum LoadError {
-    #[error("llama.cpp could not be loaded from {directory}: {source}")]
+    #[error("llama.cpp could not be loaded from {directory}: {}", with_cause(.source))]
     Library {
         directory: PathBuf,
         #[source]
@@ -59,6 +59,14 @@ pub(crate) enum LoadError {
     Context,
     #[error("the model's memory test decode failed (status {0})")]
     Probe(i32),
+}
+
+/// libloading 0.9 shows only "dlopen failed"; the loader's own message is the `source()`.
+fn with_cause(error: &libloading::Error) -> String {
+    match std::error::Error::source(error) {
+        Some(cause) => format!("{error}: {cause}"),
+        None => error.to_string(),
+    }
 }
 
 pub(crate) struct Libraries {

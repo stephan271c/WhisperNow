@@ -545,7 +545,7 @@ mod tests {
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nfixture")
             .expect("release the pending response");
         download.models.shutdown_downloads();
-        assert!(fixture.state.snapshot().active_downloads.is_empty());
+        assert_eq!(fixture.state.snapshot().active_downloads, []);
         assert!(fixture.state.lock().failed_download.is_none());
         assert!(fixture.state.snapshot().error.is_none());
         fixture
@@ -587,7 +587,7 @@ mod tests {
             fixture.state.snapshot().phase,
             Phase::Recording { .. }
         ));
-        assert!(fixture.state.snapshot().active_downloads.is_empty());
+        assert_eq!(fixture.state.snapshot().active_downloads, []);
         assert!(fixture.state.lock().failed_download.is_none());
         assert!(fixture.state.snapshot().error.is_none());
         fixture.dictation.cancel().expect("cancel recording");
@@ -610,7 +610,7 @@ mod tests {
         download.models.shutdown_downloads();
 
         let snapshot = fixture.state.snapshot();
-        assert!(snapshot.active_downloads.is_empty());
+        assert_eq!(snapshot.active_downloads, []);
         assert_eq!(snapshot.failed_download, Some(download.model_id.clone()));
         assert!(snapshot.error.is_none());
     }
@@ -630,7 +630,7 @@ mod tests {
         run_model_download(&state, &model_id, |_| panic!("the download panicked"));
 
         let snapshot = state.snapshot();
-        assert!(snapshot.active_downloads.is_empty());
+        assert_eq!(snapshot.active_downloads, []);
         assert_eq!(snapshot.failed_download, Some(model_id));
         assert_eq!(snapshot.model_state, ModelState::Failed);
         assert!(snapshot.error.is_none());

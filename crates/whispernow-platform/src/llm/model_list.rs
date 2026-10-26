@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use rig_core::providers::anthropic::{
-    client::normalize_anthropic_base_url, completion::ANTHROPIC_VERSION_LATEST,
+    completion::ANTHROPIC_VERSION_LATEST, wire::normalize_base_url,
 };
 use serde::Deserialize;
 use whispernow_core::llm::LlmError;
@@ -89,8 +89,7 @@ pub async fn list_models(
                 .collect()
         }
         RemoteProvider::Anthropic(endpoint) => {
-            let base =
-                normalize_anthropic_base_url(base_url(endpoint.as_ref(), ANTHROPIC_BASE_URL));
+            let base = normalize_base_url(base_url(endpoint.as_ref(), ANTHROPIC_BASE_URL));
             let request = http
                 .get(format!("{base}/v1/models?limit=1000"))
                 .header("x-api-key", required_key(api_key)?)

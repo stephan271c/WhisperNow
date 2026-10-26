@@ -30,8 +30,8 @@ dioxus-html = { version = "=0.7.10", features = ["serialize"] }
 dioxus-ssr.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "=0.3.77"
-web-sys = { version = "=0.3.104", features = ["Document", "Element", "EventTarget", "MouseEvent", "Window"] }
+wasm-bindgen-test = "=0.3.79"
+web-sys = { version = "=0.3.106", features = ["Document", "Element", "EventTarget", "MouseEvent", "Window"] }
 
 [lints]
 workspace = true

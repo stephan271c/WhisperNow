@@ -41,8 +41,8 @@ fn a_failed_commit_rolls_back_the_entry_and_removes_audio_before_id_reuse() {
         )
         .is_err()
     );
-    assert!(all(&history).is_empty());
-    assert!(fixture.wav_names().is_empty());
+    assert_eq!(all(&history), []);
+    assert_eq!(fixture.wav_names(), Vec::<String>::new());
     history
         .connection
         .execute_batch("DROP TRIGGER fail_commit")
@@ -103,7 +103,7 @@ fn a_reused_id_cannot_acquire_audio_that_could_not_be_cleaned_up() {
         result.expect_err("stale audio cannot attach").code,
         "history_audio_delete"
     );
-    assert!(all(&history).is_empty());
+    assert_eq!(all(&history), []);
     let id = store(&mut history, entry(2, EntryStatus::Ok, "retry"), None).expect("retry");
     assert_eq!(id.0, 1);
     assert_eq!(history.audio(id).expect("no stale audio"), None);

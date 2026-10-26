@@ -4,17 +4,20 @@
 
 use std::{sync::LazyLock, time::Duration};
 
-use futures_util::StreamExt as _;
 use rig_core::{
-    client::CompletionClient as _,
-    completion::{CompletionError, CompletionModel},
+    DynModel, ProviderError,
+    completion::{CompletionRequest, FinishReason},
+    operation::Completion,
     providers::{
-        anthropic,
-        gemini::{self, completion::gemini_api_types::FinishReason as GeminiFinishReason},
-        openai,
+        anthropic::AnthropicConfig,
+        gemini::GeminiConfig,
+        openai::{
+            OpenAIConfig,
+            wire::{Auth, OLLAMA, OPENAI, OPENROUTER},
+        },
     },
-    streaming::StreamedAssistantContent,
 };
+use rig_reqwest::ReqwestClient;
 use whispernow_core::llm::{LlmError, LlmFinishReason, LlmPrompt, LlmResponse};
 use whispernow_domain::{ApiKey, ProviderEndpoint, RemoteCleanupTarget, RemoteProvider};
 
@@ -38,88 +41,63 @@ pub async fn complete(
     api_key: Option<ApiKey>,
     prompt: LlmPrompt,
 ) -> Result<LlmResponse, LlmError> {
-    let http = http_client()?;
+    let http = ReqwestClient::from(http_client()?);
     let key = api_key.as_ref();
     let model = target.model;
-    match &target.provider {
+    let model = match &target.provider {
         RemoteProvider::Anthropic(endpoint) => {
-            anthropic(http, endpoint.as_ref(), required_key(key)?, model, &prompt).await
+            let mut config = AnthropicConfig::new(required_key(key)?);
+            if let Some(endpoint) = endpoint {
+                config = config.with_base_url(endpoint.base());
+            }
+            let mut model = config.connect(http).completion(model);
+            model
+                .wire
+                .default_max_tokens
+                .get_or_insert(ANTHROPIC_FALLBACK_MAX_TOKENS);
+            model.erase()
         }
         RemoteProvider::Gemini(endpoint) => {
-            gemini(http, endpoint.as_ref(), required_key(key)?, model, &prompt).await
+            let mut config = GeminiConfig::new(required_key(key)?);
+            if let Some(endpoint) = endpoint {
+                config = config.with_base_url(endpoint.base());
+            }
+            config.connect(http).completion(model).erase()
         }
-        RemoteProvider::OpenAi(endpoint) => {
-            let base = base_url(endpoint.as_ref(), OPENAI_BASE_URL);
-            openai_compatible(http, required_key(key)?, base, model, &prompt).await
-        }
-        RemoteProvider::OpenRouter(endpoint) => {
-            let base = base_url(endpoint.as_ref(), OPENROUTER_BASE_URL);
-            openai_compatible(http, required_key(key)?, base, model, &prompt).await
-        }
-        RemoteProvider::Ollama(endpoint) => {
-            let base = format!("{}/v1", ollama_root(endpoint.as_ref()));
-            openai_compatible(http, optional_key(key), &base, model, &prompt).await
-        }
+        RemoteProvider::OpenAi(endpoint) => chat_completions(
+            OpenAIConfig::with_key(&OPENAI, required_key(key)?),
+            base_url(endpoint.as_ref(), OPENAI_BASE_URL),
+            http,
+            model,
+        ),
+        RemoteProvider::OpenRouter(endpoint) => chat_completions(
+            OpenAIConfig::with_key(&OPENROUTER, required_key(key)?),
+            base_url(endpoint.as_ref(), OPENROUTER_BASE_URL),
+            http,
+            model,
+        ),
+        RemoteProvider::Ollama(endpoint) => chat_completions(
+            OpenAIConfig::with_key(&OLLAMA, optional_key(key)),
+            &format!("{}/v1", ollama_root(endpoint.as_ref())),
+            http,
+            model,
+        ),
         RemoteProvider::Custom(endpoint) => {
-            openai_compatible(http, optional_key(key), endpoint.base(), model, &prompt).await
+            let mut config = OpenAIConfig::with_key(&OPENAI, optional_key(key));
+            config.auth = Auth::OptionalBearer;
+            chat_completions(config, endpoint.base(), http, model)
         }
-    }
+    };
+    stream_model(&model, &prompt).await
 }
 
-async fn anthropic(
-    http: reqwest::Client,
-    endpoint: Option<&ProviderEndpoint>,
-    key: String,
-    model: String,
-    prompt: &LlmPrompt,
-) -> Result<LlmResponse, LlmError> {
-    let mut builder = anthropic::Client::builder().api_key(key).http_client(http);
-    if let Some(endpoint) = endpoint {
-        builder = builder.base_url(endpoint.base());
-    }
-    let client = builder.build().map_err(|_| LlmError::InvalidRequest)?;
-    let mut model = client.completion_model(model);
-    model
-        .default_max_tokens
-        .get_or_insert(ANTHROPIC_FALLBACK_MAX_TOKENS);
-    stream_model(model, prompt, |_| LlmFinishReason::Finished).await
-}
-
-async fn gemini(
-    http: reqwest::Client,
-    endpoint: Option<&ProviderEndpoint>,
-    key: String,
-    model: String,
-    prompt: &LlmPrompt,
-) -> Result<LlmResponse, LlmError> {
-    let mut builder = gemini::Client::builder().api_key(key).http_client(http);
-    if let Some(endpoint) = endpoint {
-        builder = builder.base_url(endpoint.base());
-    }
-    let client = builder.build().map_err(|_| LlmError::InvalidRequest)?;
-    stream_model(client.completion_model(model), prompt, |response| {
-        gemini_finish_reason(response.and_then(|response| response.finish_reason.as_ref()))
-    })
-    .await
-}
-
-async fn openai_compatible(
-    http: reqwest::Client,
-    key: String,
+fn chat_completions(
+    config: OpenAIConfig,
     base: &str,
+    http: ReqwestClient,
     model: String,
-    prompt: &LlmPrompt,
-) -> Result<LlmResponse, LlmError> {
-    let client = openai::CompletionsClient::builder()
-        .api_key(key)
-        .base_url(base)
-        .http_client(http)
-        .build()
-        .map_err(|_| LlmError::InvalidRequest)?;
-    stream_model(client.completion_model(model), prompt, |_| {
-        LlmFinishReason::Finished
-    })
-    .await
+) -> DynModel<Completion> {
+    config.with_base_url(base).connect(http).chat(model).erase()
 }
 
 /// The one client every provider call uses, so connections and TLS sessions are reused. It
@@ -162,54 +140,38 @@ fn optional_key(key: Option<&ApiKey>) -> String {
     key.map_or_else(String::new, |key| key.expose_secret().to_owned())
 }
 
-fn gemini_finish_reason(reason: Option<&GeminiFinishReason>) -> LlmFinishReason {
+fn finish_reason(reason: Option<&FinishReason>) -> LlmFinishReason {
     match reason {
-        Some(GeminiFinishReason::MaxTokens) => LlmFinishReason::OutputLimit,
-        Some(
-            GeminiFinishReason::Safety
-            | GeminiFinishReason::Recitation
-            | GeminiFinishReason::Blocklist
-            | GeminiFinishReason::ProhibitedContent
-            | GeminiFinishReason::Spii,
-        ) => LlmFinishReason::ContentFilter,
+        Some(FinishReason::Length) => LlmFinishReason::OutputLimit,
+        Some(FinishReason::ContentFilter) => LlmFinishReason::ContentFilter,
+        // Rig files Gemini's RECITATION stop under `Other`.
+        Some(FinishReason::Other(reason)) if reason == "RECITATION" => {
+            LlmFinishReason::ContentFilter
+        }
         _ => LlmFinishReason::Finished,
     }
 }
 
-/// Streams one completion. Only Gemini reports why a stream stopped in rig's final
-/// response; the other providers' streams read as finished.
-async fn stream_model<M, R>(
-    model: M,
+async fn stream_model(
+    model: &DynModel<Completion>,
     prompt: &LlmPrompt,
-    reported_finish: R,
-) -> Result<LlmResponse, LlmError>
-where
-    M: CompletionModel,
-    R: FnOnce(Option<&M::StreamingResponse>) -> LlmFinishReason,
-{
+) -> Result<LlmResponse, LlmError> {
     // API providers get no output limit or temperature of ours, so reasoning models keep
     // their full budget.
-    let provider_request = model
-        .completion_request(prompt.user())
-        .preamble(prompt.system().to_owned())
-        .build();
-    let mut stream = model
-        .stream(provider_request)
+    let request = CompletionRequest::new(prompt.user()).preamble(prompt.system());
+    let response = model
+        .stream(request)
+        .map_err(|error| map_error(&error))?
+        .finish()
         .await
         .map_err(|error| map_error(&error))?;
-    let mut text = String::new();
-    while let Some(item) = stream.next().await {
-        if let StreamedAssistantContent::Text(chunk) = item.map_err(|error| map_error(&error))? {
-            text.push_str(&chunk.text);
-        }
-    }
     Ok(LlmResponse {
-        text,
-        finish_reason: reported_finish(stream.response.as_ref()),
+        text: response.text(),
+        finish_reason: finish_reason(response.finish_reason().as_ref()),
     })
 }
 
-fn map_error(error: &CompletionError) -> LlmError {
+fn map_error(error: &ProviderError) -> LlmError {
     if let Some(status) = error.provider_response_status() {
         if status.as_u16() == 404 || names_missing_model(error) {
             return LlmError::ModelNotFound;
@@ -217,8 +179,10 @@ fn map_error(error: &CompletionError) -> LlmError {
         return status_error(status.as_u16());
     }
     match error {
-        CompletionError::HttpError(_) => LlmError::Transport,
-        CompletionError::UrlError(_) | CompletionError::RequestError(_) => LlmError::InvalidRequest,
+        ProviderError::Http(_) => LlmError::Transport,
+        ProviderError::Url(_) | ProviderError::Request(_) | ProviderError::UnsupportedOption(_) => {
+            LlmError::InvalidRequest
+        }
         _ => LlmError::InvalidResponse,
     }
 }
@@ -243,7 +207,7 @@ fn status_error(status: u16) -> LlmError {
 
 // OpenAI, and servers that copy its error shape, name a missing model in `error.code`; some
 // answer 400 rather than 404.
-fn names_missing_model(error: &CompletionError) -> bool {
+fn names_missing_model(error: &ProviderError) -> bool {
     error
         .provider_response_json()
         .ok()
@@ -254,15 +218,14 @@ fn names_missing_model(error: &CompletionError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ANTHROPIC_FALLBACK_MAX_TOKENS, GeminiFinishReason, OLLAMA_ROOT, OPENROUTER_BASE_URL,
-        base_url, complete, gemini_finish_reason, map_error, ollama_root, required_key,
-        status_error,
+        ANTHROPIC_FALLBACK_MAX_TOKENS, OLLAMA_ROOT, OPENROUTER_BASE_URL, base_url, complete,
+        finish_reason, map_error, ollama_root, required_key, status_error,
         test_server::{serve_keep_alive, serve_once},
     };
     use std::{net::TcpListener, time::Duration};
 
     use reqwest::StatusCode;
-    use rig_core::completion::CompletionError;
+    use rig_core::{ProviderError, completion::FinishReason};
     use whispernow_core::llm::{
         LlmError, LlmFinishReason, LlmPrompt, LlmResponse, build_cleanup_prompt,
     };
@@ -313,18 +276,23 @@ mod tests {
                 LlmError::InvalidRequest,
             ),
         ] {
-            let error = CompletionError::from_http_response(status, body);
+            let error = ProviderError::from_http_response(status, body);
             assert_eq!(map_error(&error), expected, "{status} {body}");
         }
     }
 
     #[test]
-    fn gemini_reports_why_it_stopped() {
+    fn a_provider_reports_why_it_stopped() {
         for (reason, expected) in [
-            (GeminiFinishReason::MaxTokens, LlmFinishReason::OutputLimit),
-            (GeminiFinishReason::Safety, LlmFinishReason::ContentFilter),
+            (FinishReason::Stop, LlmFinishReason::Finished),
+            (FinishReason::Length, LlmFinishReason::OutputLimit),
+            (FinishReason::ContentFilter, LlmFinishReason::ContentFilter),
+            (
+                FinishReason::Other("RECITATION".to_owned()),
+                LlmFinishReason::ContentFilter,
+            ),
         ] {
-            assert_eq!(gemini_finish_reason(Some(&reason)), expected);
+            assert_eq!(finish_reason(Some(&reason)), expected);
         }
     }
 

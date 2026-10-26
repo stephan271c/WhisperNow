@@ -124,7 +124,7 @@ fn history_deletion_removes_rows_and_audio() {
     let page = backend
         .history_page(&HistoryPageRequest::first_page(HistoryFilter::default()))
         .expect("new history");
-    assert!(page.entries.is_empty());
+    assert_eq!(page.entries, []);
     assert!(backend.history.audio(entry.id).is_err());
     let later = insert_entry(&backend.history, "after clear", Some(&[0.25; 160]))
         .expect("dictation after clear");

@@ -208,7 +208,7 @@ fn concurrent_settings_and_geometry_saves_retain_both_and_register_the_final_set
         autostart.set_enabled(false).expect("external change");
         let view = gateway.settings_view().await.expect("changed view");
         assert!(!view.start_on_login);
-        assert!(view.warnings.is_empty());
+        assert_eq!(view.warnings, Vec::<String>::new());
     });
     shut_down(&gateway.backend);
 }
@@ -249,14 +249,14 @@ fn a_settings_save_keeps_registers_or_refuses_the_recording_shortcut() {
             .update_settings(SettingChange::Theme(ThemePreference::Dark))
             .await
             .expect("theme save");
-        assert!(unchanged.warnings.is_empty());
+        assert_eq!(unchanged.warnings, Vec::<String>::new());
         assert_eq!(registrar.bindings(), [held(saved.recording_shortcut.key)]);
 
         let registered = gateway
             .update_settings(recording(ShortcutKey::F1))
             .await
             .expect("F1 save");
-        assert!(registered.warnings.is_empty());
+        assert_eq!(registered.warnings, Vec::<String>::new());
         assert_eq!(registrar.bindings(), [held(ShortcutKey::F1)]);
 
         *registrar.fail_register.lock().expect("fail register") = Some(held(ShortcutKey::F2).id.0);
@@ -349,7 +349,7 @@ fn a_history_limit_change_prunes_history_and_other_changes_do_not() {
     let saved = backend
         .update_settings(&SettingChange::HistoryLimit(HistoryLimit::Last20))
         .expect("limit save");
-    assert!(saved.warnings.is_empty());
+    assert_eq!(saved.warnings, Vec::<String>::new());
     assert_eq!(count(), 20);
     shut_down(&backend);
 }

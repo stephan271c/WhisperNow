@@ -760,6 +760,10 @@ mod tests {
         stopped: Arc<AtomicBool>,
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the fake portal answers at once"
+    )]
     impl ShortcutPortal for FakePortal {
         async fn register(
             &mut self,
@@ -1222,7 +1226,7 @@ mod tests {
         assert_eq!(held.activated(at(0), start), [KeyTransition::Pressed]);
         assert_eq!(held.next_deadline(), Some(start + INITIAL_RELEASE_TIMEOUT));
         let repeat = start + Duration::from_millis(500);
-        assert!(held.activated(at(500), repeat).is_empty());
+        assert_eq!(held.activated(at(500), repeat), []);
         assert_eq!(held.next_deadline(), Some(repeat + REPEAT_RELEASE_TIMEOUT));
         assert!(!held.expire(repeat + Duration::from_millis(30)));
 
@@ -1243,7 +1247,7 @@ mod tests {
             held.activated(Duration::ZERO, now),
             [KeyTransition::Pressed]
         );
-        assert!(held.activated(Duration::from_millis(500), now).is_empty());
+        assert_eq!(held.activated(Duration::from_millis(500), now), []);
         assert_eq!(held.next_deadline(), None);
         assert!(!held.expire(now + INITIAL_RELEASE_TIMEOUT));
         assert!(held.key_released(Duration::from_secs(3)));
@@ -1291,7 +1295,7 @@ mod tests {
             [KeyTransition::Released]
         );
         assert!(!held.key_released(Duration::from_millis(22)));
-        assert!(held.activated(Duration::from_millis(40), now).is_empty());
+        assert_eq!(held.activated(Duration::from_millis(40), now), []);
         held.helper(ReleaseEvent::Held(Duration::from_millis(60)), now);
         assert_eq!(
             held.activated(Duration::from_millis(60), now),
@@ -1321,12 +1325,12 @@ mod tests {
         let mut held = HeldShortcut::default();
 
         assert_eq!(held.activated(at(1000), now), [KeyTransition::Pressed]);
-        assert!(held.activated(at(1500), now).is_empty());
+        assert_eq!(held.activated(at(1500), now), []);
         assert!(held.key_released(at(1600)));
         assert_eq!(held.next_deadline(), None);
         // Repeats timed before, or just after, the release were already queued.
-        assert!(held.activated(at(1590), now).is_empty());
-        assert!(held.activated(at(1620), now).is_empty());
+        assert_eq!(held.activated(at(1590), now), []);
+        assert_eq!(held.activated(at(1620), now), []);
         assert!(!held.deactivated(at(1700)));
         assert_eq!(held.activated(at(3000), now), [KeyTransition::Pressed]);
     }

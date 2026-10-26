@@ -358,7 +358,7 @@ mod tests {
 
         cell.update::<()>(|_| Err(AppError::new(ErrorCategory::General, "refused", "Refused")))
             .expect_err("refused update");
-        assert!(published_phases(&published).is_empty());
+        assert_eq!(published_phases(&published), []);
 
         cell.publish_error(AppError::new(ErrorCategory::General, "failed", "Failed"));
         cell.apply(|state| state.phase = Phase::Error);

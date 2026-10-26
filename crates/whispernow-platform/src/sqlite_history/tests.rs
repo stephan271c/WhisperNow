@@ -382,8 +382,8 @@ fn delivery_failure_delete_and_clear_update_entries_and_audio() {
     assert_eq!(fixture.wav_names(), vec![format!("{}.wav", second.0)]);
     assert!(history.clear().expect("clear"));
     assert!(!history.clear().expect("clear again"));
-    assert!(all(&history).is_empty());
-    assert!(fixture.wav_names().is_empty());
+    assert_eq!(all(&history), []);
+    assert_eq!(fixture.wav_names(), Vec::<String>::new());
 }
 
 #[test]
@@ -412,7 +412,7 @@ fn clearing_vacuums_transcript_pages_without_reusing_ids() {
 
     assert!(history.clear().expect("clear"));
 
-    assert!(all(&history).is_empty());
+    assert_eq!(all(&history), []);
     assert!(!fixture.paths.recordings_dir().exists());
     assert!(fs::metadata(&database).expect("vacuumed database").len() < before);
     let bytes = fs::read(&database).expect("database bytes");
@@ -610,7 +610,7 @@ fn a_malformed_python_history_document_is_moved_aside_with_a_diagnostic() {
         diagnostic.map(|diagnostic| diagnostic.code).as_deref(),
         Some("history_import_invalid")
     );
-    assert!(all(&history).is_empty());
+    assert_eq!(all(&history), []);
     let backups = fixture
         .paths
         .history_backup_files()

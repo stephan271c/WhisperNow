@@ -15,7 +15,6 @@
     "frontendDist": "../../target/dx/whispernow-ui/release/web/public"
   },
   "app": {
-    "macOSPrivateApi": true,
     "withGlobalTauri": true,
     "windows": [
       {

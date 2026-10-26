@@ -37,7 +37,6 @@ windows-sys = { version = "=0.61.2", features = ["Win32_System_Registry"] }
 
 [dev-dependencies]
 whispernow-platform = { path = "../../crates/whispernow-platform", features = ["test-support"] }
-rusqlite.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tracing-subscriber.workspace = true

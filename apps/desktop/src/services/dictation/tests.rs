@@ -81,7 +81,7 @@ impl AsrEngine for ScriptedAsr {
         if self
             .script
             .failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
             })
             .is_ok()
@@ -511,7 +511,7 @@ fn cancelling_a_recording_keeps_its_audio_as_a_cancelled_entry() {
     fixture.dictation.cancel().expect("cancel");
 
     assert_eq!(fixture.settled(), Phase::Idle);
-    assert!(fixture.pasted().is_empty());
+    assert_eq!(fixture.pasted(), Vec::<String>::new());
     assert_eq!(fixture.script.decodes.load(Ordering::SeqCst), 0);
     let history = fixture.history();
     assert_eq!(history.len(), 1);
@@ -534,7 +534,7 @@ fn cancelling_during_processing_pastes_nothing() {
     release.send(()).expect("release decode");
 
     assert_eq!(fixture.settled(), Phase::Idle);
-    assert!(fixture.pasted().is_empty());
+    assert_eq!(fixture.pasted(), Vec::<String>::new());
     assert!(fixture.state.lock().last_transcript.is_none());
     let history = fixture.history();
     assert_eq!(history.len(), 1);
@@ -619,7 +619,7 @@ fn a_decode_that_fails_twice_keeps_the_audio_as_a_failed_entry() {
     fixture.dictation.stop().expect("stop");
 
     assert_eq!(fixture.settled_error().code, "transcription_failed");
-    assert!(fixture.pasted().is_empty());
+    assert_eq!(fixture.pasted(), Vec::<String>::new());
     let history = fixture.history();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].status, EntryStatus::Failed);
@@ -806,7 +806,7 @@ fn an_incomplete_cleanup_provider_keeps_the_transcript_without_calling_the_provi
     fixture.dictation.stop().expect("stop");
     assert_eq!(fixture.settled(), Phase::Idle);
     assert_eq!(fixture.pasted(), [TRANSCRIPT]);
-    assert!(fixture.cleanup_models().is_empty());
+    assert_eq!(fixture.cleanup_models(), Vec::<String>::new());
     assert!(fixture.state.lock().last_error.is_none());
     let history = fixture.history();
     assert_eq!(history[0].raw_text.as_deref(), Some(TRANSCRIPT));
@@ -925,7 +925,7 @@ fn closing_during_processing_keeps_the_audio_and_stops_the_worker() {
     fixture.dictation.join();
 
     assert_eq!(fixture.state.lock().phase, Phase::Idle);
-    assert!(fixture.pasted().is_empty());
+    assert_eq!(fixture.pasted(), Vec::<String>::new());
     let history = fixture.history();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].status, EntryStatus::Failed);
@@ -1027,6 +1027,6 @@ fn a_setup_test_reports_its_transcript_without_paste_history_or_a_last_transcrip
     );
     assert_eq!(state.last_transcript.as_deref(), Some("Earlier dictation"));
     assert!(state.error.is_none());
-    assert!(fixture.pasted().is_empty());
-    assert!(fixture.history().is_empty());
+    assert_eq!(fixture.pasted(), Vec::<String>::new());
+    assert_eq!(fixture.history(), []);
 }

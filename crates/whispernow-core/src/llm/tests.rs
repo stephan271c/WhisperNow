@@ -267,7 +267,7 @@ async fn local_cleanup_request_matches_the_training_golden_fixture() {
     let golden: serde_json::Value =
         serde_json::from_str(LOCAL_CLEANUP_GOLDEN).expect("golden fixture is JSON");
     let cases = golden["cases"].as_array().expect("golden cases");
-    assert!(!cases.is_empty());
+    assert!(!cases.is_empty(), "the golden fixture has no cases");
     for case in cases {
         let name = case["name"].as_str().expect("case name");
         let transcript = case["transcript"].as_str().expect("case transcript");

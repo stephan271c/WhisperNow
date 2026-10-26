@@ -14,17 +14,17 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTUP_TOOLCHAIN: 1.96.0
+  RUSTUP_TOOLCHAIN: 1.99.1
 
 jobs:
   supply-chain:
     name: Supply chain and immutable version contract
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Prove the stable tag and source version match
@@ -53,7 +53,7 @@ jobs:
           fi
       - name: Install pinned Rust toolchain
         run: python3 scripts/check_rust_toolchain.py
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install audit tools
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
@@ -94,8 +94,8 @@ jobs:
     env:
       WHISPERNOW_UPDATER_PUBLIC_KEY: ${{ secrets.WHISPERNOW_UPDATER_PUBLIC_KEY }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Require protected updater signing material
@@ -121,8 +121,8 @@ jobs:
         run: |
           python3 scripts/check_rust_toolchain.py
           cargo install dioxus-cli --version 0.7.10 --locked
-          cargo install tauri-cli --version 2.11.4 --locked
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+          cargo install tauri-cli --version 2.12.4 --locked
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Check and test the Rust application
         run: |
           cargo fmt --all --check
@@ -170,9 +170,6 @@ jobs:
           # llama.cpp's release libraries, which the local cleanup model runs on.
           python3 scripts/stage_llama.py --platform "${{ matrix.platform }}" --output release/llama \
             ${WHISPERNOW_MSVC_RUNTIME:+--msvc-runtime "$WHISPERNOW_MSVC_RUNTIME"}
-          # cargo tauri build links the Visual C++ runtime statically on Windows; tauri-build
-          # does not rerun when this changes, so the first build sets it as well.
-          export STATIC_VCRUNTIME=true
           cargo build -p whispernow-desktop -p whispernow-input-helper --release
       - name: Import reviewed Windows code-signing certificate
         if: runner.os == 'Windows'
@@ -201,10 +198,10 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          # Tauri's own linuxdeploy (2024) ignores LINUXDEPLOY_EXCLUDED_LIBRARIES; Tauri uses
-          # whatever copy is already in its tool cache.
+          # This release honours LINUXDEPLOY_EXCLUDED_LIBRARIES. Tauri uses whatever copy is
+          # already in its tool cache, named for tauri-bundler 2.10.4's linuxdeploy commit.
           set -euo pipefail
-          linuxdeploy="${XDG_CACHE_HOME:-$HOME/.cache}/tauri/linuxdeploy-x86_64.AppImage"
+          linuxdeploy="${XDG_CACHE_HOME:-$HOME/.cache}/tauri/linuxdeploy-07333c6-x86_64.AppImage"
           mkdir -p "$(dirname "$linuxdeploy")"
           curl --fail --location --retry 3 --output "$linuxdeploy" \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
@@ -534,7 +531,7 @@ jobs:
             --native-compliance release/native/native-compliance.zip \
             --signature-verifier "$verifier" --public-key "$WHISPERNOW_UPDATER_PUBLIC_KEY"
       - name: Upload signed platform packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: whispernow-${{ github.ref_name }}-${{ matrix.platform }}
           path: release/publish
@@ -555,13 +552,13 @@ jobs:
             os: macos-15-intel
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             release/macos-signing-certificate.pem
             scripts/check_macos_signature.py
           sparse-checkout-cone-mode: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: whispernow-${{ github.ref_name }}-${{ matrix.platform }}
           path: downloaded
@@ -594,14 +591,14 @@ jobs:
       RELEASE_COMMIT: ${{ github.sha }}
       WHISPERNOW_UPDATER_PUBLIC_KEY: ${{ secrets.WHISPERNOW_UPDATER_PUBLIC_KEY }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Build the updater signature verifier
         run: |
           python3 scripts/check_rust_toolchain.py
           cargo build -p whispernow-update-signature --release
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: whispernow-${{ github.ref_name }}-*
           path: release/download

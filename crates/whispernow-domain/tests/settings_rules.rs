@@ -135,7 +135,7 @@ fn the_model_list_keeps_the_active_model_and_follows_choices_and_removals() {
     );
 
     openai.remove_model("gpt-5-mini");
-    assert!(openai.saved_models.is_empty());
+    assert_eq!(openai.saved_models, Vec::<String>::new());
     assert_eq!(openai.model, None);
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail unless the active compiler and every workspace package use Rust 1.96."""
+"""Fail unless the active compiler and every workspace package use Rust 1.99."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
-TOOLCHAIN = "1.96.0"
-MSRV = "1.96"
+TOOLCHAIN = "1.99.1"
+MSRV = "1.99"
 
 
 def main() -> int:

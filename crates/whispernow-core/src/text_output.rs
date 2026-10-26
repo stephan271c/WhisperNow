@@ -468,7 +468,7 @@ mod tests {
             paste_and_restore(&mut desktop, "text", &cancelled, || {}),
             PasteOutcome::Cancelled
         );
-        assert!(desktop.events().is_empty());
+        assert_eq!(desktop.events(), []);
     }
 
     #[test]

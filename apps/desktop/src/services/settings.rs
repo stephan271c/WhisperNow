@@ -308,7 +308,7 @@ fn cleanup_plan(settings: &Settings) -> Option<CleanupPlan> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::Arc};
+    use std::{fs, path::PathBuf, sync::Arc};
 
     use whispernow_domain::ipc::{AudioDevice, SetApiKeyRequest};
     use whispernow_domain::{
@@ -633,12 +633,9 @@ mod tests {
             fs::read_to_string(fixture.paths.settings_file()).expect("original file"),
             malformed
         );
-        assert!(
-            fixture
-                .paths
-                .settings_backup_files()
-                .expect("backups")
-                .is_empty()
+        assert_eq!(
+            fixture.paths.settings_backup_files().expect("backups"),
+            Vec::<PathBuf>::new()
         );
         assert_eq!(fixture.warning_code(), None);
     }

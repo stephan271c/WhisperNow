@@ -6,8 +6,15 @@ use std::{
     sync::{Mutex, PoisonError},
 };
 
+#[cfg(target_os = "macos")]
+use apple_native_keyring_store::keychain::Store;
+#[cfg(target_os = "linux")]
+use dbus_secret_service_keyring_store::Store;
+use keyring_core::{Entry, api::CredentialStoreApi as _};
 use thiserror::Error;
 use whispernow_domain::{ApiKey, LlmProvider};
+#[cfg(target_os = "windows")]
+use windows_native_keyring_store::Store;
 
 /// Failure to reach or use the credential store, such as a
 /// headless Linux session without a Secret Service provider or a locked keychain.
@@ -32,10 +39,15 @@ pub(crate) struct OsCredentialStore;
 const SERVICE: &str = "WhisperNow";
 
 impl OsCredentialStore {
-    fn entry(provider: LlmProvider) -> Result<keyring::Entry, CredentialStoreUnavailable> {
+    fn entry(provider: LlmProvider) -> Result<Entry, CredentialStoreUnavailable> {
         // Saved keys are found again by this account name; changing it loses them.
         let account = format!("llm-provider:{}", provider.as_str());
-        keyring::Entry::new(SERVICE, &account).map_err(|error| unavailable("entry", &error))
+        // A store per call opens a fresh Secret Service session, so a keyring daemon that
+        // started or restarted after launch is still reached.
+        let store = Store::new().map_err(|error| unavailable("store", &error))?;
+        store
+            .build(SERVICE, &account, None)
+            .map_err(|error| unavailable("entry", &error))
     }
 }
 
@@ -44,7 +56,7 @@ impl CredentialStore for OsCredentialStore {
         match Self::entry(provider)?.get_password() {
             // A key that is no longer one line reads as no key.
             Ok(secret) => Ok(ApiKey::new(secret).ok()),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring_core::Error::NoEntry) => Ok(None),
             Err(error) => Err(unavailable("read", &error)),
         }
     }
@@ -57,7 +69,7 @@ impl CredentialStore for OsCredentialStore {
 
     fn delete(&self, provider: LlmProvider) -> Result<(), CredentialStoreUnavailable> {
         match Self::entry(provider)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
             Err(error) => Err(unavailable("delete", &error)),
         }
     }
@@ -65,15 +77,19 @@ impl CredentialStore for OsCredentialStore {
 
 /// Platform errors can name items or collections, and `BadEncoding` holds the secret's
 /// bytes, so only the operation and the variant are logged.
-fn unavailable(operation: &'static str, error: &keyring::Error) -> CredentialStoreUnavailable {
+fn unavailable(operation: &'static str, error: &keyring_core::Error) -> CredentialStoreUnavailable {
     let variant = match error {
-        keyring::Error::PlatformFailure(_) => "PlatformFailure",
-        keyring::Error::NoStorageAccess(_) => "NoStorageAccess",
-        keyring::Error::NoEntry => "NoEntry",
-        keyring::Error::BadEncoding(_) => "BadEncoding",
-        keyring::Error::TooLong(..) => "TooLong",
-        keyring::Error::Invalid(..) => "Invalid",
-        keyring::Error::Ambiguous(_) => "Ambiguous",
+        keyring_core::Error::PlatformFailure(_) => "PlatformFailure",
+        keyring_core::Error::NoStorageAccess(_) => "NoStorageAccess",
+        keyring_core::Error::NoEntry => "NoEntry",
+        keyring_core::Error::BadEncoding(_) => "BadEncoding",
+        keyring_core::Error::TooLong(..) => "TooLong",
+        keyring_core::Error::Invalid(..) => "Invalid",
+        keyring_core::Error::Ambiguous(_) => "Ambiguous",
+        keyring_core::Error::NoDefaultStore => "NoDefaultStore",
+        keyring_core::Error::BadDataFormat(..) => "BadDataFormat",
+        keyring_core::Error::BadStoreFormat(..) => "BadStoreFormat",
+        keyring_core::Error::NotSupportedByStore(..) => "NotSupportedByStore",
         _ => "Other",
     };
     tracing::warn!(

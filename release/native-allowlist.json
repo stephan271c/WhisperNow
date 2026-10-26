@@ -6,18 +6,6 @@
       "bytes": 11358,
       "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
     },
-    "Unicode-DFS-2016.txt": {
-      "bytes": 2788,
-      "sha256": "be029c50df83105a810e391778b6edcb522d6cb4b4e142332aca54437a499bf7"
-    },
-    "espeak-ng-BSD-2-Clause.txt": {
-      "bytes": 1244,
-      "sha256": "a8b0c1c7d7af6c0415c068be8cf373799d1a42b0707b79dc4ccfcaf593cd902d"
-    },
-    "espeak-ng-GPL-3.0-or-later.txt": {
-      "bytes": 35147,
-      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
-    },
     "kissfft-BSD-3-Clause.txt": {
       "bytes": 1830,
       "sha256": "4d6bcab46f27d6d0c878e8305d4bdcfe040d52bf6656b9771f04c9fb9902c0ed"
@@ -38,15 +26,15 @@
       "bytes": 1073,
       "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
     },
-    "piper-phonemize-MIT.txt": {
-      "bytes": 1071,
-      "sha256": "13746d509d74e55ea2265fbef204bb7cdbf84a8315b0207e988326cb54387028"
+    "utf8proc-MIT-AND-Unicode-DFS-2016.txt": {
+      "bytes": 5125,
+      "sha256": "3b510150d34f248a221bb88e1d811238d6c6c18b51231822c42974c39bb07256"
     }
   },
   "components": {
     "sherpa-onnx": {
       "name": "sherpa-onnx",
-      "version": "1.13.8",
+      "version": "2.0.0",
       "license": "Apache-2.0",
       "license_files": ["Apache-2.0.txt"],
       "source": "https://github.com/k2-fsa/sherpa-onnx"
@@ -67,7 +55,7 @@
     },
     "kaldi-native-fbank": {
       "name": "kaldi-native-fbank",
-      "version": "1.22.3",
+      "version": "1.22.4",
       "license": "Apache-2.0",
       "license_files": ["Apache-2.0.txt"],
       "source": "https://github.com/csukuangfj/kaldi-native-fbank"
@@ -93,32 +81,12 @@
       "license_files": ["Apache-2.0.txt"],
       "source": "https://github.com/pkufool/simple-sentencepiece"
     },
-    "piper-phonemize": {
-      "name": "piper-phonemize",
-      "version": "f3ff95afc03640bc1399e113e83361192a2fafb4",
-      "license": "MIT",
-      "license_files": ["piper-phonemize-MIT.txt"],
-      "source": "https://github.com/csukuangfj/piper-phonemize"
-    },
-    "espeak-ng": {
-      "name": "eSpeak NG",
-      "version": "ed530aa113046142eb5115cf2fc9157854d0ffe1",
-      "license": "GPL-3.0-or-later",
-      "license_files": ["espeak-ng-GPL-3.0-or-later.txt", "espeak-ng-BSD-2-Clause.txt", "Unicode-DFS-2016.txt"],
-      "source": "https://github.com/csukuangfj/espeak-ng",
-      "source_offer": {
-        "name": "espeak-ng-ed530aa113046142eb5115cf2fc9157854d0ffe1.zip",
-        "bytes": 18011501,
-        "sha256": "e4e262cbe34f7fe21f91f1ba3397f2728e1f30eafbae7853f2b753a9ed13f0dd",
-        "source": "https://github.com/csukuangfj/espeak-ng/archive/ed530aa113046142eb5115cf2fc9157854d0ffe1.zip"
-      }
-    },
-    "unicode-data": {
-      "name": "Unicode Data Files",
-      "version": "11.0.0",
-      "license": "Unicode-DFS-2016",
-      "license_files": ["Unicode-DFS-2016.txt"],
-      "source": "https://www.unicode.org/Public/11.0.0/"
+    "utf8proc": {
+      "name": "utf8proc",
+      "version": "2.12.0",
+      "license": "MIT AND Unicode-DFS-2016",
+      "license_files": ["utf8proc-MIT-AND-Unicode-DFS-2016.txt"],
+      "source": "https://github.com/JuliaStrings/utf8proc"
     },
     "llama.cpp": {
       "name": "llama.cpp (with ggml)",
@@ -158,97 +126,89 @@
   },
   "libraries": {
     "linux-x86_64": [
-      {"name": "libespeak-ng.a", "bytes": 609344, "sha256": "e232c7b46531f3ff2272338e46783e72bb782d5fc9ade74948aef5caad3d4b91"},
-      {"name": "libkaldi-decoder-core.a", "bytes": 1251510, "sha256": "f994c2a4f0b63a154cf721963dbee5d0408ae89c55c85689f23077f270ef06cb"},
-      {"name": "libkaldi-native-fbank-core.a", "bytes": 224976, "sha256": "9aa796d250c66b552445d0a475cffc453b72be88506a60f0ae49ceb5dc197db0"},
-      {"name": "libkissfft-float.a", "bytes": 28126, "sha256": "a21cc7b71707933063128fcdcd882147ca65f47c14d174a810677d5b8e82eeba"},
+      {"name": "libkaldi-decoder-core.a", "bytes": 1251510, "sha256": "48e99bd882b24ed2ccbbeaea849a483b5ac3a35da99b18f2d5255c797fabc03e"},
+      {"name": "libkaldi-native-fbank-core.a", "bytes": 225400, "sha256": "6e02b1bf85778cd720f538b454723938c80b57abb3cff7cccf8a8908e58e42ee"},
+      {"name": "libkissfft-float.a", "bytes": 28126, "sha256": "266b1a2db69f19b6b17820c1a30e60aba4dd40e91a3bcb92c5d2379e4a58086d"},
       {"name": "libonnxruntime.a", "bytes": 112461234, "sha256": "2091ef9d1aa07dadb7464426779ebb5852eb9d5d9a0b2bacd52e752ff3401bf5"},
-      {"name": "libpiper_phonemize.a", "bytes": 464780, "sha256": "8fa36b56e4267bcf5d41bd397813340850fc93fc6010ecc2c281cd432d30ec36"},
-      {"name": "libsherpa-onnx-c-api.a", "bytes": 546978, "sha256": "88b103719fa199c82bc9e28337f50ec13c36a48e1d09ea41a89e56665996fb44"},
-      {"name": "libsherpa-onnx-core.a", "bytes": 17677654, "sha256": "466b9ff857c47d0162b06936af2ad8d2b1a80f02361ea7c6dee3ac716ad9eda4"},
-      {"name": "libsherpa-onnx-cxx-api.a", "bytes": 216690, "sha256": "9ebb7e19e8a34a364bd23841dc938000a012dc1d4b96eab8b0e1ad75095daeeb"},
-      {"name": "libsherpa-onnx-fst.a", "bytes": 4028034, "sha256": "2623bd3dfd76c90467727d9fb508854bd7f8e7a9395303bab5f47cc30e876d2d"},
-      {"name": "libsherpa-onnx-fstfar.a", "bytes": 37414, "sha256": "f0db20c0c91b20eb5b56c1061e2d09bc2eda1b9758a5cb96ec42c7e568f65efc"},
-      {"name": "libsherpa-onnx-kaldifst-core.a", "bytes": 2495208, "sha256": "e0f5c2821c9144d5a7ac987fd119cf9561f2c855581e2ac3a6b1fe521f378af8"},
-      {"name": "libsherpa-onnx-portaudio_static.a", "bytes": 249050, "sha256": "2c74f5962978b02120e0339144f190f2f9a9fca1ee20f525232f9d86102aded2"},
-      {"name": "libssentencepiece_core.a", "bytes": 213436, "sha256": "66b8ffae437f1afea28ce6f69ed8072a1f59db7b8b16cc4558e6f7440725c029"},
-      {"name": "libucd.a", "bytes": 240216, "sha256": "37ffc977f55b42ce239148e254b8b708eefd2af6ce6a19f79a56a2072f8293c9"}
+      {"name": "libsherpa-onnx-c-api.a", "bytes": 576334, "sha256": "2e1c87586744e2c1514b538457627923b8e4d3b429198c46f5ed9acb6545ac74"},
+      {"name": "libsherpa-onnx-core.a", "bytes": 17167238, "sha256": "d113f3b677e7880c6c443dc46b6e28f84c31c9e941b1a26a546bfb1901465eed"},
+      {"name": "libsherpa-onnx-cxx-api.a", "bytes": 224388, "sha256": "8ae62b13f3332885d04fdd96715d3d22820f783ea6c8237472909a789b43c357"},
+      {"name": "libsherpa-onnx-fst.a", "bytes": 4028034, "sha256": "3bec234cd2209f4e5f8a1ec1b1c21230626eaca57865d41f008d0be2742946fc"},
+      {"name": "libsherpa-onnx-fstfar.a", "bytes": 37414, "sha256": "9a5fd888d2c8239e01b9f595e9d047c8a3d1420779fb152aeb3dad3e5a8e5d12"},
+      {"name": "libsherpa-onnx-kaldifst-core.a", "bytes": 2495208, "sha256": "00a7d5f5d1ad73583f5a596ca2211881af760f3de2cca92764f018afb704c374"},
+      {"name": "libsherpa-onnx-portaudio_static.a", "bytes": 249050, "sha256": "eeb199f01713d557c510df73c21f63db12f272683c046a2d418a2447ac98f9e9"},
+      {"name": "libssentencepiece_core.a", "bytes": 213436, "sha256": "213782d8ab7e99cc0652e64451404b5f27cabdb4ce7afcb39fe77a5d009560b7"},
+      {"name": "libutf8proc.a", "bytes": 358684, "sha256": "057e865455e6c48d8a45cc0b4f1fb58e0ebfcc351ee5717598be7841b4073d19"}
     ],
     "windows-x86_64": [
-      {"name": "espeak-ng.lib", "bytes": 823674, "sha256": "f0255c507ef1e08de0efad735ecf3e1eae930df715c65361e525fcccc61f29a2"},
-      {"name": "kaldi-decoder-core.lib", "bytes": 4308664, "sha256": "94096301d2634ce699790b974d53a7e5277b6a40a1ee28154bc130b0aaa3c977"},
-      {"name": "kaldi-native-fbank-core.lib", "bytes": 1852382, "sha256": "69c4a33cfcc665d8c8375c56f04b529df599767db3870503b2dae79140f47f9c"},
-      {"name": "kissfft-float.lib", "bytes": 38212, "sha256": "f28ab817626e5ed39fa6ce5f46f7aff685cd3c0d0ef23b72ffc715fb9c7a7862"},
+      {"name": "kaldi-decoder-core.lib", "bytes": 4308664, "sha256": "ef85380303c6a3c5984e64fe481301024318f4e26210f4d2dd8d7250e2bf83a9"},
+      {"name": "kaldi-native-fbank-core.lib", "bytes": 1853024, "sha256": "94074406c0ed91cf0a7c29a9886e66f9ca3e9b25dace6882bde4fd79c478b3f4"},
+      {"name": "kissfft-float.lib", "bytes": 38212, "sha256": "09f540713889033264b983da6fc49097e49592ea28df0b3de0119399a108552d"},
       {"name": "onnxruntime.lib", "bytes": 944135846, "sha256": "27f6f652f1e297b107f7a350d03d56f915351ef0dca90d1e2153cb3af39c3b0d"},
-      {"name": "piper_phonemize.lib", "bytes": 800124, "sha256": "6a8435a73e35bfdded7ddabe9626c42d1086292978d4bfbb72888848ed2372f7"},
-      {"name": "sherpa-onnx-c-api.lib", "bytes": 1701426, "sha256": "a1b06a3aa2f11c126a4a20442f9524b864ee2466ef7a96902108a211eea6cc63"},
-      {"name": "sherpa-onnx-core.lib", "bytes": 66616864, "sha256": "dc8672f43098d572ff4daef8a2e7ba103769eb57084a6964eb5b3702ec175e81"},
-      {"name": "sherpa-onnx-cxx-api.lib", "bytes": 629172, "sha256": "c861a142f46b90c42b447c675bfcc49fe508624d1f21d977ae8735a4e693c512"},
-      {"name": "sherpa-onnx-fst.lib", "bytes": 13558300, "sha256": "000393f5f81a412d7b0ae862c82e49c0154ef9718f5d16c9d0b49dd8b017f12a"},
-      {"name": "sherpa-onnx-fstfar.lib", "bytes": 601326, "sha256": "5696a8f0309b91a2927d202ed3e8ae5585070388431fea86d5d1593d2b97df63"},
-      {"name": "sherpa-onnx-kaldifst-core.lib", "bytes": 23055672, "sha256": "f6ac9a7f6931189721cc7df2cfd36c1678d790b99165245ccb70488f095724f6"},
-      {"name": "ssentencepiece_core.lib", "bytes": 823206, "sha256": "928af8dd5017435bad271e2c4aafceaab97cf29777ea6994403f5184c9dc8f05"},
-      {"name": "ucd.lib", "bytes": 243106, "sha256": "a5bedc0b4b20e205098db4be97a149d8b9845366a6195e6d482bd35a228bc18e"}
+      {"name": "sherpa-onnx-c-api.lib", "bytes": 1823166, "sha256": "f944bc7e354d765fed67cc843524f954c32245553bc207f711a4cb42a96bcd5e"},
+      {"name": "sherpa-onnx-core.lib", "bytes": 65849300, "sha256": "bf8b4859dac378224b0fcad3ef3b0f637272789e77509263242c0137bfa96c48"},
+      {"name": "sherpa-onnx-cxx-api.lib", "bytes": 663356, "sha256": "23e6136c217244b21ce1b3e77339a0f6b5db0293b5ab0aa4c5e9e747537ac511"},
+      {"name": "sherpa-onnx-fst.lib", "bytes": 13558300, "sha256": "1de84a4ba32964e0ba603817227944f0bbe62fabda9ecd2251d2df48f6e824c7"},
+      {"name": "sherpa-onnx-fstfar.lib", "bytes": 601326, "sha256": "9acb623dedc13c5e3f9c6d7baf59478fcaf9e8ac200f964b97c17defeb22a12e"},
+      {"name": "sherpa-onnx-kaldifst-core.lib", "bytes": 23055672, "sha256": "9ce56eedf07b24a7a693339051e7ff1dc8fb9cd3c98434390fb727db3afee299"},
+      {"name": "ssentencepiece_core.lib", "bytes": 823206, "sha256": "2f5e5402fbae27950ba7912839b9f06825adad5bc2d10c2f3714f7b3e9e78872"},
+      {"name": "utf8proc.lib", "bytes": 371282, "sha256": "976ed803a0eab40641d7dd8f1ac8f3f4b74ccdda3c97a17c2d65583aaec05fb7"}
     ],
     "macos-aarch64": [
-      {"name": "libespeak-ng.a", "bytes": 446248, "sha256": "11b222e567a8930ab4d7f7409e45ad998b9cf25568c66e76df8a89cd1cf1a7a8"},
-      {"name": "libkaldi-decoder-core.a", "bytes": 729056, "sha256": "fe888368f73f971a7a2cd74bb4455b810b214aa3eb999790a9700926869e9c7b"},
-      {"name": "libkaldi-native-fbank-core.a", "bytes": 233656, "sha256": "d0ef00030bc95186c5ba71c2a762c26bc0f5a10a0355593bdfdfcbf7760762f0"},
-      {"name": "libkissfft-float.a", "bytes": 19944, "sha256": "f20ba14918ef0fce25a990940e8ffb69a0d5e02cbb3c883f37733e757a85e4d8"},
+      {"name": "libkaldi-decoder-core.a", "bytes": 729056, "sha256": "87c0dae5a8ccb65c43f9dd7b8018fa941677f969e700a1b7cf307a994f3a7a38"},
+      {"name": "libkaldi-native-fbank-core.a", "bytes": 234232, "sha256": "bb945c68cf5479a85da3cf3297435899cf531da89dbeea3e3ca6d0cdd23b1aec"},
+      {"name": "libkissfft-float.a", "bytes": 19944, "sha256": "35259353502fb189aa9b1eae26eb3b8ebb7c0853327058bbd4fbb0ded68c1194"},
       {"name": "libonnxruntime.a", "bytes": 75070504, "sha256": "589e781d544d85267be5d7e74eae68fddd40ba41bf27e9961f867378170f8802"},
-      {"name": "libpiper_phonemize.a", "bytes": 381920, "sha256": "1ddd3d209802cf4ebaaa458e6d3cb238bba100a9e9300f2200e9a324a9e0f44b"},
-      {"name": "libsherpa-onnx-c-api.a", "bytes": 373320, "sha256": "610a6e55ac996f7d0e89cad935a94a7da37011827e40035e43254d3741608140"},
-      {"name": "libsherpa-onnx-core.a", "bytes": 14512584, "sha256": "58e7e9c7a8f557a4708f8719325daf833aa8f9c57feeaf667b14bc957abca08e"},
-      {"name": "libsherpa-onnx-cxx-api.a", "bytes": 150408, "sha256": "56a62b1e207c34343ef7fc4f801967dbf401e96bf7dfe71532e63be30ed5a9b4"},
-      {"name": "libsherpa-onnx-fst.a", "bytes": 2535400, "sha256": "9a09fec5ad9097da74bd6804824d1ff927850b1365de5f015e5ce652ec7dd380"},
-      {"name": "libsherpa-onnx-fstfar.a", "bytes": 55920, "sha256": "6026b47ce7825d780d67516fa8d833c9d89c0ca67dc647c649d1de45e252332c"},
-      {"name": "libsherpa-onnx-kaldifst-core.a", "bytes": 1585872, "sha256": "c3bf44ed62ff8b4289f6056d4daf915b099451d4ffd9101cf9cab3fa2a9de9c1"},
-      {"name": "libsherpa-onnx-portaudio_static.a", "bytes": 124128, "sha256": "be5ffc7c0048697cf2235f46b37d001ec2179a7acc80f1898dcfca2d64fccac6"},
-      {"name": "libssentencepiece_core.a", "bytes": 151000, "sha256": "1dde9dc6e46ef76b48241b95ee3327a07707be245fc6385f84b11fb286aba41b"},
-      {"name": "libucd.a", "bytes": 206336, "sha256": "7dd0a83ca9c568103736b49f6492b3a431b13d1a0c666d237001942934452794"}
+      {"name": "libsherpa-onnx-c-api.a", "bytes": 388760, "sha256": "2db4e3e3c61dfd5ebfa9980db9abe6d8753ba13b1207a49fdaaae70af406ca03"},
+      {"name": "libsherpa-onnx-core.a", "bytes": 14293112, "sha256": "4dc97aa857a443d9bee8d9cbf60aef8b84959ebc52af7260d0a69a21c957eeb4"},
+      {"name": "libsherpa-onnx-cxx-api.a", "bytes": 155816, "sha256": "e01e2bec7a249a7dba9df90549fcf811b2a9b483c8379854334cfa03bc6a02c7"},
+      {"name": "libsherpa-onnx-fst.a", "bytes": 2535400, "sha256": "a1e53460da1d69f5d2a80ea3d0e71d657d28fffc5b10516c78d4e8e098f1fc0e"},
+      {"name": "libsherpa-onnx-fstfar.a", "bytes": 55920, "sha256": "8c64c11fda22014eb5b12adf7c9e53eb36058de67f70b33fdf511b7111e406ac"},
+      {"name": "libsherpa-onnx-kaldifst-core.a", "bytes": 1585872, "sha256": "efa9880e04edb86d5288492c7e4ae4694d663c93a46a0815b8811293b9d640dd"},
+      {"name": "libsherpa-onnx-portaudio_static.a", "bytes": 124128, "sha256": "effea0155add05ba7aeb98178d20cf7fefc18ba1740f3a13fb04e2300a3f9e28"},
+      {"name": "libssentencepiece_core.a", "bytes": 151000, "sha256": "5a3d459e4441a1899a845d37e5e44767a064a9b06f2b4214615d2d1a94428aef"},
+      {"name": "libutf8proc.a", "bytes": 357728, "sha256": "d149d9d00db2c10c70c6ad7ab0bbccdd69800e55e5ddfadae3751dd6cba6a50c"}
     ],
     "macos-x86_64": [
-      {"name": "libespeak-ng.a", "bytes": 448856, "sha256": "f4188efe58592b7b99449d1b066e9acba134943f052e7ef847431b22311f6e31"},
-      {"name": "libkaldi-decoder-core.a", "bytes": 754536, "sha256": "8d63b18d783bac8f5f17ebb03f4c999813ec255e9dfd7aed4cc29cd75868898c"},
-      {"name": "libkaldi-native-fbank-core.a", "bytes": 249192, "sha256": "8da7d52f11fd1e54a0c24a6279f439bffbd79e522939e301161fe10c7b44d3e6"},
-      {"name": "libkissfft-float.a", "bytes": 26576, "sha256": "acb93cab1bf2c6e4b387eb89432d690d706c2601537682ca161e64c6a043d117"},
+      {"name": "libkaldi-decoder-core.a", "bytes": 754536, "sha256": "c6dc29fc0cd38d63d7a465c53852f0a2aace15f748f5c242cfe834920973bdf2"},
+      {"name": "libkaldi-native-fbank-core.a", "bytes": 249864, "sha256": "9a65766c398aad79e090bf772a59ebb28a59d6d6ba86bd1dd3cec1597184c520"},
+      {"name": "libkissfft-float.a", "bytes": 26576, "sha256": "2602231ef25f68b9d73ac311ff121adb58158fa7ecdc5cd7590748075936873f"},
       {"name": "libonnxruntime.a", "bytes": 78712160, "sha256": "dd32fb6ae491a3e893cc8a8f57028483b435c26370aba23cce75b2db4aa56b77"},
-      {"name": "libpiper_phonemize.a", "bytes": 394512, "sha256": "51349c4addea23fc3b806261db98ca8cbbc2139bccc90c1ebd1282a65a647f10"},
-      {"name": "libsherpa-onnx-c-api.a", "bytes": 377648, "sha256": "df7cffe7e811a2b8d24efccdebdd47721bbe2d56a4a45f47dfb492daed871813"},
-      {"name": "libsherpa-onnx-core.a", "bytes": 15324032, "sha256": "a52ed62da6c0ae386a994e5ff4294fb729789837bffe703ab5b6dc389a0d2a3d"},
-      {"name": "libsherpa-onnx-cxx-api.a", "bytes": 164960, "sha256": "aa5c813790b8f353539961af4ce22582a512030d82e3516489016dccb9db5db6"},
-      {"name": "libsherpa-onnx-fst.a", "bytes": 2739864, "sha256": "8311bfc3612fe5b097bb5589766e4585870076f792763ef4e2429e4e5e1ff470"},
-      {"name": "libsherpa-onnx-fstfar.a", "bytes": 62152, "sha256": "3e126b32d28db89591ab4d350531bb84e9ac65831eeb1852e6d155e787c646e5"},
-      {"name": "libsherpa-onnx-kaldifst-core.a", "bytes": 1611680, "sha256": "cc3397cbdbe62c3cc614469119239d1147cb22751bb87e77fc4963e1ce6e8cca"},
-      {"name": "libsherpa-onnx-portaudio_static.a", "bytes": 136104, "sha256": "28caa4dc96484882b410d47dd7097994442112388cb20839f8409c85404dda92"},
-      {"name": "libssentencepiece_core.a", "bytes": 157664, "sha256": "abbdcdf16719bb19d714362999092e74ebacfe89889d4feec8a643e7ad060881"},
-      {"name": "libucd.a", "bytes": 208808, "sha256": "f5e2a38d29f432a83af3610dd460640aced3efab59c270e9e8c53cc81286b38d"}
+      {"name": "libsherpa-onnx-c-api.a", "bytes": 395264, "sha256": "375512c0ad9900c4fddb87db87ae021ea10210bf10dda072061f40d8ba85d863"},
+      {"name": "libsherpa-onnx-core.a", "bytes": 15079568, "sha256": "b30f1dd9ebbe55b6cf09da3264038d55d9d20c20b3e34260228647ddef03ae71"},
+      {"name": "libsherpa-onnx-cxx-api.a", "bytes": 171320, "sha256": "0e41f57081dc9f3ff1445185c4041cdcafa2ff6714fd5f3c205023061e783ac2"},
+      {"name": "libsherpa-onnx-fst.a", "bytes": 2739864, "sha256": "231cbd8a3eb36dfd99a0a5bc30800404e2f6769025d26e498b12501831ae3039"},
+      {"name": "libsherpa-onnx-fstfar.a", "bytes": 62152, "sha256": "9ebed1d3dd564b923ff2c9fe7c6fe2476e4c50019c4c4f262f5844d368cfe515"},
+      {"name": "libsherpa-onnx-kaldifst-core.a", "bytes": 1611680, "sha256": "1665998c58007bbc40161a9b9ee59a983ee4168ada4d94481887103875a34b2b"},
+      {"name": "libsherpa-onnx-portaudio_static.a", "bytes": 136104, "sha256": "b38d5f8844fe57ee9c675d494cc043ee1ed105b618ebb2aea57d5de36ec641e4"},
+      {"name": "libssentencepiece_core.a", "bytes": 157664, "sha256": "181a97922808b3679ae52080ec0884f05a198e9637fec27be423970a4c6ced4b"},
+      {"name": "libutf8proc.a", "bytes": 358800, "sha256": "9f8feac28a989ec0285c4ff243a273e74f62ffbf7fe98749a344e7b9415b3b0e"}
     ]
   },
   "source_archives": {
     "linux-x86_64": {
-      "name": "sherpa-onnx-v1.13.8-linux-x64-static-lib.tar.bz2",
-      "bytes": 22952328,
-      "sha256": "e1fdc5b67530e15741ef897fa5ffff297056f3bf0c6d829a27af9225a4c4b5a6",
-      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-linux-x64-static-lib.tar.bz2"
+      "name": "sherpa-onnx-v2.0.0-linux-x64-static-lib.tar.bz2",
+      "bytes": 22661633,
+      "sha256": "d9879a4b8b6abc6ad4168887d7428776c2eb04646b19b744e1307a597555bc17",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.0/sherpa-onnx-v2.0.0-linux-x64-static-lib.tar.bz2"
     },
     "windows-x86_64": {
-      "name": "sherpa-onnx-v1.13.8-win-x64-static-MT-Release-lib.tar.bz2",
-      "bytes": 123206268,
-      "sha256": "56ffcf3c454c1f14f7bc9887286cc8143e7e542dc632804e1c447d5f8d534eaf",
-      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-static-MT-Release-lib.tar.bz2"
+      "name": "sherpa-onnx-v2.0.0-win-x64-static-MT-Release-lib.tar.bz2",
+      "bytes": 122697732,
+      "sha256": "13cbef1926eea3bc01c8eb59bbfa3806f02f904a76664c215c4e20989866704a",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.0/sherpa-onnx-v2.0.0-win-x64-static-MT-Release-lib.tar.bz2"
     },
     "macos-aarch64": {
-      "name": "sherpa-onnx-v1.13.8-osx-arm64-static-lib.tar.bz2",
-      "bytes": 20965936,
-      "sha256": "9091bf160dc7fdacedbc906b212badf53c2993f4e5277a0e03998e96c31d60da",
-      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-static-lib.tar.bz2"
+      "name": "sherpa-onnx-v2.0.0-osx-arm64-static-lib.tar.bz2",
+      "bytes": 20789947,
+      "sha256": "5e5bdce1d7fc834857278d8bb26f878de6a55c7085e589ed1e41a00baca643ec",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.0/sherpa-onnx-v2.0.0-osx-arm64-static-lib.tar.bz2"
     },
     "macos-x86_64": {
-      "name": "sherpa-onnx-v1.13.8-osx-x64-static-lib.tar.bz2",
-      "bytes": 20575933,
-      "sha256": "a3f88da3e54c850a12d61431e73f8affcd1f13738b75b768847dd79541835b4b",
-      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-x64-static-lib.tar.bz2"
+      "name": "sherpa-onnx-v2.0.0-osx-x64-static-lib.tar.bz2",
+      "bytes": 20405650,
+      "sha256": "a6096bb89cb92e071f5fca4a9a869f7251587b707dd52852adc1a8ad6ace9051",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.0/sherpa-onnx-v2.0.0-osx-x64-static-lib.tar.bz2"
     }
   },
   "shared_libraries": {

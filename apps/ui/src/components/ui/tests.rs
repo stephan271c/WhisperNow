@@ -326,7 +326,7 @@ fn select_keys_move_the_highlight_and_only_enter_or_a_click_chooses() {
     );
     page.key("theme", Key::Escape);
     assert_eq!(highlighted(&page, "theme"), None);
-    assert!(log.chosen().is_empty());
+    assert_eq!(log.chosen(), Vec::<String>::new());
 
     page.key("theme", Key::End).key("theme", Key::Enter);
     assert_eq!(log.chosen(), ["dark"]);
@@ -338,7 +338,7 @@ fn choosing_the_current_option_closes_the_list_without_a_change() {
     let log = ChoiceLog::default();
     let mut page = select_page(&log);
     page.click("theme").click("theme-option-1");
-    assert!(log.chosen().is_empty());
+    assert_eq!(log.chosen(), Vec::<String>::new());
     assert!(tag(&page.html(), "theme-listbox").is_none());
 }
 

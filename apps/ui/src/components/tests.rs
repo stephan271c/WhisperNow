@@ -764,7 +764,7 @@ fn a_credential_mutation_blocks_document_saves_until_its_confirmed_settings_arri
             .contains(" disabled=")
     );
     try_theme(&mut page);
-    assert!(sent_changes().is_empty());
+    assert_eq!(sent_changes(), []);
     let mut confirmed = editable_settings();
     confirmed.api_keys.insert(LlmProvider::OpenAi);
     page.answer("set_api_key", Ok(SettingsView::new(&confirmed)));
@@ -794,7 +794,7 @@ fn a_settings_reload_blocks_edits_until_it_installs_the_desktops_confirmed_value
             .contains(" disabled=")
     );
     try_theme(&mut page);
-    assert!(sent_changes().is_empty());
+    assert_eq!(sent_changes(), []);
     let mut confirmed = editable_settings();
     confirmed.recording_shortcut.key = ShortcutKey::T;
     confirmed.theme = whispernow_domain::ThemePreference::Light;
@@ -875,7 +875,7 @@ fn a_settings_toggle_saves_once_and_a_refusal_restores_it_with_the_error_beside_
     );
     let error = tag(&html, "start-minimized-error").expect("error beside the control");
     assert!(error.contains("role=\"alert\""), "{error}");
-    assert!(!text(&html, "start-minimized-error").is_empty());
+    assert_ne!(text(&html, "start-minimized-error"), "");
     assert_eq!(sent_changes().len(), 1, "a refusal is not retried");
 
     page.click("start-minimized");
@@ -1181,7 +1181,7 @@ fn a_new_vocabulary_rule_is_added_with_enter() {
     let before = page.render_counts();
     page.fire("vocabulary-source", "input", "recieve");
     page.fire("vocabulary-replacement", "input", "receive");
-    assert!(sent_changes().is_empty());
+    assert_eq!(sent_changes(), []);
     assert_eq!(
         page.rendered_since(&before),
         ["AddRuleForm", "Field", "TextInput", "Field", "TextInput"],
@@ -1211,7 +1211,7 @@ fn typed_text_survives_a_refused_or_failed_save_until_the_user_reverts() {
     // Refused before it is sent.
     page.fire("provider-endpoint", "input", "http://api.example.com");
     page.fire("provider-endpoint", "change", "http://api.example.com");
-    assert!(sent_changes().is_empty());
+    assert_eq!(sent_changes(), []);
     let html = page.html();
     let field = tag(&html, "provider-endpoint").expect("endpoint field");
     assert!(

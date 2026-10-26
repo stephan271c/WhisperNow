@@ -122,8 +122,10 @@ mod tests {
             "710ace5fc266bba391f71746a1ff7999a59d92d9af6e46a6d65c11c84df03349",
             "fixture content changed without updating its provenance"
         );
-        PCM.chunks_exact(2)
-            .map(|bytes| f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / 32_768.0)
+        let (samples, _) = PCM.as_chunks::<2>();
+        samples
+            .iter()
+            .map(|&bytes| f32::from(i16::from_le_bytes(bytes)) / 32_768.0)
             .collect()
     }
 
@@ -152,11 +154,11 @@ mod tests {
     #[test]
     fn silence_an_isolated_impulse_and_low_background_noise_have_no_segments() {
         let silence = vec![0.0; SECOND];
-        assert!(segments(&silence).is_empty());
+        assert_eq!(segments(&silence), []);
 
         let mut impulse = silence;
         impulse[SECOND / 2] = 1.0;
-        assert!(segments(&impulse).is_empty());
+        assert_eq!(segments(&impulse), []);
 
         // Two seconds of fixed-seed xorshift32 white noise bounded to 0.01 amplitude
         // (about -40 dBFS peak), a deterministic stand-in for steady room noise.
@@ -171,7 +173,7 @@ mod tests {
                 (unit * 2.0 - 1.0) * 0.01
             })
             .collect::<Vec<_>>();
-        assert!(segments(&background_noise).is_empty());
+        assert_eq!(segments(&background_noise), []);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Bundled native dependencies
 
-WhisperNow uses the official `sherpa-onnx` 1.13.8 Rust crate and its default
+WhisperNow uses the official `sherpa-onnx` 2.0.0 Rust crate and its default
 static CPU libraries. The native code is linked into the application executable;
 installers must not contain a separate sherpa-onnx or ONNX Runtime shared
 library and installed binaries must not require a development library path.
@@ -13,19 +13,14 @@ directory. Linux x86_64, Windows x86_64, macOS arm64, and macOS x86_64 have
 separate archive names, byte lengths, SHA-256 hashes, and upstream release URLs.
 
 The static link set contains sherpa-onnx, ONNX Runtime, kaldi-decoder,
-kaldi-native-fbank, OpenFst/kaldifst, KissFFT, piper-phonemize/eSpeak NG/UCD,
-and simple-sentencepiece code. `native-allowlist.json` lists the upstream
-components and licenses represented by the archive. In particular, the official
-all-features static archive includes eSpeak NG even though WhisperNow does not
-call TTS; a release owner must review the resulting GPL-3.0-or-later
-distribution obligations before signing a release.
+kaldi-native-fbank, OpenFst/kaldifst, KissFFT, utf8proc and simple-sentencepiece
+code. `native-allowlist.json` lists the upstream components and licenses
+represented by the archive.
 
 `native-licenses/` contains the exact hash-pinned license snapshots named by
-the allowlist, including the ancillary BSD and Unicode terms used by eSpeak NG
-and UCD. It also carries the exact 18,011,501-byte eSpeak NG corresponding
-source archive pinned by upstream sherpa-onnx. Staging fails if any license or
-source-offer byte differs, and emits a deterministic `native-compliance.zip`
-that is published with each platform's release packages.
+the allowlist. Staging fails if any license byte differs, and emits a
+deterministic `native-compliance.zip` that is published with each platform's
+release packages.
 
 ## llama.cpp (the local cleanup model)
 

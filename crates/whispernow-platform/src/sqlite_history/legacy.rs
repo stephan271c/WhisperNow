@@ -118,7 +118,7 @@ fn parse_legacy_timestamp(value: &str) -> Option<UtcMillis> {
         } else {
             format!("[year]-[month]-[day]{separator}[hour]:[minute]:[second]")
         };
-        let description = time::format_description::parse(&description).ok()?;
+        let description = time::format_description::parse_borrowed::<1>(&description).ok()?;
         PrimitiveDateTime::parse(value, &description)
             .ok()?
             .assume_utc()

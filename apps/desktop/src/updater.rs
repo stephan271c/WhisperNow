@@ -571,9 +571,11 @@ fn updater_error(error: tauri_plugin_updater::Error, step: UpdateStep) -> Update
 
     tracing::warn!(%error, ?step, "update failed");
     match error {
-        Error::Minisign(_) | Error::Base64(_) | Error::SignatureUtf8(_) => {
-            UpdateError::InvalidSignature
-        }
+        Error::Minisign(_)
+        | Error::Base64(_)
+        | Error::SignatureUtf8(_)
+        | Error::SignedVersionMismatch { .. }
+        | Error::MissingSignedVersion => UpdateError::InvalidSignature,
         Error::TargetNotFound(_)
         | Error::TargetsNotFound(_)
         | Error::UnsupportedArch
