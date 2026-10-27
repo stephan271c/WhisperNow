@@ -63,19 +63,17 @@ class UpdateReleaseTests(unittest.TestCase):
         for name in PACKAGES[platform]:
             path = root / name
             path.write_bytes(f"{platform}/{name}".encode())
-            sign(path)
+            if path.suffix != ".dmg":
+                sign(path)
         return root
 
     def stage(self, platform: str) -> Path:
-        compliance = self.root / "native-compliance.zip"
-        compliance.write_bytes(b"licenses")
         return update_release.stage(
             root=self.bundle(platform),
             output=self.root / "staged" / platform,
             platform=platform,
             version=VERSION,
             signature_verifier=verify,
-            native_compliance=compliance,
         )
 
     def generate(self, manifests: list[Path]) -> Path:
@@ -92,11 +90,10 @@ class UpdateReleaseTests(unittest.TestCase):
 
     def test_stage_copies_every_linux_format_under_canonical_names(self):
         manifest = json.loads(self.stage("linux-x86_64").read_text(encoding="utf-8"))
-        names = {entry["name"] for entry in manifest["assets"]}
-        for suffix in ("deb", "rpm", "AppImage"):
-            self.assertIn(f"WhisperNow_{VERSION}_linux_x86_64.{suffix}", names)
-            self.assertIn(f"WhisperNow_{VERSION}_linux_x86_64.{suffix}.sig", names)
-        self.assertIn(f"WhisperNow_{VERSION}_linux-x86_64_native-compliance.zip", names)
+        self.assertEqual(
+            {entry["name"] for entry in manifest["assets"]},
+            {f"WhisperNow_{VERSION}_linux_x86_64.{suffix}" for suffix in ("deb", "rpm", "AppImage")},
+        )
         self.assertEqual(
             {entry["target"]: entry["bundle_type"] for entry in manifest["updates"]},
             {
@@ -145,11 +142,25 @@ class UpdateReleaseTests(unittest.TestCase):
             f"https://github.com/{REPOSITORY}/releases/download/{TAG}/"
             f"WhisperNow_{VERSION}_darwin_aarch64.app.tar.gz",
         )
-        signature = latest_path.parent / f"WhisperNow_{VERSION}_darwin_aarch64.app.tar.gz.sig"
+        signature = self.root / "bundle" / "macos-aarch64" / "WhisperNow.app.tar.gz.sig"
         self.assertEqual(entry["signature"], signature.read_text(encoding="utf-8").strip())
-        sums = (latest_path.parent / "SHA256SUMS").read_text(encoding="utf-8")
-        dmg = latest_path.parent / f"WhisperNow_{VERSION}_darwin_x86_64.dmg"
-        self.assertIn(f"{hashlib.sha256(dmg.read_bytes()).hexdigest()}  {dmg.name}\n", sums)
+
+    def test_generate_publishes_only_the_packages_and_latest_json(self):
+        latest_path = self.generate([self.stage(platform) for platform in PACKAGES])
+        self.assertEqual(
+            sorted(path.name for path in latest_path.parent.iterdir()),
+            [
+                f"WhisperNow_{VERSION}_darwin_aarch64.app.tar.gz",
+                f"WhisperNow_{VERSION}_darwin_aarch64.dmg",
+                f"WhisperNow_{VERSION}_darwin_x86_64.app.tar.gz",
+                f"WhisperNow_{VERSION}_darwin_x86_64.dmg",
+                f"WhisperNow_{VERSION}_linux_x86_64.AppImage",
+                f"WhisperNow_{VERSION}_linux_x86_64.deb",
+                f"WhisperNow_{VERSION}_linux_x86_64.rpm",
+                f"WhisperNow_{VERSION}_windows_x86_64_nsis.exe",
+                "latest.json",
+            ],
+        )
 
     def test_generate_rejects_a_missing_platform(self):
         manifests = [self.stage(platform) for platform in PACKAGES if platform != "macos-x86_64"]
@@ -157,13 +168,20 @@ class UpdateReleaseTests(unittest.TestCase):
             self.generate(manifests)
         self.assertFalse((self.root / "publish" / "latest.json").exists())
 
-    def test_generate_rejects_assets_changed_after_staging(self):
+    def test_generate_rejects_packages_changed_after_staging(self):
+        manifests = [self.stage(platform) for platform in PACKAGES]
+        package = json.loads(manifests[0].read_text(encoding="utf-8"))["assets"][0]["name"]
+        (manifests[0].parent / package).write_bytes(b"swapped")
+        with self.assertRaisesRegex(ValueError, "bytes do not match"):
+            self.generate(manifests)
+
+    def test_generate_rejects_signatures_changed_after_staging(self):
         manifests = [self.stage(platform) for platform in PACKAGES]
         staged = manifests[0].parent
         next(path for path in staged.iterdir() if path.suffix == ".sig").write_text(
             "tampered", encoding="utf-8"
         )
-        with self.assertRaisesRegex(ValueError, "bytes do not match"):
+        with self.assertRaisesRegex(ValueError, "signature verification failed"):
             self.generate(manifests)
 
     def test_stable_identity_rejects_prerelease_and_version_mismatch(self):

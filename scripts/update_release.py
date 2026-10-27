@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Stage signed WhisperNow packages and generate the updater `latest.json`.
 
-`stage` runs once per platform on the bundle runner: it verifies each package's
-detached updater signature, copies the packages under canonical names, and
+`stage` runs once per platform on the bundle runner: it verifies each updater
+payload's detached signature, copies the packages under canonical names, and
 writes a small `manifest.json`. `generate` runs once in the release job: it
-combines the four platform manifests into `latest.json` and `SHA256SUMS`.
+combines the four platform manifests into `latest.json`, which carries the
+signatures, so the `.sig` files are not published.
 """
 
 from __future__ import annotations
@@ -167,7 +168,6 @@ def stage(
     platform: str,
     version: str,
     signature_verifier: SignatureVerifier,
-    native_compliance: Path | None = None,
 ) -> Path:
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"staging output must be empty: {output}")
@@ -175,18 +175,17 @@ def stage(
     assets: dict[str, dict] = {}
     updates: list[dict] = []
     for selection in select_platform(root, platform):
+        updater_name = canonical_package_name(version, selection.target, installer=False)
+        signature = Path(f"{selection.updater}.sig")
+        signature_text(signature)
+        if not signature_verifier(selection.updater, signature):
+            raise ValueError(f"updater signature verification failed: {selection.updater.name}")
+        shutil.copyfile(signature, output / f"{updater_name}.sig")
         for source, installer in ((selection.updater, False), (selection.installer, True)):
             name = canonical_package_name(version, selection.target, installer=installer)
-            if name in assets:
-                continue
-            signature = Path(f"{source}.sig")
-            signature_text(signature)
-            if not signature_verifier(source, signature):
-                raise ValueError(f"updater signature verification failed: {source.name}")
-            for copy_source, copy_name in ((source, name), (signature, f"{name}.sig")):
-                shutil.copyfile(copy_source, output / copy_name)
-                assets[copy_name] = asset_record(output / copy_name)
-        updater_name = canonical_package_name(version, selection.target, installer=False)
+            if name not in assets:
+                shutil.copyfile(source, output / name)
+                assets[name] = asset_record(output / name)
         updates.append(
             {
                 "target": selection.target,
@@ -195,10 +194,6 @@ def stage(
                 "signature_file": f"{updater_name}.sig",
             }
         )
-    if native_compliance is not None:
-        name = f"WhisperNow_{version}_{platform}_native-compliance.zip"
-        shutil.copyfile(native_compliance, output / name)
-        assets[name] = asset_record(output / name)
     manifest = {
         "platform": platform,
         "version": version,
@@ -236,7 +231,7 @@ def generate(
         raise ValueError("release notes must be non-empty and at most 64 KiB")
     platforms: set[str] = set()
     assets: dict[str, tuple[dict, Path]] = {}
-    updates: dict[str, dict] = {}
+    updates: dict[str, tuple[dict, Path]] = {}
     for manifest_path in manifests:
         document = json.loads(manifest_path.read_text(encoding="utf-8"))
         platform = document["platform"]
@@ -256,7 +251,7 @@ def generate(
         for entry in document["updates"]:
             if entry["target"] in updates:
                 raise ValueError(f"duplicate updater target: {entry['target']}")
-            updates[entry["target"]] = entry
+            updates[entry["target"]] = (entry, manifest_path.parent / entry["signature_file"])
     if platforms != set(PLATFORM_TARGETS):
         raise ValueError(f"release platforms are incomplete: {sorted(platforms)}")
     if set(updates) != set(REQUIRED_TARGETS):
@@ -267,9 +262,8 @@ def generate(
         shutil.copyfile(source, output / name)
     base_url = f"https://github.com/{repository}/releases/download/{tag}"
     platforms_document: dict[str, dict] = {}
-    for target, entry in sorted(updates.items()):
+    for target, (entry, signature) in sorted(updates.items()):
         payload = output / entry["file"]
-        signature = output / entry["signature_file"]
         if not signature_verifier(payload, signature):
             raise ValueError(f"updater signature verification failed: {target}")
         platforms_document[target] = {
@@ -284,12 +278,6 @@ def generate(
     }
     latest_path = output / "latest.json"
     latest_path.write_text(json.dumps(latest, indent=2) + "\n", encoding="utf-8")
-    (output / "SHA256SUMS").write_text(
-        "".join(
-            f"{entry['sha256']}  {name}\n" for name, (entry, _source) in sorted(assets.items())
-        ),
-        encoding="utf-8",
-    )
     return latest_path
 
 
@@ -305,7 +293,6 @@ def command_stage(args: argparse.Namespace) -> None:
             platform=args.platform,
             version=args.version,
             signature_verifier=_verifier(args),
-            native_compliance=args.native_compliance,
         )
     )
 
@@ -334,7 +321,6 @@ def parser() -> argparse.ArgumentParser:
     stage_parser.add_argument("--output", required=True, type=Path)
     stage_parser.add_argument("--platform", required=True, choices=sorted(PLATFORM_TARGETS))
     stage_parser.add_argument("--version", required=True)
-    stage_parser.add_argument("--native-compliance", type=Path)
     stage_parser.set_defaults(function=command_stage)
 
     generate_parser = subparsers.add_parser("generate")

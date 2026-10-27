@@ -18,9 +18,8 @@ code. `native-allowlist.json` lists the upstream components and licenses
 represented by the archive.
 
 `native-licenses/` contains the exact hash-pinned license snapshots named by
-the allowlist. Staging fails if any license byte differs, and emits a
-deterministic `native-compliance.zip` that is published with each platform's
-release packages.
+the allowlist. Staging fails if any license byte differs, and every installer
+carries them in its `licenses/` folder.
 
 ## llama.cpp (the local cleanup model)
 
@@ -70,7 +69,7 @@ build` sets `STATIC_VCRUNTIME`).
 llama.cpp and ggml are MIT (`llama.cpp-MIT.txt`, the release's `LICENSE`); the LLVM
 OpenMP runtime shipped on Windows is Apache-2.0 WITH LLVM-exception
 (`llvm-openmp-Apache-2.0-WITH-LLVM-exception.txt`, the release's
-`LICENSE-LLVM-OpenMP`). Both are in `native-compliance.zip`.
+`LICENSE-LLVM-OpenMP`). Both are in the installers' `licenses/` folder.
 
 The cleanup models' weights, like the ASR models', are not installer resources. The
 LFM2.5-1.2B-Base and LFM2.5-2.6B-Base fine-tunes are under the LFM Open License v1.0

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Download, verify, and extract the pinned static sherpa-onnx archive used by Cargo.
 
-It also stages the pinned native license files (and any source offers) into
-`native-compliance.zip`, which is published with each release.
+It also checks the pinned native license files, which the installers bundle.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ import json
 import shutil
 import tarfile
 import tempfile
-import zipfile
 from pathlib import Path, PurePosixPath
 from urllib.request import urlopen
 
@@ -34,14 +32,13 @@ def matches_pin(path: Path, pin: dict) -> bool:
     return path.stat().st_size == pin["bytes"] and sha256(path) == pin["sha256"]
 
 
-def load_allowlist(path: Path, platform: str) -> tuple[dict, dict, dict, list[dict]]:
+def load_allowlist(path: Path, platform: str) -> tuple[dict, dict, list[dict]]:
     document = json.loads(path.read_text(encoding="utf-8"))
     archive = document["source_archives"].get(platform)
     libraries = document["libraries"].get(platform)
     if archive is None or libraries is None:
         raise ValueError(f"native allowlist has no {platform!r} entry")
     return (
-        document["components"],
         archive,
         document["license_evidence"],
         sorted(libraries, key=lambda entry: entry["name"]),
@@ -93,31 +90,13 @@ def extract_archive(path: Path, output: Path) -> Path:
     return lib_dir
 
 
-def stage_compliance(
-    components: dict, license_files: dict, source: Path, output: Path
-) -> Path:
-    members = [(f"licenses/{name}", name, pin) for name, pin in license_files.items()]
-    members += [
-        (f"source/{offer['name']}", offer["name"], offer)
-        for component in components.values()
-        if (offer := component.get("source_offer")) is not None
-    ]
-    bundle = output / "native-compliance.zip"
-    with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_STORED) as archive:
-        for member, name, pin in sorted(members, key=lambda item: item[0]):
-            path = source / name
-            check_pinned(path, pin)
-            info = zipfile.ZipInfo(member, (1980, 1, 1, 0, 0, 0))
-            info.external_attr = 0o100644 << 16
-            archive.writestr(info, path.read_bytes())
-    return bundle
-
-
-def check_pinned(path: Path, pin: dict) -> None:
-    if not path.is_file():
-        raise ValueError(f"pinned native license file is missing: {path.name}")
-    if not matches_pin(path, pin):
-        raise ValueError(f"native license file does not match the allowlist: {path.name}")
+def check_license_files(license_files: dict, source: Path) -> None:
+    for name, pin in sorted(license_files.items()):
+        path = source / name
+        if not path.is_file():
+            raise ValueError(f"pinned native license file is missing: {name}")
+        if not matches_pin(path, pin):
+            raise ValueError(f"native license file does not match the allowlist: {name}")
 
 
 def main() -> int:
@@ -129,7 +108,7 @@ def main() -> int:
     parser.add_argument("--license-dir", type=Path, default=DEFAULT_LICENSES)
     args = parser.parse_args()
     try:
-        components, archive, license_files, expected_libraries = load_allowlist(
+        archive, license_files, expected_libraries = load_allowlist(
             args.allowlist, args.platform
         )
         args.output.mkdir(parents=True, exist_ok=True)
@@ -148,7 +127,7 @@ def main() -> int:
             shutil.copy2(args.archive, destination)
         validate_archive(destination, archive)
         lib_dir = extract_archive(destination, args.output)
-        stage_compliance(components, license_files, args.license_dir, args.output)
+        check_license_files(license_files, args.license_dir)
     except (OSError, ValueError, json.JSONDecodeError, tarfile.TarError) as error:
         parser.error(str(error))
 

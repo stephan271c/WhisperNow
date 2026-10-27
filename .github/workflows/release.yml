@@ -554,14 +554,13 @@ jobs:
             if [ ! -f "$package.sig" ]; then
               (cd apps/desktop && cargo tauri signer sign "$package")
             fi
-          done < <(find target/release/bundle -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.exe' -o -name '*.app.tar.gz' -o -name '*.dmg' \) | sort)
+          done < <(find target/release/bundle -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.exe' -o -name '*.app.tar.gz' \) | sort)
           cargo build -p whispernow-update-signature --release
           verifier=target/release/whispernow-update-signature
           if [ "${{ runner.os }}" = Windows ]; then verifier="$verifier.exe"; fi
           python3 scripts/update_release.py stage --root target/release/bundle \
             --output release/publish --platform "${{ matrix.platform }}" \
             --version "${GITHUB_REF_NAME#v}" \
-            --native-compliance release/native/native-compliance.zip \
             --signature-verifier "$verifier" --public-key "$WHISPERNOW_UPDATER_PUBLIC_KEY"
       - name: Upload signed platform packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -660,7 +659,7 @@ jobs:
           fi
           echo "release_id=$(jq -r .databaseId <<<"$document")" >> "$GITHUB_OUTPUT"
           echo "pub_date=$(jq -r .createdAt <<<"$document")" >> "$GITHUB_OUTPUT"
-      - name: Generate latest.json and SHA256SUMS
+      - name: Generate latest.json
         run: |
           set -euo pipefail
           mapfile -t manifests < <(find release/download -type f -name manifest.json | sort)
@@ -676,10 +675,10 @@ jobs:
             --public-key "$WHISPERNOW_UPDATER_PUBLIC_KEY"
           arguments=()
           while IFS= read -r name; do arguments+=(--artifact "$name"); done \
-            < <(awk '{print $2}' release/publish/SHA256SUMS)
+            < <(find release/publish -maxdepth 1 -type f ! -name latest.json -printf '%f\n' | sort)
           python3 scripts/release_version.py --release-tag "$RELEASE_TAG" \
             --updater-metadata release/publish/latest.json "${arguments[@]}"
-      - name: Upload packages and signatures, then latest.json last
+      - name: Upload packages, then latest.json last
         env:
           RELEASE_ID: ${{ steps.draft.outputs.release_id }}
         run: |

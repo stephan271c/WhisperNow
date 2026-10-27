@@ -66,6 +66,13 @@
     "resources": {
       "../../LICENSE": "licenses/LICENSE",
       "../../release/NATIVE_DEPENDENCIES.md": "licenses/NATIVE_DEPENDENCIES.md",
+      "../../release/native-licenses/Apache-2.0.txt": "licenses/Apache-2.0.txt",
+      "../../release/native-licenses/kissfft-BSD-3-Clause.txt": "licenses/kissfft-BSD-3-Clause.txt",
+      "../../release/native-licenses/lfm-open-license-v1.0.txt": "licenses/lfm-open-license-v1.0.txt",
+      "../../release/native-licenses/llama.cpp-MIT.txt": "licenses/llama.cpp-MIT.txt",
+      "../../release/native-licenses/llvm-openmp-Apache-2.0-WITH-LLVM-exception.txt": "licenses/llvm-openmp-Apache-2.0-WITH-LLVM-exception.txt",
+      "../../release/native-licenses/onnxruntime-MIT.txt": "licenses/onnxruntime-MIT.txt",
+      "../../release/native-licenses/utf8proc-MIT-AND-Unicode-DFS-2016.txt": "licenses/utf8proc-MIT-AND-Unicode-DFS-2016.txt",
       "../../resources/vad/LICENSE-MIT": "vad/LICENSE-MIT",
       "../../resources/vad/manifest.json": "vad/manifest.json",
       "../../resources/vad/silero_vad.onnx": "vad/silero_vad.onnx"

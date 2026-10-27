@@ -13,7 +13,6 @@ import sys
 import tarfile
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -119,7 +118,7 @@ class NativeStagingTests(unittest.TestCase):
             check=False,
         )
 
-    def test_static_archive_is_verified_extracted_and_licenses_zipped(self):
+    def test_static_archive_is_verified_and_extracted(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             archive = self.fixture_archive(root, "linux-x86_64")
@@ -132,13 +131,36 @@ class NativeStagingTests(unittest.TestCase):
                 {path.name for path in lib_dir.iterdir()},
                 {"libsherpa-onnx-c-api.a", "libonnxruntime.a"},
             )
-            document = json.loads(allowlist.read_text(encoding="utf-8"))
-            with zipfile.ZipFile(output / "native-compliance.zip") as bundle:
-                names = set(bundle.namelist())
-            self.assertEqual(
-                {name for name in names if name.startswith("licenses/")},
-                {f"licenses/{name}" for name in document["license_evidence"]},
+
+    def test_a_changed_license_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = self.fixture_archive(root, "linux-x86_64")
+            allowlist = self.fixture_allowlist(root, archive, "linux-x86_64")
+            licenses = root / "licenses"
+            shutil.copytree(Path(__file__).parents[2] / "release" / "native-licenses", licenses)
+            (licenses / "Apache-2.0.txt").write_text("changed", encoding="utf-8")
+            process = self.run_stage(
+                "--archive", str(archive), "--output", str(root / "output"),
+                "--allowlist", str(allowlist), "--license-dir", str(licenses),
             )
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn("Apache-2.0.txt", process.stderr)
+
+    def test_tauri_bundles_every_pinned_native_license(self):
+        repository = Path(__file__).parents[2]
+        config_path = repository / "apps" / "desktop" / "tauri.conf.json"
+        resources = json.loads(config_path.read_text(encoding="utf-8"))["bundle"]["resources"]
+        licenses = repository / "release" / "native-licenses"
+        document = json.loads((repository / "release" / "native-allowlist.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            {
+                destination: (config_path.parent / source).resolve()
+                for source, destination in resources.items()
+                if (config_path.parent / source).resolve().parent == licenses
+            },
+            {f"licenses/{name}": licenses / name for name in document["license_evidence"]},
+        )
 
     def test_production_allowlist_rejects_fake_archive(self):
         with tempfile.TemporaryDirectory() as directory:
