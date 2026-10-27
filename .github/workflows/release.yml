@@ -511,6 +511,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p release/inspect
           app="$(find target/release/bundle/macos -maxdepth 1 -type d -name '*.app' -print -quit)"
           dmg="$(find target/release/bundle/dmg -type f -name '*.dmg' -print -quit)"
           updater="$(find target/release/bundle -type f -name '*.app.tar.gz' -print -quit)"
