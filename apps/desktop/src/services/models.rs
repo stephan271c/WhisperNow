@@ -368,7 +368,7 @@ pub(super) fn hold_cleanup_unloaded(
 #[cfg(test)]
 mod tests {
     use std::{
-        io::{self, Write},
+        io::{self, Read, Write},
         net::{TcpListener, TcpStream},
         path::PathBuf,
         sync::{Arc, mpsc},
@@ -440,11 +440,14 @@ mod tests {
             }
         }
 
+        /// The download's connection once its request has arrived. A response sent earlier can
+        /// reach hyper before it writes the request, and hyper fails the download as an
+        /// unexpected message.
         fn request(&self) -> TcpStream {
             let deadline = Instant::now() + Duration::from_secs(10);
-            loop {
+            let mut stream = loop {
                 match self.listener.accept() {
-                    Ok((stream, _)) => return stream,
+                    Ok((stream, _)) => break stream,
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         assert!(
                             Instant::now() < deadline,
@@ -454,7 +457,22 @@ mod tests {
                     }
                     Err(error) => panic!("download request failed: {error}"),
                 }
+            };
+            // On Windows an accepted socket inherits the listener's nonblocking mode.
+            stream
+                .set_nonblocking(false)
+                .expect("blocking download connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .expect("download request timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).expect("download request");
+                assert!(read > 0, "download request ended before its headers");
+                request.extend_from_slice(&buffer[..read]);
             }
+            stream
         }
     }
 
