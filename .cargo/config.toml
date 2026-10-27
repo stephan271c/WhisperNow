@@ -4,6 +4,10 @@ incompatible-rust-versions = "fallback"
 [target.'cfg(target_os = "linux")']
 rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
 
+# Not the profile's `strip`: see [profile.wasm-release] in Cargo.toml.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "strip=debuginfo"]
+
 [alias]
 check-all = "check --workspace --all-targets"
 lint = "clippy --workspace --all-targets -- -D warnings"

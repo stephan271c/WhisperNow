@@ -96,11 +96,12 @@ debug = "line-tables-only"
 lto = "thin"
 strip = true
 
-# dx builds the web UI with this profile. dioxus-cli 0.7.10 strips the wasm with
-# `rust-objcopy --strip-all` before wasm-bindgen, and since LLVM 23 (Rust 1.99) that removes
-# wasm-bindgen's custom section too; stripping only debug info keeps it. `opt-level` is dx's
-# default for a web release, which a profile defined here replaces.
+# dx builds the web UI with this profile. dioxus-cli 0.7.10 runs `rust-objcopy` on the wasm
+# whenever the profile strips: `--strip-all` also removes wasm-bindgen's custom section since
+# LLVM 23 (Rust 1.99), and on macOS the tool can't load libLLVM.dylib because dx sets only
+# LD_LIBRARY_PATH. The linker strips debug info instead (.cargo/config.toml), with the same
+# output. `opt-level` is dx's default for a web release, which a profile defined here replaces.
 [profile.wasm-release]
 inherits = "release"
 opt-level = "s"
-strip = "debuginfo"
+strip = "none"
