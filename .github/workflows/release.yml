@@ -45,10 +45,12 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if document="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null)"; then
-            test "$(jq -r .tag_name <<<"$document")" = "$RELEASE_TAG"
-            test "$(jq -r .draft <<<"$document")" = true
-            test "$(jq -r .prerelease <<<"$document")" = false
+          # `gh release view` also finds drafts; the REST releases/tags endpoint returns only
+          # published releases.
+          if document="$(gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease 2>/dev/null)"; then
+            test "$(jq -r .tagName <<<"$document")" = "$RELEASE_TAG"
+            test "$(jq -r .isDraft <<<"$document")" = true
+            test "$(jq -r .isPrerelease <<<"$document")" = false
           fi
       - name: Install pinned Rust toolchain
         # With no argument, rustup installs rust-toolchain.toml's toolchain with its components
@@ -639,20 +641,20 @@ jobs:
           gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
             -f tag_name="$RELEASE_TAG" --jq .body > release/release-notes.md
           test -s release/release-notes.md
-          if document="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null)"; then
-            test "$(jq -r .draft <<<"$document")" = true
-            test "$(jq -r .prerelease <<<"$document")" = false
-            test "$(jq -r .tag_name <<<"$document")" = "$RELEASE_TAG"
+          fields=databaseId,isDraft,isPrerelease,tagName,name,body,createdAt
+          if document="$(gh release view "$RELEASE_TAG" --json "$fields" 2>/dev/null)"; then
+            test "$(jq -r .isDraft <<<"$document")" = true
+            test "$(jq -r .isPrerelease <<<"$document")" = false
+            test "$(jq -r .tagName <<<"$document")" = "$RELEASE_TAG"
             test "$(jq -r .name <<<"$document")" = "WhisperNow $version"
-            jq -r .body <<<"$document" > release/existing-release-notes.md
-            cmp --silent release/release-notes.md release/existing-release-notes.md
+            test "$(jq -r .body <<<"$document")" = "$(cat release/release-notes.md)"
           else
             gh release create "$RELEASE_TAG" --verify-tag --draft \
               --title "WhisperNow $version" --notes-file release/release-notes.md
-            document="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
+            document="$(gh release view "$RELEASE_TAG" --json "$fields")"
           fi
-          echo "release_id=$(jq -r .id <<<"$document")" >> "$GITHUB_OUTPUT"
-          echo "pub_date=$(jq -r .created_at <<<"$document")" >> "$GITHUB_OUTPUT"
+          echo "release_id=$(jq -r .databaseId <<<"$document")" >> "$GITHUB_OUTPUT"
+          echo "pub_date=$(jq -r .createdAt <<<"$document")" >> "$GITHUB_OUTPUT"
       - name: Generate latest.json and SHA256SUMS
         run: |
           set -euo pipefail
