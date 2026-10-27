@@ -71,7 +71,6 @@
       "../../resources/vad/silero_vad.onnx": "vad/silero_vad.onnx"
     },
     "license": "MIT",
-    "licenseFile": "../../LICENSE",
     "category": "Productivity",
     "shortDescription": "Private local-first desktop dictation",
     "longDescription": "WhisperNow records push-to-talk audio, detects meaningful speech with a bundled offline VAD model, transcribes it locally, and safely returns text to the intended application. User-selected ASR models are downloaded on demand and are not included in the installer."
