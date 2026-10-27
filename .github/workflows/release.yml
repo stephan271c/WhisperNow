@@ -426,16 +426,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t binaries < <(find release/inspect/deb release/inspect/rpm release/inspect/appimage/squashfs-root \
+          mapfile -t binaries < <(find release/inspect/deb release/inspect/rpm \
             -type f -path '*/usr/bin/*' -executable ! -name '*.so' | sort)
+          # The AppImage's WebKit finds its helper processes relative to the folder AppRun
+          # enters, so its binary starts only through AppRun, as users run it.
+          binaries+=(release/inspect/appimage/squashfs-root/AppRun)
           test "${#binaries[@]}" -eq 3
-          for binary in "${binaries[@]}"; do
+          # A candidate passes when it is still running at the deadline (124); if it exits
+          # early, its output is printed.
+          smoke() {
+            local label="$1" log
+            log="release/inspect/$label-$(cut -d/ -f3 <<<"$2").log"
+            shift 2
             set +e
-            python3 scripts/bounded_process.py --timeout-seconds 10 \
-              --label linux-x11-smoke -- dbus-run-session -- xvfb-run -a "$binary"
+            python3 scripts/bounded_process.py --timeout-seconds 10 --label "$label" -- \
+              sh -c 'log="$1"; shift; exec "$@" >"$log" 2>&1' sh "$log" "$@"
             status=$?
             set -e
+            if [ "$status" -ne 124 ]; then cat "$log"; fi
             test "$status" -eq 124
+          }
+          for binary in "${binaries[@]}"; do
+            smoke linux-x11-smoke "$binary" dbus-run-session -- xvfb-run -a "$binary"
           done
           runtime_dir="$(mktemp -d)"
           chmod 700 "$runtime_dir"
@@ -446,14 +458,9 @@ jobs:
           for _ in $(seq 1 50); do test -S "$runtime_dir/wayland-ci" && break; sleep 0.1; done
           test -S "$runtime_dir/wayland-ci"
           for binary in "${binaries[@]}"; do
-            set +e
-            python3 scripts/bounded_process.py --timeout-seconds 10 \
-              --label linux-wayland-smoke -- env XDG_RUNTIME_DIR="$runtime_dir" \
+            smoke linux-wayland-smoke "$binary" env XDG_RUNTIME_DIR="$runtime_dir" \
               WAYLAND_DISPLAY=wayland-ci XDG_SESSION_TYPE=wayland GDK_BACKEND=wayland \
               dbus-run-session -- "$binary"
-            status=$?
-            set -e
-            test "$status" -eq 124
           done
       - name: Inspect Windows installer payload
         if: runner.os == 'Windows'
