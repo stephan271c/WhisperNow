@@ -350,9 +350,15 @@ jobs:
         if: always() && runner.os == 'macOS'
         shell: bash
         run: |
-          if [ -n "${MACOS_KEYCHAIN:-}" ]; then security delete-keychain "$MACOS_KEYCHAIN" || true; fi
+          # Bounded: on the hosted runner this cleanup hung with no output, and the runner is
+          # discarded after the job anyway.
+          if [ -n "${MACOS_KEYCHAIN:-}" ]; then
+            python3 scripts/bounded_process.py --timeout-seconds 60 --label delete-keychain -- \
+              security delete-keychain "$MACOS_KEYCHAIN" || true
+          fi
           if [ -n "${MACOS_TRUSTED_CERTIFICATE:-}" ]; then
-            sudo security remove-trusted-cert -d "$MACOS_TRUSTED_CERTIFICATE" || true
+            python3 scripts/bounded_process.py --timeout-seconds 60 --label untrust-certificate -- \
+              sudo security remove-trusted-cert -d "$MACOS_TRUSTED_CERTIFICATE" || true
           fi
       - name: Remove Windows private-key material from the runner
         if: always() && runner.os == 'Windows'
