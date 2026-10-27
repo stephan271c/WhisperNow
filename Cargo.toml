@@ -62,7 +62,9 @@ tauri-plugin-global-shortcut = "=2.4.1"
 tauri-plugin-autostart = "=2.7.0"
 tauri-plugin-single-instance = "=2.5.4"
 tauri-plugin-process = "=2.4.0"
-tauri-plugin-updater = "=2.14.0"
+# Without `zip`: it only unpacks .zip-wrapped Windows updates, and ours are the NSIS .exe
+# (`createUpdaterArtifacts: true`). Its zip 4.6.1 fails `cargo audit` (RUSTSEC-2026-0367..0369).
+tauri-plugin-updater = { version = "=2.14.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tempfile = "=3.27.0"
 thiserror = "=2.0.21"
 time = { version = "=0.3.55", features = ["formatting", "parsing"] }
