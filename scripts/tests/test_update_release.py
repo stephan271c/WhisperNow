@@ -92,7 +92,11 @@ class UpdateReleaseTests(unittest.TestCase):
         manifest = json.loads(self.stage("linux-x86_64").read_text(encoding="utf-8"))
         self.assertEqual(
             {entry["name"] for entry in manifest["assets"]},
-            {f"WhisperNow_{VERSION}_linux_x86_64.{suffix}" for suffix in ("deb", "rpm", "AppImage")},
+            {
+                f"WhisperNow_{VERSION}_linux_x86_64.deb",
+                f"WhisperNow_{VERSION}_linux_x86_64.rpm",
+                f"WhisperNow_{VERSION}_x86_64.AppImage",
+            },
         )
         self.assertEqual(
             {entry["target"]: entry["bundle_type"] for entry in manifest["updates"]},
@@ -154,10 +158,10 @@ class UpdateReleaseTests(unittest.TestCase):
                 f"WhisperNow_{VERSION}_darwin_aarch64.dmg",
                 f"WhisperNow_{VERSION}_darwin_x86_64.app.tar.gz",
                 f"WhisperNow_{VERSION}_darwin_x86_64.dmg",
-                f"WhisperNow_{VERSION}_linux_x86_64.AppImage",
                 f"WhisperNow_{VERSION}_linux_x86_64.deb",
                 f"WhisperNow_{VERSION}_linux_x86_64.rpm",
                 f"WhisperNow_{VERSION}_windows_x86_64_nsis.exe",
+                f"WhisperNow_{VERSION}_x86_64.AppImage",
                 "latest.json",
             ],
         )

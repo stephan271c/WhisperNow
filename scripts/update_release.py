@@ -49,8 +49,9 @@ TARGETS = {
     "linux-x86_64-rpm": Target(
         "linux-x86_64", "rpm", "*.rpm", "linux_x86_64.rpm", "Linux rpm package"
     ),
+    # No "linux": the AppImage catalog's test warns about it, since every AppImage is for Linux.
     "linux-x86_64-appimage": Target(
-        "linux-x86_64", "appimage", "*.AppImage", "linux_x86_64.AppImage", "Linux AppImage"
+        "linux-x86_64", "appimage", "*.AppImage", "x86_64.AppImage", "Linux AppImage"
     ),
     "darwin-aarch64": Target(
         "macos-aarch64", "app", "*.app.tar.gz", "darwin_aarch64.app.tar.gz",
