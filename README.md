@@ -7,7 +7,8 @@ macOS and Linux, and your audio never leaves your computer.
 
 ## Demo
 
-<!-- Demo video goes here. -->
+https://github.com/user-attachments/assets/db2b7bbd-20b9-4fef-b10c-1f225d799596
+
 
 ## Features
 
