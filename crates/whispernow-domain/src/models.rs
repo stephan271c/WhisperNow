@@ -27,9 +27,10 @@ const CLEANUP_MODEL_FILE: &str = "model-Q8_0.gguf";
 struct CleanupModel {
     id: &'static str,
     display_name: &'static str,
-    /// The Hugging Face repository, as `owner/name`, that publishes the GGUF and the model
-    /// card. The download URLs are placeholders until the models are uploaded.
+    /// The Hugging Face repository, as `owner/name`, that publishes the GGUF and the model card.
     repository: &'static str,
+    /// A commit, not a branch: a later upload must not change the file `sha256` checks.
+    revision: &'static str,
     size_bytes: u64,
     sha256: &'static str,
     benchmark: CleanupBenchmark,
@@ -48,6 +49,7 @@ const CLEANUP_MODELS: [CleanupModel; 3] = [
         id: DEFAULT_CLEANUP_MODEL_ID,
         display_name: "Local cleanup model (LFM2.5 1.2B)",
         repository: "category271/whispernow-lfm2.5-1.2b",
+        revision: "dadf980b3dbece9c67dc8e7d46f65b59c9e092ad",
         size_bytes: 1_246_252_256,
         sha256: "0e121fc886fec21ab35aa5a1cdd40872e9278c41435f1cf9d94eba193d93f186",
         benchmark: CleanupBenchmark {
@@ -62,6 +64,7 @@ const CLEANUP_MODELS: [CleanupModel; 3] = [
         id: "whispernow-lfm2.5-2.6b-v1-q8_0",
         display_name: "Local cleanup model (LFM2.5 2.6B)",
         repository: "category271/whispernow-lfm2.5-2.6b",
+        revision: "65c7f66a99b4554197d42bde0a524182e715a3d0",
         size_bytes: 2_874_774_112,
         sha256: "1a3eab30c9e3cd9c8e5f3c678bdb78661306dc04803d3075c9a4ca536ff7d217",
         benchmark: CleanupBenchmark {
@@ -76,6 +79,7 @@ const CLEANUP_MODELS: [CleanupModel; 3] = [
         id: "whispernow-qwen3.5-4b-v1-q8_0",
         display_name: "Local cleanup model (Qwen3.5 4B)",
         repository: "category271/whispernow-qwen3.5-4b",
+        revision: "3b271af4ac6f4eb181c3e77dcbfa2252c7605bfd",
         size_bytes: 4_482_395_648,
         sha256: "1abff662c684473823b5e042c2aa806fdfc5b00981fcb5cae818e2ec7d58d963",
         benchmark: CleanupBenchmark {
@@ -656,8 +660,8 @@ fn local_cleanup(model: &CleanupModel) -> ModelDefinition {
         display_name: model.display_name.to_owned(),
         source: ModelSource {
             url: format!(
-                "https://huggingface.co/{}/resolve/main/{CLEANUP_MODEL_FILE}",
-                model.repository
+                "https://huggingface.co/{}/resolve/{}/{CLEANUP_MODEL_FILE}",
+                model.repository, model.revision
             ),
             archive_size_bytes: model.size_bytes,
             sha256: model.sha256.to_owned(),

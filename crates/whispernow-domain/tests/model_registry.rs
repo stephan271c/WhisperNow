@@ -97,7 +97,7 @@ fn each_model_has_the_artifacts_its_family_needs() {
 }
 
 #[test]
-fn cleanup_models_start_with_the_default_and_name_the_published_revision() {
+fn cleanup_models_start_with_the_default_and_download_from_a_pinned_commit() {
     assert_eq!(CLEANUP_MODEL_IDS[0], DEFAULT_CLEANUP_MODEL_ID);
     let registry = ModelRegistry::builtin();
     for id in CLEANUP_MODEL_IDS {
@@ -105,9 +105,16 @@ fn cleanup_models_start_with_the_default_and_name_the_published_revision() {
         let repository = id
             .strip_suffix("-v1-q8_0")
             .unwrap_or_else(|| panic!("{id} names its revision"));
-        assert_eq!(
-            model.source.url,
-            format!("https://huggingface.co/category271/{repository}/resolve/main/model-Q8_0.gguf")
+        let prefix = format!("https://huggingface.co/category271/{repository}/resolve/");
+        let commit = model
+            .source
+            .url
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix("/model-Q8_0.gguf"))
+            .unwrap_or_else(|| panic!("{id}: {}", model.source.url));
+        assert!(
+            commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{id} downloads from {commit}, not a commit"
         );
     }
 }
