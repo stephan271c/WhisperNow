@@ -84,8 +84,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The AppImage uses the host's glibc, so it runs only where glibc is at least the
+          # build machine's: 22.04 keeps it starting on Ubuntu 22.04, Debian 12 and the
+          # AppImage catalog's test machine.
           - platform: linux-x86_64
-            os: ubuntu-24.04
+            os: ubuntu-22.04
           - platform: windows-x86_64
             os: windows-2025
           - platform: macos-aarch64
@@ -237,9 +240,11 @@ jobs:
               "plugins": {"updater": {"pubkey": os.environ["WHISPERNOW_UPDATER_PUBLIC_KEY"]}},
               "bundle": {
                   "resources": {f"{llama}/*": "llama/"},
+                  # tauri-cli adds libayatana-appindicator3-1, libgtk-3-0 and
+                  # libwebkit2gtk-4.1-0. The t64 packages of Ubuntu 24.04 and Debian 13
+                  # provide the plain names.
                   "linux": {"deb": {"depends": [
-                      "at-spi2-core", "libasound2t64", "libayatana-appindicator3-1",
-                      "libgomp1", "libgtk-3-0t64", "libwebkit2gtk-4.1-0", "xdg-desktop-portal"
+                      "at-spi2-core", "libasound2", "libgomp1", "xdg-desktop-portal"
                   ]}},
               },
           }
@@ -382,8 +387,8 @@ jobs:
           mkdir -p release/inspect/deb release/inspect/rpm release/inspect/appimage
           dpkg-deb --info "$deb" > release/inspect/deb-info.txt
           dpkg-deb -x "$deb" release/inspect/deb
-          # Ubuntu 24.04's rpm2cpio (rpm 4.18) writes the whole payload but exits 1 when the
-          # package has no archive-size tag, and Tauri's RPMs have none.
+          # rpm2cpio (rpm 4.18) writes the whole payload but exits 1 when the package has no
+          # archive-size tag, and Tauri's RPMs have none.
           bsdtar -xf "$rpm" -C release/inspect/rpm
           chmod +x "$appimage"
           (cd release/inspect/appimage && ../../../"$appimage" --appimage-extract >/dev/null)
@@ -417,14 +422,14 @@ jobs:
           ! find release/inspect/appimage/squashfs-root \( -name 'libvulkan.so*' -o -name 'libwayland-client.so*' \) \
             -print -quit | grep -q .
           test -f release/inspect/appimage/squashfs-root/usr/share/whispernow/install_input_helper.sh
+          # The tray panics at startup without it, and not every system installs it.
+          test -f release/inspect/appimage/squashfs-root/usr/lib/libayatana-appindicator3.so.1
           dpkg-deb --ctrl-tarfile "$deb" | tar -xO postinst | grep -q 'chmod 2755'
           rpm -qp --scripts "$rpm" | grep -q 'chmod 2755'
           ! grep -q 'not found' release/inspect/linux-ldd.txt
           ! grep -E -i 'sherpa-onnx|onnxruntime' release/inspect/linux-ldd.txt
           dependencies="$(dpkg-deb --field "$deb" Depends)"
-          # The tray panics at startup without it, and not every system installs it.
-          test -f release/inspect/appimage/squashfs-root/usr/lib/libayatana-appindicator3.so.1
-          for dependency in at-spi2-core libasound2t64 libayatana-appindicator3-1 libgomp1 libgtk-3-0t64 libwebkit2gtk-4.1-0 xdg-desktop-portal; do
+          for dependency in at-spi2-core libasound2 libayatana-appindicator3-1 libgomp1 libgtk-3-0 libwebkit2gtk-4.1-0 xdg-desktop-portal; do
             grep -Fq "$dependency" <<<"$dependencies"
           done
           ! grep -R -I -E 'GDK_BACKEND[ =]x11|ozone-platform(=|[[:space:]])x11' \
