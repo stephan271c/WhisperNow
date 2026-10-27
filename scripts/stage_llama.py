@@ -12,6 +12,11 @@ The allowlist names those DLLs under `msvc_runtime`; they are copied into `llama
 the libraries' dependencies resolve, from the build's Visual Studio (`--msvc-runtime`, its
 `VC\Redist\MSVC\<version>\x64\Microsoft.VC*.CRT`). They are Microsoft's signed builds,
 so CI checks their signatures rather than pinning them.
+
+On macOS the bundler signs the libraries in `Contents/Frameworks` with the release certificate,
+which rewrites their bytes, so `--verify` checks only that the set of names is exact there.
+Their pins were checked when they were staged, and CI checks that each carries the pinned
+certificate (`check_macos_signature.py`).
 """
 
 from __future__ import annotations
@@ -89,10 +94,12 @@ def stage(
         shutil.copyfile(available[name.lower()], output / name)
 
 
-def verify(directory: Path, libraries: list[dict], runtime: list[str]) -> None:
+def verify(directory: Path, libraries: list[dict], runtime: list[str], signed: bool) -> None:
     present = sorted(path.name for path in directory.iterdir()) if directory.is_dir() else []
     if present != sorted([library["name"] for library in libraries] + runtime):
         raise ValueError(f"packaged llama.cpp libraries are not the exact pinned set: {present}")
+    if signed:
+        return
     for library in libraries:
         path = directory / library["name"]
         if not matches_pin(path, library):
@@ -114,7 +121,7 @@ def main() -> int:
     try:
         archive, libraries, runtime = load_pins(args.allowlist, args.platform)
         if args.verify is not None:
-            verify(args.verify, libraries, runtime)
+            verify(args.verify, libraries, runtime, signed=args.platform.startswith("macos"))
             return 0
         if bool(runtime) != (args.msvc_runtime is not None):
             raise ValueError(

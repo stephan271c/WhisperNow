@@ -218,9 +218,9 @@ class LlamaLibraryTests(unittest.TestCase):
         allowlist.write_text(json.dumps(document), encoding="utf-8")
         return archive, allowlist
 
-    def run_stage(self, *arguments: str) -> subprocess.CompletedProcess:
+    def run_stage(self, *arguments: str, platform: str = "linux-x86_64") -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(SCRIPTS / "stage_llama.py"), "--platform", "linux-x86_64", *arguments],
+            [sys.executable, str(SCRIPTS / "stage_llama.py"), "--platform", platform, *arguments],
             text=True,
             capture_output=True,
             check=False,
@@ -248,6 +248,28 @@ class LlamaLibraryTests(unittest.TestCase):
             tampered = self.run_stage("--verify", str(output), "--allowlist", str(allowlist))
             self.assertNotEqual(tampered.returncode, 0)
             self.assertIn("does not match the allowlist", tampered.stderr)
+
+    def test_on_macos_verify_checks_the_names_because_signing_rewrites_the_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive, allowlist = self.fixture(root)
+            document = json.loads(allowlist.read_text(encoding="utf-8"))
+            llama = document["shared_libraries"]["llama"]
+            for key in ("archives", "libraries"):
+                llama[key]["macos-aarch64"] = llama[key].pop("linux-x86_64")
+            allowlist.write_text(json.dumps(document), encoding="utf-8")
+            frameworks = root / "Frameworks"
+            common = ("--allowlist", str(allowlist))
+            staged = self.run_stage(
+                "--archive", str(archive), "--output", str(frameworks), *common, platform="macos-aarch64"
+            )
+            self.assertEqual(staged.returncode, 0, staged.stderr)
+            (frameworks / "libllama.so.0").write_bytes(b"fixture llama, signed")
+            verified = self.run_stage("--verify", str(frameworks), *common, platform="macos-aarch64")
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            (frameworks / "libggml-cpu-x64.so").unlink()
+            missing = self.run_stage("--verify", str(frameworks), *common, platform="macos-aarch64")
+            self.assertIn("not the exact pinned set", missing.stderr)
 
     def test_an_archive_that_is_not_the_pinned_one_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
