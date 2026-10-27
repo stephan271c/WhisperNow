@@ -15,7 +15,9 @@ tauri-build.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tauri.workspace = true
+# Not inherited from the workspace: tauri-cli (2.12.4) reads `tray-icon` only from this
+# table, and without it the AppImage lacks libayatana-appindicator3, which the tray loads.
+tauri = { version = "=2.12.5", features = ["tray-icon"] }
 tauri-plugin-global-shortcut.workspace = true
 tauri-plugin-autostart.workspace = true
 tauri-plugin-single-instance.workspace = true

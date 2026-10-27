@@ -422,6 +422,8 @@ jobs:
           ! grep -q 'not found' release/inspect/linux-ldd.txt
           ! grep -E -i 'sherpa-onnx|onnxruntime' release/inspect/linux-ldd.txt
           dependencies="$(dpkg-deb --field "$deb" Depends)"
+          # The tray panics at startup without it, and not every system installs it.
+          test -f release/inspect/appimage/squashfs-root/usr/lib/libayatana-appindicator3.so.1
           for dependency in at-spi2-core libasound2t64 libayatana-appindicator3-1 libgomp1 libgtk-3-0t64 libwebkit2gtk-4.1-0 xdg-desktop-portal; do
             grep -Fq "$dependency" <<<"$dependencies"
           done

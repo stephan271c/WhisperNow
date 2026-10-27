@@ -56,7 +56,6 @@ serde-wasm-bindgen = "=0.6.5"
 sha2 = { version = "=0.11.1", features = ["zeroize"] }
 sherpa-onnx = { version = "=2.0.0", default-features = false, features = ["static"] }
 tar = { version = "=0.4.46", default-features = false }
-tauri = { version = "=2.12.5", features = ["tray-icon"] }
 tauri-build = "=2.7.4"
 tauri-plugin-global-shortcut = "=2.4.1"
 tauri-plugin-autostart = "=2.7.0"
