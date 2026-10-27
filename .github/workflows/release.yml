@@ -593,7 +593,9 @@ jobs:
           test -n "$dmg"
           xattr -w com.apple.quarantine '0081;00000000;GitHub Actions;' "$dmg"
           mount_point="$(mktemp -d)"
-          hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" "$dmg"
+          # The DMG shows the license as an agreement, which hdiutil reads from stdin.
+          PAGER=cat hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" "$dmg" \
+            < <(yes) >/dev/null
           trap 'hdiutil detach "$mount_point"' EXIT
           app="$(find "$mount_point" -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -n "$app"
