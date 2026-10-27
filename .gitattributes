@@ -1,0 +1,5 @@
+# Check out text with LF on every platform: tests and release checks compare exact bytes
+# (the updater signature fixtures, the VAD license hash), and include_str! would embed CRLF.
+* text=auto eol=lf
+# The upstream license as published with the model, byte for byte.
+training/hub/whispernow-lfm2.5-1.2b/LICENSE -text
