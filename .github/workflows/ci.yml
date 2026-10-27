@@ -2,8 +2,18 @@ name: Rust quality gates
 
 on:
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "brand/**"
+      - LICENSE
   push:
     branches: [master]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "brand/**"
+      - LICENSE
   workflow_dispatch:
 
 permissions:
