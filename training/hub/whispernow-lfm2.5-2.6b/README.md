@@ -22,7 +22,7 @@ datasets:
 
 This model cleans up an ASR transcript by removing fillers, false starts and repeats, applying the speaker's self-corrections, and adjusting formatting. It is a full fine-tune of [LiquidAI/LFM2.5-2.6B-Base](https://huggingface.co/LiquidAI/LFM2.5-2.6B-Base), made for the local cleanup step of [WhisperNow](https://github.com/stephan271c/WhisperNow), a desktop dictation app.
 
-It is the middle one of three cleanup models. Over the test split and both benchmarks it makes 0.77 times the factual errors of the 1.2B (90% interval 0.73–0.81) and 1.32 times those of the cloud glm-5.3-flash (1.23–1.41). On dictations of up to 25 words it makes fewer than either cloud glm-5.3 model, and at 26–200 words it makes 1.0–1.4 times as many as glm-5.3-flash.
+Over the test split and both benchmarks it makes 0.77 times the factual errors of the 1.2B (90% interval 0.73–0.81) and 1.32 times those of the cloud glm-5.3-flash at low reasoning (1.23–1.41). On dictations of up to 25 words it makes fewer than either cloud glm-5.3 model, and at 26–200 words it makes 1.0–1.4 times as many as glm-5.3-flash.
 
 | model | Q8_0 file | memory in use | factual errors per 1,000 words | 100 / 1,000 words, GPU | 100 / 1,000 words, CPU |
 |---|---|---|---|---|---|
@@ -44,7 +44,7 @@ alright so the hides need to soak in the lime bath for uh three days no actually
 The hides need to soak in the lime bath for 5 days for these thicker buffalo hides, and the pH should be around 12.5 to properly loosen the hair. Giuliana said to add an extra 30 pounds of hydrated lime to this batch because the last one came out underprocessed.
 ```
 
-A list inside a message. The request after it is dictated text, so it stays in the output:
+A list inside a message, then a request that stays in the output:
 
 ```text
 for the farm run tomorrow we're picking up fence posts feed for the chickens and uh that new hose nozzle also text me when you're leaving because i need to move the truck
@@ -65,13 +65,11 @@ It learned the cleanup rules WhisperNow sends to cloud models ([full prompt](htt
 
 - It removes fillers and verbal tics ("um", "like", "you know", "so" opening a sentence), stutters, repeated words and false starts.
 - When the speaker clearly corrects themselves, it keeps only the corrected version and drops the cue ("no wait", "scratch that").
-- It keeps hedges ("maybe", "I think") and reasons ("because ...").
-- It fixes grammar, spelling, punctuation and capitalization, but keeps the speaker's words and tone.
-- It lays out shopping lists, to-do lists, steps, recipes and meeting notes as lists under a short label taken from the speaker's words. Messages, stories and explanations stay as sentences.
+- It fixes grammar, spelling, punctuation and capitalization, but keeps the speaker's words, tone, hedges ("maybe", "I think") and reasons ("because ...").
+- It lays out shopping lists, to-do lists, steps, recipes and meeting notes as lists; messages, stories and explanations stay as sentences. It uses no bold, italics, headings or em dashes.
 - It writes amounts, counts, dates, times and percentages in digits, and turns spoken punctuation and symbols ("dash dash help") into the real thing. Code, paths and URLs stay exactly as dictated.
 - A question or command in the transcript is cleaned up and returned as text, never answered or carried out.
 - When the transcript holds no dictated words (only fillers or noise), it returns `EMPTY`.
-- It uses no bold, italics, headings or em dashes.
 
 ## How to use
 
@@ -83,9 +81,7 @@ Every score below was measured with:
 
 - greedy decoding (temperature 0);
 - a repeat penalty of 1.05 over the whole prompt and reply (llama.cpp: `repeat_penalty` 1.05, `repeat_last_n` 4096);
-- a reply budget of 2.5 tokens per transcript word, and at least 64.
-
-The repeat penalty is the value Liquid AI recommends for [LFM2.5-1.2B-Instruct](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct), used for all three WhisperNow models; for [LFM2.5-2.6B](https://huggingface.co/LiquidAI/LFM2.5-2.6B) it recommends 1.1.
+- a reply limit of 2.5 tokens per transcript word, and at least 64.
 
 ### llama.cpp
 
@@ -128,14 +124,6 @@ reply = model.generate(
 print(tokenizer.decode(reply[0, inputs["input_ids"].shape[1]:], skip_special_tokens=True))
 ```
 
-## Files
-
-| file | what it is |
-|---|---|
-| `model.safetensors`, `config.json`, `generation_config.json`, `tokenizer.json`, `tokenizer_config.json`, `chat_template.jinja` | BF16 weights for transformers |
-| `model-Q8_0.gguf` | 2.87 GB. The scores below use this file, and WhisperNow downloads it. |
-| `LICENSE` | the LFM Open License v1.0 |
-
 ## Evaluation
 
 **Test sets.**
@@ -144,7 +132,9 @@ print(tokenizer.decode(reply[0, inputs["input_ids"].shape[1]:], skip_special_tok
 - **bench-long:** 416 dictations of 151–946 words, 49 of them real meeting turns from the AMI corpus.
 - **bench-noise:** 461 dictations of 20–64 words, each with one kind of disfluency (restarts, repeats, filler clusters, corrections and others), plus a control set.
 
-**Scoring.** A judge model (OpenAI's `gpt-6.1-sol` at high reasoning) compares each output with the reference and lists its faults. **Factual errors** counts facts that were dropped, changed, put on the wrong side of a correction, or invented, per 1,000 reference words. Lower is better. Nearly all of them are lost facts: for our models and both glm-5.3 models, invented facts are 4–7% of the errors. Our models ran at Q8_0 in llama.cpp with the settings above; the cloud glm-5.3-flash (at low reasoning) and glm-5.3 (at max reasoning) received WhisperNow's full cleanup prompt. Rates are for: 3,295 test rows, 414 bench-long rows and all 461 bench-noise rows (4,170 in all).
+Scores cover 4,170 rows: 3,295 of test, 414 of bench-long and all 461 of bench-noise.
+
+**Scoring.** A judge model, OpenAI's `gpt-6.1-sol` at high reasoning, compares each output with the reference. **Factual errors** are facts dropped, changed, put on the wrong side of a correction, or invented, per 1,000 reference words. The cloud models received WhisperNow's full cleanup prompt.
 
 **Factual errors per 1,000 reference words:**
 
@@ -156,7 +146,7 @@ print(tokenizer.decode(reply[0, inputs["input_ids"].shape[1]:], skip_special_tok
 | WhisperNow LFM2.5 2.6B (this model) | 3.73 | 7.12 | 4.09 | 4.88 |
 | WhisperNow Qwen3.5 4B | 2.21 | 4.56 | 2.62 | 3.01 |
 
-**By transcript length.** One error in a 10-word dictation counts as 100 per 1,000 words, so short dictations have high rates.
+**By transcript length:**
 
 ![Factual errors per 1,000 reference words by transcript length, for the three WhisperNow models and the two cloud glm-5.3 models](charts/errors-by-length.png)
 
@@ -169,7 +159,7 @@ print(tokenizer.decode(reply[0, inputs["input_ids"].shape[1]:], skip_special_tok
 | 201–450 | 484 | 2.52 | 3.63 | 6.83 | 5.42 | 3.14 |
 | 451 and more | 432 | 1.46 | 3.51 | 6.79 | 5.11 | 3.13 |
 
-**Against the cloud models.** Each point is a WhisperNow model's factual errors divided by a cloud model's, on the same rows, with a 90% paired bootstrap interval. Below 1× means our fine-tuned models are better.
+**Against the cloud models.** Each point is a WhisperNow model's factual errors divided by a cloud model's, with a 90% paired bootstrap interval.
 
 ![Factual errors of each WhisperNow model divided by glm-5.3-flash's and by glm-5.3 at max reasoning's, by transcript length](charts/against-cloud.png)
 
@@ -188,9 +178,9 @@ print(tokenizer.decode(reply[0, inputs["input_ids"].shape[1]:], skip_special_tok
 | replies that answer or act on the dictation instead of cleaning it | 0 | 2 | 1 | 8 | 3 |
 | replies that loop | 9 | 5 | 3 | 2 | 2 |
 
-Every row covers the same 4,170 dictations as the factual-errors table above: the test split, bench-long and bench-noise together. The last two rows are counts. A self-correction left in is one the output keeps as spoken ("Tuesday, no wait, Wednesday"): nothing is lost, but it isn't cleaned up. Long dictations are the fine-tuned models' weak spot: on bench-long (151–946 words) this model makes 7.12 factual errors per 1,000 words, against 4.98 for glm-5.3-flash (low) and 2.30 for glm-5.3 (max).
+The last two rows are counts. A self-correction left in is one the output keeps as spoken ("Tuesday, no wait, Wednesday"). Nearly all factual errors are lost facts: invented facts are 4–7% of them for our models and both glm-5.3 models.
 
-**Other models.** Seven more cloud models received WhisperNow's full cleanup prompt on an 800-row sample of the test split and both benchmarks (1,670 rows, judged the same way). Rates are higher than above because bench-long is a larger share of these rows. Invented facts are a larger share of the errors only for Granite 4.2 8B (16%) and Claude Haiku 5.5 (12%).
+**Other models.** Seven more cloud models were scored on an 800-row sample of the test split plus both benchmarks (1,670 rows). Rates are higher than above because bench-long is a larger share of these rows. Invented facts are a larger share of the errors only for Granite 4.2 8B (16%) and Claude Haiku 5.5 (12%).
 
 ![Factual errors per 1,000 reference words for every model evaluated, sorted](charts/all-models.png)
 
@@ -198,7 +188,7 @@ The same rates by transcript length, sorted by the overall rate:
 
 ![Factual errors per 1,000 reference words for every model evaluated, by transcript length](charts/all-models-by-length.png)
 
-**Speed.** Seconds for the whole reply, median of 5 runs. Ours ran at Q8_0 in llama.cpp on an RTX 5070 GPU and a Ryzen 9 8945HS CPU; the cloud models were called from their API providers using the cleanup prompt.
+**Speed.** Seconds for the whole reply, median of 5 runs. Ours ran at Q8_0 in llama.cpp on an RTX 5070 GPU and a Ryzen 9 8945HS CPU, with WhisperNow's speculative decoding, which drafts tokens from a rule-based cleanup of the transcript. The cloud models were called through their providers' APIs.
 
 ![Seconds per reply by transcript length on a GPU and a CPU, against the range of cloud models](charts/latency.png)
 
@@ -211,21 +201,20 @@ The same rates by transcript length, sorted by the overall rate:
 | 500 | 0.79 | 1.5 | 2.8 | 11 | 26 | 47 | 15 | 86 |
 | 1,005 | 2.0 | 3.8 | 7.2 | 27 | 65 | 118 | 19 | 99 |
 
-These times use WhisperNow's speculative decoding, which drafts tokens from a rule-based clean-up of the transcript.
-
 ## Training
 
-- **Base model:** [LiquidAI/LFM2.5-2.6B-Base](https://huggingface.co/LiquidAI/LFM2.5-2.6B-Base). The post-trained LFM2.5-2.6B is a reasoning model that opens its own `<think>` block even under this template; the base checkpoint has no such habit.
-- **Data:** the train split of the [WhisperNow Cleanup dataset](https://huggingface.co/datasets/category271/whispernow-cleanup) (60,836 rows). A fixed 600 rows of its val split gave the validation loss.
-- **Recipe:** a full fine-tune for 3 epochs, with loss on the reply only. Learning rate 1e-5 with a cosine schedule and 3% warmup, no weight decay, 32 rows per step, at most 2,816 tokens per row, fp32 master weights under bf16 autocast, fused AdamW, gradient checkpointing, TRL's chunked loss, seed 109. Peak GPU memory was 75 GB.
+- **Base model:** [LiquidAI/LFM2.5-2.6B-Base](https://huggingface.co/LiquidAI/LFM2.5-2.6B-Base).
+- **Data:** the train split of the [WhisperNow Cleanup dataset](https://huggingface.co/datasets/category271/whispernow-cleanup) (60,836 rows).
+- **Recipe:** a full fine-tune for 3 epochs, with loss on the reply only. AdamW at learning rate 1e-5 with a cosine schedule and 3% warmup, no weight decay, 32 rows per step, at most 2,816 tokens per row, bf16 mixed precision.
 - **Hardware:** one H100 80 GB on Modal, 100 minutes.
+- **Code:** the [training code](https://github.com/stephan271c/WhisperNow/tree/master/training) is in the WhisperNow repository. This model's settings are in [`configs/lfm25-2.6b.toml`](https://github.com/stephan271c/WhisperNow/blob/master/training/configs/lfm25-2.6b.toml).
 
 ## Limitations
 
 - **English only.**
-- **It makes more factual errors on long dictations.** On bench-long (151–946 words) it makes at least one in 80.9% of dictations, against 64.7% for glm-5.3-flash.
+- **It makes more factual errors on long dictations.** On bench-long (151–946 words) it makes at least one in 80.9% of dictations, against 64.7% for glm-5.3-flash at low reasoning.
 - **It was not trained on dictations over about 1,000 words.**
 
 ## License
 
-The weights are under the LFM Open License v1.0, the base model's license, included as `LICENSE`. That license allows commercial use only by organizations with annual revenue under $10 million (Section 5).
+The weights are under the base model's LFM Open License v1.0, included as `LICENSE`.
