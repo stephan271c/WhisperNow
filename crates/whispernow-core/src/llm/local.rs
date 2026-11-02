@@ -1,7 +1,7 @@
 //! The local cleanup model's decode loop, independent of the inference library.
 //!
 //! The platform crate runs it on llama.cpp; tests run it on a fake model. It decodes as
-//! `llama-server` b11259 does for one request with `cache_prompt: false`, so the app's
+//! `llama-server` b12048 does for one request with `cache_prompt: false`, so the app's
 //! output equals the server's on the same GGUF and backend:
 //!
 //! - The prompt is the chat template rendered as text and tokenized with special tokens

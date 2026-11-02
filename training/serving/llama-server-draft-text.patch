@@ -1,6 +1,6 @@
 --- a/common/common.h
 +++ b/common/common.h
-@@ -398,7 +398,17 @@
+@@ -405,7 +405,17 @@
              return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
          });
  
@@ -21,7 +21,7 @@
  
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
-@@ -2888,7 +2888,7 @@
+@@ -3066,7 +3066,7 @@
      common_speculative_impl * impl = spec->impl_last[seq_id];
  
      if (impl == nullptr) {
@@ -32,16 +32,16 @@
  
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -18,6 +18,8 @@
- #include "mtmd-helper.h"
+@@ -24,6 +24,8 @@
+ #include "base64.hpp"
  
  #include <algorithm>
 +#include <cctype>
 +#include <cstring>
  #include <cstddef>
  #include <cinttypes>
- #include <exception>
-@@ -195,6 +197,168 @@
+ #include <deque>
+@@ -256,6 +258,168 @@
      }
  };
  
@@ -210,15 +210,15 @@
  struct server_slot {
      int id;
  
-@@ -216,6 +379,7 @@
+@@ -301,6 +465,7 @@
      common_prompt_checkpoint spec_ckpt;
      bool spec_is_replay = false;
      std::mt19937 spec_synth_rng;
 +    server_text_draft spec_text_draft;
  
-     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
+     // TODO: move members that belong to the task (such as `generated`, `has_new_line`) to task_results_state
      //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
-@@ -1686,6 +1850,8 @@
+@@ -1949,6 +2114,8 @@
      }
  
      bool launch_slot_with_task(server_slot & slot, server_task && task) {
@@ -227,7 +227,7 @@
          // process per-request lora adapters
          if (!task.params.lora.empty()) {
              auto task_loras = construct_lora_list(task.params.lora);
-@@ -3024,6 +3190,42 @@
+@@ -3913,6 +4080,42 @@
              queue_tasks.yield_to_queue([&]() {
                  common_speculative_draft(spec.get());
              });
@@ -237,7 +237,7 @@
 +                if (slot.spec_text_draft.empty()) {
 +                    return;
 +                }
-+                const std::string words = slot.spec_text_draft.draft(slot.generated_text);
++                const std::string words = slot.spec_text_draft.draft(slot.generated.text);
 +                if (words.empty()) {
 +                    return;
 +                }
@@ -272,7 +272,7 @@
          // make checkpoints if needed
 --- a/tools/server/server-task.h
 +++ b/tools/server/server-task.h
-@@ -75,6 +75,9 @@
+@@ -100,6 +100,9 @@
      bool timings_per_token   = false;
      bool post_sampling_probs = false;
  
@@ -284,7 +284,7 @@
  
 --- a/tools/server/server-schema.cpp
 +++ b/tools/server/server-schema.cpp
-@@ -190,6 +190,12 @@
+@@ -192,6 +192,12 @@
      add((new field_bool("post_sampling_probs", params.post_sampling_probs))
          ->set_desc("Return probabilities of top n_probs tokens after applying the sampling chain"));
  

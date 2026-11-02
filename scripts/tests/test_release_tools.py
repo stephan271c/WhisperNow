@@ -202,13 +202,13 @@ class NativeStagingTests(unittest.TestCase):
 
 class LlamaLibraryTests(unittest.TestCase):
     def fixture(self, root: Path) -> tuple[Path, Path]:
-        source = root / "llama-b11259"
+        source = root / "llama-b12048"
         source.mkdir()
-        (source / "libllama.so.0.5.0").write_bytes(b"fixture llama")
+        (source / "libllama.so.0.8.0").write_bytes(b"fixture llama")
         (source / "libggml-cpu-x64.so").write_bytes(b"fixture cpu")
         (source / "llama-server").write_bytes(b"not shipped")
-        (source / "libllama.so.0").symlink_to("libllama.so.0.5.0")
-        archive = root / "llama-b11259-bin-ubuntu-vulkan-x64.tar.gz"
+        (source / "libllama.so.0").symlink_to("libllama.so.0.8.0")
+        archive = root / "llama-b12048-bin-ubuntu-vulkan-x64.tar.gz"
         with tarfile.open(archive, "w:gz") as bundle:
             bundle.add(source, arcname=source.name)
         document = json.loads(
@@ -231,8 +231,8 @@ class LlamaLibraryTests(unittest.TestCase):
             },
             "libraries": {
                 "linux-x86_64": [
-                    {"name": "libggml-cpu-x64.so", "member": "llama-b11259/libggml-cpu-x64.so", **pin(b"fixture cpu")},
-                    {"name": "libllama.so.0", "member": "llama-b11259/libllama.so.0.5.0", **pin(b"fixture llama")},
+                    {"name": "libggml-cpu-x64.so", "member": "llama-b12048/libggml-cpu-x64.so", **pin(b"fixture cpu")},
+                    {"name": "libllama.so.0", "member": "llama-b12048/libllama.so.0.8.0", **pin(b"fixture llama")},
                 ]
             },
         }

@@ -385,7 +385,7 @@ pub(crate) struct Context {
 }
 
 impl Context {
-    /// Creates a context of at least `context_size` tokens as `llama-server` b11259 does for
+    /// Creates a context of at least `context_size` tokens as `llama-server` b12048 does for
     /// one slot with speculative decoding: batches of 2,048 tokens in micro-batches of 512,
     /// room for 4 draft tokens' outputs, recurrent state that can roll back 4 tokens
     /// (`n_rs_seq`) as the patched server sets up for `ngram-simple`, Flash Attention when

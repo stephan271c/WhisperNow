@@ -122,7 +122,7 @@ impl Backend {
 }
 
 /// On macOS the libraries sit in the bundle's `Contents/Frameworks/`, where they are signed. A
-/// development build can point `WHISPERNOW_LLAMA_DIR` at a llama.cpp b11259 release instead.
+/// development build can point `WHISPERNOW_LLAMA_DIR` at a llama.cpp b12048 release instead.
 fn llama_dir(resource_dir: &Path) -> PathBuf {
     if let Some(directory) = std::env::var_os("WHISPERNOW_LLAMA_DIR") {
         PathBuf::from(directory)

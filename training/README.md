@@ -35,7 +35,7 @@ This directory builds the **WhisperNow Cleanup** dataset, then trains, evaluates
 
   The app uses sherpa-onnx 2.0.0, but 2.0 ignores the eSpeak data Kokoro reads here and shifts Parakeet's transcripts slightly, so the speech steps stay on 1.13.6.
 - **Training** needs `uv sync --extra train` (torch with CUDA 13.0 wheels, transformers and TRL). Run model commands as `uv run --extra train cleanup …`. Syncing one extra removes the others, so name each one you need: `uv sync --extra audio --extra train`.
-- **Export and serving** use llama.cpp release **b11259** in `.cache/llama.cpp/`: the release source in `src/` (for `convert_hf_to_gguf.py`) and the release binaries in `cuda/llama-b11259/` and `cpu/llama-b11259/`. `cleanup build-server [--cpu]` builds the patched llama-server into `.cache/llama.cpp/draft-text/build-{cuda,cpu}/`. The build takes about 10 minutes; run it under the CPU and I/O limits AGENTS.md sets for Cargo.
+- **Export and serving** use llama.cpp release **b12048** in `.cache/llama.cpp/`: the release source in `src/` (for `convert_hf_to_gguf.py`) and the release binaries in `cuda/llama-b12048/` and `cpu/llama-b12048/`. `cleanup build-server [--cpu]` builds the patched llama-server into `.cache/llama.cpp/draft-text/build-{cuda,cpu}/`. The build takes about 10 minutes; run it under the CPU and I/O limits AGENTS.md sets for Cargo.
 - **LLM settings** come from the repo-root `.env` ([below](#llm-roles)). `datagen publish` needs `hf auth login`.
 - Run GPU- and CPU-heavy jobs under `nice -n 10 ionice -c2 -n7`, and not while a Cargo build is running.
 
@@ -156,7 +156,7 @@ Training and the app must build the same prompt.
 
 ### In the app
 
-The app runs the models in process on llama.cpp b11259's C API. It uses the GPU when it can (Vulkan on Linux and Windows, Metal on Apple silicon) and the CPU otherwise. To use a model, choose the provider **Local cleanup model**, then pick and download one in Settings → Models. Each model is pinned in the app's registry by URL, size and SHA-256. The patched server is for evaluation and latency only.
+The app runs the models in process on llama.cpp b12048's C API. It uses the GPU when it can (Vulkan on Linux and Windows, Metal on Apple silicon) and the CPU otherwise. To use a model, choose the provider **Local cleanup model**, then pick and download one in Settings → Models. Each model is pinned in the app's registry by URL, size and SHA-256. The patched server is for evaluation and latency only.
 
 ## LLM roles
 

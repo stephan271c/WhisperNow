@@ -108,6 +108,7 @@ pub(super) struct ContextParams {
     pub cb_eval_user_data: *mut c_void,
     pub type_k: c_int,
     pub type_v: c_int,
+    pub moe_cache_size: usize,
     pub abort_callback: Option<AbortCallback>,
     pub abort_callback_data: *mut c_void,
     pub embeddings: bool,
@@ -141,18 +142,19 @@ const _: () = {
     assert!(std::mem::offset_of!(ModelParams, tensor_split) == 40);
     assert!(std::mem::offset_of!(ModelParams, vocab_only) == 72);
     assert!(std::mem::offset_of!(ModelParams, load_mtp) == 77);
-    assert!(size_of::<ContextParams>() == 160);
+    assert!(size_of::<ContextParams>() == 168);
     assert!(std::mem::offset_of!(ContextParams, n_rs_seq) == 16);
     assert!(std::mem::offset_of!(ContextParams, n_threads) == 28);
     assert!(std::mem::offset_of!(ContextParams, flash_attn_type) == 52);
     assert!(std::mem::offset_of!(ContextParams, yarn_orig_ctx) == 80);
     assert!(std::mem::offset_of!(ContextParams, cb_eval) == 88);
     assert!(std::mem::offset_of!(ContextParams, type_k) == 104);
-    assert!(std::mem::offset_of!(ContextParams, abort_callback) == 112);
-    assert!(std::mem::offset_of!(ContextParams, embeddings) == 128);
-    assert!(std::mem::offset_of!(ContextParams, kv_unified) == 133);
-    assert!(std::mem::offset_of!(ContextParams, samplers) == 136);
-    assert!(std::mem::offset_of!(ContextParams, ctx_other) == 152);
+    assert!(std::mem::offset_of!(ContextParams, moe_cache_size) == 112);
+    assert!(std::mem::offset_of!(ContextParams, abort_callback) == 120);
+    assert!(std::mem::offset_of!(ContextParams, embeddings) == 136);
+    assert!(std::mem::offset_of!(ContextParams, kv_unified) == 141);
+    assert!(std::mem::offset_of!(ContextParams, samplers) == 144);
+    assert!(std::mem::offset_of!(ContextParams, ctx_other) == 160);
     assert!(size_of::<Batch>() == 56);
 };
 

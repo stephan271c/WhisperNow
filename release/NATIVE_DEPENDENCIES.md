@@ -23,7 +23,7 @@ carries them in its `licenses/` folder.
 
 ## llama.cpp (the local cleanup model)
 
-AI cleanup's **Local cleanup model** provider runs in process on llama.cpp b11259's
+AI cleanup's **Local cleanup model** provider runs in process on llama.cpp b12048's
 public C API (`llama.h`). Nothing is compiled: the app opens the official release's
 shared libraries at run time, from the resources' `llama/` directory (on macOS, the
 bundle's `Contents/Frameworks/`, where they are signed with the app).
@@ -35,14 +35,14 @@ payload against the same pins with `--verify`.
 
 | Platform | Archive | Backends | Files | Unpacked | xz -6 |
 | --- | --- | --- | --- | --- | --- |
-| Linux x86_64 | `ubuntu-vulkan-x64.tar.gz` | Vulkan, CPU (13 CPU variants, best one chosen at run time) | 18 | 69.9 MB | 8.2 MB |
-| Windows x86_64 | `win-vulkan-x64.zip` | Vulkan, CPU (13 CPU variants), with LLVM `libomp.dll` | 19 | 70.4 MB | 8.3 MB |
-| macOS arm64 | `macos-arm64.tar.gz` | Metal, CPU (Accelerate BLAS) | 7 | 10.5 MB | 1.5 MB |
-| macOS x86_64 | `macos-x64.tar.gz` | CPU (Accelerate BLAS) | 6 | 6.0 MB | 1.6 MB |
+| Linux x86_64 | `ubuntu-vulkan-x64.tar.gz` | Vulkan, CPU (13 CPU variants, best one chosen at run time) | 18 | 67.8 MB | 7.8 MB |
+| Windows x86_64 | `win-vulkan-x64.zip` | Vulkan, CPU (13 CPU variants), with LLVM `libomp.dll` | 19 | 67.8 MB | 7.6 MB |
+| macOS arm64 | `macos-arm64.tar.gz` | Metal, CPU (Accelerate BLAS) | 7 | 11.4 MB | 1.7 MB |
+| macOS x86_64 | `macos-x64.tar.gz` | CPU (Accelerate BLAS) | 6 | 6.6 MB | 1.8 MB |
 
 Packages grow by roughly the compressed size: about 8 MB with xz or LZMA (deb, rpm,
-NSIS), about 23 MB with gzip-class compression (AppImage), and 1.5–3 MB on macOS.
-Nothing is compiled, so builds take no longer; staging downloads one 11–33 MB archive.
+NSIS), about 22 MB with gzip-class compression (AppImage), and 1.5–3 MB on macOS.
+Nothing is compiled, so builds take no longer; staging downloads one 12–38 MB archive.
 The Vulkan backend accounts for about 44 MB on Linux and Windows. It loads only where
 a Vulkan loader (`libvulkan.so.1`, `vulkan-1.dll`) exists; without one, or without a
 usable GPU, the model runs on the CPU. It goes to the first GPU that takes it, discrete

@@ -20,7 +20,7 @@ from ..datagen.paths import CACHE
 from . import prompt
 
 LLAMA_CPP = CACHE / "llama.cpp"
-LLAMA_CPP_BUILD = "b11259"
+LLAMA_CPP_BUILD = "b12048"
 # Tokens per request slot: a 1,000-word dictation takes about 1,400 prompt tokens with the
 # instructions, and its reply may take 2,500 (`prompt.max_tokens`).
 CTX_PER_SLOT = 8192
