@@ -152,6 +152,8 @@ pub struct ModelSummary {
     pub benchmark: Option<ModelBenchmark>,
     /// The model new installations start with.
     pub recommended: bool,
+    /// Listed ahead of More models.
+    pub featured: bool,
 }
 
 impl ModelSummary {
@@ -159,6 +161,7 @@ impl ModelSummary {
     pub fn new(definition: ModelDefinition, availability: ModelAvailability) -> Self {
         Self {
             recommended: definition.is_recommended(),
+            featured: definition.is_featured(),
             family: definition.family(),
             size_bytes: definition.source.archive_size_bytes,
             id: definition.id,

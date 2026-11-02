@@ -20,6 +20,7 @@ from whispernow_training.model.prompt import (
 def test_messages_and_rendered_prompt_match_the_golden_fixture(case):
     assert messages(case["transcript"]) == case["messages"]
     assert render(case["messages"]) == case["rendered"]
+    assert render(case["messages"], bos_token="<bos>", chat=GEMMA4) == case["rendered_gemma4"]
     assert max_tokens(case["transcript"]) == case["max_tokens"]
     assert preclean(case["transcript"]) == case["draft_text"]
 

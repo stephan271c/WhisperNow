@@ -521,6 +521,7 @@ pub(super) fn model(id: &str, name: &str, availability: ModelAvailability) -> Mo
         size_bytes: 75_000_000,
         benchmark: None,
         recommended: name == "Base",
+        featured: false,
     }
 }
 
@@ -1366,6 +1367,7 @@ fn cleanup_model(id: &str, name: &str, availability: ModelAvailability) -> Model
         family: whispernow_domain::ModelFamily::Cleanup,
         languages: Vec::new(),
         recommended: false,
+        featured: true,
         ..model(id, name, availability)
     }
 }
@@ -1521,9 +1523,9 @@ fn cleanup_models_show_memory_and_latency_beside_accuracy_bars() {
     let shown = text(&html, "main-content");
     assert!(shown.contains("Memory1.6 GB"), "{shown}");
     assert!(shown.contains("Latency0.2 s GPU · 3.1 s CPU"), "{shown}");
-    assert!(html.contains(
-        "aria-label=\"Accuracy: 2 of 5. About 6.3 factual errors per 1,000 words (4,170 held-out dictations)\""
-    ));
+    assert!(
+        html.contains("aria-label=\"Accuracy: 2 of 5. About 6.3 factual errors per 1,000 words\"")
+    );
     assert!(!html.contains("aria-label=\"Speed:"));
 }
 
@@ -1622,6 +1624,49 @@ fn a_cleanup_model_is_marked_selected_only_once_downloaded() {
             availability == ModelAvailability::Downloaded,
             "{availability:?}"
         );
+    }
+}
+
+#[test]
+fn a_retired_cleanup_model_waits_behind_more_models_until_it_is_selected_or_downloaded() {
+    const CHOSEN: &str = "whispernow-lfm2.5-1.2b-v1-q8_0";
+    const RETIRED: &str = "whispernow-qwen3.5-4b-v1-q8_0";
+    const RETIRED_ROW: &str = "model-whispernow-qwen3-5-4b-v1-q8_0-name";
+    const MORE: &str = "cleanup-more-models";
+    let retired = |chosen: &str, availability| {
+        let mut management = local_cleanup(chosen, RETIRED);
+        let model = models_of(&mut management)
+            .iter_mut()
+            .find(|model| model.id.as_str() == RETIRED)
+            .expect("retired model");
+        model.featured = false;
+        model.availability = availability;
+        management
+    };
+
+    let mut page = shell(
+        snapshot(Phase::Idle),
+        retired(CHOSEN, ModelAvailability::NotInstalled),
+    );
+    open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+    let html = page.html();
+    assert!(tag(&html, RETIRED_ROW).is_none());
+    let button = tag(&html, MORE).expect("the More models button");
+    assert!(button.contains("aria-expanded=\"false\""), "{button}");
+    assert!(text(&html, MORE).contains("More models (1)"));
+
+    open(&mut page, &[MORE]);
+    assert!(tag(&page.html(), RETIRED_ROW).is_some());
+    assert!(text(&page.html(), MORE).contains("Fewer models"));
+
+    for management in [
+        retired(CHOSEN, ModelAvailability::Downloaded),
+        retired(RETIRED, ModelAvailability::Downloaded),
+    ] {
+        let mut page = shell(snapshot(Phase::Idle), management);
+        open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
+        assert!(tag(&page.html(), RETIRED_ROW).is_some());
+        assert!(tag(&page.html(), MORE).is_none(), "nothing is left to show");
     }
 }
 

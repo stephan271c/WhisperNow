@@ -149,7 +149,7 @@ When every reference of a split was written by `gpt-6.1-sol` at high reasoning, 
 
 Training and the app must build the same prompt.
 
-- Training and serving both render prompts with `serving/chat_template.jinja`, which rejects a system message.
+- Training and serving both render prompts with `serving/chat_template.jinja`, or `chat_template_gemma4.jinja` for Gemma 4 models. Both reject a system message.
 - `serving/prompt_golden.json` pins the messages, the rendered prompt, the token limit, the decoding settings and the draft for a few transcripts. `tests/test_model_prompt.py` and the app's `local_cleanup_prompt_matches_the_training_golden_fixture` both check against it. Change it, the template, `model/prompt.py` and the app's `build_local_cleanup_prompt` together.
 - Each request carries a draft: the transcript pre-cleaned by code (`model/draft.py`; in the app, `llm/draft.rs`). The app's engine uses it for speculative decoding, and requests from this directory send it to the patched llama-server as `draft_text`.
 - Decoding is greedy, with `repeat_penalty` 1.05 over `repeat_last_n` 4096 tokens, and `max_tokens` = max(64, ⌈2.5 × input words⌉). A reply that hits the limit counts as a loop, and the app keeps the pre-cleaned text.

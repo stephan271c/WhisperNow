@@ -2,8 +2,8 @@
 
 `serving/chat_template.jinja` turns the messages into the model's text (Gemma 4 models use
 `chat_template_gemma4.jinja`). Training renders with it and `llama-server --chat-template-file`
-serves with it. `serving/prompt_golden.json` pins the messages and the ChatML text; the Rust
-builder (`build_local_cleanup_prompt` in whispernow-core) is tested against the same file.
+serves with it. `serving/prompt_golden.json` pins the messages and both formats' text; the Rust
+builder (`render_prompt` in whispernow-core) is tested against the same file.
 """
 
 from __future__ import annotations

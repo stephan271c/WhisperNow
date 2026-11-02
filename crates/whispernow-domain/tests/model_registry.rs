@@ -120,6 +120,26 @@ fn cleanup_models_start_with_the_default_and_download_from_a_pinned_commit() {
 }
 
 #[test]
+fn released_cleanup_models_stay_registered() {
+    for id in [
+        "whispernow-lfm2.5-1.2b-v1-q8_0",
+        "whispernow-lfm2.5-2.6b-v1-q8_0",
+        "whispernow-qwen3.5-4b-v1-q8_0",
+        "whispernow-nemotron-bolt-e4b-v1-q8_0",
+    ] {
+        assert!(CLEANUP_MODEL_IDS.contains(&id), "{id}");
+    }
+}
+
+#[test]
+fn the_default_cleanup_model_is_featured_and_speech_models_are_not() {
+    let registry = ModelRegistry::builtin();
+    let default = registry.get(DEFAULT_CLEANUP_MODEL_ID).expect("default");
+    assert!(default.is_featured());
+    assert!(registry.speech_models().all(|model| !model.is_featured()));
+}
+
+#[test]
 fn lookup_finds_registered_models_and_rejects_unknown_ones() {
     let registry = ModelRegistry::builtin();
 
@@ -147,6 +167,19 @@ fn identifiers_reject_filesystem_components() {
     ] {
         assert_eq!(ModelId::new(invalid).err(), Some(error), "ID {invalid:?}");
     }
+}
+
+#[test]
+fn cleanup_models_are_told_apart_by_their_accuracy_bars() {
+    let registry = ModelRegistry::builtin();
+    let bars = CLEANUP_MODEL_IDS.map(|id| {
+        let model = registry.get(id).expect("registered cleanup model");
+        let Some(ModelBenchmark::Cleanup(benchmark)) = model.benchmark else {
+            panic!("{id} is measured");
+        };
+        benchmark.accuracy().get()
+    });
+    assert_eq!(bars, [2, 3, 4, 5]);
 }
 
 #[test]

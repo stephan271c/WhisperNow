@@ -541,6 +541,7 @@ fn management_with_history() -> ManagementState {
         size_bytes: 116_204_861,
         benchmark: None,
         recommended: false,
+        featured: false,
     }]);
     management
 }

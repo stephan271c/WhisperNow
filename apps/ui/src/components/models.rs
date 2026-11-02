@@ -140,7 +140,7 @@ pub(super) fn ModelRow(
                 RatingBars { label: "Accuracy", value: benchmark.accuracy(),
                     detail: factual_errors_detail(&benchmark) }
                 Measurement { label: "Latency", value: latency(&benchmark),
-                    detail: "To clean up a 100-word dictation, on an RTX 5070 GPU and on a Ryzen 9 8945HS CPU" }
+                    detail: "To clean up a 100-word dictation" }
             }
         },
         None => rsx! {},
@@ -263,7 +263,7 @@ fn accuracy_detail(benchmark: &SpeechBenchmark) -> String {
 
 fn factual_errors_detail(benchmark: &CleanupBenchmark) -> String {
     format!(
-        "About {:.1} factual errors per 1,000 words (4,170 held-out dictations)",
+        "About {:.1} factual errors per 1,000 words",
         benchmark.factual_errors_per_1000_words
     )
 }

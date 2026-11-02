@@ -233,14 +233,14 @@ fn load_engine(shared: &Shared, model_id: &ModelId) -> Result<LocalCleanupEngine
     if shared.held.load(Ordering::Acquire) {
         return Err(ModelLoadError::Held);
     }
-    let path = shared
+    let file = shared
         .store
-        .cleanup_model_path(model_id)?
+        .cleanup_model_file(model_id)?
         .ok_or(ModelLoadError::NotInstalled)?;
     let threads = default_threads();
     let loaded = LocalCleanupEngine::load(
         &shared.library_directory,
-        &path,
+        &file,
         threads,
         shared.use_gpu.load(Ordering::Acquire),
     )
@@ -328,7 +328,7 @@ mod tests {
     use std::{fs, time::Duration};
 
     use tempfile::TempDir;
-    use whispernow_domain::{ModelDefinition, ModelLayout, ModelRegistry, ModelSource};
+    use whispernow_domain::{ChatFormat, ModelDefinition, ModelLayout, ModelRegistry, ModelSource};
 
     use super::*;
     use crate::{AppPaths, DownloadTimeouts};
@@ -346,6 +346,7 @@ mod tests {
             },
             layout: ModelLayout::Gguf {
                 model: MODEL_FILE.to_owned(),
+                chat_format: ChatFormat::ChatMl,
             },
             languages: Vec::new(),
             benchmark: None,

@@ -29,7 +29,7 @@ pub use llm::{complete, list_models};
 pub use local_cleanup::{HeldUnloaded, LocalCleanupService};
 #[cfg(any(test, feature = "test-support"))]
 pub use models::DownloadTimeouts;
-pub use models::{DownloadProgress, ModelListEntry, ModelStore, ModelStoreError};
+pub use models::{CleanupModelFile, DownloadProgress, ModelListEntry, ModelStore, ModelStoreError};
 pub use opener::{open_directory, open_privacy_settings, open_url};
 #[cfg(target_os = "linux")]
 pub use paste_delivery::x11_paste_injection_available;

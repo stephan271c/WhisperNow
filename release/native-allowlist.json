@@ -22,6 +22,10 @@
       "bytes": 19741,
       "sha256": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4"
     },
+    "openmdw-1.1.txt": {
+      "bytes": 2619,
+      "sha256": "2ab44b68365473c112f5092211a38f231cb23e50de68b75a13369adbd76a74df"
+    },
     "onnxruntime-MIT.txt": {
       "bytes": 1073,
       "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
@@ -115,6 +119,13 @@
       "license": "Apache-2.0",
       "license_files": ["Apache-2.0.txt"],
       "source": "https://huggingface.co/category271/whispernow-qwen3.5-4b"
+    },
+    "cleanup-model-nemotron-bolt-e4b": {
+      "name": "WhisperNow cleanup model Nemotron Bolt E4B (a fine-tune of NVIDIA's Nemotron 3.5 Bolt E4B, itself post-trained from Google's Gemma 4 E4B; downloaded on demand, not bundled)",
+      "version": "v1 Q8_0",
+      "license": "OpenMDW-1.1 AND Apache-2.0",
+      "license_files": ["openmdw-1.1.txt", "Apache-2.0.txt"],
+      "source": "https://huggingface.co/category271/whispernow-nemotron-bolt-e4b"
     },
     "llvm-openmp": {
       "name": "LLVM OpenMP runtime (libomp.dll, Windows only)",

@@ -13,11 +13,11 @@ use tar::{Builder as TarBuilder, EntryType};
 use tempfile::TempDir;
 use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::{
-    DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout, ModelRegistry,
-    ModelSource,
+    ChatFormat, DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout,
+    ModelRegistry, ModelSource,
 };
 use whispernow_platform::{
-    AppPaths, DownloadProgress, DownloadTimeouts, ModelStore, ModelStoreError,
+    AppPaths, CleanupModelFile, DownloadProgress, DownloadTimeouts, ModelStore, ModelStoreError,
 };
 
 const MODEL_ID: &str = "fixture-whisper";
@@ -105,6 +105,7 @@ fn make_single_file_store(url: &str, file: &[u8]) -> TempStore {
     let mut definition = definition(url.to_owned(), file);
     definition.layout = ModelLayout::Gguf {
         model: "model-Q8_0.gguf".to_owned(),
+        chat_format: ChatFormat::Gemma4,
     };
     make_store_for_definition(definition)
 }
@@ -255,29 +256,32 @@ fn a_single_file_model_is_downloaded_verified_installed_and_removed_as_is() {
 }
 
 #[test]
-fn an_installed_gguf_model_has_a_cleanup_model_path_and_nothing_else_does() {
+fn an_installed_gguf_model_has_a_cleanup_model_file_and_nothing_else_does() {
     let gguf = b"GGUF fixture weights".repeat(64);
     let server = serve(Response::ok(gguf.clone()));
     let (_root, _, store, id) = make_single_file_store(&server.url(MODEL_PATH), &gguf);
-    assert_eq!(store.cleanup_model_path(&id), Ok(None));
+    assert_eq!(store.cleanup_model_file(&id), Ok(None));
 
     let resolved = store
         .download(&id, &CancellationToken::default(), &|_| {})
         .expect("single-file download");
 
     assert_eq!(
-        store.cleanup_model_path(&id),
-        Ok(Some(resolved.root.join("model-Q8_0.gguf")))
+        store.cleanup_model_file(&id),
+        Ok(Some(CleanupModelFile {
+            path: resolved.root.join("model-Q8_0.gguf"),
+            chat_format: ChatFormat::Gemma4,
+        }))
     );
     let unknown = ModelId::new(OTHER_MODEL_ID).expect("fixture ID");
     assert_eq!(
-        store.cleanup_model_path(&unknown),
+        store.cleanup_model_file(&unknown),
         Err(ModelStoreError::UnknownModel)
     );
 }
 
 #[test]
-fn an_installed_speech_model_has_no_cleanup_model_path() {
+fn an_installed_speech_model_has_no_cleanup_model_file() {
     let archive = valid_archive();
     let server = serve(Response::ok(archive.clone()));
     let (_root, _, store, id) = make_store(&server, &archive);
@@ -286,7 +290,7 @@ fn an_installed_speech_model_has_no_cleanup_model_path() {
         .expect("fixture download");
 
     assert!(store.resolve(&id).expect("resolve").is_some());
-    assert_eq!(store.cleanup_model_path(&id), Ok(None));
+    assert_eq!(store.cleanup_model_file(&id), Ok(None));
 }
 
 #[test]

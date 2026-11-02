@@ -14,8 +14,8 @@ use tempfile::{Builder, NamedTempFile};
 use thiserror::Error;
 use whispernow_core::{CancellationToken, ResolvedModel};
 use whispernow_domain::{
-    DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout, ModelRegistry,
-    ModelSource,
+    ChatFormat, DownloadPhase, ModelAvailability, ModelDefinition, ModelId, ModelLayout,
+    ModelRegistry, ModelSource,
 };
 
 use crate::{
@@ -99,6 +99,12 @@ impl Default for DownloadTimeouts {
             total: Duration::from_hours(2),
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CleanupModelFile {
+    pub path: PathBuf,
+    pub chat_format: ChatFormat,
 }
 
 /// Transfers and extraction run unlocked; model resolution, listing, removals and final
@@ -347,17 +353,24 @@ impl ModelStore {
 
     /// An installed cleanup model's GGUF; `None` while it is not installed, or the id is a
     /// speech model's.
-    pub fn cleanup_model_path(
+    pub fn cleanup_model_file(
         &self,
         model_id: &ModelId,
-    ) -> Result<Option<PathBuf>, ModelStoreError> {
+    ) -> Result<Option<CleanupModelFile>, ModelStoreError> {
         let Some(model) = self.resolve(model_id)? else {
             return Ok(None);
         };
-        let ModelLayout::Gguf { model: file } = &model.definition.layout else {
+        let ModelLayout::Gguf {
+            model: file,
+            chat_format,
+        } = &model.definition.layout
+        else {
             return Ok(None);
         };
-        Ok(Some(model.root.join(file)))
+        Ok(Some(CleanupModelFile {
+            path: model.root.join(file),
+            chat_format: *chat_format,
+        }))
     }
 
     pub fn list(&self) -> Result<Vec<ModelListEntry>, ModelStoreError> {
@@ -429,9 +442,9 @@ impl ModelStore {
             .map_err(filesystem("create model staging directory"))?;
         report_phase(DownloadPhase::Extracting);
         let staged_root = match &definition.layout {
-            ModelLayout::Gguf { model: artifact } => {
-                Self::stage_single_file(&definition, download, staging.path(), artifact)?
-            }
+            ModelLayout::Gguf {
+                model: artifact, ..
+            } => Self::stage_single_file(&definition, download, staging.path(), artifact)?,
             _ => Self::extract_archive(&definition, download.path(), staging.path(), cancellation)?,
         };
         report_phase(DownloadPhase::Installing);

@@ -25,6 +25,7 @@ use std::{
 };
 
 use thiserror::Error;
+use whispernow_domain::ChatFormat;
 
 use super::align::WordAligner;
 
@@ -32,7 +33,12 @@ pub type Token = i32;
 
 /// The chat template's turn opener. The server's message spans start at it, so the prompt's
 /// first one marks the user turn.
-const TURN_START: &str = "<|im_start|>";
+const fn turn_start(format: ChatFormat) -> &'static str {
+    match format {
+        ChatFormat::ChatMl => "<|im_start|>",
+        ChatFormat::Gemma4 => "<|turn>",
+    }
+}
 /// `ngram-simple`'s n-gram (`--spec-ngram-simple-size-n 4`).
 const NGRAM_SIZE: usize = 4;
 /// llama.cpp's `repeat_penalty`, as the cleanup model's evaluation ran it.
@@ -50,11 +56,15 @@ const DRAFT_TAIL_TOKENS: usize = 6;
 /// The server's checkpoint offsets before the end of the prompt, besides `n_ubatch`.
 const CHECKPOINT_OFFSET: usize = 4;
 
-/// Renders the local cleanup prompt as `training/serving/chat_template.jinja` does with a
-/// generation prompt. `bos` is the model's BOS token as text.
+/// Renders the local cleanup prompt as the `format`'s template in `training/serving` does with
+/// a generation prompt. `bos` is the model's BOS token as text.
 #[must_use]
-pub fn render_prompt(bos: &str, transcript: &str) -> String {
-    format!("{bos}{TURN_START}user\n{transcript}<|im_end|>\n{TURN_START}assistant\n")
+pub fn render_prompt(format: ChatFormat, bos: &str, transcript: &str) -> String {
+    let turn = turn_start(format);
+    match format {
+        ChatFormat::ChatMl => format!("{bos}{turn}user\n{transcript}<|im_end|>\n{turn}assistant\n"),
+        ChatFormat::Gemma4 => format!("{bos}{turn}user\n{transcript}<turn|>\n{turn}model\n"),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
@@ -112,6 +122,7 @@ pub struct LocalDecodeRequest<'request> {
     /// Rendered prompt tokens from the context's model, without adding BOS and with
     /// special-token text parsed.
     pub prompt: Vec<Token>,
+    pub chat_format: ChatFormat,
     pub max_tokens: usize,
     /// `Some` decodes speculatively with this text as the transcript draft, which may be
     /// empty; `None` decodes one token at a time.
@@ -179,6 +190,7 @@ pub fn decode<C: DecodeContext>(
 ) -> Result<LocalDecodeOutput, LocalDecodeError> {
     let LocalDecodeRequest {
         prompt,
+        chat_format,
         max_tokens,
         draft,
     } = request;
@@ -194,11 +206,11 @@ pub fn decode<C: DecodeContext>(
     }
 
     let batching = if context.checkpoints_prompt() {
-        let turn_start = context.tokenize(TURN_START.as_bytes(), true)?;
+        let opener = context.tokenize(turn_start(chat_format).as_bytes(), true)?;
         PromptBatching::Checkpointed {
             user_turn: prompt
-                .windows(turn_start.len().max(1))
-                .position(|window| window == turn_start.as_slice()),
+                .windows(opener.len().max(1))
+                .position(|window| window == opener.as_slice()),
         }
     } else {
         PromptBatching::Plain

@@ -6,10 +6,10 @@ use whispernow_core::llm::{
     DraftText,
     local::{self, DecodeContext, LocalDecodeError, LocalDecodeOutput, LocalDecodeRequest},
 };
-use whispernow_domain::ipc::CleanupDevice;
+use whispernow_domain::{ChatFormat, ipc::CleanupDevice};
 
 use super::ModelLoadError;
-use crate::llama;
+use crate::{llama, models::CleanupModelFile};
 
 /// The server's context per slot; contexts are never smaller, so the app decodes in the
 /// same memory layout as the evaluation did.
@@ -30,6 +30,7 @@ pub(crate) fn default_threads() -> i32 {
 
 pub(crate) struct LocalCleanupEngine {
     model: Rc<llama::Model>,
+    chat_format: ChatFormat,
     context: Option<llama::Context>,
     threads: i32,
 }
@@ -37,14 +38,15 @@ pub(crate) struct LocalCleanupEngine {
 impl LocalCleanupEngine {
     pub(crate) fn load(
         library_directory: &Path,
-        model_path: &Path,
+        file: &CleanupModelFile,
         threads: i32,
         use_gpu: bool,
     ) -> Result<Self, llama::LoadError> {
         let libraries = llama::Libraries::load(library_directory)?;
-        let model = llama::Model::load(libraries, model_path, use_gpu)?;
+        let model = llama::Model::load(libraries, &file.path, use_gpu)?;
         Ok(Self {
             model: Rc::new(model),
+            chat_format: file.chat_format,
             context: None,
             threads,
         })
@@ -78,7 +80,8 @@ impl LocalCleanupEngine {
         draft: &DraftText,
         between_passes: impl FnMut(&[u8]) -> ControlFlow<()>,
     ) -> Result<LocalDecodeOutput, EngineError> {
-        let rendered = local::render_prompt(&self.model.bos_text(), transcript);
+        let chat_format = self.chat_format;
+        let rendered = local::render_prompt(chat_format, &self.model.bos_text(), transcript);
         let tokens = self
             .model
             .tokenize(rendered.as_bytes(), true)
@@ -96,6 +99,7 @@ impl LocalCleanupEngine {
             context,
             LocalDecodeRequest {
                 prompt: tokens,
+                chat_format,
                 max_tokens: max_output_tokens,
                 draft: Some(draft.as_str()),
             },

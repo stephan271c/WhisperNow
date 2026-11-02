@@ -34,16 +34,21 @@ struct CleanupModel {
     size_bytes: u64,
     sha256: &'static str,
     benchmark: CleanupBenchmark,
+    chat_format: ChatFormat,
+    /// Listed ahead of More models.
+    featured: bool,
 }
 
-/// The local cleanup models in display order. Factual errors (lost and invented facts) are per
+/// The local cleanup models in display order. A released model stays here: saved settings name
+/// it, an unknown id loads as the default, and only models here can be deleted. Clear `featured`
+/// to retire one. Factual errors (lost and invented facts) are per
 /// 1,000 reference words, pooled over 4,170 held-out dictations (the test split, bench-long and
 /// bench-noise) and judged by `gpt-6.1-sol` (`cleanup eval`, training/README.md). Latency is the
 /// median of five `cleanup bench` runs of its 100-word dictation against the patched
 /// `llama-server` the app's engine matches, on an RTX 5070 and on a Ryzen 9 8945HS. Memory is the
 /// larger of that server's VRAM and its resident memory on the CPU with its prompt cache off, as
 /// the app has none.
-const CLEANUP_MODELS: [CleanupModel; 3] = [
+const CLEANUP_MODELS: [CleanupModel; 4] = [
     // LFM2.5-1.2B-Base fine-tuned for cleanup, under the LFM Open License v1.0.
     CleanupModel {
         id: DEFAULT_CLEANUP_MODEL_ID,
@@ -58,6 +63,8 @@ const CLEANUP_MODELS: [CleanupModel; 3] = [
             gpu_latency: Duration::from_millis(178),
             cpu_latency: Duration::from_millis(2_328),
         },
+        chat_format: ChatFormat::ChatMl,
+        featured: true,
     },
     // LFM2.5-2.6B-Base fine-tuned for cleanup, under the LFM Open License v1.0.
     CleanupModel {
@@ -73,6 +80,8 @@ const CLEANUP_MODELS: [CleanupModel; 3] = [
             gpu_latency: Duration::from_millis(344),
             cpu_latency: Duration::from_millis(5_390),
         },
+        chat_format: ChatFormat::ChatMl,
+        featured: true,
     },
     // Qwen3.5-4B-Base fine-tuned for cleanup, under Apache-2.0.
     CleanupModel {
@@ -88,6 +97,27 @@ const CLEANUP_MODELS: [CleanupModel; 3] = [
             gpu_latency: Duration::from_millis(624),
             cpu_latency: Duration::from_millis(8_869),
         },
+        chat_format: ChatFormat::ChatMl,
+        featured: false,
+    },
+    // NVIDIA's Nemotron 3.5 Bolt E4B fine-tuned for cleanup, under OpenMDW-1.1, on Google's
+    // Gemma 4 E4B under Apache-2.0.
+    CleanupModel {
+        id: "whispernow-nemotron-bolt-e4b-v1-q8_0",
+        display_name: "Local cleanup model (Nemotron Bolt E4B)",
+        repository: "category271/whispernow-nemotron-bolt-e4b",
+        revision: "821f34f7feaf490594f733b246b7dffe2d597927",
+        size_bytes: 7_972_708_768,
+        sha256: "28ebf2933bc295876d72dc9d187af7ffbdec94c4501c27f4b97dd06cd05effed",
+        benchmark: CleanupBenchmark {
+            memory_bytes: 8_370_384_896,
+            factual_errors_per_1000_words: 2.59,
+            gpu_latency: Duration::from_millis(662),
+            // The 4B's latency above times Bolt's ratio to the 4B in one sitting (9.6 s / 7.3 s).
+            cpu_latency: Duration::from_millis(11_602),
+        },
+        chat_format: ChatFormat::Gemma4,
+        featured: true,
     },
 ];
 
@@ -188,6 +218,14 @@ pub enum ModelAvailability {
     NotInstalled,
 }
 
+/// The turn markers a cleanup model was trained on: `training/serving/chat_template.jinja` and
+/// `chat_template_gemma4.jinja`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChatFormat {
+    ChatMl,
+    Gemma4,
+}
+
 /// The files a model needs, as slash-separated paths relative to its directory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelLayout {
@@ -199,6 +237,7 @@ pub enum ModelLayout {
     },
     Gguf {
         model: String,
+        chat_format: ChatFormat,
     },
     Whisper {
         encoder: String,
@@ -241,7 +280,7 @@ impl ModelLayout {
                 joiner,
                 tokens,
             } => vec![encoder, decoder, joiner, tokens],
-            Self::Gguf { model } => vec![model],
+            Self::Gguf { model, .. } => vec![model],
             Self::Whisper {
                 encoder,
                 decoder,
@@ -368,9 +407,9 @@ impl CleanupBenchmark {
     #[must_use]
     pub fn accuracy(&self) -> Rating {
         Rating::new(match self.factual_errors_per_1000_words {
-            errors if errors < 2.5 => 5,
+            errors if errors < 2.75 => 5,
             errors if errors < 3.5 => 4,
-            errors if errors < 5.0 => 3,
+            errors if errors < 5.25 => 3,
             errors if errors < 6.5 => 2,
             _ => 1,
         })
@@ -420,6 +459,13 @@ impl ModelDefinition {
     #[must_use]
     pub fn is_recommended(&self) -> bool {
         self.id == ModelId::default()
+    }
+
+    #[must_use]
+    pub fn is_featured(&self) -> bool {
+        CLEANUP_MODELS
+            .iter()
+            .any(|model| model.featured && model.id == self.id.as_str())
     }
 }
 
@@ -668,6 +714,7 @@ fn local_cleanup(model: &CleanupModel) -> ModelDefinition {
         },
         layout: ModelLayout::Gguf {
             model: CLEANUP_MODEL_FILE.to_owned(),
+            chat_format: model.chat_format,
         },
         languages: Vec::new(),
         benchmark: Some(ModelBenchmark::Cleanup(model.benchmark)),

@@ -74,7 +74,8 @@ OpenMP runtime shipped on Windows is Apache-2.0 WITH LLVM-exception
 The cleanup models' weights, like the ASR models', are not installer resources. The
 LFM2.5-1.2B-Base and LFM2.5-2.6B-Base fine-tunes are under the LFM Open License v1.0
 (`lfm-open-license-v1.0.txt`), the Qwen3.5-4B-Base fine-tune under Apache-2.0
-(`Apache-2.0.txt`).
+(`Apache-2.0.txt`), and the Nemotron Bolt E4B fine-tune under OpenMDW-1.1
+(`openmdw-1.1.txt`) on a Gemma 4 base under Apache-2.0.
 
 ## Model weights
 

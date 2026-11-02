@@ -276,14 +276,24 @@ fn ProviderRows(
 fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
     let context = use_context::<UiContext>();
     let management = context.management;
-    let models = management
+    let mut show_more = use_signal(|| false);
+    // A model the user selected or downloaded stays in view, retired or not.
+    let (mut shown, more): (Vec<_>, Vec<_>) = management
         .read()
         .models
         .iter()
         .flatten()
         .filter(|model| model.family == ModelFamily::Cleanup)
         .cloned()
-        .collect::<Vec<_>>();
+        .partition(|model| {
+            model.featured
+                || model.id == chosen_model
+                || model.availability == ModelAvailability::Downloaded
+        });
+    let hidden = more.len();
+    if show_more() {
+        shown.extend(more);
+    }
     let loaded = management.read().models.is_some();
     let error = management.read().setting_error(SettingKey::CleanupModel);
     let reason = context
@@ -300,8 +310,8 @@ fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
             if !loaded {
                 p { class: "section-note", role: "status", "Loading models…" }
             }
-            ul { class: "model-list",
-                for model in models {
+            ul { id: "cleanup-model-list", class: "model-list",
+                for model in shown {
                     ModelRow {
                         key: "{model.id.as_str()}",
                         kind: ModelRowKind::Cleanup {
@@ -311,6 +321,16 @@ fn CleanupModels(chosen_model: ModelId, disabled: bool) -> Element {
                         settings_disabled: disabled,
                         model,
                     }
+                }
+            }
+            if hidden > 0 {
+                Button {
+                    id: "cleanup-more-models",
+                    variant: ButtonVariant::Ghost,
+                    aria_expanded: if show_more() { "true" } else { "false" },
+                    aria_controls: "cleanup-model-list",
+                    onclick: move |_| show_more.toggle(),
+                    if show_more() { "Fewer models" } else { "More models ({hidden})" }
                 }
             }
         }

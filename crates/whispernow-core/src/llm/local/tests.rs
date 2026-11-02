@@ -1,16 +1,19 @@
 use std::ops::ControlFlow;
 
+use whispernow_domain::ChatFormat;
+
 use super::{
     DRAFT_TOKENS, DecodeContext, LocalDecodeError, LocalDecodeOutput, LocalDecodeRequest,
     LocalFinish, Outputs, PromptBatching, Reply, State, Token, decode, ngram_draft, prompt_chunks,
     render_prompt,
 };
 
-const SPECIAL: [&str; 3] = ["<s>", "<|im_start|>", "<|im_end|>"];
+const SPECIAL: [&str; 5] = ["<s>", "<|im_start|>", "<|im_end|>", "<|turn>", "<turn|>"];
 const END: Token = 2;
-const WORDS: [&str; 12] = [
+const WORDS: [&str; 13] = [
     "user",
     "assistant",
+    "model",
     "\n",
     " the",
     " cat",
@@ -72,10 +75,10 @@ impl Fake {
 
     /// The reply in `history`: everything after the assistant turn's opening.
     fn reply(&self, history: &[Token]) -> Vec<Token> {
-        let opening = [self.token("assistant"), self.token("\n")];
+        let openings = ["assistant", "model"].map(|role| [self.token(role), self.token("\n")]);
         let start = history
             .windows(2)
-            .position(|window| window == opening)
+            .position(|window| openings.iter().any(|opening| window == opening))
             .expect("an assistant turn")
             + 2;
         history[start..].to_vec()
@@ -224,12 +227,13 @@ fn run(
     draft: Option<&str>,
     max_tokens: usize,
 ) -> Result<LocalDecodeOutput, LocalDecodeError> {
-    let prompt = render_prompt("<s>", transcript.trim());
+    let prompt = render_prompt(ChatFormat::ChatMl, "<s>", transcript.trim());
     let tokens = fake.tokenize(prompt.as_bytes(), true)?;
     decode(
         fake,
         LocalDecodeRequest {
             prompt: tokens,
+            chat_format: ChatFormat::ChatMl,
             max_tokens,
             draft,
         },
@@ -239,6 +243,25 @@ fn run(
 
 fn text(output: &LocalDecodeOutput) -> &str {
     std::str::from_utf8(&output.text).expect("UTF-8 reply")
+}
+
+#[test]
+fn a_gemma4_prompt_is_split_at_its_own_user_turn() {
+    let mut fake = fake_following(" the cat", &[]);
+    let prompt = render_prompt(ChatFormat::Gemma4, "<s>", "q");
+    let tokens = fake.tokenize(prompt.as_bytes(), true).expect("tokenizes");
+    decode(
+        &mut fake,
+        LocalDecodeRequest {
+            prompt: tokens,
+            chat_format: ChatFormat::Gemma4,
+            max_tokens: 64,
+            draft: None,
+        },
+        |_| ControlFlow::Continue(()),
+    )
+    .expect("decodes");
+    assert_eq!(fake.batches[0], (0, 1, Outputs::Nothing), "BOS alone");
 }
 
 #[test]
@@ -464,13 +487,14 @@ fn a_full_context_cuts_the_reply_off_and_a_long_prompt_is_refused() {
 #[test]
 fn breaking_between_passes_stops_the_decode() {
     let mut fake = fake_following(" the cat sat on the mat", &[]);
-    let prompt = render_prompt("<s>", "q");
+    let prompt = render_prompt(ChatFormat::ChatMl, "<s>", "q");
     let tokens = fake.tokenize(prompt.as_bytes(), true).expect("tokenizes");
     let mut seen = Vec::new();
     let result = decode(
         &mut fake,
         LocalDecodeRequest {
             prompt: tokens,
+            chat_format: ChatFormat::ChatMl,
             max_tokens: 64,
             draft: None,
         },

@@ -2,7 +2,7 @@ use std::{collections::VecDeque, sync::Mutex};
 
 use super::prompt::CLEANUP_SYSTEM_CONTRACT;
 use super::*;
-use whispernow_domain::{ProviderEndpoint, RemoteProvider, Settings};
+use whispernow_domain::{ChatFormat, ProviderEndpoint, RemoteProvider, Settings};
 
 fn config() -> CleanupTarget {
     CleanupTarget::Remote(RemoteCleanupTarget {
@@ -299,8 +299,13 @@ async fn local_cleanup_request_matches_the_training_golden_fixture() {
         assert_eq!(messages[0]["role"], "user", "{name}");
         assert_eq!(messages[0]["content"], transcript.as_str(), "{name}");
         assert_eq!(
-            local::render_prompt("<|startoftext|>", transcript),
+            local::render_prompt(ChatFormat::ChatMl, "<|startoftext|>", transcript),
             case["rendered"].as_str().expect("case rendered"),
+            "{name}"
+        );
+        assert_eq!(
+            local::render_prompt(ChatFormat::Gemma4, "<bos>", transcript),
+            case["rendered_gemma4"].as_str().expect("case rendered"),
             "{name}"
         );
         assert_eq!(
