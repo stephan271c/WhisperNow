@@ -14,13 +14,16 @@ tags:
 - gguf
 datasets:
 - category271/whispernow-cleanup
+new_version: category271/whispernow-nemotron-bolt-e4b
 ---
 
 # WhisperNow Qwen3.5 4B
 
 This model cleans up an ASR transcript by removing fillers, false starts and repeats, applying the speaker's self-corrections, and adjusting formatting. It is a full fine-tune of [Qwen/Qwen3.5-4B-Base](https://huggingface.co/Qwen/Qwen3.5-4B-Base), made for the local cleanup step of [WhisperNow](https://github.com/stephan271c/WhisperNow), a desktop dictation app.
 
-It is the largest and most accurate of three cleanup models. Over the test split and both benchmarks it makes 0.81 times the factual errors of the cloud glm-5.3-flash at low reasoning (90% interval 0.76–0.87) and 0.62 times those of the LFM2.5 2.6B (0.58–0.66). It makes no more than glm-5.3-flash at any length. Against glm-5.3 at max reasoning, it makes fewer on dictations of up to 25 words, is level at 26–100 words, and makes more above 100.
+[Nemotron Bolt E4B](https://huggingface.co/category271/whispernow-nemotron-bolt-e4b) has replaced this model in WhisperNow's main list. It makes 0.86 times the factual errors of this model (90% interval 0.81–0.91), and its file is 7.97 GB against this model's 4.48 GB. This model stays in the app under More models.
+
+Over the test split and both benchmarks it makes 0.81 times the factual errors of the cloud glm-5.3-flash at low reasoning (90% interval 0.76–0.87) and 0.62 times those of the LFM2.5 2.6B (0.58–0.66). It makes no more than glm-5.3-flash at any length. Against glm-5.3 at max reasoning, it makes fewer on dictations of up to 25 words, is level at 26–100 words, and makes more above 100.
 
 | model | Q8_0 file | memory in use | factual errors per 1,000 words | 100 / 1,000 words, GPU | 100 / 1,000 words, CPU |
 |---|---|---|---|---|---|

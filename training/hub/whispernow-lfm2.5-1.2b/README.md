@@ -22,7 +22,7 @@ datasets:
 
 This model cleans up an ASR transcript by removing fillers, false starts and repeats, applying the speaker's self-corrections, and adjusting formatting. It is a full fine-tune of [LiquidAI/LFM2.5-1.2B-Base](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Base), made for the local cleanup step of [WhisperNow](https://github.com/stephan271c/WhisperNow), a desktop dictation app.
 
-It is the smallest and fastest of three cleanup models. Over the test split and both benchmarks it makes 1.70 times as many factual errors as the cloud glm-5.3-flash at low reasoning (90% interval 1.59–1.82). On dictations of up to 25 words it makes fewer than glm-5.3-flash and is level with glm-5.3 at max reasoning.
+It is the smallest and fastest WhisperNow cleanup model. Over the test split and both benchmarks it makes 1.70 times as many factual errors as the cloud glm-5.3-flash at low reasoning (90% interval 1.59–1.82). On dictations of up to 25 words it makes fewer than glm-5.3-flash and is level with glm-5.3 at max reasoning.
 
 | model | Q8_0 file | memory in use | factual errors per 1,000 words | 100 / 1,000 words, GPU | 100 / 1,000 words, CPU |
 |---|---|---|---|---|---|

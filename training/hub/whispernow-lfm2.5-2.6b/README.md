@@ -16,11 +16,14 @@ tags:
 - gguf
 datasets:
 - category271/whispernow-cleanup
+new_version: category271/whispernow-lfm3-1.7b
 ---
 
 # WhisperNow LFM2.5 2.6B
 
 This model cleans up an ASR transcript by removing fillers, false starts and repeats, applying the speaker's self-corrections, and adjusting formatting. It is a full fine-tune of [LiquidAI/LFM2.5-2.6B-Base](https://huggingface.co/LiquidAI/LFM2.5-2.6B-Base), made for the local cleanup step of [WhisperNow](https://github.com/stephan271c/WhisperNow), a desktop dictation app.
+
+[LFM3 1.7B](https://huggingface.co/category271/whispernow-lfm3-1.7b) has replaced this model in WhisperNow's main list. It makes about as many factual errors (1.03 times this model's, 90% interval 0.98–1.08) at two-thirds of the file size, and takes about 0.7 times as long. This model stays in the app under More models.
 
 Over the test split and both benchmarks it makes 0.77 times the factual errors of the 1.2B (90% interval 0.73–0.81) and 1.32 times those of the cloud glm-5.3-flash at low reasoning (1.23–1.41). On dictations of up to 25 words it makes fewer than either cloud glm-5.3 model, and at 26–200 words it makes 1.0–1.4 times as many as glm-5.3-flash.
 
