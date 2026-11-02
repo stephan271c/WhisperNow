@@ -1,0 +1,18 @@
+# LFM3-1.7B, full fine-tune from the base checkpoint, on a Modal GPU (modal_train.py): the 2.6B's
+# recipe (configs/lfm25-2.6b.toml). Plain ChatML, without the empty `<think></think>` LFM3's own
+# template prefills, so the app's prompt builder needs no change. fp32 weights, gradients and Adam
+# state take about 28 GB. Serving needs llama.cpp b11960 or newer.
+base_model = "LiquidAI/LFM3-1.7B-Base"
+base_revision = "545fc8f4c7b5fa9f405105274cd29c4f8f44b526"
+learning_rate = 1e-5
+epochs = 3
+batch_size = 32
+grad_accum = 1
+warmup = 0.03
+weight_decay = 0.0
+lr_scheduler = "cosine"
+max_length = 2816
+seed = 109
+gradient_checkpointing = true
+chunked_loss = true
+checkpoint_minutes = 25

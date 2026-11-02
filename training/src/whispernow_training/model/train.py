@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 from datasets import Dataset
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, Gemma4ForCausalLM, TrainerCallback
+from transformers import AutoModelForCausalLM, AutoTokenizer, Gemma4ForCausalLM, PreTrainedConfig, TrainerCallback
 from trl import SFTConfig, SFTTrainer
 
 from ..datagen.paths import BUILD, TRAINING_ROOT
@@ -48,9 +48,14 @@ def resolve(path_or_id: str) -> str:
     return str(local) if local.exists() else path_or_id
 
 
-def load_tokenizer(base_model: str):
-    tokenizer = AutoTokenizer.from_pretrained(base_model)
-    chat = prompt.chat_format(AutoConfig.from_pretrained(base_model).model_type)
+def model_type(path: str, revision: str = "") -> str:
+    """Read from config.json: `AutoConfig` would run the modeling code of a type transformers doesn't know."""
+    return PreTrainedConfig.get_config_dict(path, revision=revision or None)[0]["model_type"]
+
+
+def load_tokenizer(base_model: str, revision: str = ""):
+    tokenizer = AutoTokenizer.from_pretrained(base_model, revision=revision or None, trust_remote_code=False)
+    chat = prompt.chat_format(model_type(base_model, revision))
     tokenizer.chat_template = chat.template()
     # Qwen3.5 has no bos token. llama.cpp then takes token 11 (",") as the bos, and the template would
     # render it when serving, so prompts start with the base model's end of document instead.
@@ -61,16 +66,19 @@ def load_tokenizer(base_model: str):
     return tokenizer
 
 
-def load_model(path: str, dtype: torch.dtype):
+def load_model(path: str, dtype: torch.dtype, revision: str = ""):
     # A Gemma 4 checkpoint holds audio and vision towers besides the text model, which is under
     # `model.language_model.`; load only the text model. transformers saves it back under that prefix,
     # so its own saves need the mapping too. Without it no text weight matches, and transformers
     # initializes them all at random with only a load report.
-    if AutoConfig.from_pretrained(path).model_type in ("gemma4", "gemma4_text"):
+    if model_type(path, revision) in ("gemma4", "gemma4_text"):
         return Gemma4ForCausalLM.from_pretrained(
             path, dtype=dtype, attn_implementation="sdpa", key_mapping={r"^model\.language_model\.": "model."}
         )
-    return AutoModelForCausalLM.from_pretrained(path, dtype=dtype, attn_implementation="sdpa")
+    return AutoModelForCausalLM.from_pretrained(
+        path, dtype=dtype, attn_implementation="sdpa", revision=revision or None,
+        trust_remote_code=model_type(path, revision) == "lfm3",
+    )
 
 
 def checkpoint_dir(out: Path, epoch: int) -> Path:
@@ -169,12 +177,12 @@ def train(config: TrainConfig, out: Path, callbacks: list[TrainerCallback] = ())
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
     base_model = resolve(config.base_model)
-    tokenizer = load_tokenizer(base_model)
+    tokenizer = load_tokenizer(base_model, config.base_revision)
     resumed_from = latest_checkpoint(out)
     # fp32 master weights under bf16 autocast. A resumed run loads its weights here: the trainer
     # reloads them with a non-strict `load_state_dict`, which matches no key when transformers saves
     # another layout (Qwen3.5's `model.language_model.*`) and silently keeps the base weights.
-    model = load_model(resumed_from or base_model, torch.float32)
+    model = load_model(resumed_from or base_model, torch.float32, config.base_revision)
     if config.freeze_per_layer_embeddings:
         # Frozen weights need no fp32 master copy; the layers still run under bf16 autocast.
         embeddings = model.get_per_layer_input_embeddings()

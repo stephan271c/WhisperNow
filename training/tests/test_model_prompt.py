@@ -48,4 +48,4 @@ def test_a_gemma4_row_renders_in_gemma4_turns():
 
 def test_gemma4_models_get_the_gemma4_format():
     assert chat_format("gemma4") is chat_format("gemma4_text") is GEMMA4
-    assert chat_format("qwen3_5") is chat_format("lfm2") is CHATML
+    assert chat_format("qwen3_5") is chat_format("lfm2") is chat_format("lfm3") is CHATML

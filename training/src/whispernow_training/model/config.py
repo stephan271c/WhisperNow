@@ -10,6 +10,8 @@ from pathlib import Path
 @dataclass(frozen=True)
 class TrainConfig:
     base_model: str
+    # The Hub commit of `base_model`, for a checkpoint whose own modeling code runs (LFM3).
+    base_revision: str = ""
     learning_rate: float = 3e-5
     epochs: float = 2.0
     # Examples per optimizer step is batch_size × grad_accum.

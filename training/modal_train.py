@@ -105,7 +105,7 @@ def prefetch(config: str) -> str:
     from whispernow_training.model import train  # noqa: F401  (imports every training dependency)
 
     settings = train_config.load(REMOTE / config)
-    path = snapshot_download(settings.base_model)
+    path = snapshot_download(settings.base_model, revision=settings.base_revision or None)
     hf_cache.commit()
     shipped = sorted(str(file.relative_to(REMOTE)) for file in REMOTE.rglob("*") if file.is_file() and "src/" not in str(file))
     return f"torch {torch.__version__} (CUDA {torch.version.cuda}); {settings.base_model} in {path}; shipped besides src/: {shipped}"
