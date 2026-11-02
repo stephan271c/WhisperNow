@@ -87,10 +87,11 @@ the GPU through Vulkan on Windows and Linux and Metal on Apple Silicon, and the 
 
 | Model | Download | Time for 100 words, GPU | Time for 100 words, CPU |
 | --- | --- | --- | --- |
-| LFM2.5 1.2B, the default | 1.2 GB | 0.2 s | 2.3 s |
-| LFM2.5 2.6B | 2.9 GB | 0.3 s | 5.4 s |
-| Qwen3.5 4B | 4.5 GB | 0.6 s | 8.9 s |
-| Nemotron Bolt E4B | 8.0 GB | 0.7 s | 11.6 s |
+| LFM2.5 1.2B | 1.2 GB | 0.2 s | 2.1 s |
+| LFM3 1.7B, the default | 1.8 GB | 0.3 s | 2.6 s |
+| LFM2.5 2.6B | 2.9 GB | 0.3 s | 4.1 s |
+| Qwen3.5 4B | 4.5 GB | 0.6 s | 8.3 s |
+| Nemotron Bolt E4B | 8.0 GB | 0.6 s | 8.3 s |
 
 Times were measured on an RTX 5070 and a Ryzen 9 8945HS.
 

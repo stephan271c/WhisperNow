@@ -106,6 +106,13 @@
       "license_files": ["lfm-open-license-v1.0.txt"],
       "source": "https://huggingface.co/category271/whispernow-lfm2.5-1.2b"
     },
+    "cleanup-model-lfm3-1.7b": {
+      "name": "WhisperNow cleanup model LFM3 1.7B (a fine-tune of Liquid AI's LFM3-1.7B-Base; downloaded on demand, not bundled)",
+      "version": "v1 Q8_0",
+      "license": "LFM Open License v1.0",
+      "license_files": ["lfm-open-license-v1.0.txt"],
+      "source": "https://huggingface.co/category271/whispernow-lfm3-1.7b"
+    },
     "cleanup-model-lfm2.5-2.6b": {
       "name": "WhisperNow cleanup model LFM2.5 2.6B (a fine-tune of Liquid AI's LFM2.5-2.6B-Base; downloaded on demand, not bundled)",
       "version": "v1 Q8_0",

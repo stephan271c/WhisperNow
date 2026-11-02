@@ -1512,7 +1512,8 @@ fn cleanup_models_show_memory_and_latency_beside_accuracy_bars() {
         "whispernow-lfm2.5-2.6b-v1-q8_0",
     );
     models_of(&mut management)[1].benchmark = Some(ModelBenchmark::Cleanup(CleanupBenchmark {
-        memory_bytes: 1_619_001_344,
+        gpu_memory_bytes: 1_619_001_344,
+        cpu_memory_bytes: 1_411_129_344,
         factual_errors_per_1000_words: 6.32,
         gpu_latency: std::time::Duration::from_millis(178),
         cpu_latency: std::time::Duration::from_millis(3_149),
@@ -1521,7 +1522,8 @@ fn cleanup_models_show_memory_and_latency_beside_accuracy_bars() {
     open(&mut page, &["nav-settings", "nav-settings-ai-cleanup"]);
     let html = page.html();
     let shown = text(&html, "main-content");
-    assert!(shown.contains("Memory1.6 GB"), "{shown}");
+    assert!(shown.contains("Memory1.4 GB"), "{shown}");
+    assert!(html.contains("title=\"On GPU: 1.6 GB VRAM\""));
     assert!(shown.contains("Latency0.2 s GPU · 3.1 s CPU"), "{shown}");
     assert!(
         html.contains("aria-label=\"Accuracy: 2 of 5. About 6.3 factual errors per 1,000 words\"")

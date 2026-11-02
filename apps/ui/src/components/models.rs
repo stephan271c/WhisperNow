@@ -135,8 +135,8 @@ pub(super) fn ModelRow(
         },
         Some(ModelBenchmark::Cleanup(benchmark)) => rsx! {
             div { class: "model-ratings",
-                Measurement { label: "Memory", value: gigabytes(benchmark.memory_bytes),
-                    detail: "The most GPU or system memory the loaded model takes" }
+                Measurement { label: "Memory", value: gigabytes(benchmark.cpu_memory_bytes),
+                    detail: format!("On GPU: {} VRAM", gigabytes(benchmark.gpu_memory_bytes)) }
                 RatingBars { label: "Accuracy", value: benchmark.accuracy(),
                     detail: factual_errors_detail(&benchmark) }
                 Measurement { label: "Latency", value: latency(&benchmark),
@@ -285,10 +285,9 @@ fn latency(benchmark: &CleanupBenchmark) -> String {
     )
 }
 
-/// A measurement shown as its number. `detail` says what was measured, on hover and to
-/// screen readers.
+/// A measurement shown as its number, with `detail` on hover and to screen readers.
 #[component]
-fn Measurement(label: &'static str, value: String, detail: &'static str) -> Element {
+fn Measurement(label: &'static str, value: String, #[props(into)] detail: String) -> Element {
     rsx! {
         span { class: "rating", title: detail,
             span { "{label}" }

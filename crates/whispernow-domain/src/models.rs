@@ -11,7 +11,7 @@ const RELEASE_BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/downl
 const DEFAULT_SPEECH_MODEL_ID: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
 
 // Retrained cleanup models get new ids so installed weights cannot outlive their revision.
-pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-lfm2.5-1.2b-v1-q8_0";
+pub const DEFAULT_CLEANUP_MODEL_ID: &str = "whispernow-lfm3-1.7b-v1-q8_0";
 /// Every local cleanup model, the default first.
 pub const CLEANUP_MODEL_IDS: [&str; CLEANUP_MODELS.len()] = {
     let mut ids = [""; CLEANUP_MODELS.len()];
@@ -44,24 +44,43 @@ struct CleanupModel {
 /// to retire one. Factual errors (lost and invented facts) are per
 /// 1,000 reference words, pooled over 4,170 held-out dictations (the test split, bench-long and
 /// bench-noise) and judged by `gpt-6.1-sol` (`cleanup eval`, training/README.md). Latency is the
-/// median of five `cleanup bench` runs of its 100-word dictation against the patched
-/// `llama-server` the app's engine matches, on an RTX 5070 and on a Ryzen 9 8945HS. Memory is the
-/// larger of that server's VRAM and its resident memory on the CPU with its prompt cache off, as
-/// the app has none.
-const CLEANUP_MODELS: [CleanupModel; 4] = [
-    // LFM2.5-1.2B-Base fine-tuned for cleanup, under the LFM Open License v1.0.
+/// median of `cleanup bench` runs of its 100-word dictation against the patched `llama-server`
+/// the app's engine matches, five on an RTX 5070 and three on a Ryzen 9 8945HS. Memory is that
+/// server's VRAM, and its resident memory on the CPU with its prompt cache off, as the app has
+/// none.
+const CLEANUP_MODELS: [CleanupModel; 5] = [
+    // LFM3-1.7B-Base fine-tuned for cleanup, under the LFM Open License v1.0.
     CleanupModel {
         id: DEFAULT_CLEANUP_MODEL_ID,
+        display_name: "Local cleanup model (LFM3 1.7B)",
+        repository: "category271/whispernow-lfm3-1.7b",
+        revision: "99fc46e9dcfe6bf45cc0e378c4715a5a5a01603f",
+        size_bytes: 1_846_226_080,
+        sha256: "6851a43eb59860111c75058ee1fee7b8e2a06ed2810ebddec07e3b08526466a6",
+        benchmark: CleanupBenchmark {
+            gpu_memory_bytes: 2_227_175_424,
+            cpu_memory_bytes: 2_123_636_736,
+            factual_errors_per_1000_words: 5.04,
+            gpu_latency: Duration::from_millis(253),
+            cpu_latency: Duration::from_millis(2_570),
+        },
+        chat_format: ChatFormat::ChatMl,
+        featured: true,
+    },
+    // LFM2.5-1.2B-Base fine-tuned for cleanup, under the LFM Open License v1.0.
+    CleanupModel {
+        id: "whispernow-lfm2.5-1.2b-v1-q8_0",
         display_name: "Local cleanup model (LFM2.5 1.2B)",
         repository: "category271/whispernow-lfm2.5-1.2b",
         revision: "dadf980b3dbece9c67dc8e7d46f65b59c9e092ad",
         size_bytes: 1_246_252_256,
         sha256: "0e121fc886fec21ab35aa5a1cdd40872e9278c41435f1cf9d94eba193d93f186",
         benchmark: CleanupBenchmark {
-            memory_bytes: 1_619_001_344,
+            gpu_memory_bytes: 1_619_001_344,
+            cpu_memory_bytes: 1_411_129_344,
             factual_errors_per_1000_words: 6.32,
-            gpu_latency: Duration::from_millis(178),
-            cpu_latency: Duration::from_millis(2_328),
+            gpu_latency: Duration::from_millis(167),
+            cpu_latency: Duration::from_millis(2_092),
         },
         chat_format: ChatFormat::ChatMl,
         featured: true,
@@ -75,13 +94,14 @@ const CLEANUP_MODELS: [CleanupModel; 4] = [
         size_bytes: 2_874_774_112,
         sha256: "1a3eab30c9e3cd9c8e5f3c678bdb78661306dc04803d3075c9a4ca536ff7d217",
         benchmark: CleanupBenchmark {
-            memory_bytes: 3_290_431_488,
+            gpu_memory_bytes: 3_290_431_488,
+            cpu_memory_bytes: 3_115_692_032,
             factual_errors_per_1000_words: 4.88,
-            gpu_latency: Duration::from_millis(344),
-            cpu_latency: Duration::from_millis(5_390),
+            gpu_latency: Duration::from_millis(329),
+            cpu_latency: Duration::from_millis(4_066),
         },
         chat_format: ChatFormat::ChatMl,
-        featured: true,
+        featured: false,
     },
     // Qwen3.5-4B-Base fine-tuned for cleanup, under Apache-2.0.
     CleanupModel {
@@ -92,10 +112,11 @@ const CLEANUP_MODELS: [CleanupModel; 4] = [
         size_bytes: 4_482_395_648,
         sha256: "1abff662c684473823b5e042c2aa806fdfc5b00981fcb5cae818e2ec7d58d963",
         benchmark: CleanupBenchmark {
-            memory_bytes: 5_302_546_432,
+            gpu_memory_bytes: 5_291_114_496,
+            cpu_memory_bytes: 5_302_546_432,
             factual_errors_per_1000_words: 3.01,
-            gpu_latency: Duration::from_millis(624),
-            cpu_latency: Duration::from_millis(8_869),
+            gpu_latency: Duration::from_millis(593),
+            cpu_latency: Duration::from_millis(8_252),
         },
         chat_format: ChatFormat::ChatMl,
         featured: false,
@@ -110,11 +131,11 @@ const CLEANUP_MODELS: [CleanupModel; 4] = [
         size_bytes: 7_972_708_768,
         sha256: "28ebf2933bc295876d72dc9d187af7ffbdec94c4501c27f4b97dd06cd05effed",
         benchmark: CleanupBenchmark {
-            memory_bytes: 8_370_384_896,
+            gpu_memory_bytes: 5_576_327_168,
+            cpu_memory_bytes: 8_370_384_896,
             factual_errors_per_1000_words: 2.59,
-            gpu_latency: Duration::from_millis(662),
-            // The 4B's latency above times Bolt's ratio to the 4B in one sitting (9.6 s / 7.3 s).
-            cpu_latency: Duration::from_millis(11_602),
+            gpu_latency: Duration::from_millis(618),
+            cpu_latency: Duration::from_millis(8_338),
         },
         chat_format: ChatFormat::Gemma4,
         featured: true,
@@ -395,8 +416,8 @@ impl SpeechBenchmark {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanupBenchmark {
-    /// The most memory the loaded model takes, on the GPU or on the CPU.
-    pub memory_bytes: u64,
+    pub gpu_memory_bytes: u64,
+    pub cpu_memory_bytes: u64,
     /// Facts the cleaned text drops, changes or invents, per 1,000 words of the reference.
     pub factual_errors_per_1000_words: f32,
     pub gpu_latency: Duration,

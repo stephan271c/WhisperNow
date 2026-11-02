@@ -126,6 +126,7 @@ fn released_cleanup_models_stay_registered() {
         "whispernow-lfm2.5-2.6b-v1-q8_0",
         "whispernow-qwen3.5-4b-v1-q8_0",
         "whispernow-nemotron-bolt-e4b-v1-q8_0",
+        "whispernow-lfm3-1.7b-v1-q8_0",
     ] {
         assert!(CLEANUP_MODEL_IDS.contains(&id), "{id}");
     }
@@ -170,7 +171,7 @@ fn identifiers_reject_filesystem_components() {
 }
 
 #[test]
-fn cleanup_models_are_told_apart_by_their_accuracy_bars() {
+fn cleanup_model_accuracy_bars_follow_their_measured_errors() {
     let registry = ModelRegistry::builtin();
     let bars = CLEANUP_MODEL_IDS.map(|id| {
         let model = registry.get(id).expect("registered cleanup model");
@@ -179,7 +180,7 @@ fn cleanup_models_are_told_apart_by_their_accuracy_bars() {
         };
         benchmark.accuracy().get()
     });
-    assert_eq!(bars, [2, 3, 4, 5]);
+    assert_eq!(bars, [3, 2, 3, 4, 5]);
 }
 
 #[test]
