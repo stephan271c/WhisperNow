@@ -12,7 +12,7 @@
         "minHeight": 520,
         "center": true,
         "visible": false,
-        "transparent": true,
+        "transparent": false,
         "acceptFirstMouse": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,

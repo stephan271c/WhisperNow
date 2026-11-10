@@ -157,16 +157,11 @@ fn recording_bar_never_steals_focus() {
 }
 
 #[test]
-fn settings_window_is_transparent_so_linux_chrome_can_round_its_corners() {
+fn settings_window_is_opaque_so_webkitgtk_paints_it() {
+    // A transparent settings window rendered blank on NVIDIA under Wayland (issue #4).
     let config: serde_json::Value =
         serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid JSON");
-    let settings_window = config["app"]["windows"]
-        .as_array()
-        .expect("configured windows")
-        .iter()
-        .find(|window| window["label"] == SETTINGS_WINDOW)
-        .expect("settings window");
-    assert_eq!(settings_window["transparent"], true);
+    assert_eq!(settings_window(&config)["transparent"], false);
 }
 
 fn settings_window(config: &serde_json::Value) -> &serde_json::Value {

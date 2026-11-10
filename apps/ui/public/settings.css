@@ -349,16 +349,14 @@ small {
   grid-template-rows: var(--titlebar-height) minmax(0, 1fr);
 }
 
-/* Linux has no frame to round the window, so the shell's own corners are the window's: the
-   window is transparent. The undecorated Windows window stays square. */
+/* Linux has no frame, so the shell draws the window's edge. The window stays opaque and square:
+   WebKitGTK leaves a transparent window unpainted on some drivers, such as NVIDIA on Wayland. */
 .settings-shell.custom-chrome:not([data-platform="windows"]) {
   border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-window);
 }
 
 .settings-shell.custom-chrome:not([data-platform="windows"]).maximized {
   border: 0;
-  border-radius: 0;
 }
 
 .custom-chrome .settings-sidebar {
